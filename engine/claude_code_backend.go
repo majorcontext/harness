@@ -212,6 +212,48 @@ type ClaudeCodeConfig struct {
 	ExtraArgs []string
 	// PermissionMode, if non-empty, becomes --permission-mode <value>.
 	PermissionMode string
+	// HTTPBaseURL is the harness HTTP server's own loopback base URL (e.g.
+	// "http://127.0.0.1:4096" — cmd/harness's serveCmd derives it from its
+	// own -addr the same way it already does for the plugin host, via
+	// serveURLForAddr), or "" when this session is not being served over
+	// HTTP at all (e.g. a one-shot `harness run`). It is the ONLY thing
+	// this package needs to reach the harness-hosted get_conversation_history
+	// MCP tool at /session/{id}/mcp (server/server.go) — see
+	// claudeCodeMCPConfigFile, which appends a synthetic "http" server
+	// entry naming <HTTPBaseURL>/session/<s.ID>/mcp whenever this is
+	// non-empty, regardless of whether Config.MCP configures any servers
+	// of its own. Empty disables the synthetic entry entirely: there is no
+	// endpoint for a delegated turn to call in that mode, so advertising
+	// one would just be a dead tool.
+	HTTPBaseURL string
+	// HTTPAuthToken, when non-empty, is sent as an "Authorization: Bearer
+	// <token>" header on the synthetic history-server entry above — the
+	// same bearer scheme server.Server.authorized checks for every other
+	// route. Empty (e.g. a loopback-only Unauthenticated serve, per
+	// server.Options.Unauthenticated) omits the header entirely rather
+	// than sending an empty bearer value.
+	HTTPAuthToken string
+}
+
+// claudeCodeToolsServerName is the synthetic --mcp-config server name
+// claudeCodeMCPConfigFile registers for the harness-hosted MCP server
+// (server/mcp_history.go's POST /session/{id}/mcp — get_conversation_history
+// plus, when configured, the native `process` tool) — see
+// ClaudeCodeConfig.HTTPBaseURL's own doc comment. A fixed, harness-
+// namespaced name (never an operator-configured Config.MCP key) so it can
+// never collide with one.
+const claudeCodeToolsServerName = "harness-tools"
+
+// claudeCodeHistoryServerURL returns the synthetic history-server's own
+// per-session URL — <HTTPBaseURL>/session/<s.ID>/mcp — or "" when
+// ClaudeCodeConfig.HTTPBaseURL is unset (see its own doc comment for why
+// that disables the entry entirely).
+func (s *Session) claudeCodeHistoryServerURL() string {
+	base := strings.TrimRight(s.cfg.ClaudeCode.HTTPBaseURL, "/")
+	if base == "" {
+		return ""
+	}
+	return base + "/session/" + s.ID + "/mcp"
 }
 
 // claudeCodeDelegated reports whether s's CURRENT model routes to this
@@ -247,6 +289,28 @@ func (s *Session) recordClaudeCodeSessionID(id string) {
 	}
 	s.claudeCodeCLISessionID = id
 	s.persistClaudeCodeSessionID(id)
+}
+
+// claudeCodeHistoryWatermarkCount returns Session.claudeCodeHistoryWatermark
+// — see its own doc comment.
+func (s *Session) claudeCodeHistoryWatermarkCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claudeCodeHistoryWatermark
+}
+
+// recordClaudeCodeHistoryWatermark durably records n as this session's
+// claudeCodeHistoryWatermark — see that field's own doc comment. A no-op
+// when n already matches the recorded value, so a turn that leaves
+// s.History()'s length unchanged never writes a redundant journal record.
+func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.claudeCodeHistoryWatermark == n {
+		return
+	}
+	s.claudeCodeHistoryWatermark = n
+	s.persistClaudeCodeHistoryWatermark(n)
 }
 
 // applyClaudeCodeUsage folds a delegated turn's AGGREGATE usage (the
@@ -294,7 +358,8 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage) {
 // reports the failure, exactly like the native path's
 // interruptedTurnError partial-append behavior (engine.go).
 func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, error) {
-	text := lastUserMessageText(s.History())
+	history := s.History()
+	text := lastUserMessageText(history)
 	if text == "" {
 		return nil, errors.New("engine: claude-code delegated turn found no pending user message to answer")
 	}
@@ -348,6 +413,13 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if resumeID := s.claudeCodeSessionID(); resumeID != "" {
 		args = append(args, "--resume", resumeID)
 	}
+	// See claudeCodeHistoryDirectiveArgs's own doc comment: nil (a no-op
+	// append) unless history holds conversation the CLI's own resumed
+	// session (if any) has not already incorporated — deliberately
+	// independent of resumeID above, since a model switch away from
+	// claude-code and back leaves the CLI session id in place but can
+	// still leave it stale relative to history.
+	args = append(args, claudeCodeHistoryDirectiveArgs(history, s.claudeCodeHistoryWatermarkCount())...)
 	if cfg.PermissionMode != "" {
 		args = append(args, "--permission-mode", cfg.PermissionMode)
 	}
@@ -505,6 +577,20 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}()
 
 	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
+	if started {
+		// The CLI's own session actually came up for this turn — whether
+		// or not turnErr is set (see claudeCodeTurnResult's own o.started
+		// branch for the identical "started but errored is still real
+		// activity" reasoning) — so by now it has incorporated everything
+		// currently in s.History(): either it produced those messages
+		// itself this turn, or an earlier turn's get_conversation_history
+		// pull already covered the rest. Recording that here, not only on
+		// a successful result, is what lets claudeCodeHistoryDirectiveArgs
+		// tell a genuinely stale resumed session (history grew via an
+		// intervening native-provider turn) apart from one that is merely
+		// mid-turn.
+		s.recordClaudeCodeHistoryWatermark(len(s.History()))
+	}
 
 	// cmd.Wait() below does NOT reintroduce the EOF wait that
 	// consumeClaudeCodeStream's early return on "result" just avoided, on
@@ -665,6 +751,60 @@ func lastUserMessageText(history []message.Message) string {
 		return ""
 	}
 	return last.Parts.Text()
+}
+
+// claudeCodeHistoryDirective is the --append-system-prompt text
+// runClaudeCodeTurn appends exactly once per delegated session — see
+// claudeCodeHistoryDirectiveArgs. It tells the CLI to call the
+// harness-hosted get_conversation_history tool (server/mcp_history.go's
+// POST /session/{id}/mcp, advertised via the claudeCodeToolsServerName
+// entry claudeCodeMCPConfigFile writes) before answering, so a session that
+// switches to claude-code mid-conversation (or on its first-ever
+// claude-code turn) does not start blind to everything that already
+// happened: stream-json INPUT cannot seed prior history (a "user" line
+// gets live re-executed; an "assistant" line is dropped or crashes the
+// CLI — see this file's package doc for why this pull-based tool exists
+// instead), so this is the one nudge that gets the CLI to pull it itself.
+const claudeCodeHistoryDirective = "You are continuing a conversation that happened on another model. Before responding, call the get_conversation_history tool to read what happened so far."
+
+// claudeCodeHistoryDirectiveArgs returns the --append-system-prompt argv
+// pair (flag plus value) whenever history holds conversation the CLI's own
+// resumed session (if any) has NOT already incorporated — priorCount >
+// watermark, where priorCount is len(history) minus the single pending
+// trigger message runClaudeCodeTurn is about to answer (lastUserMessageText's
+// own caller contract: history's last element is always that pending
+// message) and watermark is Session.claudeCodeHistoryWatermarkCount(), the
+// message count as of the end of whichever delegated turn last ran. nil
+// (priorCount <= watermark) in two cases:
+//
+//   - A session's genuine first-ever message: watermark is 0 (no delegated
+//     turn has ever run) and priorCount is also 0 (no prior history at
+//     all). Calling get_conversation_history would return nothing useful.
+//   - Consecutive claude-code turns with nothing new in between: the
+//     previous turn's own watermark update already accounts for
+//     everything currently in history, including that turn's own answer.
+//     The CLI's --resume'd session already carries forward whichever
+//     earlier turn's own get_conversation_history tool_result — re-pulling
+//     here would waste a call the CLI has no reason to repeat (see this
+//     file's package doc, "one call suffices").
+//
+// This is deliberately NOT gated on Session.claudeCodeSessionID() (whether a
+// CLI session id is recorded at all): a model switch away from claude-code
+// and back leaves claudeCodeCLISessionID untouched (see its own doc
+// comment), so a resumed CLI session can still be stale relative to
+// s.history even though resumeID != "" — exactly the case an intervening
+// native-provider turn (or several) produces. watermark, not resumeID's
+// emptiness, is what actually answers "has the CLI's session seen
+// everything currently in history".
+func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []string {
+	priorCount := len(history) - 1
+	if priorCount < 0 {
+		priorCount = 0
+	}
+	if priorCount <= watermark {
+		return nil
+	}
+	return []string{"--append-system-prompt", claudeCodeHistoryDirective}
 }
 
 // consumeClaudeCodeStream reads newline-delimited stream-json events from r
@@ -1367,20 +1507,36 @@ func claudeCodeMCPServerEnv(env []string) map[string]string {
 // (via /proc or ps) — writing to a file only this process's own return
 // value names, then removing it once this call returns (the child has
 // already read it by then; it only needs the file at startup), keeps that
-// material out of the process list. len(servers) == 0 (MCP unconfigured,
-// or s.cfg.MCP does not implement claudeCodeMCPServerLister — see
-// claudeCodeMCPServers) returns "", a no-op cleanup, and a nil error: MCP
-// passthrough is opt-in, never a hard requirement for a delegated turn to
-// proceed.
+// material out of the process list. len(servers) == 0 AND no synthetic
+// history-server entry (MCP unconfigured, or s.cfg.MCP does not implement
+// claudeCodeMCPServerLister — see claudeCodeMCPServers — and
+// ClaudeCodeConfig.HTTPBaseURL unset, e.g. a one-shot `harness run`)
+// returns "", a no-op cleanup, and a nil error: MCP passthrough is
+// opt-in, never a hard requirement for a delegated turn to proceed.
 func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err error) {
 	noop := func() {}
 	servers := claudeCodeMCPServers(s.cfg.MCP)
-	if len(servers) == 0 {
+	historyURL := s.claudeCodeHistoryServerURL()
+	if len(servers) == 0 && historyURL == "" {
 		return "", noop, nil
 	}
-	cfg := claudeCodeMCPConfig{MCPServers: make(map[string]claudeCodeMCPServerSpec, len(servers))}
+	cfg := claudeCodeMCPConfig{MCPServers: make(map[string]claudeCodeMCPServerSpec, len(servers)+1)}
 	for name, spec := range servers {
 		cfg.MCPServers[name] = claudeCodeMCPServerSpecFor(spec)
+	}
+	if historyURL != "" {
+		// A synthetic entry, not one of Config.MCP's own servers — see
+		// ClaudeCodeConfig.HTTPBaseURL's own doc comment. This rides the
+		// same temp-file mechanism as every other server here (never an
+		// inline argv value), so HTTPAuthToken's bearer value gets the
+		// same argv-visibility protection
+		// TestClaudeCodeMCPConfigCredentialsNeverInChildArgv already locks
+		// in for an operator-configured server's own credentials.
+		spec := claudeCodeMCPServerSpec{Type: "http", URL: historyURL}
+		if tok := s.cfg.ClaudeCode.HTTPAuthToken; tok != "" {
+			spec.Headers = map[string]string{"Authorization": "Bearer " + tok}
+		}
+		cfg.MCPServers[claudeCodeToolsServerName] = spec
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {

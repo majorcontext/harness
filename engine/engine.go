@@ -1084,6 +1084,26 @@ type Session struct {
 	// restart.
 	claudeCodeCLISessionID string
 
+	// claudeCodeHistoryWatermark is len(s.history) as of the end of the
+	// most recent delegated turn that actually started (see
+	// runClaudeCodeTurn's own watermark-update call and
+	// claudeCodeHistoryDirectiveArgs, engine/claude_code_backend.go) —
+	// i.e. how many of s.history's messages the CLI's OWN session
+	// (claudeCodeCLISessionID) has already incorporated, either by
+	// producing them itself or by pulling them via
+	// get_conversation_history. claudeCodeCLISessionID is NEVER cleared
+	// on a model switch away from claude-code (a later switch BACK still
+	// --resumes the same CLI session), so this watermark — not
+	// claudeCodeCLISessionID's own emptiness — is what tells
+	// runClaudeCodeTurn whether that resumed session is stale relative to
+	// s.history: a switch to a native provider and back can grow
+	// s.history past this watermark without ever clearing
+	// claudeCodeCLISessionID, and the directive must re-fire in exactly
+	// that case. Zero until the first delegated turn that starts
+	// completes. Persisted (recClaudeCodeHistoryWatermark, store.go) and
+	// restored by LoadSession, alongside claudeCodeCLISessionID.
+	claudeCodeHistoryWatermark int
+
 	// spawnedChildIDs is every child id this session has ever Spawn'd —
 	// appended to live (Spawn, session_manager.go) and folded back from
 	// the durable recTaskSpawned audit trail on reload (store.go's
@@ -3678,6 +3698,66 @@ func (s *Session) MCPCall(ctx context.Context, server, tool string, args json.Ra
 		return nil, false, fmt.Errorf("engine: no MCP servers configured")
 	}
 	return s.cfg.MCP.CallServerTool(ctx, server, tool, args)
+}
+
+// ToolDef returns the provider.ToolDef (Name, Description, InputSchema) of
+// the native session tool registered under name — e.g. "process" — or
+// ok=false if no such tool is registered on this session (its owning
+// Config field unset, e.g. Config.Processes nil for "process"; or name
+// simply unrecognized). s.tools is populated once, at session construction
+// (newSession), and never mutated afterward — see executeTool's own
+// unsynchronized read of the same map — so this needs no locking either.
+//
+// This is the read half of RunTool's generic external-dispatch seam: a
+// caller outside the native agentic loop (the harness-hosted MCP server,
+// server/mcp_history.go) uses it to advertise a native tool's OWN
+// Description/InputSchema in tools/list, rather than hand-duplicating a
+// second copy of the schema that could silently drift from the real one.
+func (s *Session) ToolDef(name string) (def provider.ToolDef, ok bool) {
+	t, ok := s.tools[name]
+	if !ok {
+		return provider.ToolDef{}, false
+	}
+	return t.Def, true
+}
+
+// RunTool synthesizes a *message.ToolCall for name/args and drives it
+// through runToolCall — the same hook (ToolExecuteBefore/ToolExecuteAfter),
+// event (EventToolStart/EventToolEnd, tool.execute.start/end), and
+// panic-recovery path every native-loop tool call goes through (see
+// runToolCall's own doc comment). It is RunTool's write half of the same
+// generic external-dispatch seam ToolDef reads from: the harness-hosted MCP
+// server's `process` tool (server/mcp_history.go) is the first caller
+// outside the native agentic loop, invoking a native harness tool by name
+// on behalf of a REMOTE MCP client (a delegated Claude Code CLI turn)
+// rather than this session's own model.
+//
+// Unlike a native-loop tool call, the synthesized ToolCall/its ToolResult
+// are never appended to s.History(): there is no corresponding assistant
+// message in THIS session's own transcript to pair them with, mirroring
+// MCPCall's identical "pass through, do not persist" contract for an
+// MCP-registry-routed call, just above.
+//
+// The returned error collapses runToolCall's separate isErr flag into one
+// Go error (out's own text, wrapped) — matching mcpserver.ToolHandler's
+// contract exactly (server/mcp_history.go's process-tool handler passes
+// RunTool's own return straight through: any error becomes
+// CallToolResult.IsError, never a protocol-level failure) — so a genuine
+// TOOL failure (e.g. "no such process") and this call's own inability to
+// dispatch at all (there isn't one today; s.tools falls back to an
+// "unknown tool" text result, not a panic or an error return) are both
+// reported the same, simple way.
+func (s *Session) RunTool(ctx context.Context, name string, args json.RawMessage) (message.Parts, error) {
+	tc := &message.ToolCall{
+		CallID:    newID("call"),
+		Name:      name,
+		Arguments: args,
+	}
+	out, isErr := s.runToolCall(ctx, tc)
+	if isErr {
+		return nil, fmt.Errorf("engine: tool %q: %s", name, out.Text())
+	}
+	return out, nil
 }
 
 // shellEnv collects env additions from the shell.env hook chain.

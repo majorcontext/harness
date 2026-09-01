@@ -937,6 +937,15 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /session/{id}/message", s.auth(s.handleMessages))
 	mux.HandleFunc("GET /session/{id}/journal", s.auth(s.handleJournal))
 	mux.HandleFunc("GET /session/{id}/request", s.auth(s.handleRequest))
+	// The MCP server role for sess's own harness-hosted tools (currently
+	// get_conversation_history — see mcp_history.go's package doc). A
+	// delegated Claude Code CLI turn is handed this endpoint's own URL in
+	// its --mcp-config (engine.ClaudeCodeConfig.HTTPBaseURL), so it carries
+	// the same s.auth bearer-token gate as every other route: an operator
+	// wiring HTTPAuthToken (or an Unauthenticated loopback bind) is what
+	// makes the delegated child able to reach it, exactly like any other
+	// authenticated route.
+	mux.HandleFunc("POST /session/{id}/mcp", s.auth(s.handleSessionMCP))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
 	mux.HandleFunc("POST /session/{id}/enqueue", s.auth(s.handleEnqueue))
 	mux.HandleFunc("GET /session/{id}/queue", s.auth(s.handleQueueGet))
@@ -958,6 +967,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
 	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))
 	mux.HandleFunc("POST /process/{name}/restart", s.auth(s.handleProcessRestart))
+	// GET /process/{name}/logs: the processes panel's log tail, behind the
+	// same auth as every other process route — see handleProcessLogs.
+	mux.HandleFunc("GET /process/{name}/logs", s.auth(s.handleProcessLogs))
 	// /debug/goroutines: an authed HTTP alternative to sending SIGQUIT (see
 	// handleGoroutines's doc comment and cmd/harness/main.go's serveCmd,
 	// which confirms SIGQUIT still produces Go's default all-goroutine dump

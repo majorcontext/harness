@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/majorcontext/harness/process"
 )
@@ -41,6 +42,49 @@ func (s *Server) handleProcessRestart(w http.ResponseWriter, r *http.Request) {
 	s.handleProcessAction(w, r, func(ctx context.Context, name string) (process.Status, error) {
 		return s.opts.Processes.Restart(ctx, name)
 	})
+}
+
+// processLogsJSON is GET /process/{name}/logs' response shape — a
+// console's processes panel wants both the trailing log content and the
+// process's own current status in one round trip, rather than a second
+// request to GET /process for the status half.
+type processLogsJSON struct {
+	Content string         `json:"content"`
+	Status  process.Status `json:"status"`
+}
+
+// handleProcessLogs answers GET /process/{name}/logs?tail=N: the last N
+// lines of name's log file (process.Manager.Logs' own default, 50, when
+// tail is absent or not a positive integer) plus its current status. Same
+// small-handler pattern as handleProcessAction, but Logs' own three-value
+// return (content, status, error) doesn't fit that helper's
+// Status-only processAction shape, so this gets its own body.
+func (s *Server) handleProcessLogs(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "process name is required")
+		return
+	}
+	if s.opts.Processes == nil {
+		writeErr(w, http.StatusNotFound, "no such process")
+		return
+	}
+	tail := 0
+	if v := r.URL.Query().Get("tail"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			tail = n
+		}
+	}
+	content, st, err := s.opts.Processes.Logs(name, tail)
+	if err != nil {
+		if errors.Is(err, process.ErrUnknownProcess) {
+			writeErr(w, http.StatusNotFound, "no such process")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, processLogsJSON{Content: content, Status: st})
 }
 
 // handleProcessAction resolves {name} and, if Processes is configured and

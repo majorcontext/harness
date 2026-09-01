@@ -49,6 +49,13 @@ type ProcessRegistry interface {
 // processToolName is the session tool's fixed name.
 const processToolName = "process"
 
+// ProcessToolName exports processToolName for a caller outside this
+// package that needs to name the SAME tool RunTool/ToolDef dispatch by —
+// server/mcp_history.go's harness-hosted MCP `process` tool entry,
+// notably — without hand-duplicating the literal "process" and risking it
+// silently drifting from this package's own internal name.
+const ProcessToolName = processToolName
+
 // defaultLogTail is the logs action's default tail line count when the
 // caller omits it.
 const defaultLogTail = 50

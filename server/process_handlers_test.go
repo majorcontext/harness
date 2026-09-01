@@ -121,11 +121,59 @@ func TestHandleProcessUnknownName404(t *testing.T) {
 	h, _ := newProcessHarness(t, map[string]process.Def{
 		"dev": {Command: []string{"sh", "-c", "true"}},
 	})
-	for _, action := range []string{"start", "stop", "restart"} {
-		resp, body := h.do(http.MethodPost, "/process/nope/"+action, nil)
+	for _, action := range []string{"start", "stop", "restart", "logs"} {
+		method := http.MethodPost
+		if action == "logs" {
+			method = http.MethodGet
+		}
+		resp, body := h.do(method, "/process/nope/"+action, nil)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s: status = %d, body = %s, want 404", action, resp.StatusCode, body)
 		}
+	}
+}
+
+// TestHandleProcessLogs proves GET /process/{name}/logs returns the
+// process's own log content alongside its current status — the processes
+// panel's one-request source for both.
+func TestHandleProcessLogs(t *testing.T) {
+	h, _ := newProcessHarness(t, map[string]process.Def{
+		"dev": {
+			Command:      []string{"sh", "-c", `echo "Ready in 5ms"; sleep 100`},
+			ReadyRegex:   "Ready in .*ms",
+			ReadyTimeout: 5 * time.Second,
+		},
+	})
+	resp, body := h.do(http.MethodPost, "/process/dev/start", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("start status = %d, body = %s", resp.StatusCode, body)
+	}
+
+	resp, body = h.do(http.MethodGet, "/process/dev/logs", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("logs status = %d, body = %s", resp.StatusCode, body)
+	}
+	var got processLogsJSON
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal: %v (%s)", err, body)
+	}
+	if !strings.Contains(got.Content, "Ready in 5ms") {
+		t.Errorf("Content = %q, want the ready line", got.Content)
+	}
+	if got.Status.State != process.StateReady {
+		t.Errorf("Status = %+v, want ready", got.Status)
+	}
+}
+
+// TestHandleProcessLogsNotConfigured404s proves the endpoint 404s (not a
+// panic, not a bare empty body) when no Options.Processes is configured
+// at all, the same "unconfigured looks like unknown" rule
+// handleProcessAction already applies to start/stop/restart.
+func TestHandleProcessLogsNotConfigured404(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, body := h.do(http.MethodGet, "/process/dev/logs", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, body = %s, want 404", resp.StatusCode, body)
 	}
 }
 
