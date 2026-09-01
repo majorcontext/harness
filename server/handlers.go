@@ -33,7 +33,13 @@ type sessionJSON struct {
 	// EffortUnset, the provider default). A dashboard reads it back here after
 	// POST /session/{id}/thinking, the same way it reads Model.
 	Effort message.Effort `json:"effort,omitempty"`
-	Status string         `json:"status"`
+	// ServiceTier is the session's current Codex speed-tier value (empty =
+	// provider default). A dashboard reads it back here after POST
+	// /session/{id}/service-tier, the same way it reads Effort. Harness
+	// forwards this value verbatim and does not validate which tiers a
+	// model or plan supports (see provider.Request.ServiceTier).
+	ServiceTier string `json:"service_tier,omitempty"`
+	Status      string `json:"status"`
 	// State is the unambiguous composite: idle, busy, or goal-running. Kept
 	// alongside Status (never replacing it) for backward compat. Precedence:
 	// goal-running wins whenever a goal is active, REGARDLESS of the momentary
@@ -3091,6 +3097,71 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
 }
 
+// setServiceTierResponseJSON is the POST /session/{id}/service-tier response
+// shape: the session's Codex speed-tier value after the swap (a same-value
+// set is a durable no-op, echoing the current value — see
+// engine.Session.SetServiceTier).
+type setServiceTierResponseJSON struct {
+	ServiceTier string `json:"service_tier"`
+}
+
+// handleSetServiceTier swaps a session's Codex speed-tier value, decoupled
+// from prompting — a client/dashboard-driven swap that never claims the run
+// slot (SetServiceTier is concurrency-safe and takes effect on the NEXT
+// request). It mirrors handleSetThinking: an unknown session is 404. Unlike
+// effort, there is no ParseEffort-equivalent validation at all — the value
+// is an opaque string harness forwards verbatim, never checked against a
+// known tier set, since a dashboard that must gate per model/plan (the
+// boxes picker) holds its own mapping. An empty string is accepted and
+// clears the value (provider default). On success SetServiceTier emits
+// EventServiceTierChanged, which Publish journals as the durable
+// "service_tier" record.
+func (s *Server) handleSetServiceTier(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
+	var body struct {
+		ServiceTier string `json:"service_tier"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Resolve the session FIRST, loading a cold one into residency with the
+	// same race handling handleSetThinking uses (two *engine.Session for one
+	// log must never both be mutated — SetServiceTier persists the durable
+	// recServiceTier record).
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		sess, err := s.opts.LoadSession(id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		s.mu.Lock()
+		var evicted []*engine.Session
+		if ex := s.sessions[id]; ex != nil {
+			st = ex
+		} else {
+			st = &sessionState{sess: sess, lastUsed: time.Now()}
+			s.sessions[id] = st
+			evicted = s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+		releaseEvicted(evicted)
+	}
+
+	st.sess.SetServiceTier(body.ServiceTier)
+	writeJSON(w, http.StatusOK, setServiceTierResponseJSON{ServiceTier: st.sess.ServiceTier()})
+}
+
 // evictResidentLocked unloads the longest-idle non-busy sessions from
 // s.sessions (this server's OWN residency bookkeeping) when the resident
 // count exceeds Options.MaxResident. Busy sessions are never evicted;
@@ -3881,6 +3952,7 @@ func (s *Server) buildSession(lv liveSession) sessionJSON {
 		CreatedAt:         sess.CreatedAt(),
 		Model:             sess.Model(),
 		Effort:            sess.Effort(),
+		ServiceTier:       sess.ServiceTier(),
 		Status:            status,
 		State:             compositeState(status == "busy", goal != nil && goal.Active, forcesIdlePause(goal)),
 		Messages:          len(sess.History()),
@@ -3927,17 +3999,18 @@ func (s *Server) buildSessionFromIndex(ix engine.SessionIndex) sessionJSON {
 	lastTurn := s.lastTurnJSONLocked(ix.ID)
 	s.mu.Unlock()
 	return sessionJSON{
-		ID:        ix.ID,
-		CreatedAt: ix.CreatedAt,
-		Model:     ix.Model,
-		Effort:    ix.Effort,
-		Status:    "idle",
-		State:     compositeState(false, goal != nil && goal.Active, forcesIdlePause(goal)),
-		Messages:  ix.Messages,
-		Seq:       seq,
-		Goal:      goal,
-		WorkDir:   ix.WorkDir,
-		LastTurn:  lastTurn,
+		ID:          ix.ID,
+		CreatedAt:   ix.CreatedAt,
+		Model:       ix.Model,
+		Effort:      ix.Effort,
+		ServiceTier: ix.ServiceTier,
+		Status:      "idle",
+		State:       compositeState(false, goal != nil && goal.Active, forcesIdlePause(goal)),
+		Messages:    ix.Messages,
+		Seq:         seq,
+		Goal:        goal,
+		WorkDir:     ix.WorkDir,
+		LastTurn:    lastTurn,
 		Usage: usageJSON{
 			InputTokens:      ix.Usage.InputTokens,
 			OutputTokens:     ix.Usage.OutputTokens,

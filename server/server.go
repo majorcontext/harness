@@ -967,6 +967,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("DELETE /session/{id}/goal", s.auth(s.handleGoalDelete))
 	mux.HandleFunc("POST /session/{id}/model", s.auth(s.handleSetModel))
 	mux.HandleFunc("POST /session/{id}/thinking", s.auth(s.handleSetThinking))
+	mux.HandleFunc("POST /session/{id}/service-tier", s.auth(s.handleSetServiceTier))
 	mux.HandleFunc("POST /session/{id}/abort", s.auth(s.handleAbort))
 	// session.send (design doc, Stage 4): deliver a message to ANY session
 	// this server's SessionManager tracks, root or child — see

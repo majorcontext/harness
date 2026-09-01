@@ -93,6 +93,17 @@ type JournalRecord struct {
 	// value) and leaves it nil on every other record type.
 	Effort *message.Effort `json:"effort,omitempty"`
 
+	// ServiceTier is a *string, not a bare string with omitempty, for the
+	// same reason Effort is a pointer above: a recServiceTier record's
+	// SetServiceTier clear writes ServiceTier == "" — an explicit,
+	// meaningful wire value ("service_tier":"") — which a bare string with
+	// omitempty would indistinguishably drop, reading identically to a
+	// record type that never carries a service-tier value at all.
+	// projectJournalRecord always sets a non-nil pointer on
+	// recSession/recServiceTier (even for an empty value) and leaves it nil
+	// on every other record type.
+	ServiceTier *string `json:"service_tier,omitempty"`
+
 	// Goal trace (Type is one of recGoalSet/Updated/Eval/Stalled/Achieved/
 	// Cleared/EvalFailed/Parked). GoalReason is sanitized: goal.stalled and
 	// goal.eval_failed carry a raw provider/tool err.Error() here (see
@@ -198,6 +209,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		out.TaskDepth = rec.TaskDepth
 		out.Model = rec.Model
 		out.Effort = effortPtr(rec.Effort)
+		out.ServiceTier = serviceTierPtr(rec.ServiceTier)
 	case recMessage:
 		if rec.Message != nil {
 			out.MessageID = rec.Message.ID
@@ -210,6 +222,8 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		out.Model = rec.Model
 	case recEffort:
 		out.Effort = effortPtr(rec.Effort)
+	case recServiceTier:
+		out.ServiceTier = serviceTierPtr(rec.ServiceTier)
 	case recGoalSet, recGoalUpdated, recGoalEval, recGoalStalled, recGoalAchieved, recGoalCleared, recGoalEvalFailed, recGoalParked:
 		if rec.Goal != nil {
 			out.GoalCondition = rec.Goal.Condition
@@ -269,4 +283,13 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 // carries an effort level."
 func effortPtr(e message.Effort) *message.Effort {
 	return &e
+}
+
+// serviceTierPtr returns a non-nil pointer to a local copy of tier, always —
+// even when tier is empty — so JournalRecord.ServiceTier's own doc comment
+// holds: a cleared service tier renders as an explicit "service_tier":""
+// wire value, never an omitted key indistinguishable from "this record type
+// never carries a service-tier value." Mirrors effortPtr.
+func serviceTierPtr(tier string) *string {
+	return &tier
 }
