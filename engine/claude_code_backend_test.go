@@ -1686,3 +1686,192 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 		t.Errorf("CLI stdin's second line = %q, want it to carry the queued prompt's text", lines[1])
 	}
 }
+
+// TestClaudeCodeMidTurnInjectionWriteFailureDoesNotStrandWatermark is the
+// regression test for an adversarial-review finding on #231 (PR
+// majorcontext/harness#231, commit 7918b6d): a mid-turn queued prompt
+// whose stdin write to the running `claude` child FAILS (the child's read
+// end closes right as the injection lands — a `claude --bg` turn, or any
+// child racing its own exit against the wake) was silently and
+// PERMANENTLY lost, contradicting the pump's own "a delay, never a loss"
+// doc comment (runClaudeCodeTurn, engine/claude_code_backend.go).
+//
+// Root cause: the pump appends the injected block into session history
+// BEFORE attempting the write (so a failed write still leaves the block
+// durably in s.history — correct, honest bookkeeping), but
+// runClaudeCodeTurn's end-of-turn watermark recording
+// (recordClaudeCodeHistoryWatermark(len(s.History()))) ran unconditionally
+// whenever the child started, counting that now-durable-but-undelivered
+// message as if the CLI's own resumed session already had it. The NEXT
+// claude-code turn's claudeCodeHistoryDirectiveArgs then computes
+// priorCount == watermark (not priorCount > watermark), so it never fires
+// the --append-system-prompt get_conversation_history re-pull that would
+// have been the injected prompt's last chance to actually reach the
+// model — silently dropped, though the transcript shows it as delivered.
+//
+// This test proves the fix: after a mid-turn injection's write fails, the
+// recorded watermark must be capped BELOW the failed message's own
+// position, so a LATER claude-code turn's own directive check sees
+// priorCount > watermark and re-fires the history pull — the lost
+// prompt's one remaining path back to the model.
+func TestClaudeCodeMidTurnInjectionWriteFailureDoesNotStrandWatermark(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "queue_injection_broken_pipe")
+
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "STDIN_CLOSED_READY" {
+			readyOnce.Do(func() { close(ready) })
+		}
+	}
+
+	type outcome struct {
+		msg *message.Message
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		msg, err := s.Prompt(context.Background(), "start")
+		done <- outcome{msg, err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("Prompt returned (%+v, %v) before fakeclaude ever emitted STDIN_CLOSED_READY", res.msg, res.err)
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted STDIN_CLOSED_READY within 10s")
+	}
+
+	// The turn is now mid-flight with fakeclaude's own stdin read end
+	// already closed. Enqueue now: the pump's injection write is
+	// guaranteed to land on the closed pipe and fail.
+	if _, _, err := s.EnqueuePrompt("LOST-IF-BUGGY: please handle this", ""); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	var res outcome
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first Prompt did not return within 10s")
+	}
+	if res.err != nil {
+		t.Fatalf("first Prompt: %v", res.err)
+	}
+
+	// The queue itself is still empty (dequeued, not stranded there) and
+	// the prompt's text is still honestly present in history — this test
+	// is about the WATERMARK, not about re-queueing or hiding the attempt.
+	if q := s.QueuedPrompts(); len(q) != 0 {
+		t.Errorf("QueuedPrompts() after the failed injection = %+v, want empty (dequeued once, not requeued)", q)
+	}
+	found := false
+	for _, m := range s.History() {
+		if m.Role == message.RoleUser && strings.Contains(m.Parts.Text(), "LOST-IF-BUGGY: please handle this") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("session history has no user message carrying the failed injection's text")
+	}
+
+	// The second claude-code turn must re-fire the history-directive
+	// re-pull: proof the watermark did not silently cover the lost
+	// message. Without the fix, this argv carries no
+	// --append-system-prompt at all (mirrors
+	// TestClaudeCodeHistoryDirectiveAbsentOnConsecutiveClaudeTurns'
+	// negative case) — the model's only remaining path to the queued
+	// prompt.
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if len(invocations) != 2 {
+		t.Fatalf("invocations = %d, want 2: %+v", len(invocations), invocations)
+	}
+	got, ok := argvValueAfter(invocations[1], "--append-system-prompt")
+	if !ok || got != claudeCodeHistoryDirective {
+		t.Fatalf("second invocation --append-system-prompt = %q, ok=%v, want the history directive %q -- "+
+			"the failed mid-turn injection was silently stranded (watermark advanced past it)", got, ok, claudeCodeHistoryDirective)
+	}
+}
+
+// TestClaudeCodeStopRetiresPumpBlockedInStdinWrite is the regression test
+// for the second adversarial-review finding on #231 (PR
+// majorcontext/harness#231, commit 7918b6d): a stop landing (the child's
+// own terminal "result" event arrives, closing stopPump) while the
+// stdin-writer pump is BLOCKED inside its own stdin.Write call must still
+// retire the pump promptly — not wedge <-pumpDone (and so the whole
+// runClaudeCodeTurn call) until ctx cancellation, the same `claude --bg`
+// class of wedge the StdoutPipe/StderrPipe handling elsewhere in this file
+// already exists to prevent, just one pipe over.
+//
+// fakeclaude's "queue_injection_blocked_write" mode never reads stdin
+// again after its own first marker message, so the driver's own mid-turn
+// injection write — many times larger than any real OS pipe buffer, so it
+// cannot possibly complete in one buffered chunk — blocks inside the
+// write(2) syscall with nothing on the other end ever draining it. The
+// select below is this test's OWN hard-timeout guard: with the pre-fix
+// code (stdin closed only from inside the pump's own select branches,
+// never reachable while blocked in a live Write call), this test hangs
+// until it times out; with the fix (the outer goroutine closes stdin
+// itself, unconditionally, right after close(stopPump), before ever
+// waiting on pumpDone), Go's os.File.Close interrupts the pump's blocked
+// Write immediately and the turn completes normally.
+func TestClaudeCodeStopRetiresPumpBlockedInStdinWrite(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "queue_injection_blocked_write")
+	pidFile := filepath.Join(t.TempDir(), "leaked.pid")
+	t.Setenv("FAKE_CLAUDE_LEAK_PID_FILE", pidFile)
+
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+
+	type outcome struct {
+		msg *message.Message
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		msg, err := s.Prompt(context.Background(), "start")
+		done <- outcome{msg, err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("Prompt returned (%+v, %v) before fakeclaude ever emitted WAITING_FOR_QUEUE", res.msg, res.err)
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+	}
+
+	// Many times larger than any real pipe buffer (typically 16-64KiB) --
+	// the driver's own write of this, plus its JSON/OPERATOR-MESSAGES
+	// framing overhead, cannot complete in one buffered chunk while
+	// fakeclaude never reads any of it.
+	huge := strings.Repeat("X", 8*1024*1024)
+	if _, _, err := s.EnqueuePrompt(huge, ""); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			killLeakedFakeClaude(t, pidFile)
+			t.Fatalf("Prompt: %v", res.err)
+		}
+	case <-time.After(15 * time.Second):
+		// Cleaning up here too: if this branch ever fires, the leaked
+		// grandchild would otherwise outlive the test.
+		killLeakedFakeClaude(t, pidFile)
+		t.Fatal("Prompt did not return within 15s of the child's \"result\" event — " +
+			"the stdin-writer pump is wedged inside a blocked Write, never retired by the stop " +
+			"(the claude --bg-class stdin wedge this test guards against)")
+	}
+	killLeakedFakeClaude(t, pidFile)
+}

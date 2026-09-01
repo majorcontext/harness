@@ -32,7 +32,14 @@
 // "queue_injection" (blocks for a SECOND stdin line mid-turn, proving the
 // driver's stdin-writer pump keeps stdin open and delivers a mid-turn
 // queued prompt to THIS running child instead of a fresh one — see its own
-// comment below).
+// comment below), "queue_injection_broken_pipe" (closes its own stdin read
+// end before the driver ever gets a chance to write a mid-turn injection,
+// so that write fails — proves a failed injection's watermark accounting
+// does not silently strand it, see its own comment below), and
+// "queue_injection_blocked_write" (never reads stdin again after its own
+// first marker, so a large mid-turn injection fills the pipe and blocks
+// the driver's own Write — proves a stop landing mid-write still retires
+// the pump promptly instead of wedging, see its own comment below).
 package main
 
 import (
@@ -237,6 +244,116 @@ func main() {
 			"subtype":  "success",
 			"is_error": false,
 			"result":   resultText,
+			"usage": map[string]any{
+				"input_tokens":  5,
+				"output_tokens": 5,
+			},
+		})
+		return
+	case "queue_injection_broken_pipe":
+		// Proves the driver's own watermark bookkeeping never advances
+		// PAST a mid-turn injection whose stdin write actually failed --
+		// the shape a real child's read end closing right as the
+		// injection lands produces (EPIPE on a `claude --bg` turn, or any
+		// child that exits between the wake firing and the write
+		// happening). Emits WAITING_FOR_QUEUE (the same synchronization
+		// marker "queue_injection" uses), then closes ITS OWN stdin read
+		// end and emits a SECOND marker, STDIN_CLOSED_READY, only after
+		// that close has actually completed -- the test waits for THIS
+		// marker (not WAITING_FOR_QUEUE) before enqueueing, so the
+		// driver's injection write is guaranteed to land on an
+		// already-closed pipe and fail, deterministically, never a race
+		// against whether the close beat the write. Never reads a second
+		// line at all -- there is nothing left open to read from -- and
+		// completes normally, exactly like a turn that finished its own
+		// work with no idea a queued prompt ever existed.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "WAITING_FOR_QUEUE"}},
+			},
+		})
+		_ = os.Stdin.Close()
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "STDIN_CLOSED_READY"}},
+			},
+		})
+		// Give the driver's stdin-writer pump time to actually wake,
+		// dequeue, and attempt (and fail) its write against the
+		// now-closed pipe before this process finishes the turn --
+		// otherwise a fast finish could race ahead of the test's own
+		// EnqueuePrompt call and leave nothing for the pump to even
+		// attempt. This is cross-process timing against a real
+		// subprocess (see e2e/AGENTS.md's carve-out for exactly this
+		// class of wait), not a substitute for the Go test's own
+		// event-driven synchronization, which never sleeps.
+		time.Sleep(300 * time.Millisecond)
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "STDIN_CLOSED_READY",
+			"usage": map[string]any{
+				"input_tokens":  5,
+				"output_tokens": 5,
+			},
+		})
+		return
+	case "queue_injection_blocked_write":
+		// Proves a stop landing while the driver's stdin-writer pump is
+		// BLOCKED inside its own stdin.Write call still retires it
+		// promptly, instead of wedging <-pumpDone (and so the whole
+		// turn) until ctx cancellation -- the shape a `claude --bg`
+		// leaked grandchild holding stdin's read end open produces. This
+		// mirrors "bg_leak" below exactly, just on stdin instead of
+		// stdout/stderr: spawn a grandchild that inherits THIS process's
+		// stdin (a DUPLICATED copy of the same pipe read end) and sleeps
+		// well past any sane test timeout, then let THIS direct child
+		// exit normally and quickly right after its own "result" --
+		// cmd.Wait() on the direct child returns promptly either way (the
+		// existing EOF-avoidance design this file's own doc comment
+		// covers), but the pipe's read end stays held open by the
+		// grandchild regardless of the direct child's own lifetime, so
+		// ONLY an explicit stdin.Close() on the driver's side can ever
+		// unblock a write still in flight against it. The test kills the
+		// grandchild by PID (FAKE_CLAUDE_LEAK_PID_FILE, same convention
+		// "bg_leak" uses) once it has proved the driver did not wedge on
+		// it.
+		//
+		// Emits WAITING_FOR_QUEUE, spawns the leaker, then gives the
+		// driver's own mid-turn injection write (the test enqueues
+		// something many times larger than any real pipe buffer) time to
+		// actually start and block inside the OS write(2) call before
+		// this process emits "result" and exits -- cross-process timing
+		// against a real subprocess, not a substitute for the Go test's
+		// own event-driven synchronization (see e2e/AGENTS.md's carve-out
+		// for this class of wait).
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "WAITING_FOR_QUEUE"}},
+			},
+		})
+		leaker := exec.Command(os.Args[0])
+		leaker.Env = []string{"FAKE_CLAUDE_MODE=bg_leak_child"}
+		leaker.Stdin = os.Stdin
+		if err := leaker.Start(); err == nil {
+			if pidFile := os.Getenv("FAKE_CLAUDE_LEAK_PID_FILE"); pidFile != "" {
+				_ = os.WriteFile(pidFile, []byte(strconv.Itoa(leaker.Process.Pid)), 0o644)
+			}
+			_ = leaker.Process.Release()
+		}
+		time.Sleep(500 * time.Millisecond)
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "done despite a blocked mid-turn write",
 			"usage": map[string]any{
 				"input_tokens":  5,
 				"output_tokens": 5,
