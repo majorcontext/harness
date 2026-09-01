@@ -289,6 +289,108 @@ func TestClaudeCodeErrorResultReturnsError(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification is the
+// regression test for the claude-code delegated lane's own bypass of the
+// task-notification delivery/commit machinery — root-caused live as an
+// infinite resume loop: a settled non-blocking child's notification never
+// reached the model (runClaudeCodeTurn built its CLI turn purely from
+// lastUserMessageText, never calling checkoutTaskNotificationsSegment the
+// way the native loop body — engine.go's runAgenticLoop, via streamTurn —
+// does on every call), so the model kept answering the bare trigger
+// string with "No action taken," and the notification, never committed,
+// stayed pending forever, so SessionManager.finalizeTurn's
+// hasPendingTaskNotifications check kept re-firing triggerResumeLocked.
+//
+// Proves both halves of the fix, in one real Prompt call through the fake
+// CLI: (a) the delivery half — the CLI's actual STDIN contains the
+// checked-out notification's rendered content, not just the bare trigger
+// string, so the model can act on the child's real result; (b) the commit
+// half — a turn that then SUCCEEDS clears the pending set
+// (hasPendingTaskNotifications false afterward, breaking the loop) and
+// durably records delivery (a recTaskNotifyDelivered record on the
+// session's own log, exactly like the native path's own commit).
+func TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+	stdinLog := filepath.Join(t.TempDir(), "stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	s.enqueueTaskNotification(taskNotification{
+		ChildID: "ses_child1",
+		Agent:   "explore",
+		Status:  StatusDone,
+		Result:  "found the bug in foo.go",
+	})
+
+	if _, err := s.Prompt(context.Background(), taskResumeTriggerText); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	stdin := string(stdinBytes)
+	if !strings.Contains(stdin, "ses_child1") || !strings.Contains(stdin, "found the bug in foo.go") {
+		t.Fatalf("CLI stdin missing the checked-out notification's content (only the bare trigger reached the model): %s", stdin)
+	}
+
+	if s.hasPendingTaskNotifications() {
+		t.Error("notification still pending after a successful delegated turn — commitTaskNotifications did not run, so the resume loop is not broken")
+	}
+
+	data, err := os.ReadFile(filepath.Join(s.cfg.SessionDir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, `"type":"task.notify_delivered"`) || !strings.Contains(log, `"child_id":"ses_child1"`) {
+		t.Fatalf("log missing task.notify_delivered record: %s", log)
+	}
+}
+
+// TestClaudeCodeDelegatedTurnRequeuesTaskNotificationOnFailure is the
+// companion failure-path proof: when the delegated turn itself errors (the
+// CLI's own "error" mode here — an is_error result, see
+// TestClaudeCodeErrorResultReturnsError), the notification checked out for
+// that failed attempt must be REQUEUED, not lost — mirroring the native
+// loop body's own requeueTaskNotifications call on its streamTurnWithRetry
+// error path (engine.go's runAgenticLoop).
+func TestClaudeCodeDelegatedTurnRequeuesTaskNotificationOnFailure(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "error")
+	stdinLog := filepath.Join(t.TempDir(), "stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	s.enqueueTaskNotification(taskNotification{
+		ChildID: "ses_child1",
+		Status:  StatusDone,
+		Result:  "found the bug in foo.go",
+	})
+
+	if _, err := s.Prompt(context.Background(), taskResumeTriggerText); err == nil {
+		t.Fatal("Prompt returned no error for an is_error result")
+	}
+
+	// The failed attempt must actually have CHECKED OUT the notification
+	// (folded it into the CLI input it sent) — otherwise "still pending"
+	// below would trivially hold even with no checkout/requeue wiring at
+	// all, proving nothing about the requeue path this test targets.
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	if !strings.Contains(string(stdinBytes), "ses_child1") {
+		t.Fatalf("failed attempt's own CLI stdin never carried the notification (checkout never ran, so requeue is not actually exercised): %s", stdinBytes)
+	}
+
+	if !s.hasPendingTaskNotifications() {
+		t.Fatal("notification lost after a failed delegated turn — it was committed or dropped instead of requeued")
+	}
+	seg := s.checkoutTaskNotificationsSegment()
+	if !strings.Contains(seg, "ses_child1") {
+		t.Errorf("requeued notification missing from a later checkout: %q", seg)
+	}
+}
+
 // TestClaudeCodeAbortSignalsChild proves a canceled context makes
 // runClaudeCodeTurn return promptly (bounded well under fakeclaude's own
 // hour-long sleep) rather than hanging until the child exits on its own —

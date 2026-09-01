@@ -35,6 +35,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -87,16 +88,25 @@ func main() {
 	}
 
 	if mode != "fast_no_drain" {
-		// Drain (don't require) exactly one stdin line — the real driver
-		// writes one turn message and closes stdin; reading it keeps this
-		// stand-in honest about the protocol without validating its
-		// content.
-		go func() {
-			scanner := bufio.NewScanner(os.Stdin)
-			for scanner.Scan() {
-				// discard
+		// Read (and, when FAKE_CLAUDE_STDIN_LOG is set, record) the one
+		// turn-input line the real driver writes — the real driver writes
+		// its turn message and closes stdin BEFORE it ever reads this
+		// process's stdout (see runClaudeCodeTurn's own stdin write/close
+		// ordering, claude_code_backend.go), so a synchronous read-to-EOF
+		// here always completes promptly regardless of mode, with none of
+		// the goroutine-vs-process-exit race a background drain would
+		// carry for a test that actually wants the captured bytes.
+		// FAKE_CLAUDE_STDIN_LOG lets a test recover the EXACT bytes the
+		// driver sent — e.g. proving a checked-out task notification's
+		// rendered content actually reached the CLI's input, not just the
+		// bare trigger text (engine/claude_code_backend_test.go).
+		stdinBytes, _ := io.ReadAll(os.Stdin)
+		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" {
+			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				_, _ = f.Write(stdinBytes)
+				f.Close()
 			}
-		}()
+		}
 	}
 
 	sessionID := os.Getenv("FAKE_CLAUDE_SESSION_ID")

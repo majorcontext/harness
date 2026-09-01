@@ -2536,9 +2536,24 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			// (emitSessionError before returning) — a plugin host
 			// watching for session errors must see a delegated turn's
 			// failure exactly like a native one's.
+			//
+			// requeueTaskNotifications mirrors the native branch's own
+			// failure-path call (below, in the s.streamTurnWithRetry
+			// err != nil case): whatever runClaudeCodeTurn's own
+			// checkoutTaskNotificationsSegment call (claude_code_backend.go)
+			// checked out for this attempt never reached a request that
+			// survived, so return it to pending rather than lose it —
+			// see requeueTaskNotifications' doc comment.
+			s.requeueTaskNotifications()
 			s.emitSessionError(err)
 			return nil, err
 		}
+		// This attempt succeeded and msg is about to be returned as the
+		// turn's real result: whatever was checked out for it really was
+		// delivered in the CLI input that produced msg. Commit BEFORE
+		// returning, mirroring the native branch's own commit-before-append
+		// ordering (below) — see commitTaskNotifications' doc comment.
+		s.commitTaskNotifications()
 		return msg, nil
 	}
 	s.emitStatus("busy")
