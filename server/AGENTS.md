@@ -49,16 +49,17 @@ Another session that owns the workdir still conflicts.
   natural drain trigger.
 - Dispatch queued input before goal auto-arm.
 - Keep abort independent from queue clear.
-- Keep `POST /enqueue` write-ahead and idempotent. Keep it text-only.
+- Keep `POST /enqueue` write-ahead and idempotent.
 - Keep `GET /queue` as the reconciliation surface.
 
 ## Prompt attachments
 
-`prompt_async` takes file blob parts beside its text parts: images and PDFs
-today. Validate every attachment before the run slot is claimed: allowed
-media type, inline data, bytes that really are the claimed type, and the
-size cap. Reject in the handler. Never persist an attachment a provider
-cannot render.
+`prompt_async` and `POST /enqueue` both take file blob parts beside their
+text parts: images and PDFs today. Validate every attachment before the run
+slot is claimed: allowed media type, inline data, bytes that really are the
+claimed type, and the size cap. Reject in the handler. Never persist an
+attachment a provider cannot render. Share `decodePromptParts` and its caps
+between both endpoints — do not fork a second validator.
 
 Add a media type only when EVERY provider adapter transcodes it. Each
 accepted type owns a verifier in `promptAttachmentTypes`.

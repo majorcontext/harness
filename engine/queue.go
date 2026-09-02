@@ -422,9 +422,23 @@ func (s *Session) flushQueueRecordsLocked() {
 // dequeue record and the turn's completion loses the delivery — it is
 // never redelivered — while the watermark correctly continues to report
 // the message as accepted: lose-once-on-crash, not deliver-twice.
-func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplicate bool, err error) {
+//
+// blobs are the prompt's attachments, carried through exactly like
+// EnqueuePrompt's own blobs parameter (see its doc comment): variadic so
+// every existing text-only caller and call site stays untouched, filtered
+// through usablePromptBlobs BEFORE the emptiness check so a caller passing
+// only unusable blobs (nil, or one with neither Data nor URL) cannot
+// satisfy "empty text is fine when a blob came with it" and durably persist
+// a prompt.queued record promising an attachment that can never be
+// delivered. They ride on the SAME seq as the prompt's text — there is no
+// separate idempotency key for an attachment, so a retry that resends the
+// identical seq is required to resend the identical blobs too (the caller
+// reconstructs the same request on retry; this method has no way to detect
+// a seq reused with DIFFERENT content, same as it already has none for text).
+func (s *Session) EnqueuePromptDurable(text string, seq int64, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
+	usable := usablePromptBlobs(blobs)
+	if trimmed == "" && len(usable) == 0 {
 		return 0, false, ErrEmptyPromptText
 	}
 	if seq < 1 {
@@ -462,7 +476,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 	// the record it is about to write.
 	s.flushQueueRecordsLocked()
 	const op = "enqueue_durable"
-	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq}}
+	rec := record{Type: recPromptQueued, Prompt: &promptRecord{ID: id, Text: trimmed, Seq: seq, Blobs: usable}}
 	if err := s.timedStorePhase(op, "write_record", func() error {
 		return s.writeRecord(rec)
 	}); err != nil {
@@ -487,7 +501,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64) (id int64, duplic
 			return 0, false, err
 		}
 	}
-	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq})
+	s.promptQueue = append(s.promptQueue, QueuedPrompt{ID: id, Text: trimmed, Seq: seq, Blobs: usable})
 	s.enqueueSeq = seq
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not

@@ -994,13 +994,28 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/TextPart"
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/PromptBlobPart"
           description: >
-            Text parts only. Unlike PromptRequest, this write-ahead route
-            takes no attachments at all: its callers are machine relays
-            (an inbox poller, a coordinator) whose upstream ack rides on the
-            durable-accept contract, not the interactive composer a person
-            attaches a file to.
+            Text parts and file attachments — the same shape PromptRequest
+            accepts, validated by the SAME gate (an attachment must be one
+            of image/png, image/jpeg, image/gif, image/webp, or
+            application/pdf; must carry inline base64 `data` rather than a
+            `url`; must really be the type it claims; must not exceed
+            20971520 bytes — see PromptRequest's `parts` description for the
+            full rule and the 33554432-byte whole-body bound). A rejected
+            attachment 400s before any run slot is claimed or anything is
+            durably accepted, so the caller's `seq` is not consumed and the
+            SAME seq is safe to retry with a fixed attachment.
+
+
+            A blob rides through the durable queue on its prompt's own
+            `seq` — there is no separate idempotency key for an
+            attachment — and survives a process restart with it, replaying
+            through the same drain machinery that already carries a
+            plain-queued prompt's attachments (idle dispatch, tool-call-
+            boundary append, goal-turn-boundary injection).
         seq:
           type: integer
           format: int64
@@ -2472,7 +2487,13 @@ paths:
               schema: { $ref: "#/components/schemas/EnqueueResponse" }
         "400":
           description: >
-            `parts` is empty, a part's type is not `text`, or `seq` is < 1.
+            `parts` is empty, a part's type is neither `text` nor `blob`,
+            `seq` is < 1, or a blob attachment fails PromptRequest's own
+            admission checks (unsupported media type, no inline `data`,
+            oversize, or bytes that do not decode as the claimed type) —
+            see `EnqueueRequest`'s `parts` description. A 400 here means the
+            caller's `seq` was NOT consumed: retry the same seq once the
+            attachment is fixed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -2491,6 +2512,17 @@ paths:
             prompt". Either way nothing was durably accepted, so the SAME
             seq is safe to retry immediately — idempotency makes the retry
             free once it lands.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: >
+            The request body exceeds 33554432 bytes and was refused before
+            being decoded — the same `promptRequestMaxBytes` guard
+            prompt_async's own 413 uses (see its description): blob `data`
+            is base64 and decoding it allocates, so an oversized body is
+            stopped at the read rather than after the cost is paid. Nothing
+            was durably accepted, so the caller's `seq` was not consumed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
