@@ -49,17 +49,14 @@ Responses clients so opaque data cannot cross endpoints.
 Do not validate credentials during registry construction. The first provider
 request owns credential validation.
 
-## Monitor and hub composition
+## Hub composition
 
-`cmd/harness` may import `tools/hub` and `tools/monitor`. The server may
+`cmd/harness` may import `tools/hub`. The server may
 not.
 
 Only allow empty-token unauthenticated service when `resolveUnauthenticated`
 proves loopback or receives the explicit non-loopback opt-in. Keep the two
 warning messages distinct.
-
-Print tokenized monitor URLs only to an interactive terminal. Do not write a
-tokenized URL to piped production logs.
 
 ## GC and pprof diagnostics
 

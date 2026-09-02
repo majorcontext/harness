@@ -13,7 +13,7 @@ remain authoritative when historical material describes an earlier behavior.
 | [models-and-providers.md](models-and-providers.md) | Model state, effort, cache affinity, and adapters |
 | [mcp-tool-loading.md](mcp-tool-loading.md) | Deferred MCP schemas and stable tool ordering |
 | [plugins-and-protocols.md](plugins-and-protocols.md) | Plugin lifecycle and external protocol boundaries |
-| [development-interfaces.md](development-interfaces.md) | Hub and monitor behavior |
+| [development-interfaces.md](development-interfaces.md) | Hub behavior |
 | [fleet-and-serve.md](fleet-and-serve.md) | Fleet state, lineage, exhaustion, and diagnostics |
 | [deploy-modal.md](deploy-modal.md) | Deployment modal behavior |
 
@@ -36,4 +36,3 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 | [managed-processes.md](design/managed-processes.md) | Box-scoped managed process lifecycle |
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |
 | [nested-instruction-loading.md](design/nested-instruction-loading.md) | Project instruction discovery and truncation |
-| [monitor-mockup.html](design/monitor-mockup.html) | Monitor visual reference |

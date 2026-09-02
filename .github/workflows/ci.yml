@@ -47,14 +47,6 @@ jobs:
         # test file, which the runner then runs directly.
         run: node --test tools/inspector/*_test.mjs
 
-      - name: Monitor unit tests
-        # tools/monitor is the same pattern as the inspector above: a single
-        # build-free HTML file whose pure helpers (SSE parser, activity
-        # reducer, transcript fold, route codec, formatters) are extracted
-        # from a TESTABLE region and unit-tested with node's built-in test
-        # runner. Same glob-not-directory rationale as the inspector step.
-        run: node --test tools/monitor/*_test.mjs
-
       - name: Hub unit tests
         # tools/hub's pure logic has been unit-tested by hub_test.mjs since
         # its introduction (AGENTS.md's "Development hub" section documents

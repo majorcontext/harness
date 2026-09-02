@@ -3162,58 +3162,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
-  /:
-    get:
-      operationId: monitorRootRedirect
-      summary: Convenience redirect from the bare root to the monitor UI.
-      description: >
-        Present only when this instance was started with the monitor page
-        embedded (same `MonitorPage` guard as `/monitor` below); a box that
-        omits it 404s here exactly as any other unmatched path. 302-redirects
-        to the canonical `/monitor` so visiting the box's host with no path
-        lands on the monitor. UNAUTHENTICATED like `/monitor` — the redirect
-        carries no secret, and a browser preserves any `#t=<token>` fragment
-        across the 302 (fragments are never sent to the server). Anchored to
-        the root path ONLY (`GET /{$}`), so it never shadows another route's
-        404 — see server/handlers.go's handleRoot.
-      security: []
-      responses:
-        "302":
-          description: >
-            Redirect to /monitor. `Location: /monitor`.
-          headers:
-            Location:
-              schema: { type: string, example: /monitor }
-        "404":
-          description: This instance was not started with the monitor page embedded.
-
-  /monitor:
-    get:
-      operationId: monitorPage
-      summary: The embedded, single-file session monitor UI.
-      description: >
-        Present only when this instance was started with the monitor page
-        embedded (cmd/harness's `serve` always does this; see
-        docs/development-interfaces.md); a box that omits it 404s here
-        exactly as it always has. Serves tools/monitor/index.html verbatim,
-        byte for byte — the same static, build-free, credential-free page
-        that can also be opened via file:// or hosted separately.
-        UNAUTHENTICATED like /health: the page itself carries no secrets,
-        and every API call it makes is still authenticated normally by the
-        browser entering a run token into the page. A
-        Content-Security-Policy header scopes it to same-origin
-        (connect-src 'self') — see server/handlers.go's
-        monitorContentSecurityPolicy.
-      security: []
-      responses:
-        "200":
-          description: OK — the monitor's index.html.
-          content:
-            text/html:
-              schema: { type: string }
-        "404":
-          description: This instance was not started with the monitor page embedded.
-
   # Candidate for v1.1, deliberately deferred: GET /session/{id}/diff
   # (working-tree diff for orchestrator PR-preview rendering). Needs a
   # position on git ownership inside the engine first.

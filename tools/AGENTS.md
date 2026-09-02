@@ -4,7 +4,7 @@ These rules apply to `tools/`. Harness does not merge ancestor files. If root
 guidance is not active, locate the Git root and read `<repo-root>/AGENTS.md`.
 Resolve repository paths and commands from that root.
 
-The hub, monitor, and inspector are operator tools. They are not deployed
+The hub and inspector are operator tools. They are not deployed
 multi-user products. Keep each page build-free and dependency-free unless a
 separate design changes that constraint.
 
@@ -57,39 +57,6 @@ The hub uses a dark tactical-telemetry style.
 - Keep body text monospace and headings heavy uppercase.
 - Do not add gradients, soft shadows, rounded corners, or decorative metadata.
 - Do not add emoji or em dashes to hub UI strings.
-
-## Session monitor
-
-The monitor is a single-box live board.
-
-- Keep the standalone `file://` and static-host path working.
-- Keep `GET /monitor` as the same-origin embedded path.
-- Store manual connection settings in the documented local-storage keys.
-- Keep route state in explicit fragment parameters.
-- Adopt a `#t=` token into storage, then scrub it from the visible URL.
-- Do not connect an embedded page to a different origin under its same-origin
-  CSP.
-- Keep the testable helper region stable.
-
-Run:
-
-```bash
-node --test tools/monitor/*_test.mjs
-go test -race ./tools/monitor/...
-```
-
-Read `tools/monitor/e2e/README.md`,
-`docs/development-interfaces.md`, and the approved monitor
-mockup before a layout change.
-
-### Monitor UI design language
-
-The monitor uses the instrument-sheet design, not the hub design.
-
-- Preserve the light-first OKLCH token system and its dark variant.
-- Reserve green, amber, and red for state.
-- Reserve the filled accent for the send action.
-- Keep `docs/design/monitor-mockup.html` as the visual specification.
 
 ## Inspector
 
