@@ -1486,6 +1486,17 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// two can never drift on the torn-write and ID-burn rules it holds.
 	qf := promptQueueFold{queue: s.promptQueue, nextID: s.promptQueueNextID, seq: s.enqueueSeq}
 
+	// apply is the switch every fold below writes into a Session field
+	// through. A snapshot-anchored load (snapshotStartAfter above) SKIPS
+	// this switch for every record at or before the anchor, so any Session
+	// field only ever set here (never restored elsewhere) must also be
+	// captured/restored by snapshot.go's captureSnapshotLocked/
+	// restoreSnapshot — see sessionSnapshot's own doc comment and
+	// TestEverySessionFieldIsClassifiedForSnapshotting
+	// (engine/snapshot_field_coverage_test.go), the fail-closed guard that
+	// requires every Session field to be classified as snapshotted or
+	// deliberately excluded, so a new case added here cannot silently ship
+	// without that decision being made.
 	apply := func(rec record, line int, isLast bool) error {
 		// Seed the session's metadata-index fold from the same records
 		// (index.go). A resumed session keeps writing that index through
