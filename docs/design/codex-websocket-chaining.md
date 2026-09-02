@@ -53,13 +53,11 @@ The existing WebSocket configuration is the feature gate. No new user-facing
 configuration controls response chaining or remote prewarm. A native Responses
 client under another family never sends `previous_response_id` or `generate`.
 
-The engine's local scheduling gate is the optional `StartupPrewarmer` interface.
-`*openai.Client` implements that interface for every Responses family, then its
-`Prewarm` method applies the Codex, WebSocket, and session-key checks above.
-Consequently, fresh non-Codex Responses sessions can perform early local
-discovery, hooks, and request assembly before `Prewarm` returns without network
-activity. This is part of the shipped disclosure boundary, not a claim that
-non-Codex requests use response chaining.
+The engine's local scheduling gate is the optional `StartupPrewarmer` interface
+and its side-effect-free `StartupPrewarmEnabled` method. The engine checks both
+before instruction and Skill discovery, hooks, MCP access, or tool assembly.
+`*openai.Client` returns true only for `CodexFamily` with WebSocket transport.
+Generic OpenAI and HTTP-only sessions retain first-prompt lazy assembly.
 
 ## Architecture
 
@@ -177,10 +175,11 @@ Only live adapter state authorizes an incremental request.
 
 `NewSession` remains non-blocking. After a fresh session has an ID and has
 completed local construction, the engine schedules one bounded background task
-when its initially configured provider implements `StartupPrewarmer`. Managed
-roots wait for adoption and task-tool installation. Children wait until their
-final lineage, model, agent type, and tool restrictions exist. Loaded sessions
-do not prewarm.
+when its initially configured provider implements `StartupPrewarmer` and reports
+startup prewarm enabled. The engine checks this before any early assembly.
+Managed roots wait for adoption and task-tool installation. Children wait until
+their final lineage, model, agent type, and tool restrictions exist. Loaded and
+ineligible sessions do not prewarm.
 
 The prewarm task prepares the stable first-request prefix before any user input:
 
@@ -247,12 +246,11 @@ prompt:
 Prewarm sends no user prompt, transcript, tool result, or arbitrary project file
 content beyond existing instruction and Skill catalog discovery.
 
-This behavior deliberately changes Harness's lazy boundary. Project reads,
-Skill discovery, plugin hooks, MCP connection attempts, and request assembly can
-begin after fresh-session creation and before the first prompt for any provider
-that implements `StartupPrewarmer`. Provider network activity begins only if
-that implementation performs it. The shipped OpenAI implementation performs
-network prewarm only after the Codex scope gate passes.
+This behavior changes Harness's lazy boundary only for eligible fresh Codex
+WebSocket sessions. Project reads, Skill discovery, plugin hooks, MCP connection
+attempts, request assembly, and provider activity can begin after session
+creation and before the first prompt. Generic OpenAI, HTTP-only, loaded,
+evaluator, and summarizer sessions retain first-use behavior.
 
 ### Validation and discovery errors
 
@@ -341,15 +339,21 @@ A completed WebSocket model call reports `provider.RequestMetadata` on its
 - `complete_input_items`.
 - `sent_input_items`.
 - `previous_response_used`.
+- `chain_recovered`.
 
-HTTP calls and providers that omit request metadata omit all four metric fields.
+HTTP calls and providers that omit request metadata omit all projection fields.
 A successful full-request recovery after `previous_response_not_found` reports
-the final projection as `full` with `previous_response_used=false`; the shipped
-metadata has no separate recovery flag.
+`request_mode=full`, `previous_response_used=false`, and
+`chain_recovered=true`.
 
 A `generate:false` prewarm is not a model inference, user turn, assistant
-message, or `turn_metrics` record. The implementation does not emit prewarm
-status, duration, or age metrics.
+message, or `turn_metrics` record. The engine emits separate `startup_prewarm`
+records through `Config.OnStartupPrewarmMetrics` or structured stderr. The
+bounded statuses are `started`, `ready`, `consumed`, `failed`, `timed_out`,
+`cancelled`, and `stale`. Records include `session_id`, `duration_ms`, and
+`age_ms`. They never contain a provider response ID. `consumed` and `stale`
+report age when the first completed request resolves compatibility. A complete
+request or recovered chain miss marks a ready prewarm stale.
 
 Existing `response.completed` usage remains authoritative for token accounting.
 The server reports inclusive `input_tokens` and
@@ -459,8 +463,9 @@ Validate behavior and the shipped metrics before broad rollout:
 5. Inspect provider-reported cache-read input.
 6. Monitor provider errors and truncated-stream rate.
 
-The shipped metrics do not identify prewarm outcomes or chain-miss recovery as
-separate counters. Use a wire trace when those distinctions are required.
+Use `startup_prewarm.status` to compare eligibility, readiness, and first-turn
+consumption. Use `turn_metrics.chain_recovered` to monitor chain misses without
+exposing response IDs.
 
 Rollback disables Responses WebSocket transport or reverts the adapter change.
 Canonical history and journals require no migration or repair.

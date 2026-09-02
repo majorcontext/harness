@@ -104,13 +104,15 @@ Only `CodexFamily` requests with WebSocket transport and a non-empty
 - Never log, persist, or export a response ID as projection metadata.
 
 `generate:false` prewarm can accept empty input. Ordinary requests cannot.
-Prewarm emits no provider events. `Prewarm` must return promptly when its context
-is canceled; the engine cannot terminate a callback that ignores cancellation.
+`StartupPrewarmEnabled` returns true only for `CodexFamily` with WebSocket
+transport. Prewarm emits no provider events. `Prewarm` must return promptly when
+its context is canceled; the engine cannot terminate a callback that ignores
+cancellation.
 
 Completed WebSocket streams can report `RequestMetadata` as `full` or
-`incremental`. Report complete and sent item counts without response IDs. Keep
-OpenAI usage provider-reported: subtract `cached_tokens` from inclusive input
-and expose the cached subset as `CacheReadTokens`.
+`incremental`. Report complete and sent item counts and `chain_recovered` without
+response IDs. Keep OpenAI usage provider-reported: subtract `cached_tokens` from
+inclusive input and expose the cached subset as `CacheReadTokens`.
 
 ## Native OpenAI Responses endpoints
 

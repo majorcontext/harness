@@ -109,9 +109,9 @@ other arguments share that limit.
 ## Project instructions (AGENTS.md)
 
 The engine injects a project's `AGENTS.md` into the system prompt. The first
-load normally happens during `Prompt`. A fresh session whose configured
-provider implements `provider.StartupPrewarmer` starts the same load in its
-background startup assembly instead. The engine walks up from `Config.WorkDir`
+load normally happens during `Prompt`. An eligible fresh session starts the
+same load during background startup prewarm. Loaded sessions and sessions whose
+provider is not eligible remain lazy until `Prompt`. The engine walks up from `Config.WorkDir`
 for `AGENTS.md` (falling back to `AGENT.md`), stopping at the git root or
 filesystem root; the closest file wins, per the
 [agents.md](https://agents.md/) convention. The file is schema-less Markdown —
@@ -187,9 +187,9 @@ docs/design/nested-instruction-loading.md.
 
 The engine advertises [Agent Skills](https://agentskills.io) in the system
 prompt following the spec's progressive-disclosure model. Discovery normally
-runs on the first `Prompt`, alongside instruction loading. A fresh session with
-a startup-prewarm-capable provider starts both load-once operations during
-background startup assembly. The engine runs `skill.Discover` over each
+runs on the first `Prompt`, alongside instruction loading. An eligible fresh
+session starts both load-once operations during background startup prewarm.
+Loaded and ineligible sessions remain lazy until the first prompt. The engine runs `skill.Discover` over each
 configured directory, merges the results sorted by name, and injects one system
 segment **after** the instructions segment and before hook (`system.transform`)
 segments. That segment is stage 1 only: a header telling the model it MUST read
@@ -657,8 +657,10 @@ are final. Loaded sessions, goal evaluators, compaction summaries, and the
 Claude Code delegated path do not schedule startup prewarm.
 
 The engine schedules the task only when the initially configured provider
-implements `provider.StartupPrewarmer`. It then performs the same stable-prefix
-assembly as a real turn:
+implements `provider.StartupPrewarmer` and its side-effect-free
+`StartupPrewarmEnabled` method returns true. The eligibility check runs before
+instruction and Skill discovery, hooks, MCP access, or tool assembly. The task
+then performs the same stable-prefix assembly as a real turn:
 
 1. Load and cache project instructions.
 2. Discover and cache the Agent Skills catalog.
@@ -668,15 +670,14 @@ assembly as a real turn:
 6. Build an empty-message `provider.Request` with the session key.
 7. Call the effective provider's `Prewarm` method if it still has the capability.
 
-This is an early disclosure boundary. Disk reads, hooks, MCP connection attempts,
-plugin activity, and provider work can start after fresh-session construction
-and before user input. `*openai.Client` implements the optional interface for all
-native Responses families. Therefore, its local discovery and assembly can run
-for a non-Codex Responses family, although `openai.Client.Prewarm` returns before
-network activity unless the resolved family is `codex`, WebSocket transport is
-enabled, and the session key is non-empty. A qualifying Codex call connects the
-session-keyed socket and sends an empty-input `response.create` with
-`generate:false`. It keeps `store:false` and waits for `response.completed`.
+This is an early disclosure boundary for eligible fresh sessions. Disk reads,
+hooks, MCP connection attempts, plugin activity, and provider work can start
+after fresh-session construction and before user input. The OpenAI client is
+eligible only when its family is `codex` and WebSocket transport is enabled.
+Generic OpenAI and HTTP-only clients remain lazy until the first prompt. A
+qualifying Codex call connects the session-keyed socket and sends an empty-input
+`response.create` with `generate:false`. It keeps `store:false` and waits for
+`response.completed`.
 
 The prewarm request contains the stable system and tool prefix. It can disclose
 base and appended system segments, project instructions, the Agent Skills
@@ -709,10 +710,18 @@ the first prompt. Providers must obey the cancellation contract to prevent that
 residual limitation.
 
 Prewarm emits no provider events, user or assistant messages, usage, or
-`turn_metrics`. Deterministic instruction and Skill discovery errors remain
-cached and fail the first prompt through the normal checks. Startup-only
-provider, hook, MCP, and transport failures remain best effort; the normal turn
-reports only failures it encounters itself.
+`turn_metrics`. It emits `startup_prewarm` lifecycle records through
+`Config.OnStartupPrewarmMetrics` or the default structured stderr sink. Statuses
+are `started`, `ready`, `consumed`, `failed`, `timed_out`, `cancelled`, and
+`stale`. Each record contains `session_id`, `duration_ms`, and `age_ms` without a
+provider response ID. `consumed` and `stale` report age when the first completed
+request resolves whether it used compatible prewarm lineage. A full request or
+a chain-miss recovery makes a ready prewarm `stale`.
+
+Deterministic instruction and Skill discovery errors remain cached and fail the
+first prompt through the normal checks. Startup-only provider, hook, MCP, and
+transport failures remain best effort; the normal turn reports only failures it
+encounters itself.
 
 ## Per-turn metrics
 
@@ -743,12 +752,12 @@ ID threaded through the provider boundary.
 
 An adapter can attach transport projection metadata only to `EventDone`. When
 present, `turn_metrics` also includes `request_mode`, `complete_input_items`,
-`sent_input_items`, and `previous_response_used`. Codex WebSocket calls report
-`request_mode` as `full` or `incremental`. An immediate chain-miss recovery
-reports the final complete retry as `full`; there is no separate recovery field.
-HTTP and adapters without this metadata omit all four fields. Startup prewarm
-emits no `EventDone` to the engine and therefore has no `turn_metrics` record or
-prewarm-status metric.
+`sent_input_items`, `previous_response_used`, and `chain_recovered`. Codex
+WebSocket calls report `request_mode` as `full` or `incremental`. An immediate
+chain-miss recovery reports the final complete retry as `full` and sets
+`chain_recovered=true`. HTTP and adapters without projection metadata omit these
+fields. Startup prewarm emits no `EventDone` and therefore has no `turn_metrics`
+record; its separate lifecycle metric is described above.
 
 Usage remains the completed response's provider report. For OpenAI Responses,
 `input_tokens` on the wire includes `input_tokens_details.cached_tokens`.

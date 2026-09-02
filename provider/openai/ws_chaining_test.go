@@ -62,6 +62,32 @@ func TestIncrementalInputRejectsChangedOrShortPrefix(t *testing.T) {
 	}
 }
 
+func TestIncrementalInputRejectsAdjacentLargeIntegers(t *testing.T) {
+	previous := &apiRequest{Input: rawItems(`{"value":9007199254740992}`)}
+	current := rawItems(`{"value":9007199254740993}`, `{"value":"suffix"}`)
+
+	if got, ok := incrementalInput(previous, nil, current); ok || got != nil {
+		t.Fatalf("incrementalInput = (%s, %v), want (nil, false) for distinct large integers", got, ok)
+	}
+}
+
+func TestResponsesRequestPropertiesRejectAdjacentLargeToolSchemaIntegers(t *testing.T) {
+	previous := &apiRequest{Tools: []apiToolDef{{
+		Type:       "function",
+		Name:       "search",
+		Parameters: json.RawMessage(`{"type":"integer","maximum":9007199254740992}`),
+	}}}
+	current := &apiRequest{Tools: []apiToolDef{{
+		Type:       "function",
+		Name:       "search",
+		Parameters: json.RawMessage(`{"type":"integer","maximum":9007199254740993}`),
+	}}}
+
+	if responsesRequestPropertiesMatch(previous, current) {
+		t.Fatal("responsesRequestPropertiesMatch accepted distinct adjacent large schema integers")
+	}
+}
+
 func TestResponsesRequestPropertiesMatchCoversEveryField(t *testing.T) {
 	temperature := 0.2
 	topP := 0.8
@@ -319,9 +345,10 @@ func TestWebSocketSecondTurnSendsOnlyIncrementalSuffix(t *testing.T) {
 	}
 }
 
-func TestWebSocketEmptyResponseIDDoesNotPublishLineage(t *testing.T) {
+func TestWebSocketTerminalEmptyResponseIDDoesNotReuseCreatedIDForLineage(t *testing.T) {
 	server := newWSLineageServer(t)
 	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"response.created","response":{"id":"resp_created_must_not_authorize_lineage"}}`,
 		`{"type":"response.output_text.delta","output_index":0,"delta":"two"}`,
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"two"}]}}`,
 		`{"type":"response.completed","response":{}}`,
@@ -543,7 +570,7 @@ func TestPreviousResponseNotFoundRetriesFullRequestOnce(t *testing.T) {
 	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil {
 		t.Fatalf("terminal event = %+v, want EventDone with request metadata", terminal)
 	}
-	want := provider.RequestMetadata{Mode: provider.RequestModeFull, CompleteInputItems: 3, SentInputItems: 3, PreviousResponseUsed: false}
+	want := provider.RequestMetadata{Mode: provider.RequestModeFull, CompleteInputItems: 3, SentInputItems: 3, PreviousResponseUsed: false, ChainRecovered: true}
 	if !reflect.DeepEqual(*terminal.RequestMetadata, want) {
 		t.Fatalf("request metadata = %+v, want %+v", *terminal.RequestMetadata, want)
 	}

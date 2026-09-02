@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -133,11 +134,21 @@ func incrementalInput(previous *apiRequest, responseItems, current []json.RawMes
 }
 
 func rawJSONEqual(previous, current json.RawMessage) bool {
-	var previousValue, currentValue any
-	if json.Unmarshal(previous, &previousValue) != nil || json.Unmarshal(current, &currentValue) != nil {
-		return false
+	decode := func(raw json.RawMessage) (any, bool) {
+		if !json.Valid(raw) {
+			return nil, false
+		}
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return nil, false
+		}
+		return value, true
 	}
-	return reflect.DeepEqual(previousValue, currentValue)
+	previousValue, previousOK := decode(previous)
+	currentValue, currentOK := decode(current)
+	return previousOK && currentOK && reflect.DeepEqual(previousValue, currentValue)
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
+	openaiadapter "github.com/majorcontext/harness/provider/openai"
 )
 
 type startupPrewarmProvider struct {
@@ -23,7 +25,10 @@ type startupPrewarmProvider struct {
 	release            <-chan struct{}
 	prewarmErr         error
 	ignoreCancellation bool
+	enabled            bool
 	returnOnce         sync.Once
+
+	requestMetadata *provider.RequestMetadata
 
 	mu             sync.Mutex
 	streamRequests []*provider.Request
@@ -32,12 +37,15 @@ type startupPrewarmProvider struct {
 func newStartupPrewarmProvider(name string) *startupPrewarmProvider {
 	return &startupPrewarmProvider{
 		name:            name,
+		enabled:         true,
 		prewarmRequests: make(chan *provider.Request, 1),
 		prewarmReturned: make(chan struct{}),
 	}
 }
 
 func (p *startupPrewarmProvider) Name() string { return p.name }
+
+func (p *startupPrewarmProvider) StartupPrewarmEnabled() bool { return p.enabled }
 
 func (p *startupPrewarmProvider) Prewarm(ctx context.Context, req *provider.Request) error {
 	p.prewarmRequests <- cloneStartupRequest(req)
@@ -64,7 +72,7 @@ func (p *startupPrewarmProvider) Stream(ctx context.Context, req *provider.Reque
 	p.streamRequests = append(p.streamRequests, cloneStartupRequest(req))
 	p.mu.Unlock()
 	msg := &message.Message{ID: "msg_ready", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "ready"}}}
-	return &scriptedStream{events: []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: provider.Usage{InputTokens: 3, OutputTokens: 2}}}}, nil
+	return &scriptedStream{events: []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: provider.Usage{InputTokens: 3, OutputTokens: 2}, RequestMetadata: p.requestMetadata}}}, nil
 }
 
 func (p *startupPrewarmProvider) streams() []*provider.Request {
@@ -98,6 +106,225 @@ func requirePrewarmRequest(t *testing.T, p *startupPrewarmProvider) *provider.Re
 	default:
 		t.Fatal("startup prewarm did not start")
 		return nil
+	}
+}
+
+type startupCountingMCP struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *startupCountingMCP) Tools(context.Context) []provider.ToolDef {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+	return nil
+}
+
+func (*startupCountingMCP) CallTool(context.Context, string, json.RawMessage) (message.Parts, bool, error) {
+	return nil, false, nil
+}
+
+func (*startupCountingMCP) CallServerTool(context.Context, string, string, json.RawMessage) (message.Parts, bool, error) {
+	return nil, false, nil
+}
+
+func (m *startupCountingMCP) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+func TestGenericOpenAIStartupPrewarmDoesNoEarlyAssembly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		work := t.TempDir()
+		if err := os.WriteFile(filepath.Join(work, "AGENTS.md"), []byte("instructions"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := &openaiadapter.Client{Family: openaiadapter.Family, UseWebSocketTransport: true}
+		hooks := &fakeHooks{segments: []string{"hook"}}
+		mcp := &startupCountingMCP{}
+		cfg := startupConfig(p)
+		cfg.WorkDir = work
+		cfg.Hooks = hooks
+		cfg.MCP = mcp
+
+		s := NewSession(cfg)
+		synctest.Wait()
+
+		s.mu.Lock()
+		instructionsLoaded := s.instrLoaded
+		skillsLoaded := s.skillsLoaded
+		s.mu.Unlock()
+		if instructionsLoaded || skillsLoaded {
+			t.Fatalf("early discovery = instructions:%v skills:%v, want neither", instructionsLoaded, skillsLoaded)
+		}
+		if hooks.paramCalls != 0 || hooks.systemCalls != 0 {
+			t.Fatalf("early hook calls = params:%d system:%d, want zero", hooks.paramCalls, hooks.systemCalls)
+		}
+		if got := mcp.count(); got != 0 {
+			t.Fatalf("early MCP Tools calls = %d, want zero", got)
+		}
+	})
+}
+
+func TestStartupPrewarmBothReadyAndPromptCanceledDoesNotMutate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		for i := 0; i < 100; i++ {
+			p := newStartupPrewarmProvider("test")
+			s := NewSession(startupConfig(p))
+			requirePrewarmRequest(t, p)
+			<-p.prewarmReturned
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			_, err := s.Prompt(ctx, "must not append")
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("iteration %d: Prompt error = %v, want context.Canceled", i, err)
+			}
+			if got := s.History(); len(got) != 0 {
+				t.Fatalf("iteration %d: history = %#v, want empty", i, got)
+			}
+			if got := len(p.streams()); got != 0 {
+				t.Fatalf("iteration %d: Stream calls = %d, want zero", i, got)
+			}
+		}
+	})
+}
+
+func TestStartupPrewarmMetricsExposeLifecycleAndResolution(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newStartupPrewarmProvider("test")
+		release := make(chan struct{})
+		p.release = release
+		p.requestMetadata = &provider.RequestMetadata{
+			Mode:                 provider.RequestModeIncremental,
+			PreviousResponseUsed: true,
+		}
+		metrics := make(chan StartupPrewarmMetrics, 3)
+		cfg := startupConfig(p)
+		cfg.OnStartupPrewarmMetrics = func(m StartupPrewarmMetrics) { metrics <- m }
+		s := NewSession(cfg)
+		requirePrewarmRequest(t, p)
+		readyTimer := time.NewTimer(2 * time.Second)
+		defer readyTimer.Stop()
+		<-readyTimer.C
+		close(release)
+		<-p.prewarmReturned
+		promptTimer := time.NewTimer(3 * time.Second)
+		defer promptTimer.Stop()
+		<-promptTimer.C
+		if _, err := s.Prompt(context.Background(), "hello"); err != nil {
+			t.Fatal(err)
+		}
+
+		want := []StartupPrewarmStatus{StartupPrewarmStarted, StartupPrewarmReady, StartupPrewarmConsumed}
+		for i, status := range want {
+			got := <-metrics
+			if got.Status != status {
+				t.Fatalf("metrics[%d].Status = %q, want %q", i, got.Status, status)
+			}
+			if got.SessionID != s.ID {
+				t.Fatalf("metrics[%d].SessionID = %q, want %q", i, got.SessionID, s.ID)
+			}
+			if got.DurationMillis < 0 || got.AgeMillis < 0 {
+				t.Fatalf("metrics[%d] timings = duration:%d age:%d, want non-negative", i, got.DurationMillis, got.AgeMillis)
+			}
+			switch status {
+			case StartupPrewarmStarted:
+				if got.DurationMillis != 0 || got.AgeMillis != 0 {
+					t.Fatalf("started timings = duration:%d age:%d, want 0/0", got.DurationMillis, got.AgeMillis)
+				}
+			case StartupPrewarmReady:
+				if got.DurationMillis != 2000 || got.AgeMillis != 2000 {
+					t.Fatalf("ready timings = duration:%d age:%d, want 2000/2000", got.DurationMillis, got.AgeMillis)
+				}
+			case StartupPrewarmConsumed:
+				if got.DurationMillis != 2000 || got.AgeMillis != 5000 {
+					t.Fatalf("consumed timings = duration:%d age:%d, want 2000/5000", got.DurationMillis, got.AgeMillis)
+				}
+			}
+		}
+	})
+}
+
+func TestStartupPrewarmMetricsExposeFailureTimeoutCancellationAndStale(t *testing.T) {
+	tests := []struct {
+		name   string
+		status StartupPrewarmStatus
+		run    func(*testing.T, *startupPrewarmProvider, *Session)
+	}{
+		{
+			name:   "failed",
+			status: StartupPrewarmFailed,
+			run: func(t *testing.T, p *startupPrewarmProvider, _ *Session) {
+				requirePrewarmRequest(t, p)
+				<-p.prewarmReturned
+			},
+		},
+		{
+			name:   "timed out",
+			status: StartupPrewarmTimedOut,
+			run: func(t *testing.T, p *startupPrewarmProvider, s *Session) {
+				requirePrewarmRequest(t, p)
+				if _, err := s.Prompt(context.Background(), "fallback"); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:   "cancelled",
+			status: StartupPrewarmCancelled,
+			run: func(t *testing.T, p *startupPrewarmProvider, s *Session) {
+				requirePrewarmRequest(t, p)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				_, _ = s.Prompt(ctx, "cancel")
+			},
+		},
+		{
+			name:   "stale",
+			status: StartupPrewarmStale,
+			run: func(t *testing.T, p *startupPrewarmProvider, s *Session) {
+				p.requestMetadata = &provider.RequestMetadata{Mode: provider.RequestModeFull}
+				requirePrewarmRequest(t, p)
+				<-p.prewarmReturned
+				if _, err := s.Prompt(context.Background(), "changed"); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				p := newStartupPrewarmProvider("test")
+				if tt.name == "failed" {
+					p.prewarmErr = errors.New("prewarm failed")
+				}
+				if tt.name == "timed out" || tt.name == "cancelled" {
+					p.release = make(chan struct{})
+				}
+				metrics := make(chan StartupPrewarmMetrics, 4)
+				cfg := startupConfig(p)
+				cfg.OnStartupPrewarmMetrics = func(m StartupPrewarmMetrics) { metrics <- m }
+				s := NewSession(cfg)
+				tt.run(t, p, s)
+				synctest.Wait()
+
+				<-metrics // started
+				var got StartupPrewarmMetrics
+				for len(metrics) > 0 {
+					got = <-metrics
+				}
+				if got.Status != tt.status {
+					t.Fatalf("final prewarm status = %q, want %q", got.Status, tt.status)
+				}
+				if got.DurationMillis < 0 || got.AgeMillis < 0 {
+					t.Fatalf("timings = duration:%d age:%d, want non-negative", got.DurationMillis, got.AgeMillis)
+				}
+			})
+		})
 	}
 }
 

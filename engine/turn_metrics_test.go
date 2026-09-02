@@ -297,6 +297,7 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 		CompleteInputItems:   7,
 		SentInputItems:       2,
 		PreviousResponseUsed: true,
+		ChainRecovered:       true,
 	}
 	prov := &scriptedProvider{name: "codex", turns: [][]provider.Event{{
 		{Type: provider.EventDone, Message: &message.Message{ID: responseID, Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}, StopReason: provider.StopEndTurn, RequestMetadata: metadata},
@@ -314,8 +315,8 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 		t.Fatalf("metrics records = %d, want 1", len(recorded))
 	}
 	got := recorded[0]
-	if got.RequestMode != provider.RequestModeIncremental || got.CompleteInputItems != 7 || got.SentInputItems != 2 || !got.PreviousResponseUsed {
-		t.Fatalf("projection metrics = %+v, want incremental 7 complete, 2 sent, previous response used", got)
+	if got.RequestMode != provider.RequestModeIncremental || got.CompleteInputItems != 7 || got.SentInputItems != 2 || !got.PreviousResponseUsed || !got.ChainRecovered {
+		t.Fatalf("projection metrics = %+v, want incremental 7 complete, 2 sent, previous response used, chain recovered", got)
 	}
 	raw, err := json.Marshal(got)
 	if err != nil {
@@ -336,6 +337,7 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 		`"complete_input_items":7`,
 		`"sent_input_items":2`,
 		`"previous_response_used":true`,
+		`"chain_recovered":true`,
 	} {
 		if !strings.Contains(record, field) {
 			t.Errorf("serialized turn_metrics record %q does not contain %s", record, field)

@@ -140,6 +140,9 @@ type RequestMetadata struct {
 	CompleteInputItems   int         `json:"complete_input_items"`
 	SentInputItems       int         `json:"sent_input_items"`
 	PreviousResponseUsed bool        `json:"previous_response_used"`
+	// ChainRecovered is true when an incremental request received an immediate
+	// chain miss and completed after one full-request retry.
+	ChainRecovered bool `json:"chain_recovered"`
 }
 
 // Event is one streaming event from a model call.
@@ -186,11 +189,13 @@ type Stream interface {
 }
 
 // StartupPrewarmer is an optional provider capability that prepares transport-local
-// state before the first model call. Prewarm must not emit provider events.
-// Prewarm MUST return promptly when ctx is canceled. The engine bounds prompt
-// waiting and session ownership at that deadline, but Go cannot forcibly stop a
-// callback that ignores cancellation.
+// state before the first model call. StartupPrewarmEnabled must be side-effect free;
+// the engine calls it before startup discovery, hooks, or tool assembly. Prewarm must
+// not emit provider events and MUST return promptly when ctx is canceled. The engine
+// bounds prompt waiting and session ownership at that deadline, but Go cannot forcibly
+// stop a callback that ignores cancellation.
 type StartupPrewarmer interface {
+	StartupPrewarmEnabled() bool
 	Prewarm(context.Context, *Request) error
 }
 

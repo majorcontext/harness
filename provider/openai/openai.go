@@ -118,6 +118,12 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 
 func (c *Client) Name() string { return c.family() }
 
+// StartupPrewarmEnabled reports whether engine startup assembly can produce
+// transport state for this client without relying on request data.
+func (c *Client) StartupPrewarmEnabled() bool {
+	return c.family() == CodexFamily && c.UseWebSocketTransport
+}
+
 // httpClient returns the *http.Client this adapter makes every request
 // with — c.HTTPClient, or http.DefaultClient when unset. Both the HTTP POST
 // path and the websocket dial (see Stream, wsPoolFor) use this exact value,
@@ -732,7 +738,7 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		assistant := s.assemble()
 		if name == "response.completed" && s.onComplete != nil {
-			s.onComplete(s.respID, assistant)
+			s.onComplete(ev.Response.ID, assistant)
 		}
 		s.queue = append(s.queue, provider.Event{
 			Type:              provider.EventDone,

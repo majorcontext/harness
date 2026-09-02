@@ -248,6 +248,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	chainedRequest := createOptions.PreviousResponseID != ""
 	newSource := func(name string, data []byte) *wsFrameSource {
 		return &wsFrameSource{
+			ctx:         ctx,
 			conn:        conn,
 			idleTimeout: p.idleTimeout,
 			buffered:    &wsFrame{name: name, data: data},
@@ -358,6 +359,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 				CompleteInputItems:   len(completeRequest.Input),
 				SentInputItems:       len(completeRequest.Input),
 				PreviousResponseUsed: false,
+				ChainRecovered:       true,
 			}
 			return newSource(name, data), fullMetadata, nil
 		}

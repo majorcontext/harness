@@ -591,6 +591,11 @@ type Config struct {
 	// the default first.
 	OnTurnMetrics func(TurnMetrics)
 
+	// OnStartupPrewarmMetrics receives non-secret startup-prewarm lifecycle
+	// records. Nil writes structured records to stderr. The callback can run
+	// from the startup worker and must be fast and concurrency-safe.
+	OnStartupPrewarmMetrics func(StartupPrewarmMetrics)
+
 	// Now is the clock TurnMetrics timing reads: streamTurn calls it just
 	// before the provider call, at the first non-activity stream event, and
 	// at EventDone, to compute TTFTMillis/StreamMillis (see TurnMetrics).
@@ -1245,8 +1250,9 @@ type Session struct {
 
 	// startupPrewarm is installed once after this fresh session reaches its
 	// final local or manager-owned construction gate. LoadSession leaves it nil.
-	startupPrewarm         *startupPrewarm
-	startupPrewarmEligible bool
+	startupPrewarm           *startupPrewarm
+	startupPrewarmResolution *startupPrewarmResolution
+	startupPrewarmEligible   bool
 
 	// Project-instruction segment, loaded once during startup prewarm or, for a
 	// loaded session, on the first Prompt (see instructions.go). instrLoaded gates
@@ -1534,9 +1540,10 @@ type Session struct {
 	agentDefsErr    error
 }
 
-// NewSession creates a session. Nothing touches the network, spawns
-// processes, or writes to disk here — provider auth and plugin spawns happen
-// on first use, and the session log is created on first message append.
+// NewSession creates a fresh session and can schedule nonblocking asynchronous
+// startup prewarm for an eligible provider. That task can read disk, invoke
+// hooks, connect MCP dependencies, and use the network. Use
+// NewSessionDeferredStartup when manager adoption must finish first.
 func NewSession(cfg Config) *Session {
 	return newFreshSession(cfg, true)
 }
@@ -2662,6 +2669,7 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 		s.emitSessionError(err)
 		return nil, err
 	}
+	defer s.clearStartupPrewarmResolution()
 	// Refuse a model with no known context window, before anything else
 	// happens: no history append, no provider call, no instructions read.
 	// Running one anyway is running with NO context management at all,
@@ -3230,14 +3238,16 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
 			doneAt := s.cfg.Now()
+			s.resolveStartupPrewarm(ev.RequestMetadata)
 			var requestMode provider.RequestMode
 			var completeInputItems, sentInputItems int
-			var previousResponseUsed bool
+			var previousResponseUsed, chainRecovered bool
 			if ev.RequestMetadata != nil {
 				requestMode = ev.RequestMetadata.Mode
 				completeInputItems = ev.RequestMetadata.CompleteInputItems
 				sentInputItems = ev.RequestMetadata.SentInputItems
 				previousResponseUsed = ev.RequestMetadata.PreviousResponseUsed
+				chainRecovered = ev.RequestMetadata.ChainRecovered
 			}
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
@@ -3259,6 +3269,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				CompleteInputItems:   completeInputItems,
 				SentInputItems:       sentInputItems,
 				PreviousResponseUsed: previousResponseUsed,
+				ChainRecovered:       chainRecovered,
 			})
 			if ev.SubscriptionUsage != nil {
 				// See provider.Event.SubscriptionUsage's own doc comment:

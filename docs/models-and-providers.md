@@ -401,9 +401,11 @@ misses use the normal provider error path.
 
 A completed WebSocket call attaches request projection metadata to
 `provider.EventDone`: `request_mode` (`full` or `incremental`),
-`complete_input_items`, `sent_input_items`, and `previous_response_used`. The
-engine copies those values into `turn_metrics`. HTTP calls and providers that do
-not report the metadata omit these fields.
+`complete_input_items`, `sent_input_items`, `previous_response_used`, and
+`chain_recovered`. The engine copies those values into `turn_metrics`. A
+successful immediate chain-miss retry reports `request_mode=full` and
+`chain_recovered=true`. HTTP calls and providers that do not report projection
+metadata omit these fields.
 
 Token accounting remains provider-reported. OpenAI reports `input_tokens` with
 `input_tokens_details.cached_tokens` included. The adapter stores the cached

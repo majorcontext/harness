@@ -21,6 +21,7 @@ type wsFrame struct {
 // websocket-delivered response exactly as it does for an SSE-delivered one.
 // Only how a (name, data) pair is obtained differs.
 type wsFrameSource struct {
+	ctx         context.Context
 	conn        *websocket.Conn
 	idleTimeout time.Duration
 	buffered    *wsFrame
@@ -51,7 +52,10 @@ func (w *wsFrameSource) next() (string, []byte, error) {
 		w.observe(f.name, f.data, nil)
 		return f.name, f.data, nil
 	}
-	ctx := context.Background()
+	ctx := w.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if w.idleTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, w.idleTimeout)

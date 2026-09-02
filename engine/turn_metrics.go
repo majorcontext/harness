@@ -62,6 +62,9 @@ type TurnMetrics struct {
 	CompleteInputItems   int
 	SentInputItems       int
 	PreviousResponseUsed bool
+	// ChainRecovered distinguishes an immediate chain-miss full retry from an
+	// initially full request.
+	ChainRecovered bool
 }
 
 // defaultTurnMetricsStderr is the JSON handler every default turn_metrics
@@ -104,6 +107,7 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 			"complete_input_items", m.CompleteInputItems,
 			"sent_input_items", m.SentInputItems,
 			"previous_response_used", m.PreviousResponseUsed,
+			"chain_recovered", m.ChainRecovered,
 		)
 	}
 	defaultTurnMetricsStderr.Info("turn_metrics", args...)

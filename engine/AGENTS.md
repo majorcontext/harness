@@ -43,8 +43,9 @@ it. Add ambient status only to a throwaway request copy.
 ## Project instructions and Agent Skills
 
 `loadInstructions` searches upward from `Config.WorkDir`. It returns the first
-`AGENTS.md` or `AGENT.md` and stops at the Git root or filesystem root. It runs
-on the first prompt, not at `NewSession`.
+`AGENTS.md` or `AGENT.md` and stops at the Git root or filesystem root. Eligible
+fresh sessions load it during startup prewarm. Loaded and ineligible sessions
+load it on the first prompt.
 
 - Treat a missing instruction file as valid.
 - Reject an empty or invalid UTF-8 instruction file.
@@ -52,9 +53,10 @@ on the first prompt, not at `NewSession`.
 - Keep omitted sections reachable through the generated outline.
 - Do not claim that nested attach-on-read is implemented.
 
-Discover Agent Skills on the first prompt. Inject only the catalog. Require the
-model to load a selected `SKILL.md`. Reject malformed or duplicate skills.
-Rediscover skills after resume and never persist the catalog.
+Eligible fresh sessions discover Agent Skills during startup prewarm. Loaded and
+ineligible sessions discover them on the first prompt. Inject only the catalog.
+Require the model to load a selected `SKILL.md`. Reject malformed or duplicate
+skills. Rediscover skills after resume and never persist the catalog.
 
 ## Tool execution and file tools
 
@@ -83,8 +85,10 @@ resolved absolute paths and serialize parallel mutations by file key.
 ## Startup prewarm
 
 Start prewarm only for a fresh native session whose initially configured
-provider implements `provider.StartupPrewarmer`. Start managed roots after
-adoption and children after final lineage and tool restrictions.
+provider implements `provider.StartupPrewarmer` and returns true from
+`StartupPrewarmEnabled`. Check eligibility before discovery, hooks, or tool
+assembly. Start managed roots after adoption and children after final lineage
+and tool restrictions.
 
 - Keep `NewSession` non-blocking.
 - Use one 15-second context from scheduling through discovery and completion.
@@ -95,6 +99,7 @@ adoption and children after final lineage and tool restrictions.
 - Cancel session-owned prewarm when the session is removed.
 - Cache deterministic instruction and Skill errors for the first prompt.
 - Emit no turn, message, usage, provider event, or `turn_metrics` for prewarm.
+- Emit `startup_prewarm` lifecycle metrics without provider response IDs.
 
 The callback must obey context cancellation. Detach ownership at the deadline
 even if it does not. One noncompliant callback can remain as an unowned goroutine;

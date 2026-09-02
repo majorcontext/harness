@@ -2,14 +2,80 @@ package openai
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/provider"
 )
 
 var _ provider.StartupPrewarmer = (*Client)(nil)
+
+func TestStartupPrewarmEnabledOnlyForCodexWebSocket(t *testing.T) {
+	tests := []struct {
+		name      string
+		family    string
+		websocket bool
+		want      bool
+	}{
+		{name: "codex websocket", family: CodexFamily, websocket: true, want: true},
+		{name: "codex http", family: CodexFamily, want: false},
+		{name: "generic OpenAI websocket", family: Family, websocket: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &Client{Family: tt.family, UseWebSocketTransport: tt.websocket}
+			if got := client.StartupPrewarmEnabled(); got != tt.want {
+				t.Fatalf("StartupPrewarmEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexPrewarmCancellationAfterCreatedReturnsWithoutLineage(t *testing.T) {
+	accepted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		close(accepted)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	conn, _, err := websocket.Dial(context.Background(), toWebSocketURL(server.URL), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	lineagePublished := false
+	source := &wsFrameSource{
+		ctx:      ctx,
+		conn:     conn,
+		buffered: &wsFrame{name: "response.created", data: []byte(`{"type":"response.created","response":{"id":"resp_cancelled"}}`)},
+		onTerminal: func(string, []byte, bool) {
+			lineagePublished = true
+		},
+	}
+	stream := &stream{wsConn: source, model: lineageRequest("prewarm-cancel").Model, family: CodexFamily}
+	<-accepted
+	if ev, err := stream.Next(); err != nil || ev.Type != provider.EventActivity {
+		t.Fatalf("created frame = (%+v, %v), want activity", ev, err)
+	}
+	cancel()
+
+	if _, err := stream.Next(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-created Next error = %v, want context.Canceled", err)
+	}
+	if lineagePublished {
+		t.Fatal("canceled prewarm published response lineage")
+	}
+}
 
 func TestCodexPrewarmSendsGenerateFalseAndEmptyInput(t *testing.T) {
 	server := newWSLineageServer(t)

@@ -130,6 +130,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"agentDefs":                 "lazy discovery cache payload, same pattern as agentDefsLoaded",
 	"agentDefsErr":              "lazy discovery cache error, same pattern as agentDefsLoaded",
 	"startupPrewarm":            "runtime-only startup task handle; loaded sessions never resume or restore prewarm",
+	"startupPrewarmResolution":  "runtime-only first-turn metric state; loaded sessions never resume or restore prewarm",
 	"startupPrewarmEligible":    "fresh-session construction gate; loaded sessions deliberately remain ineligible",
 }
 
