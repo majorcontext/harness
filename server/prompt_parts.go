@@ -79,6 +79,24 @@ var promptAttachmentTypes = map[string]func(mediaType string, data []byte) error
 // transcript with nothing able to repair it. This ceiling sits below that.
 const promptAttachmentMaxBytes = 20 * 1024 * 1024
 
+// promptRequestMaxBytes bounds the WHOLE prompt request body, before any of
+// it is decoded.
+//
+// promptAttachmentMaxBytes above is checked per attachment, but only AFTER
+// encoding/json has already base64-decoded that attachment into a []byte --
+// and nothing bounds how many attachments one body may carry. So without a
+// bound here, a single request could make this server allocate an unbounded
+// amount before the first size check ever ran, and the check would then
+// reject what it had already paid for.
+//
+// 32 MiB is the same ceiling Anthropic applies to a whole request, which is
+// the real limit a prompt has to fit inside anyway. Base64 costs about 4/3,
+// so this admits one attachment at the full 20 MiB per-attachment cap
+// (~26.7 MiB encoded) plus its text, or several smaller ones -- while a body
+// that could never be delivered to a provider is refused here, cheaply,
+// instead of after the allocation.
+const promptRequestMaxBytes = 32 * 1024 * 1024
+
 // verifyImageBytes proves data decodes as the image type it claims. It
 // reads the header only (dimensions, not pixels), so a 20MB image costs a
 // header parse rather than a full decode.

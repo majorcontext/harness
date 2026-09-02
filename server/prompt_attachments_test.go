@@ -270,7 +270,6 @@ func TestPromptAsyncAcceptsPDFAttachment(t *testing.T) {
 // wedge imageclamp exists to heal (an oversized image persisted into a
 // durable transcript) starts exactly one accepted-but-unusable blob ago.
 func TestPromptAsyncRejectsUnusableBlob(t *testing.T) {
-	pngBytes := testPNG(t)
 	cases := []struct {
 		name string
 		part map[string]any
@@ -352,7 +351,6 @@ func TestPromptAsyncRejectsUnusableBlob(t *testing.T) {
 			if calls != 0 {
 				t.Errorf("provider calls = %d, want 0", calls)
 			}
-			_ = pngBytes
 		})
 	}
 }
@@ -377,6 +375,42 @@ func TestPromptAsyncOversizeBlobRejected(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("exceeds")) {
 		t.Errorf("error = %s, want it to name the size limit", data)
+	}
+}
+
+// TestPromptAsyncOversizeBodyRejectedBeforeDecode proves the WHOLE-body
+// bound, which is a different guarantee from the per-blob cap above.
+//
+// promptAttachmentMaxBytes is checked per attachment, but only after
+// encoding/json has already base64-decoded that attachment into a []byte,
+// and nothing caps how many attachments one body may carry -- so without
+// this bound a caller could make the server allocate an unbounded amount
+// before the first size check ran, then reject what it had already paid
+// for. http.MaxBytesReader stops the read at promptRequestMaxBytes, so the
+// body below is never fully decoded and the answer is 413, not 400.
+func TestPromptAsyncOversizeBodyRejectedBeforeDecode(t *testing.T) {
+	prov := newCapturingProvider(asstTurn("never"))
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	// Two attachments, each UNDER the per-attachment cap, that together
+	// exceed the request bound: exactly the case the per-blob check alone
+	// cannot catch.
+	half := append(testPNG(t), bytes.Repeat([]byte("x"), promptRequestMaxBytes*2/3)...)
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []any{
+			attachmentPart("image/png", half),
+			attachmentPart("image/png", half),
+		},
+	})
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("prompt_async status %d, want 413: %s", resp.StatusCode, data)
+	}
+	if !bytes.Contains(data, []byte("limit")) {
+		t.Errorf("error = %s, want it to name the request limit", data)
+	}
+	if users := h.userMessages(id); len(users) != 0 {
+		t.Errorf("user messages = %d, want none", len(users))
 	}
 }
 

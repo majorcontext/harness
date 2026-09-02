@@ -825,6 +825,19 @@ components:
         data: { type: string, contentEncoding: base64 }
         url: { type: string }
 
+    PromptBlobPart:
+      description: >
+        A BlobPart sent as a PROMPT attachment, which must carry inline
+        base64 `data`. BlobPart itself allows `data` OR `url` because a
+        blob in a TRANSCRIPT legitimately carries either, but prompt_async
+        rejects a url-only attachment (decodePromptBlob): honoring one would
+        make harness ask every provider — and imageclamp, which has to decode
+        bytes to clamp them — to fetch a caller-supplied URL from inside the
+        box, which is an egress decision this route does not get to make.
+      allOf:
+        - $ref: "#/components/schemas/BlobPart"
+        - required: [data]
+
     ToolCallPart:
       type: object
       required: [type, call_id, name, arguments]
@@ -916,7 +929,7 @@ components:
           items:
             oneOf:
               - $ref: "#/components/schemas/TextPart"
-              - $ref: "#/components/schemas/BlobPart"
+              - $ref: "#/components/schemas/PromptBlobPart"
           description: >
             Text parts and file attachments. Text parts are joined by
             newlines into the prompt's text; each blob part becomes a Blob

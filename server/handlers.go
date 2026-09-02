@@ -1650,7 +1650,21 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// uniqueness and never a reason to reject the prompt.
 		ID string `json:"id"`
 	}
+	// Bound the body BEFORE decoding it: blob data arrives as base64 and
+	// encoding/json allocates the decoded []byte during Unmarshal, so the
+	// per-attachment size check in decodePromptParts runs only after this
+	// server has already paid for whatever the caller sent -- and nothing
+	// bounds how many attachments one body carries. See
+	// promptRequestMaxBytes. handleEnqueue needs no such bound: its parts
+	// are text-only.
+	r.Body = http.MaxBytesReader(w, r.Body, promptRequestMaxBytes)
 	if err := decodeBody(r, &body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"request body exceeds the %d-byte limit", promptRequestMaxBytes))
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
