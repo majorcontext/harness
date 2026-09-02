@@ -1017,6 +1017,21 @@ type Session struct {
 	// delegated/subscription turn regardless.
 	subscriptionUsage *message.SubscriptionUsage
 
+	// claudeCodeSessionCostUSD/haveClaudeCodeCost carry this session's
+	// cumulative "claude"-lane delegated-turn dollar cost (see
+	// message.SubscriptionUsage.SessionCostUSD's own doc comment) — the
+	// running sum of every completed delegated turn's own
+	// claudeCodeEnvelope.TotalCostUSD, folded in by
+	// Session.applyClaudeCodeUsage and durable via the claude_code.usage
+	// journal record (see persistClaudeCodeUsage/store.go's
+	// recClaudeCodeUsage replay), unlike subscriptionUsage above which is
+	// process-local only. haveClaudeCodeCost distinguishes "no delegated
+	// turn has ever completed" (false, SessionCostUSD reports nil) from
+	// "a turn completed and its cost happened to be exactly zero" (true) —
+	// mirrors haveLastUsage's own role for lastUsage.
+	claudeCodeSessionCostUSD float64
+	haveClaudeCodeCost       bool
+
 	// turnUnsettled is SessionManager.recoverInterruptedTurnLocked's
 	// restart-recovery signal, replacing an earlier, unreliable
 	// heuristic (hasUnansweredTurn, since removed) that tried to infer
@@ -2149,18 +2164,38 @@ func (s *Session) applySubscriptionUsage(u message.SubscriptionUsage) {
 func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.subscriptionUsage == nil {
+	if s.subscriptionUsage == nil && !s.haveClaudeCodeCost {
 		return nil
 	}
-	cp := *s.subscriptionUsage
-	cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
-	if s.subscriptionUsage.Overage != nil {
-		// Deep-copy Overage too, not just Windows: the struct copy above
-		// (cp := *s.subscriptionUsage) only copies the pointer value, so
-		// without this a caller mutating the returned snapshot's Overage
-		// would mutate this session's own stored one.
-		overage := *s.subscriptionUsage.Overage
-		cp.Overage = &overage
+	var cp message.SubscriptionUsage
+	if s.subscriptionUsage != nil {
+		cp = *s.subscriptionUsage
+		cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
+		if s.subscriptionUsage.Overage != nil {
+			// Deep-copy Overage too, not just Windows: the struct copy
+			// above (cp := *s.subscriptionUsage) only copies the pointer
+			// value, so without this a caller mutating the returned
+			// snapshot's Overage would mutate this session's own stored
+			// one.
+			overage := *s.subscriptionUsage.Overage
+			cp.Overage = &overage
+		}
+	} else {
+		// haveClaudeCodeCost is true but no rate_limit_event snapshot has
+		// ever arrived (a `claude` build that completed a delegated turn
+		// without ever sending one) — synthesize a minimal "claude"-lane
+		// snapshot so SessionCostUSD still has somewhere to live, rather
+		// than silently dropping a real cost figure because Windows/
+		// Overage happen to be unknown.
+		cp = message.SubscriptionUsage{
+			Provider:   "claude",
+			Windows:    []message.SubscriptionUsageWindow{},
+			CapturedAt: s.cfg.Now().Unix(),
+		}
+	}
+	if s.haveClaudeCodeCost {
+		cost := s.claudeCodeSessionCostUSD
+		cp.SessionCostUSD = &cost
 	}
 	return &cp
 }

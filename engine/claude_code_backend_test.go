@@ -1457,6 +1457,81 @@ func TestClaudeCodeRateLimitEventWithNoOverageOmitsOverage(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeSessionCostAccumulatesAcrossTurns proves a delegated
+// session's message.SubscriptionUsage.SessionCostUSD sums the `claude`
+// CLI's own per-turn total_cost_usd (fakeclaude's "normal" mode reports
+// 0.0123 on every turn's "result" event) across successive turns, rather
+// than reporting only the latest turn's figure — see
+// Session.applyClaudeCodeUsage's own doc comment for why this is a
+// cumulative session total, not a last-turn snapshot.
+func TestClaudeCodeSessionCostAccumulatesAcrossTurns(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+
+	if _, err := s.Prompt(context.Background(), "first turn"); err != nil {
+		t.Fatalf("first Prompt: %v", err)
+	}
+	usage := s.SubscriptionUsage()
+	if usage == nil || usage.SessionCostUSD == nil {
+		t.Fatalf("SubscriptionUsage() after first turn = %+v, want a non-nil SessionCostUSD", usage)
+	}
+	if got, want := *usage.SessionCostUSD, 0.0123; got < want-1e-9 || got > want+1e-9 {
+		t.Errorf("SessionCostUSD after first turn = %v, want %v", got, want)
+	}
+
+	if _, err := s.Prompt(context.Background(), "second turn"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	usage = s.SubscriptionUsage()
+	if usage == nil || usage.SessionCostUSD == nil {
+		t.Fatalf("SubscriptionUsage() after second turn = %+v, want a non-nil SessionCostUSD", usage)
+	}
+	if got, want := *usage.SessionCostUSD, 0.0246; got < want-1e-9 || got > want+1e-9 {
+		t.Errorf("SessionCostUSD after second turn = %v, want %v (0.0123 summed twice)", got, want)
+	}
+}
+
+// TestClaudeCodeSessionCostNilBeforeAnyTurn proves SessionCostUSD stays
+// absent (nil, per message.SubscriptionUsage.SessionCostUSD's own doc
+// comment) for a session that has not completed a "claude"-lane turn in
+// this process yet — the counterpart to
+// TestClaudeCodeSessionCostAccumulatesAcrossTurns, which proves the
+// non-nil case.
+func TestClaudeCodeSessionCostNilBeforeAnyTurn(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+
+	if got := s.SubscriptionUsage(); got != nil {
+		t.Fatalf("SubscriptionUsage() before any turn = %+v, want nil", got)
+	}
+}
+
+// TestClaudeCodeSessionCostSurvivesReload proves SessionCostUSD is durable
+// (recClaudeCodeUsage now carries the per-turn cost alongside token
+// usage — see persistClaudeCodeUsage) — a process restart between two
+// delegated turns must not silently reset the running dollar total to
+// only the post-reload turn's own cost.
+func TestClaudeCodeSessionCostSurvivesReload(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+
+	if _, err := s.Prompt(context.Background(), "first turn"); err != nil {
+		t.Fatalf("first Prompt: %v", err)
+	}
+
+	reloaded, err := LoadSession(Config{
+		SessionDir: s.cfg.SessionDir,
+		ClaudeCode: s.cfg.ClaudeCode,
+	}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	usage := reloaded.SubscriptionUsage()
+	if usage == nil || usage.SessionCostUSD == nil {
+		t.Fatalf("reloaded SubscriptionUsage() = %+v, want a non-nil SessionCostUSD", usage)
+	}
+	if got, want := *usage.SessionCostUSD, 0.0123; got < want-1e-9 || got > want+1e-9 {
+		t.Errorf("reloaded SessionCostUSD = %v, want %v", got, want)
+	}
+}
+
 // TestClaudeCodeRetryableClassification proves a "result" event this file
 // can actually name as transient provider weather (a rate-limit signal) is
 // wrapped provider.RetryableError, while a genuinely deterministic result
