@@ -1049,6 +1049,54 @@ func TestClaudeCodeForwardSubagentTextAlwaysSet(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeThinkingDisplayAlwaysSummarized proves runClaudeCodeTurn
+// always sends --thinking-display summarized. Opus 4.7 and later default
+// thinking.display to "omitted", under which the API returns a thinking
+// block whose `thinking` field is empty and whose signature is the only
+// content: claudeCodeAssistantMessage then stores an empty
+// message.Reasoning, consumeClaudeCodeStream emits no EventReasoningDelta
+// for it (its `r.Text != ""` guard), and a consumer gets a durable part it
+// cannot render and cannot align against the row that streamed the turn.
+// The flag is the only channel that overrides that default — the
+// showThinkingSummaries setting does not reach the request.
+func TestClaudeCodeThinkingDisplayAlwaysSummarized(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	got, ok := argvValueAfter(invocations[0], "--thinking-display")
+	if !ok {
+		t.Fatalf("argv has no --thinking-display: %v", invocations[0])
+	}
+	if want := "summarized"; got != want {
+		t.Errorf("--thinking-display = %q, want %q", got, want)
+	}
+}
+
+// TestClaudeCodeExtraArgsCannotOverrideThinkingDisplay proves a config
+// cannot quietly defeat the engine-owned --thinking-display. ExtraArgs are
+// appended AFTER every engine flag and the CLI keeps the LAST value of a
+// repeated option, so an ExtraArgs entry would win silently and restore the
+// signature-only thinking blocks the flag exists to prevent. Both wire
+// forms are rejected, matching the append-prompt conflict check.
+func TestClaudeCodeExtraArgsCannotOverrideThinkingDisplay(t *testing.T) {
+	for _, args := range [][]string{
+		{"--thinking-display", "omitted"},
+		{"--thinking-display=omitted"},
+		{"--thinking-display", "summarized"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			s, _ := claudeCodeTestSession(t, "normal")
+			s.cfg.ClaudeCode.ExtraArgs = args
+			_, err := s.Prompt(context.Background(), "hi")
+			if err == nil || !strings.Contains(err.Error(), "--thinking-display") {
+				t.Fatalf("Prompt error = %v, want a --thinking-display conflict", err)
+			}
+		})
+	}
+}
+
 // TestClaudeCodeDisallowsNativeSpawnTools proves runClaudeCodeTurn always
 // sends --disallowedTools naming every native Claude Code tool that spawns
 // a same-family subagent (Agent, Workflow). All subagent spawning in the

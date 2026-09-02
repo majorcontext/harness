@@ -72,7 +72,11 @@
 //     would render as two separate turns. Appended via plain
 //     Session.append (no usage — see the usage-mapping note below) and
 //     emitted as EventMessage, with one EventReasoningDelta per non-empty
-//     thinking part, one EventTextDelta per non-empty text part (folding
+//     thinking part (runClaudeCodeTurn asks for a summary with
+//     --thinking-display summarized, which is what makes a non-empty one
+//     the ordinary case rather than the impossible one — the emission stays
+//     conditional, since the API can still answer with an empty summary),
+//     one EventTextDelta per non-empty text part (folding
 //     the whole block's text into the message in a single "delta", the
 //     closest honest match to the native EventTextDelta/EventReasoningDelta
 //     contract given the CLI hands over complete blocks), and one
@@ -438,6 +442,17 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 			}
 		}
 	}
+	// --thinking-display is engine-owned, and ExtraArgs are appended AFTER
+	// every engine flag: the CLI keeps the LAST value of a repeated option,
+	// so an override here would win silently and restore the empty-thinking
+	// blocks the flag exists to prevent (see its own comment below). Reject
+	// it up front rather than let a config quietly defeat the driver's own
+	// wire contract — the same shape as the append-prompt conflict above.
+	for _, arg := range cfg.ExtraArgs {
+		if claudeCodeThinkingDisplayArg(arg) {
+			return nil, fmt.Errorf("engine: claude-code: Config.ClaudeCode.ExtraArgs contains %q, which is engine-owned; runClaudeCodeTurn always sends --thinking-display summarized, and an ExtraArgs value would override it and return empty thinking blocks", arg)
+		}
+	}
 
 	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
 	// written before the args slice below so its path can be included, and
@@ -465,6 +480,38 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// which this driver always sets, so it is safe to pass
 		// unconditionally.
 		"--forward-subagent-text",
+		// Opus 4.7 silently flipped the API default of thinking.display from
+		// "summarized" to "omitted", and every model after it kept that
+		// default. Under "omitted" the API still THINKS and still bills for
+		// it, but returns the thinking block with an empty `thinking` field
+		// and only its provider signature: claudeCodeAssistantMessage stores
+		// message.Reasoning{Text: ""}, consumeClaudeCodeStream's
+		// `if r.Text != ""` guard emits no EventReasoningDelta, and every
+		// consumer sees a signature-only part it can neither render nor
+		// align against a streamed row. The boxes console rendered a turn
+		// TWICE off that asymmetry (meetneptune/boxes#599).
+		//
+		// --thinking-display is the CLI's own override for that default and
+		// the ONLY channel that carries it: the `showThinkingSummaries`
+		// setting does not reach the request (verified — it returns an empty
+		// thinking field), and the API parameter is not otherwise reachable
+		// through the CLI. Verified end to end against a live Opus
+		// subscription session: 383 characters of summarized thinking where
+		// the same prompt without the flag returned 0.
+		//
+		// The flag is real but NOT listed in `claude --help` (`claude
+		// --thinking-display bogus` answers "Allowed choices are summarized,
+		// omitted"), so treat it as a pinned-CLI dependency: a CLI that drops
+		// it fails the spawn outright rather than silently degrading, which
+		// is the loud failure this driver wants — the box image pins its own
+		// CLI version, so an upgrade is a deliberate, testable step.
+		//
+		// Summaries only, and a REQUEST rather than a guarantee: the raw
+		// chain of thought is never exposed by any model under any setting,
+		// "summarized" is the maximum available, and an empty summary is
+		// still a possible answer — every reader downstream stays guarded
+		// for it (consumeClaudeCodeStream's own `r.Text != ""`).
+		"--thinking-display", "summarized",
 		// All subagent spawning in the claude-code lane must go through
 		// harness's own cross-family "task" tool (server/mcp_history.go,
 		// #223), never the CLI's native same-family equivalent — the two
@@ -1746,6 +1793,14 @@ func claudeCodeAppendPromptArg(arg string) bool {
 		strings.HasPrefix(arg, "--append-system-prompt=") ||
 		arg == "--append-system-prompt-file" ||
 		strings.HasPrefix(arg, "--append-system-prompt-file=")
+}
+
+// claudeCodeThinkingDisplayArg reports whether an ExtraArgs entry sets the
+// engine-owned --thinking-display option, in either the separate-value or
+// the `=` form — see runClaudeCodeTurn's rejection of it.
+func claudeCodeThinkingDisplayArg(arg string) bool {
+	return arg == "--thinking-display" ||
+		strings.HasPrefix(arg, "--thinking-display=")
 }
 
 // claudeCodeRetryableClass classifies a "result" event's own reported
