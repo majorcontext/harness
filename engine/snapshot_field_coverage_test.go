@@ -104,6 +104,8 @@ var snapshotExcludedSessionFields = map[string]string{
 	"instrSeg":                  "lazy load-once cache payload, same pattern as instrLoaded",
 	"instrErr":                  "lazy load-once cache error, same pattern as instrLoaded",
 	"instrPath":                 "lazy load-once cache payload, same pattern as instrLoaded",
+	"mcpInstrLoaded":            "lazy render-once cache gate for the connected-MCP-server instructions segment, rendered on first use from the live registry rather than replayed; same pattern as instrLoaded",
+	"mcpInstrSeg":               "lazy render-once cache payload, same pattern as mcpInstrLoaded",
 	"turn":                      "explicitly excluded by sessionSnapshot's own doc comment: no record carries it, so a full replay reports turn=0 too — capturing it would violate the snapshot-equals-full-replay invariant, not merely skip an optimization",
 	"lastSystem":                "same explicit exclusion as turn, same doc comment, same reasoning",
 	"pendingContinuationNudge":  "one-shot scratch state for the single in-flight Prompt call, cleared before that call returns; never persisted",

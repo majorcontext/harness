@@ -58,11 +58,24 @@ type Config struct {
 	// rendering with no outline. HARNESS_INSTRUCTIONS_MODE overrides this key
 	// (see cmd/harness). See engine.InstructionsMode.
 	InstructionsMode string `json:"instructions_mode,omitempty"`
-	// AppendSystemPrompt lists operator-supplied environment facts that the
-	// agent cannot discover. Do not use it for tool instructions or project
-	// instructions. The engine places entries after System and before its own
-	// generated segments. Claude Code receives one blank-line-joined
-	// --append-system-prompt value.
+	// AppendSystemPrompt lists PLATFORM-owned facts the agent cannot
+	// discover, and the platform policy that depends on them. Two hard
+	// exclusions remain: project instructions belong in AGENTS.md, and tool
+	// SHAPE (a schema, a description, when to call one server's tool) belongs
+	// to the tool itself — an MCP server states its own usage through
+	// initialize instructions, which the engine renders as its own system
+	// segment (engine/mcp_instructions.go). What is left for this key is the
+	// text no tool owns: what this environment is, and what the platform
+	// running it guarantees. The engine places entries after System and
+	// before its own generated segments. Claude Code receives one
+	// blank-line-joined --append-system-prompt value.
+	//
+	// Every segment must be BYTE-STABLE for the life of a session. These
+	// entries sit at the front of the prompt-cache prefix, so a value that
+	// varies per turn or per process start (a timestamp, a pod name, a live
+	// status) re-processes the whole conversation uncached on every request,
+	// with no error to notice. Put anything that changes in the ambient
+	// status channel instead (engine/process.go's withAmbientStatus).
 	//
 	// Merge is additive: base segments come first, then project segments.
 	// This rule differs from every other slice field. In box deployments, the

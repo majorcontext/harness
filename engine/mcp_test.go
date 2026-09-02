@@ -54,6 +54,9 @@ type fakeMCPTool struct {
 // internals" approach as mcp/http_test.go's fakeHTTPServer.
 type fakeMCPHTTPServer struct {
 	tools []fakeMCPTool
+	// instructions, when set, is returned as InitializeResult.Instructions
+	// — the server's own usage guidance (see mcp_instructions.go).
+	instructions string
 	// blockUntil, if non-nil, is closed to unblock every request (used to
 	// simulate a hung server that never responds, per AGENTS.md's
 	// channel-closed-in-Cleanup pattern for hang simulation).
@@ -86,11 +89,15 @@ func (s *fakeMCPHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	var result any
 	switch in.Method {
 	case "initialize":
-		result = map[string]any{
+		init := map[string]any{
 			"protocolVersion": "2025-11-25",
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": "fake-mcp-http", "version": "0.0.1"},
 		}
+		if s.instructions != "" {
+			init["instructions"] = s.instructions
+		}
+		result = init
 	case "tools/list":
 		var tools []map[string]any
 		for _, tool := range s.tools {

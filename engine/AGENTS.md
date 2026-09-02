@@ -40,6 +40,11 @@ Only engine code creates `message.EngineContext`. Use it for trusted ambient
 status and continuation nudges. Never replace it with `message.Text` or persist
 it. Add ambient status only to a throwaway request copy.
 
+Keep the system array byte-stable within a session. It is the prompt-cache
+prefix. Render a segment that depends on live state once and freeze it, as
+`mcpInstructionsSegment` does. Put text that must change in the ambient status
+channel instead.
+
 ## Project instructions and Agent Skills
 
 `loadInstructions` searches upward from `Config.WorkDir`. It returns the first

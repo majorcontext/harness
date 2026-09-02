@@ -77,9 +77,17 @@ stopgap.)
 
 ## Appended system prompt (`append_system_prompt`)
 
-Config key `append_system_prompt` is an array of environment facts. Use it for
-facts an agent cannot discover, such as a gateway URL or required bind address.
-Do not use it for tool instructions or project instructions.
+Config key `append_system_prompt` is an array of platform-owned facts. Use it
+for a fact an agent cannot discover, such as a gateway URL or a required bind
+address, and for the platform policy that depends on that fact. Do not use it
+for project instructions. Do not use it for tool shape. An MCP server states
+its own usage through initialize instructions, which the engine renders as its
+own segment (see "Connected MCP server instructions" below).
+
+Every segment must be byte-stable for the life of a session. These entries sit
+at the front of the prompt-cache prefix. A value that changes between turns
+re-processes the whole conversation uncached, and reports no error. Put text
+that changes in the ambient status channel instead.
 
 The engine places entries after `Config.System` and before its generated
 segments. `serve` and `run` both set `Config.AppendSystemPrompt`. For `run`,
@@ -105,6 +113,41 @@ The joined value crosses the operating system argument boundary. Keep these
 environment facts short. The operating system can reject an unusually large
 argument; Harness cannot derive one portable limit because the environment and
 other arguments share that limit.
+
+## Connected MCP server instructions
+
+An MCP server can return `instructions` from `initialize`. The engine renders
+one system segment listing every connected server that supplied that text,
+with the namespaced tool names it contributed:
+
+```
+<mcp_instructions>
+<server name="boxes-orchestration" tools="mcp__boxes-orchestration__spawn_box, ...">
+Fleet orchestration over every box in the fleet.
+</server>
+</mcp_instructions>
+```
+
+The segment sits after project instructions and the skills catalog, and before
+the deferred-MCP catalog. That order is a cache decision. This segment is the
+stable half of the MCP context; the deferred catalog changes when tool search
+selects a tool.
+
+The engine renders the block once per session and then freezes it. A server
+that connects on a later retry contributes its tools but not its instructions
+for that session. Freezing is deliberate: a system-array change invalidates
+the system and messages caches together, so re-rendering the block when a
+server's state changes re-processes the whole conversation. Live connection
+state has its own channel that costs nothing to change — the ambient
+degraded-server block (`mcp_status.go`).
+
+Server text is untrusted. The renderer defangs the block's own markup, so a
+server cannot forge a sibling `<server>` element under another server's name.
+
+Before this segment existed, only the delegated Claude Code lane saw a server's
+instructions, because the CLI reads them from `--mcp-config` itself. A native
+session dropped `InitializeResult.Instructions` on the floor, so the same box
+behaved differently depending on which lane served it.
 
 ## Project instructions (AGENTS.md)
 

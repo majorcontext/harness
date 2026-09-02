@@ -325,8 +325,11 @@ type Config struct {
 	WorkDir     string   // working directory for built-in tools
 
 	// AppendSystemPrompt carries OPERATOR-supplied system prompt segments —
-	// environment truth the agent cannot otherwise discover (a gateway URL
-	// template, a required bind address), not tool shape. Each entry becomes
+	// platform truth the agent cannot otherwise discover (a gateway URL
+	// template, a required bind address) and the platform policy that
+	// depends on it, never project instructions and never tool shape (an MCP
+	// server states its own usage through initialize instructions, rendered
+	// as their own segment — see mcp_instructions.go). Each entry becomes
 	// one system segment, in order, directly after System and before every
 	// engine-assembled segment (tool batching, instructions, skills, the MCP
 	// catalog, plugin transforms). Config key `append_system_prompt` (see
@@ -337,6 +340,12 @@ type Config struct {
 	// CLI, as one blank-line-joined --append-system-prompt value — see
 	// runClaudeCodeTurn and claude_code_backend.go's package doc for why the
 	// two are treated differently.
+	//
+	// Every segment must be byte-stable for the life of a session: they sit
+	// at the front of the prompt-cache prefix on both lanes, so a value that
+	// varies between turns silently re-processes the whole conversation
+	// uncached. See config.Config.AppendSystemPrompt for the full rule and
+	// withAmbientStatus for where changing text belongs instead.
 	AppendSystemPrompt []string
 
 	// ClaudeCode configures the delegated-turn backend a session whose
@@ -1292,6 +1301,16 @@ type Session struct {
 	skillsLoaded bool
 	skillsSeg    string
 	skillsErr    error
+
+	// Connected-MCP-server instructions segment (see mcp_instructions.go),
+	// rendered once on the first request that reaches segment assembly and
+	// then frozen for the session. Frozen deliberately: this text sits in
+	// the SYSTEM array, so re-rendering it when a server's connection state
+	// changes would rewrite the cached prefix mid-session and re-process the
+	// whole conversation uncached. Liveness has its own channel that costs
+	// nothing to change (mcpStatusSegment). Guarded by mu.
+	mcpInstrLoaded bool
+	mcpInstrSeg    string
 
 	// Goal-loop state (see goal.go). goalActive is set while a goal is set but
 	// neither achieved nor cleared; goalCondition holds the current goal's
@@ -3028,6 +3047,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// them, before any hook-contributed segments (see ensureSkills in
 	// skills.go).
 	if seg := s.skillsSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	// Connected-MCP-server instructions sit before the deferred-MCP catalog:
+	// both describe MCP, and this one is the STABLE half, so it stays ahead
+	// of the half that changes when tool search selects a deferred tool (see
+	// mcp_instructions.go for why that ordering is a cache decision).
+	if seg := s.mcpInstructionsSegment(); seg != "" {
 		system = append(system, seg)
 	}
 	// The deferred-MCP catalog sits after the skills catalog — the same
