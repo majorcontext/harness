@@ -1228,6 +1228,15 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			if len(msg.Parts) == 0 {
 				continue
 			}
+			// alreadyStreamed counts the LEADING parts whose delta this
+			// envelope must not repeat. The buffering path streams a
+			// reasoning-only envelope's delta the moment it arrives, so
+			// live streaming is unaffected by the buffering, and the merge
+			// below puts that very part at the front of msg.Parts —
+			// emitting the whole slice would send the same thinking text
+			// twice, and a consumer that APPENDS deltas would show it
+			// twice until EventMessage replaced the row.
+			alreadyStreamed := 0
 			if len(pendingReasoning) > 0 {
 				if env.ParentToolUseID == pendingReasoningParent {
 					// The common case: this envelope is the rest of the
@@ -1239,6 +1248,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					merged = append(merged, pendingReasoning...)
 					merged = append(merged, msg.Parts...)
 					msg.Parts = merged
+					alreadyStreamed = len(pendingReasoning)
 				} else {
 					// A different parent thread interrupted the buffered
 					// thinking block: flush it standalone rather than
@@ -1287,7 +1297,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// reloaded. Reported twice against the boxes console
 			// (meetneptune/boxes#599 fixed a different orphan shape; this
 			// is the one that produced the plain-text repro).
-			for _, p := range msg.Parts {
+			for _, p := range msg.Parts[alreadyStreamed:] {
 				switch part := p.(type) {
 				case *message.Text:
 					if part.Text != "" {

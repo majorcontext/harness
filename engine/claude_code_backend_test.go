@@ -1119,6 +1119,36 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeBufferedReasoningStreamsOnce proves a buffered thinking
+// block's delta is emitted exactly once.
+//
+// The buffering path streams a reasoning-only envelope's delta the moment
+// it arrives, so live streaming is unaffected by the buffering. The merge
+// then puts that same part at the FRONT of the next envelope's message, so
+// a delta loop over the whole merged slice sends the thinking text a second
+// time — and a consumer that appends deltas renders it twice until the
+// EventMessage that follows replaces the row.
+func TestClaudeCodeBufferedReasoningStreamsOnce(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.Prompt(context.Background(), "think about it"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	var reasoningDeltas int
+	for _, ev := range events {
+		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
+			reasoningDeltas++
+		}
+	}
+	if reasoningDeltas != 1 {
+		t.Errorf("reasoning.delta for the buffered thinking block emitted %d times, want exactly 1", reasoningDeltas)
+	}
+}
+
 // TestClaudeCodeDeltasPrecedeTheirMessage proves every delta for a turn
 // segment reaches the consumer BEFORE that segment's own EventMessage.
 //
