@@ -633,8 +633,7 @@ func TestNoMonitorOrRootRoute(t *testing.T) {
 // TestUnauthenticatedServesWithoutToken covers cmd/harness's loopback-
 // unauthenticated path (server.Options.Unauthenticated): every route
 // serves successfully with NO Authorization header at all — not just
-// /health/MonitorPage, which were already unauthenticated before this
-// field existed.
+// /health, which was already unauthenticated before this field existed.
 func TestUnauthenticatedServesWithoutToken(t *testing.T) {
 	dir := t.TempDir()
 	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
