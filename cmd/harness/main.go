@@ -1332,18 +1332,6 @@ func serveURLForAddr(addr string) string {
 	return "http://" + net.JoinHostPort(host, port)
 }
 
-// stderrIsTerminal reports whether os.Stderr is an interactive terminal
-// (isatty), stdlib-only: os.ModeCharDevice on the file mode is the
-// established Go idiom for this check (no golang.org/x/term or other
-// dependency — this repo's zero-dep rule for production code). Used solely
-func stderrIsTerminal() bool {
-	info, err := os.Stderr.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
-}
-
 // serveCmd starts the HTTP+SSE session API. The run token comes from
 // HARNESS_RUN_TOKEN, required on any bind unless the operator explicitly
 // opts out via -unauthenticated/HARNESS_UNAUTHENTICATED (non-loopback) or the
