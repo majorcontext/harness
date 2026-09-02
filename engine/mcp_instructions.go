@@ -40,6 +40,30 @@ const (
 	mcpInstructionsCloseTag = "</mcp_instructions>"
 )
 
+// mcpInstructionsPerServerCap bounds ONE server's instructions text, in
+// runes. The text is UNTRUSTED -- it arrives from whatever process the
+// server config points at -- and this block is a system-prompt segment,
+// written to the prompt cache once and re-read for every turn of the
+// session. An unbounded server therefore does not cost one large message;
+// it inflates the cached prefix for the whole session, and far enough out
+// it crowds the context window the conversation itself needs. Bounding it
+// is the same trade taskNotificationResultCap makes for a child's Result,
+// and the cut is MARKED (capRunes appends taskLogTruncationMarker) so a
+// model reading truncated guidance can tell it is truncated.
+//
+// PER SERVER, not per block, because the two inputs have different trust:
+// the text is remote and unbounded, while the SET of servers is operator
+// configuration in this box's own harness.json. Capping the block would
+// let one verbose server silently swallow a later server's guidance;
+// capping each server bounds the total at cap x servers, which the
+// operator already controls.
+//
+// 4000 matches taskNotificationResultCap. Real server instructions run a
+// few hundred to a couple thousand runes (the boxes-orchestration and
+// braintrust servers both sit well inside it), so this cuts a server that
+// is misconfigured or hostile, not one that is merely thorough.
+const mcpInstructionsPerServerCap = 4000
+
 // renderMCPInstructions renders one system segment listing every connected
 // server that supplied initialize instructions, sorted by name:
 //
@@ -83,6 +107,7 @@ func renderMCPInstructions(reg MCPRegistry) string {
 		if text == "" {
 			continue
 		}
+		text, _ = capRunes(text, mcpInstructionsPerServerCap)
 		e.Text = text
 		kept = append(kept, e)
 	}
