@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -65,6 +66,78 @@ type apiRequest struct {
 	// pass-through/no-validation contract this adapter follows). Empty sends
 	// no field, so the account's default tier applies.
 	ServiceTier string `json:"service_tier,omitempty"`
+}
+
+// responsesRequestPropertiesMatch reports whether two Responses requests have
+// the same context-bearing properties. Input is compared separately by
+// incrementalInput, and Stream is a transport framing detail.
+func responsesRequestPropertiesMatch(previous, current *apiRequest) bool {
+	if previous == nil || current == nil {
+		return previous == current
+	}
+	return previous.Model == current.Model &&
+		previous.Instructions == current.Instructions &&
+		apiToolsEqual(previous.Tools, current.Tools) &&
+		float64PointersEqual(previous.Temperature, current.Temperature) &&
+		float64PointersEqual(previous.TopP, current.TopP) &&
+		previous.MaxOutputTokens == current.MaxOutputTokens &&
+		previous.Store == current.Store &&
+		reflect.DeepEqual(previous.Include, current.Include) &&
+		reflect.DeepEqual(previous.Reasoning, current.Reasoning) &&
+		previous.PromptCacheKey == current.PromptCacheKey &&
+		previous.ServiceTier == current.ServiceTier
+}
+
+func apiToolsEqual(previous, current []apiToolDef) bool {
+	if len(previous) != len(current) {
+		return false
+	}
+	for i := range previous {
+		if previous[i].Type != current[i].Type ||
+			previous[i].Name != current[i].Name ||
+			previous[i].Description != current[i].Description ||
+			!rawJSONEqual(previous[i].Parameters, current[i].Parameters) {
+			return false
+		}
+	}
+	return true
+}
+
+func float64PointersEqual(previous, current *float64) bool {
+	return previous == nil && current == nil ||
+		previous != nil && current != nil && *previous == *current
+}
+
+// incrementalInput returns the part of current after the prior request input
+// and response items. Prefix values compare as JSON, so insignificant object
+// formatting does not prevent chaining.
+func incrementalInput(previous *apiRequest, responseItems, current []json.RawMessage) ([]json.RawMessage, bool) {
+	if previous == nil {
+		return nil, false
+	}
+	prefixLength := len(previous.Input) + len(responseItems)
+	if len(current) < prefixLength {
+		return nil, false
+	}
+	for i, item := range previous.Input {
+		if !rawJSONEqual(item, current[i]) {
+			return nil, false
+		}
+	}
+	for i, item := range responseItems {
+		if !rawJSONEqual(item, current[len(previous.Input)+i]) {
+			return nil, false
+		}
+	}
+	return current[prefixLength:], true
+}
+
+func rawJSONEqual(previous, current json.RawMessage) bool {
+	var previousValue, currentValue any
+	if json.Unmarshal(previous, &previousValue) != nil || json.Unmarshal(current, &currentValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(previousValue, currentValue)
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of
