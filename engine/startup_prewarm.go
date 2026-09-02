@@ -26,10 +26,9 @@ type startupPrewarm struct {
 	consumeOnce sync.Once
 	outcomeOnce sync.Once
 
-	mu              sync.Mutex
-	workerCompleted bool
-	completedAt     time.Time
-	resultErr       error
+	mu            sync.Mutex
+	outcomeStatus StartupPrewarmStatus
+	outcomeAt     time.Time
 }
 
 type startupPrewarmResolution struct {
@@ -75,20 +74,19 @@ func (s *Session) startStartupPrewarm() {
 	go func() {
 		<-h.deadlineDone
 		if ctx.Err() == context.DeadlineExceeded {
-			s.emitStartupPrewarmOutcome(h, StartupPrewarmTimedOut, time.Now())
+			at := time.Now()
+			won := h.claimOutcome(StartupPrewarmTimedOut, at)
+			h.cancel()
 			s.detachStartupPrewarm(h)
+			if won {
+				s.emitStartupPrewarmMetrics(h, StartupPrewarmTimedOut, at)
+			}
 		}
 	}()
 
 	go func() {
 		err := s.runStartupPrewarm(ctx)
 		completedAt := time.Now()
-		h.mu.Lock()
-		h.workerCompleted = true
-		h.completedAt = completedAt
-		h.resultErr = err
-		h.mu.Unlock()
-
 		status := StartupPrewarmReady
 		switch {
 		case ctx.Err() == context.DeadlineExceeded:
@@ -98,7 +96,20 @@ func (s *Session) startStartupPrewarm() {
 		case err != nil:
 			status = StartupPrewarmFailed
 		}
-		s.emitStartupPrewarmOutcome(h, status, completedAt)
+		won := h.claimOutcome(status, completedAt)
+		if status == StartupPrewarmTimedOut || status == StartupPrewarmCancelled {
+			close(h.done)
+			cancel()
+			s.detachStartupPrewarm(h)
+			s.clearStartupPrewarmResolution()
+			if won {
+				s.emitStartupPrewarmMetrics(h, status, completedAt)
+			}
+			return
+		}
+		if won {
+			s.emitStartupPrewarmMetrics(h, status, completedAt)
+		}
 		close(h.done)
 		cancel()
 	}()
@@ -153,36 +164,45 @@ func (s *Session) consumeStartupPrewarm(ctx context.Context) error {
 	case <-h.done:
 		return s.consumeCompletedStartupPrewarm(ctx, h)
 	case <-h.deadlineDone:
-		if h.completed() {
+		if h.hasOutcome() {
 			return s.consumeCompletedStartupPrewarm(ctx, h)
 		}
+		at := time.Now()
+		won := h.claimOutcome(StartupPrewarmTimedOut, at)
 		h.cancel()
-		s.emitStartupPrewarmOutcome(h, StartupPrewarmTimedOut, time.Now())
 		s.detachStartupPrewarm(h)
+		if won {
+			s.emitStartupPrewarmMetrics(h, StartupPrewarmTimedOut, at)
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		return nil
 	case <-ctx.Done():
+		at := time.Now()
+		won := h.claimOutcome(StartupPrewarmCancelled, at)
 		h.cancel()
-		s.emitStartupPrewarmOutcome(h, StartupPrewarmCancelled, time.Now())
 		s.detachStartupPrewarm(h)
+		if won {
+			s.emitStartupPrewarmMetrics(h, StartupPrewarmCancelled, at)
+		}
 		return ctx.Err()
 	}
 }
 
 func (s *Session) consumeCompletedStartupPrewarm(ctx context.Context, h *startupPrewarm) error {
 	if err := ctx.Err(); err != nil {
+		at := time.Now()
+		won := h.claimOutcome(StartupPrewarmCancelled, at)
 		h.cancel()
-		s.emitStartupPrewarmOutcome(h, StartupPrewarmCancelled, time.Now())
 		s.detachStartupPrewarm(h)
+		if won {
+			s.emitStartupPrewarmMetrics(h, StartupPrewarmCancelled, at)
+		}
 		return err
 	}
-	h.mu.Lock()
-	completedAt := h.completedAt
-	resultErr := h.resultErr
-	h.mu.Unlock()
-	if resultErr == nil {
+	status, completedAt := h.outcome()
+	if status == StartupPrewarmReady {
 		s.mu.Lock()
 		s.startupPrewarmResolution = &startupPrewarmResolution{startedAt: h.startedAt, readyAt: completedAt}
 		s.mu.Unlock()
@@ -195,10 +215,27 @@ func (s *Session) consumeCompletedStartupPrewarm(ctx context.Context, h *startup
 	return nil
 }
 
-func (h *startupPrewarm) completed() bool {
+func (h *startupPrewarm) claimOutcome(status StartupPrewarmStatus, at time.Time) bool {
+	won := false
+	h.outcomeOnce.Do(func() {
+		h.mu.Lock()
+		h.outcomeStatus = status
+		h.outcomeAt = at
+		h.mu.Unlock()
+		won = true
+	})
+	return won
+}
+
+func (h *startupPrewarm) outcome() (StartupPrewarmStatus, time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.workerCompleted
+	return h.outcomeStatus, h.outcomeAt
+}
+
+func (h *startupPrewarm) hasOutcome() bool {
+	status, _ := h.outcome()
+	return status != ""
 }
 
 func (s *Session) detachStartupPrewarm(h *startupPrewarm) {
@@ -218,17 +255,17 @@ func (s *Session) cancelStartupPrewarmWithStatus(status StartupPrewarmStatus) {
 	h := s.startupPrewarm
 	s.mu.Unlock()
 	if h != nil {
-		s.emitStartupPrewarmOutcome(h, status, time.Now())
+		at := time.Now()
+		won := h.claimOutcome(status, at)
 		h.cancel()
 		s.detachStartupPrewarm(h)
+		s.clearStartupPrewarmResolution()
+		if won {
+			s.emitStartupPrewarmMetrics(h, status, at)
+		}
+		return
 	}
 	s.clearStartupPrewarmResolution()
-}
-
-func (s *Session) emitStartupPrewarmOutcome(h *startupPrewarm, status StartupPrewarmStatus, at time.Time) {
-	h.outcomeOnce.Do(func() {
-		s.emitStartupPrewarmMetrics(h, status, at)
-	})
 }
 
 func (s *Session) resolveStartupPrewarm(metadata *provider.RequestMetadata) {

@@ -702,12 +702,14 @@ also cancels an owned task.
 
 `StartupPrewarmer.Prewarm` must return promptly after context cancellation. The
 engine bounds prompt waiting and session ownership independently: a deadline
-signal detaches the handle even when the callback has not returned. Go cannot
-terminate an arbitrary in-process callback. A provider that ignores cancellation
-can therefore leave one residual, unowned callback goroutine blocked after the
-15-second boundary. The engine does not retain it, wait for it, or let it delay
-the first prompt. Providers must obey the cancellation contract to prevent that
-residual limitation.
+signal cancels the worker and detaches the handle before an outcome callback can
+block. The first winning outcome is committed before callback invocation, so a
+reentrant callback cannot change that outcome or deadlock its once gate. Go
+cannot terminate an arbitrary in-process callback. A provider that ignores
+cancellation can therefore leave one residual, unowned callback goroutine
+blocked after the 15-second boundary. The engine does not retain it, wait for
+it, or let it delay the first prompt. Providers must obey the cancellation
+contract to prevent that residual limitation.
 
 Prewarm emits no provider events, user or assistant messages, usage, or
 `turn_metrics`. It emits `startup_prewarm` lifecycle records through

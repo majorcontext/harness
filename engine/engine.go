@@ -593,7 +593,9 @@ type Config struct {
 
 	// OnStartupPrewarmMetrics receives non-secret startup-prewarm lifecycle
 	// records. Nil writes structured records to stderr. The callback can run
-	// from the startup worker and must be fast and concurrency-safe.
+	// from the startup worker and must be fast and concurrency-safe. Outcome
+	// state is committed before invocation. Timeout and cancellation release
+	// session ownership before invocation.
 	OnStartupPrewarmMetrics func(StartupPrewarmMetrics)
 
 	// Now is the clock TurnMetrics timing reads: streamTurn calls it just

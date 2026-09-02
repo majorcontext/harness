@@ -365,10 +365,12 @@ Chaining does not infer or synthesize cache metrics.
 ## Session and process lifecycle
 
 The engine creates one 15-second context when it schedules prewarm. An
-independent deadline observer detaches session ownership when that context ends,
-even if the worker callback has not returned. The first prompt waits only for
-that same boundary. Session removal and prompt cancellation also cancel and
-detach an owned task.
+independent deadline observer cancels the worker and detaches session ownership
+before it invokes external outcome metrics. The first outcome winner commits its
+status and timestamp before callback invocation. A reentrant callback cannot
+change the winner or deadlock the once gate. The first prompt waits only for the
+same boundary. Session removal and prompt cancellation also cancel and detach an
+owned task before external outcome callbacks run.
 
 `StartupPrewarmer.Prewarm` must return promptly after context cancellation. Go
 cannot forcibly terminate an arbitrary in-process callback. A provider or

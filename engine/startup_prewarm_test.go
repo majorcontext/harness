@@ -192,6 +192,167 @@ func TestStartupPrewarmBothReadyAndPromptCanceledDoesNotMutate(t *testing.T) {
 	})
 }
 
+func TestStartupPrewarmTimedOutOutcomeCannotBecomeConsumedOrStale(t *testing.T) {
+	metrics := make(chan StartupPrewarmMetrics, 2)
+	s := newSession(Config{OnStartupPrewarmMetrics: func(m StartupPrewarmMetrics) { metrics <- m }})
+	s.ID = "session"
+	h := &startupPrewarm{
+		startedAt:    time.Unix(0, 0),
+		cancel:       func() {},
+		deadlineDone: make(chan struct{}),
+		done:         make(chan struct{}),
+	}
+	s.startupPrewarm = h
+
+	if !h.claimOutcome(StartupPrewarmTimedOut, time.Unix(1, 0)) {
+		t.Fatal("timed-out outcome did not win test setup")
+	}
+	s.emitStartupPrewarmMetrics(h, StartupPrewarmTimedOut, time.Unix(1, 0))
+	close(h.done)
+	if err := s.consumeStartupPrewarm(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s.startupPrewarmResolution != nil {
+		t.Fatal("timed-out outcome installed a usable prewarm resolution")
+	}
+	s.resolveStartupPrewarm(&provider.RequestMetadata{
+		Mode:                 provider.RequestModeIncremental,
+		PreviousResponseUsed: true,
+	})
+
+	first := <-metrics
+	if first.Status != StartupPrewarmTimedOut {
+		t.Fatalf("first status = %q, want timed_out", first.Status)
+	}
+	select {
+	case extra := <-metrics:
+		t.Fatalf("status sequence = timed_out -> %s, want timed_out only", extra.Status)
+	default:
+	}
+}
+
+func TestStartupPrewarmOutcomeCallbackCanReenterCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newStartupPrewarmProvider("test")
+		release := make(chan struct{})
+		p.release = release
+		var s *Session
+		callbackReturned := make(chan struct{})
+		cfg := startupConfig(p)
+		cfg.OnStartupPrewarmMetrics = func(m StartupPrewarmMetrics) {
+			if m.Status == StartupPrewarmReady {
+				s.cancelStartupPrewarm()
+				close(callbackReturned)
+			}
+		}
+		s = NewSession(cfg)
+		requirePrewarmRequest(t, p)
+		close(release)
+		synctest.Wait()
+
+		select {
+		case <-callbackReturned:
+		default:
+			t.Fatal("reentrant metrics callback did not return")
+		}
+		s.mu.Lock()
+		retained := s.startupPrewarm != nil
+		s.mu.Unlock()
+		if retained {
+			t.Fatal("reentrant cancellation retained startup-prewarm ownership")
+		}
+	})
+}
+
+func TestStartupPrewarmBlockingOutcomeCallbackCannotRetainOwnership(t *testing.T) {
+	t.Run("prompt cancellation", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var s *Session
+		s = newSession(Config{OnStartupPrewarmMetrics: func(m StartupPrewarmMetrics) {
+			if m.Status == StartupPrewarmCancelled {
+				close(entered)
+				<-release
+			}
+		}})
+		s.ID = "session"
+		cancelled := make(chan struct{})
+		h := &startupPrewarm{
+			startedAt:    time.Now(),
+			cancel:       func() { close(cancelled) },
+			deadlineDone: make(chan struct{}),
+			done:         make(chan struct{}),
+		}
+		s.startupPrewarm = h
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		result := make(chan error, 1)
+		go func() {
+			result <- s.consumeStartupPrewarm(ctx)
+		}()
+		<-entered
+
+		s.mu.Lock()
+		retained := s.startupPrewarm != nil
+		s.mu.Unlock()
+		select {
+		case <-cancelled:
+		default:
+			retained = true
+		}
+		close(release)
+		if err := <-result; !errors.Is(err, context.Canceled) {
+			t.Fatalf("consume error = %v, want context.Canceled", err)
+		}
+		if retained {
+			t.Fatal("blocking cancellation callback retained startup-prewarm ownership")
+		}
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			block := make(chan struct{})
+			p := newStartupPrewarmProvider("test")
+			p.release = block
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			cfg := startupConfig(p)
+			cfg.OnStartupPrewarmMetrics = func(m StartupPrewarmMetrics) {
+				if m.Status == StartupPrewarmTimedOut {
+					close(entered)
+					<-release
+				}
+			}
+			s := NewSession(cfg)
+			requirePrewarmRequest(t, p)
+			result := make(chan error, 1)
+			go func() {
+				_, err := s.Prompt(context.Background(), "fallback")
+				result <- err
+			}()
+			synctest.Wait()
+			<-entered
+			synctest.Wait()
+
+			s.mu.Lock()
+			retained := s.startupPrewarm != nil
+			s.mu.Unlock()
+			select {
+			case <-p.prewarmReturned:
+			default:
+				retained = true
+			}
+			close(release)
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+			if retained {
+				t.Fatal("blocking deadline callback retained startup-prewarm ownership or worker")
+			}
+		})
+	})
+}
+
 func TestStartupPrewarmMetricsExposeLifecycleAndResolution(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p := newStartupPrewarmProvider("test")
