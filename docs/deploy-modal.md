@@ -200,9 +200,17 @@ so a cloned repo's skills are offered to box sessions automatically.
 
 ### Telling box sessions about the environment
 
-Config `append_system_prompt` is an array of environment facts for every
-session created by `serve` or `run`. Use it for facts an agent cannot discover,
-such as a gateway URL template or a required `0.0.0.0` bind address.
+Config `append_system_prompt` is an array of platform-owned facts for every
+session created by `serve` or `run`. Use it for a fact an agent cannot
+discover, such as a gateway URL template or a required `0.0.0.0` bind address,
+and for the platform policy that depends on that fact. Do not use it for
+project instructions or for tool shape. An MCP server states its own usage
+through initialize instructions, which reach the model as their own segment.
+
+Keep every segment byte-stable for the life of a session. A segment that
+carries a timestamp, a pod name, or any live status re-processes the whole
+conversation uncached on every request. Nothing reports that; the only signal
+is the bill.
 
 The key merges additively. Platform entries come first, then entries from the
 cloned repository's `.harness.json`. A repository can add facts but cannot
