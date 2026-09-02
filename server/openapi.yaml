@@ -839,6 +839,19 @@ components:
         data: { type: string, contentEncoding: base64 }
         url: { type: string }
 
+    PromptBlobPart:
+      description: >
+        A BlobPart sent as a PROMPT attachment, which must carry inline
+        base64 `data`. BlobPart itself allows `data` OR `url` because a
+        blob in a TRANSCRIPT legitimately carries either, but prompt_async
+        rejects a url-only attachment (decodePromptBlob): honoring one would
+        make harness ask every provider — and imageclamp, which has to decode
+        bytes to clamp them — to fetch a caller-supplied URL from inside the
+        box, which is an egress decision this route does not get to make.
+      allOf:
+        - $ref: "#/components/schemas/BlobPart"
+        - required: [data]
+
     ToolCallPart:
       type: object
       required: [type, call_id, name, arguments]
@@ -928,8 +941,37 @@ components:
           type: array
           minItems: 1
           items:
-            $ref: "#/components/schemas/TextPart"
-          description: v1 accepts text parts only.
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/PromptBlobPart"
+          description: >
+            Text parts and file attachments. Text parts are joined by
+            newlines into the prompt's text; each blob part becomes a Blob
+            part of the user message, after the text, in the order given.
+
+
+            An attachment must be one of image/png, image/jpeg, image/gif,
+            image/webp, or application/pdf — every media type each provider
+            lane can actually deliver (an image block, or a document block
+            for a PDF). It must carry inline base64 `data` rather than a
+            `url`, must really be the type it claims (an image is decoded, a
+            PDF must carry its %PDF- header), and must not exceed 20971520
+            bytes. Anything else is rejected with 400 before the prompt is
+            accepted, because a blob no provider can render would otherwise
+            be persisted into the durable transcript and re-sent on every
+            later turn. A prompt carrying at least one attachment is valid
+            with no text part at all.
+
+
+            Those 400s are per-attachment judgments, made after the body is
+            decoded. The WHOLE body is separately bounded at 33554432 bytes
+            and answered with 413 before any of it is decoded, since blob
+            `data` is base64 and decoding it allocates — so a client can tell
+            the two apart: a 400 means this attachment is unusable, a 413
+            means the request was too large to inspect at all. Base64 costs
+            about 4/3, so the body bound is reached by roughly 24 MiB of
+            attachment bytes however they are divided up, which is why
+            several individually-legal attachments can still exceed it.
         model:
           $ref: "#/components/schemas/ModelRef"
           description: >
@@ -938,11 +980,11 @@ components:
             as the CLI -model flag) — but ONLY when this prompt starts
             running immediately. When the session is busy and this request's
             prompt is durably queued instead (see prompt_async's 202
-            `status: queued`), the override is silently dropped: `QueuedPrompt`
-            carries text only (docs/plans/2026-07-19-prompt-queue.md's
-            text-only v1 limit), so there is no slot to carry a per-prompt
-            override through to a future drain. Re-issue the request once it
-            is confirmed `started` if the override must take effect.
+            `status: queued`), the override is silently dropped: a queued
+            prompt carries its own text, attachments, and ids — not a model
+            ref — so there is no slot to carry a per-prompt override through
+            to a future drain. Re-issue the request once it is confirmed
+            `started` if the override must take effect.
 
     EnqueueRequest:
       type: object
@@ -953,7 +995,12 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/TextPart"
-          description: v1 accepts text parts only, same as PromptRequest.
+          description: >
+            Text parts only. Unlike PromptRequest, this write-ahead route
+            takes no attachments at all: its callers are machine relays
+            (an inbox poller, a coordinator) whose upstream ack rides on the
+            durable-accept contract, not the interactive composer a person
+            attaches a file to.
         seq:
           type: integer
           format: int64
@@ -964,10 +1011,10 @@ components:
             (the watermark simply jumps to it), but an out-of-order FRESH
             seq is indistinguishable from a duplicate and is silently
             dropped — see EnqueueResponse's `duplicate` status. No `model`
-            field: a durably-enqueued prompt is subject to the exact same
-            text-only, no-override limit as a queued PromptRequest (see
-            PromptRequest's `model` description) — there is simply no slot
-            to offer one here.
+            field: a durably-enqueued prompt is subject to the same
+            no-override limit as a queued PromptRequest (see PromptRequest's
+            `model` description) — there is simply no slot to offer one
+            here.
 
     EnqueueResponse:
       type: object
@@ -2317,6 +2364,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
+        "400":
+          description: >
+            The body is malformed, `parts` is empty, or an attachment is
+            unusable — an unsupported media type, a url instead of inline
+            `data`, bytes that are not the type they claim, or one
+            attachment past 20971520 bytes. Each is a judgment about a
+            specific part, made after the body is decoded; contrast the 413
+            below, which is about the request as a whole. The error message
+            names which attachment and why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
@@ -2326,6 +2385,16 @@ paths:
             session set workdir_isolation="worktree" (the error names the
             holder session). Same-session busy (another prompt or a running
             goal loop) no longer reaches this response — see the 202 case.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: >
+            The request body exceeds 33554432 bytes and was refused before
+            being decoded — blob `data` is base64 and decoding it allocates,
+            so an oversized body is stopped at the read rather than after
+            the cost is paid. Distinct from the per-attachment 400s in
+            `parts`: this one says nothing about any individual attachment.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

@@ -127,7 +127,8 @@ to a page. Bound scans to the indexed log size.
 - Let queued input beat goal auto-arm.
 - Deliver each item once across tool and goal-turn drains.
 - Do not auto-dispatch a restored queue at boot.
-- Keep queued prompts text-only and model-override-free.
+- Keep queued prompts model-override-free.
+- Persist a queued prompt's attachments with it and deliver them at every drain.
 - Preserve durable sequence deduplication and its high-water mark.
 
 Keep the process manager box-scoped and shared. Runtime declarations are not

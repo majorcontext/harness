@@ -2521,6 +2521,41 @@ func (s *Session) emitSessionError(err error) {
 	}})
 }
 
+// promptParts builds the canonical Parts of one prompt's user message: the
+// typed text first, then one Blob part per attachment, in the caller's own
+// order. It is the ONE place a prompt's text and attachments become a
+// message, shared by PromptWithOrigin's two append sites (the native loop
+// and the claude-code delegated lane), so the two can never disagree about
+// where an attachment lands.
+//
+// Empty text with attachments is a real prompt — an uploaded screenshot
+// with nothing typed beside it — and yields blob parts only, never an empty
+// Text part in front of them: a leading empty text block is noise every
+// provider transcoder would have to carry. Empty text with NO attachments
+// keeps the exact single-empty-Text-part shape this function replaced, so
+// nothing changes for a caller that prompts with "".
+func promptParts(text string, blobs []*message.Blob) message.Parts {
+	if len(blobs) == 0 {
+		return message.Parts{&message.Text{Text: text}}
+	}
+	parts := make(message.Parts, 0, 1+len(blobs))
+	if text != "" {
+		parts = append(parts, &message.Text{Text: text})
+	}
+	for _, b := range blobs {
+		if b == nil {
+			continue
+		}
+		parts = append(parts, b)
+	}
+	if len(parts) == 0 {
+		// Every attachment was nil: fall back to the text-only shape rather
+		// than appending a part-less user message no provider can transcode.
+		return message.Parts{&message.Text{Text: text}}
+	}
+	return parts
+}
+
 // Prompt appends a user message and runs the agent loop — stream a turn,
 // execute any tool calls, feed results back — until the model ends its turn.
 // It returns the final assistant message. A thin, origin-less wrapper around
@@ -2565,7 +2600,15 @@ func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message
 // order is (and remains) append order, never a sort on this ID — see
 // ResolveMessageID's own doc comment for why a client-minted, time-sortable
 // ID must never be trusted for chronology.
-func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string, id string) (*message.Message, error) {
+// blobs are the prompt's attachments — an image a person uploaded beside
+// their text, today. They ride as variadic trailing arguments so every one
+// of this method's existing callers stays untouched and there is still
+// exactly ONE parameterized entry point for appending a user message (the
+// same reason origin is a parameter here rather than a third sibling
+// method). Each blob becomes its own message.Blob part of the appended user
+// message, after the text part — see promptParts. A prompt carrying at
+// least one blob is valid with empty text.
+func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string, id string, blobs ...*message.Blob) (*message.Message, error) {
 	// A session delegated to the Claude Code CLI (ClaudeCodeProviderFamily
 	// — see engine/claude_code_backend.go) dispatches here, FIRST, before
 	// every check and assembly step below: ContextWindowErr,
@@ -2583,7 +2626,7 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 		s.append(message.Message{
 			ID:        ResolveMessageID(id),
 			Role:      message.RoleUser,
-			Parts:     message.Parts{&message.Text{Text: text}},
+			Parts:     promptParts(text, blobs),
 			CreatedAt: time.Now().UTC(),
 			Origin:    origin,
 		})
@@ -2626,7 +2669,7 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	s.append(message.Message{
 		ID:        ResolveMessageID(id),
 		Role:      message.RoleUser,
-		Parts:     message.Parts{&message.Text{Text: text}},
+		Parts:     promptParts(text, blobs),
 		CreatedAt: time.Now().UTC(),
 		Origin:    origin,
 	})
@@ -2897,10 +2940,17 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 // by reusing the identical mechanism rather than adding a second one.
 func (s *Session) drainQueuedPromptsIntoHistory() {
 	if queued := s.DequeueAllPrompts("injected"); len(queued) > 0 {
+		// promptParts, not a bare Text part: a drained prompt can carry
+		// attachments (QueuedPrompt.Blobs), and operatorMessagesBlock
+		// renders TEXT only — it announces each prompt's attachment count
+		// and this append is what actually delivers the bytes, as Blob
+		// parts of the same injected user message. Without them an image
+		// queued while a turn was running would reach the model as a
+		// sentence about a picture it cannot see.
 		s.append(message.Message{
 			ID:        newID("msg"),
 			Role:      message.RoleUser,
-			Parts:     message.Parts{&message.Text{Text: strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")}},
+			Parts:     promptParts(strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n"), queuedBlobs(queued)),
 			CreatedAt: time.Now().UTC(),
 		})
 	}
