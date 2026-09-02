@@ -113,8 +113,22 @@ a repository-wide or concurrency-sensitive change.
 
 ## Testing
 
+Name the failure before you write the test. State the input, the state, and the
+wrong output. A test that cannot fail for one named reason has no value.
+
 For behavior-changing code, add and confirm the failing test first. Then implement
-the change. For prose-only changes, validate links, formatting, and loaders.
+the change. That failing test also proves that the agent did the work. For prose-only
+changes, validate links, formatting, and loaders.
+
+Do not write a test that can only restate the implementation. Use the check that
+fits the change instead.
+
+- Wiring and composition: the build and a startup path cover them.
+- A rule that the type system enforces: the compiler is the test.
+- A thin adapter over an external system: test the contract with a fake.
+- An exploratory design: spike, delete the spike, then test what you keep.
+
+Keep a test that pins a named, reported regression.
 
 - Run Go tests with `-race`.
 - Red-verify each regression test against the exact mechanism it names.
@@ -174,6 +188,16 @@ Use ASD-STE100 Simplified Technical English for repository prose.
 Use active voice, common words, and one stable term for each concept.
 Keep instructions at 20 words or fewer when practical. Name code elements
 instead of using vague references. Quote identifiers and error strings exactly.
+
+Default to no code comment. Prefer a clearer name or a smaller function over an
+explanation. Comment only what the code cannot show: a constraint, a hazard, a
+rejected alternative, or a non-obvious reason. Keep it to the shortest form that
+carries the reason.
+
+Do not write a comment that describes the change that you made. `git blame` and
+the commit body hold that history, and the comment goes stale at the next edit.
+A comment that says "no longer", "now", or "instead of" belongs in the commit
+message.
 
 Use standard Go style. Run `gofmt` and `go vet`. Prefer explicit exported
 types and small interfaces.
