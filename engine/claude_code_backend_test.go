@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1119,6 +1120,78 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeGroupsParallelToolCallsByUpstreamID proves ONE upstream API
+// response becomes ONE harness message, even when the CLI streams its
+// content blocks as several envelopes with the first tool's result
+// interleaved between them.
+//
+// A real `claude` binary sends one envelope per content block, every
+// envelope repeating the response's own message.id, and it runs the first
+// tool before it sends the second tool_use. Appending one message per
+// envelope therefore split a single response holding two parallel tool
+// calls into two adjacent assistant messages, and the upstream id was
+// decoded nowhere, so nothing downstream could put them back together.
+//
+// The result order is the other half of the contract: a tool_result must
+// never be journaled ahead of the call it answers, so the interleaved
+// result is held behind the assembled message and lands after it.
+func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "parallel_tools")
+	if _, err := s.Prompt(context.Background(), "run both"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning + BOTH tool calls), tool(alpha),
+	// tool(beta), assistant(text) = 5 — not 6, the pre-fix shape with the
+	// second tool call stranded in its own message.
+	if len(hist) != 5 {
+		var shape []string
+		for _, m := range hist {
+			kinds := make([]string, 0, len(m.Parts))
+			for _, p := range m.Parts {
+				kinds = append(kinds, fmt.Sprintf("%T", p))
+			}
+			shape = append(shape, string(m.Role)+"["+strings.Join(kinds, ",")+"]")
+		}
+		t.Fatalf("History() len = %d, want 5: %v", len(hist), shape)
+	}
+
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant {
+		t.Fatalf("hist[1].Role = %q, want assistant", asst.Role)
+	}
+	var calls []string
+	for _, p := range asst.Parts {
+		if tc, ok := p.(*message.ToolCall); ok {
+			calls = append(calls, tc.CallID)
+		}
+	}
+	if want := []string{"toolu_alpha", "toolu_beta"}; !slices.Equal(calls, want) {
+		t.Errorf("assembled tool calls = %v, want %v (both blocks of one response, in order)", calls, want)
+	}
+	if _, ok := asst.Parts[0].(*message.Reasoning); !ok {
+		t.Errorf("hist[1].Parts[0] = %T, want the response's own Reasoning first", asst.Parts[0])
+	}
+
+	// Both results follow the message that carries their calls, in arrival
+	// order, and the NEXT response's own id ends the group rather than
+	// joining it.
+	for i, want := range []string{"toolu_alpha", "toolu_beta"} {
+		m := hist[2+i]
+		if m.Role != message.RoleTool {
+			t.Fatalf("hist[%d].Role = %q, want tool", 2+i, m.Role)
+		}
+		tr, ok := m.Parts[0].(*message.ToolResult)
+		if !ok || tr.CallID != want {
+			t.Errorf("hist[%d].Parts[0] = %+v, want a ToolResult for %q", 2+i, m.Parts[0], want)
+		}
+	}
+	if got := hist[4].Parts.Text(); got != "done" {
+		t.Errorf("hist[4] text = %q, want the separate response %q", got, "done")
+	}
+}
+
 // TestClaudeCodeBufferedReasoningStreamsOnce proves a buffered thinking
 // block's delta is emitted exactly once.
 //
@@ -1146,6 +1219,79 @@ func TestClaudeCodeBufferedReasoningStreamsOnce(t *testing.T) {
 	}
 	if reasoningDeltas != 1 {
 		t.Errorf("reasoning.delta for the buffered thinking block emitted %d times, want exactly 1", reasoningDeltas)
+	}
+}
+
+// TestClaudeCodeGroupingRespectsResponseAndThreadBoundaries proves the two
+// boundaries the grouping must not cross, both found by review of #240.
+//
+// A SUBAGENT tool_result arrives on a different parent_tool_use_id while a
+// main-thread response is still being assembled. It answers a call the
+// subagent's own earlier response already journaled, so holding it behind
+// the unrelated main-thread response would reorder it for nothing — and
+// journaling it while that response is still buffered would put it AHEAD
+// of a message the wire sent first. The open response closes instead.
+//
+// A THINKING-ONLY envelope then opens the NEXT response. It carries a
+// different upstream id, but the reasoning-buffer path buffers and
+// continues, so the id boundary has to be checked BEFORE that branch or
+// the previous response stays open across a boundary it has nothing to do
+// with.
+func TestClaudeCodeGroupingRespectsResponseAndThreadBoundaries(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "parallel_tools_crossing")
+	if _, err := s.Prompt(context.Background(), "cross the boundaries"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	hist := s.History()
+	var shape []string
+	for _, m := range hist {
+		kinds := make([]string, 0, len(m.Parts))
+		for _, p := range m.Parts {
+			kinds = append(kinds, fmt.Sprintf("%T", p))
+		}
+		shape = append(shape, string(m.Role)+"["+strings.Join(kinds, ",")+"]")
+	}
+	// user, assistant[subagent tool_use], assistant[main tool_use],
+	// tool[subagent result], assistant[reasoning + text].
+	if len(hist) != 5 {
+		t.Fatalf("History() len = %d, want 5: %v", len(hist), shape)
+	}
+
+	// Wire order survives: the subagent's result lands AFTER the
+	// main-thread message the wire sent before it, never held behind it
+	// and never journaled ahead of it.
+	if hist[1].ParentToolUseID != "toolu_parent" {
+		t.Errorf("hist[1].ParentToolUseID = %q, want the subagent's own thread: %v", hist[1].ParentToolUseID, shape)
+	}
+	if hist[2].ParentToolUseID != "" {
+		t.Errorf("hist[2].ParentToolUseID = %q, want the main thread: %v", hist[2].ParentToolUseID, shape)
+	}
+	if hist[3].Role != message.RoleTool {
+		t.Fatalf("hist[3].Role = %q, want the subagent tool result after the main-thread message: %v", hist[3].Role, shape)
+	}
+	tr, ok := hist[3].Parts[0].(*message.ToolResult)
+	if !ok || tr.CallID != "toolu_child" {
+		t.Errorf("hist[3].Parts[0] = %+v, want a ToolResult for toolu_child", hist[3].Parts[0])
+	}
+
+	// The next response's thinking block closed the previous one rather
+	// than joining it: its reasoning belongs to the FINAL message.
+	last := hist[4]
+	if last.Role != message.RoleAssistant {
+		t.Fatalf("hist[4].Role = %q, want assistant: %v", last.Role, shape)
+	}
+	if _, ok := last.Parts[0].(*message.Reasoning); !ok {
+		t.Errorf("hist[4].Parts[0] = %T, want the second response's own Reasoning", last.Parts[0])
+	}
+	if got := last.Parts.Text(); got != "done" {
+		t.Errorf("hist[4] text = %q, want %q", got, "done")
+	}
+	// Each earlier response kept exactly its own single tool call.
+	for _, i := range []int{1, 2} {
+		if len(hist[i].Parts) != 1 {
+			t.Errorf("hist[%d].Parts = %+v, want exactly that response's one tool call", i, hist[i].Parts)
+		}
 	}
 }
 

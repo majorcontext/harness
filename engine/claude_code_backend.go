@@ -1148,6 +1148,71 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	var pendingReasoning message.Parts
 	var pendingReasoningParent string
 
+	// pendingAssistant assembles the ONE message.Message for one upstream
+	// API response. The CLI streams each content block of a response as
+	// its own "assistant" envelope, all sharing that response's
+	// message.id, so a response holding two parallel tool_use blocks
+	// arrived as two envelopes and became two harness messages — one model
+	// response, split in half, with no way for any consumer to put it back
+	// together (the upstream id was decoded nowhere and persisted nowhere).
+	//
+	// The CLI runs the first tool and reports its result BEFORE it sends
+	// the second tool_use envelope, so grouping means holding the assistant
+	// message across that execution, and holding the interleaved
+	// tool_result behind it to keep a result after the call it answers.
+	// deferredToolResults is that hold. The COST is a wider crash window:
+	// today each envelope is journaled the moment it arrives, and a crash
+	// mid-execution keeps the call; with grouping, that crash loses the
+	// call record for a tool that already ran. Nothing else regresses --
+	// every LIVE event (tool start, tool end, deltas) is still emitted the
+	// instant its envelope arrives, so no consumer waits on the group.
+	var pendingAssistant *message.Message
+	var pendingAssistantUpstream string
+	var pendingAssistantParent string
+	var deferredToolResults []message.Message
+
+	// emitClaudeCodeParts streams one envelope's parts, always AHEAD of the
+	// message they belong to (see the EventMessage emit for why that order
+	// is load-bearing).
+	emitClaudeCodeParts := func(parts message.Parts) {
+		for _, p := range parts {
+			switch part := p.(type) {
+			case *message.Text:
+				if part.Text != "" {
+					s.emit(Event{Type: EventTextDelta, Text: part.Text})
+				}
+			case *message.Reasoning:
+				if part.Text != "" {
+					s.emit(Event{Type: EventReasoningDelta, Text: part.Text})
+				}
+			case *message.ToolCall:
+				s.emit(Event{Type: EventToolStart, ToolCall: part})
+			}
+		}
+	}
+
+	// flushPendingAssistant journals the assembled message and then every
+	// tool_result held behind it, in arrival order — the shape the wire
+	// would have had if the CLI had sent the whole response at once.
+	flushPendingAssistant := func() {
+		if pendingAssistant == nil {
+			return
+		}
+		msg := *pendingAssistant
+		pendingAssistant = nil
+		pendingAssistantUpstream = ""
+		pendingAssistantParent = ""
+		s.append(msg)
+		s.emit(Event{Type: EventMessage, Message: &msg})
+		finalMsg = &msg
+		for i := range deferredToolResults {
+			result := deferredToolResults[i]
+			s.append(result)
+			s.emit(Event{Type: EventMessage, Message: &result})
+		}
+		deferredToolResults = nil
+	}
+
 	// flushPendingReasoning appends any buffered reasoning as a
 	// standalone assistant message. This is the uncommon path: it fires
 	// only when a differently-parented envelope interrupts a buffered
@@ -1259,6 +1324,19 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				pendingReasoning = nil
 				pendingReasoningParent = ""
 			}
+			// The id boundary is checked BEFORE the reasoning-only branch
+			// below: a thinking block opening the NEXT response would
+			// otherwise slip past it (that branch buffers and continues),
+			// leaving the previous response's message open across a
+			// boundary it has nothing to do with — a longer hold than the
+			// one this grouping justifies, and a different flush order on
+			// a truncated stream.
+			upstream := claudeCodeUpstreamID(env.Message)
+			if pendingAssistant != nil &&
+				(upstream == "" || upstream != pendingAssistantUpstream ||
+					env.ParentToolUseID != pendingAssistantParent) {
+				flushPendingAssistant()
+			}
 			if reasoningOnlyParts(msg.Parts) {
 				// Buffer it — do not append or emit EventMessage yet —
 				// and wait for the envelope that completes this turn
@@ -1274,10 +1352,16 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				}
 				continue
 			}
-			// Durable first, then the stream: append writes the record
-			// before any client can see a token of it, so a crash can
-			// never leave a consumer holding content the journal lost.
-			s.append(msg)
+			// One upstream response, one message: an envelope carrying
+			// the SAME upstream id as the one being assembled extends it
+			// rather than starting a second message. Its parts still
+			// stream immediately. Any mismatch already flushed above, so
+			// a surviving pendingAssistant here IS this envelope's own.
+			if pendingAssistant != nil && upstream != "" {
+				emitClaudeCodeParts(msg.Parts[alreadyStreamed:])
+				pendingAssistant.Parts = append(pendingAssistant.Parts, msg.Parts...)
+				continue
+			}
 			// The DELTAS precede their own EventMessage. This is the
 			// native lane's contract -- deltas stream while a turn is
 			// open, and the durable message finalizes what they built --
@@ -1297,29 +1381,23 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// reloaded. Reported twice against the boxes console
 			// (meetneptune/boxes#599 fixed a different orphan shape; this
 			// is the one that produced the plain-text repro).
-			for _, p := range msg.Parts[alreadyStreamed:] {
-				switch part := p.(type) {
-				case *message.Text:
-					if part.Text != "" {
-						s.emit(Event{Type: EventTextDelta, Text: part.Text})
-					}
-				case *message.Reasoning:
-					if part.Text != "" {
-						s.emit(Event{Type: EventReasoningDelta, Text: part.Text})
-					}
-				case *message.ToolCall:
-					s.emit(Event{Type: EventToolStart, ToolCall: part})
-				}
+			emitClaudeCodeParts(msg.Parts[alreadyStreamed:])
+			pendingAssistant = &msg
+			pendingAssistantUpstream = upstream
+			pendingAssistantParent = env.ParentToolUseID
+			if upstream == "" {
+				// Nothing to group on: journal it at once, exactly as this
+				// driver did before grouping existed.
+				flushPendingAssistant()
 			}
-			s.emit(Event{Type: EventMessage, Message: &msg})
-			finalMsg = &msg
 		case "user":
 			msg := claudeCodeToolResultMessage(env.Message, env.ParentToolUseID)
 			if msg == nil {
 				continue
 			}
-			s.append(*msg)
-			s.emit(Event{Type: EventMessage, Message: msg})
+			// The live tool end first, for the same reason a delta
+			// precedes its message: a consumer folds the result onto the
+			// tool card it already has open.
 			for _, p := range msg.Parts {
 				if tr, ok := p.(*message.ToolResult); ok {
 					s.emit(Event{
@@ -1330,7 +1408,36 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					})
 				}
 			}
+			if pendingAssistant != nil && env.ParentToolUseID != pendingAssistantParent {
+				// A DIFFERENT thread's result while a response is open.
+				// Holding it behind that response would reorder it for
+				// nothing (it answers a call already journaled), but
+				// journaling it while the response is still buffered would
+				// put it AHEAD of a message the wire sent first. Close the
+				// response instead: wire order survives, and the only cost
+				// is that a group interrupted by another thread's result
+				// ends there.
+				flushPendingAssistant()
+			}
+			if pendingAssistant != nil {
+				// Hold it behind the message that carries its call: the
+				// CLI reports this result BEFORE the response's remaining
+				// tool_use blocks, and a result must never be journaled
+				// ahead of the call it answers.
+				//
+				// Only for the SAME thread. A subagent's result answers a
+				// call in a message that is already journaled, so holding
+				// it behind an unrelated main-thread response would
+				// reorder it for nothing and hold it longer than the
+				// response whose calls are being grouped.
+				deferredToolResults = append(deferredToolResults, *msg)
+				continue
+			}
+			s.append(*msg)
+			s.emit(Event{Type: EventMessage, Message: msg})
 		case "result":
+			// Terminal: nothing more can join the open response.
+			flushPendingAssistant()
 			usage := mapClaudeCodeUsage(env.Usage)
 			s.applyClaudeCodeUsage(usage, env.TotalCostUSD)
 			streamMillis := env.DurationMillis - env.TTFTMillis
@@ -1398,8 +1505,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		// beyond the four above) is inert activity, per the package doc.
 	}
 	// The scanner loop ended without ever reaching "result" (a crashed or
-	// truncated stream) — flush any buffered thinking block now rather
-	// than silently drop it. See flushPendingReasoning's own doc comment.
+	// truncated stream) — flush what is buffered now rather than silently
+	// drop it. See flushPendingReasoning's and flushPendingAssistant's own
+	// doc comments.
+	flushPendingAssistant()
 	flushPendingReasoning()
 	return finalMsg, started, turnErr
 }
@@ -1599,7 +1708,14 @@ func mapClaudeCodeUsage(u *claudeCodeUsage) provider.Usage {
 // claudeCodeContentBlock — see decodeClaudeCodeContentBlocks, which
 // accepts both.
 type claudeCodeMessage struct {
-	Role    string          `json:"role"`
+	Role string `json:"role"`
+	// ID is the UPSTREAM Anthropic message id (msg_01...) — the id of the
+	// one API response this envelope carries a single content block of.
+	// Several consecutive "assistant" envelopes share it whenever a
+	// response holds more than one block, which is what
+	// consumeClaudeCodeStream groups on; harness mints its own id for the
+	// message it assembles and never persists this one.
+	ID      string          `json:"id,omitempty"`
 	Content json.RawMessage `json:"content"`
 }
 
@@ -1820,6 +1936,21 @@ func claudeCodeAppendSystemPrompt(segments []string) (string, bool) {
 		return "", false
 	}
 	return strings.Join(segments, "\n\n"), true
+}
+
+// claudeCodeUpstreamID reads an envelope's upstream Anthropic message id.
+// Empty for any envelope that carries none — an older CLI, a shape this
+// decoder does not recognize — which consumeClaudeCodeStream treats as
+// "cannot group", falling back to one harness message per envelope.
+func claudeCodeUpstreamID(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var cm claudeCodeMessage
+	if err := json.Unmarshal(raw, &cm); err != nil {
+		return ""
+	}
+	return cm.ID
 }
 
 func claudeCodeAppendPromptArg(arg string) bool {
