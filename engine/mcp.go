@@ -967,8 +967,11 @@ func sanitizeMCPCallError(server string, err error) error {
 type MCPServerInstructions struct {
 	// Name is the server's configured name.
 	Name string
-	// Text is InitializeResult.Instructions verbatim, as the server sent it.
-	// Never empty: Instructions omits a server that set none.
+	// Text is InitializeResult.Instructions verbatim, as the server sent it,
+	// surrounding whitespace included — renderMCPInstructions trims for
+	// display rather than storing a value the server did not send. Never
+	// blank: Instructions omits a server whose instructions are empty or
+	// whitespace-only.
 	Text string
 	// Tools are this server's namespaced tool names, sorted, so the model
 	// can tie the guidance to the tools it can actually call.
@@ -1003,8 +1006,8 @@ func (m *MCPManager) Instructions() []MCPServerInstructions {
 		if !e.Connected || e.client == nil {
 			continue
 		}
-		text := strings.TrimSpace(e.client.Instructions())
-		if text == "" {
+		text := e.client.Instructions()
+		if strings.TrimSpace(text) == "" {
 			continue
 		}
 		tools := make([]string, 0, len(e.tools))
