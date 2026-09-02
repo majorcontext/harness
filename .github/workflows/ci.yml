@@ -35,7 +35,13 @@ jobs:
 
       - run: go vet ./...
 
-      - run: test -z "$(gofmt -l .)"
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required for:\n%s\n' "$unformatted"
+            exit 1
+          fi
 
       - name: Inspector unit tests
         # The session inspector is a single build-free HTML file; its pure
