@@ -305,3 +305,39 @@ func TestMCPInstructionsInSystemArrayStableAcrossTurns(t *testing.T) {
 		t.Errorf("segment missing server text: %q", first[i])
 	}
 }
+
+// TestRenderMCPInstructionsCapsServerText: a server's instructions text is
+// UNTRUSTED remote input spliced into the system prefix, which is written to
+// the prompt cache once and re-read for the rest of the session. An
+// unbounded server would therefore inflate every cached prefix and, far
+// enough out, crowd the context window — so each server's text is capped and
+// the cut is marked, never silent.
+func TestRenderMCPInstructionsCapsServerText(t *testing.T) {
+	long := strings.Repeat("A", mcpInstructionsPerServerCap+500)
+	reg := &fakeInstructionsRegistry{entries: []MCPServerInstructions{{
+		Name: "chatty",
+		Text: long,
+	}}}
+	got := renderMCPInstructions(reg)
+
+	if strings.Contains(got, long) {
+		t.Errorf("segment carries the server's full text uncapped:\n%s", got)
+	}
+	if !strings.Contains(got, taskLogTruncationMarker) {
+		t.Errorf("segment does not mark the truncation:\n%s", got)
+	}
+	// The block's own markup is small and fixed; the cap governs the size.
+	if n := len([]rune(got)); n > mcpInstructionsPerServerCap+200 {
+		t.Errorf("segment = %d runes, want <= cap plus the block's own markup", n)
+	}
+
+	// A server inside the cap is passed through untouched — the cap must not
+	// mark, or trim, text it did not cut.
+	short := &fakeInstructionsRegistry{entries: []MCPServerInstructions{{
+		Name: "brief", Text: "Use the tool.",
+	}}}
+	if g := renderMCPInstructions(short); !strings.Contains(g, "Use the tool.") ||
+		strings.Contains(g, taskLogTruncationMarker) {
+		t.Errorf("short text was altered:\n%s", g)
+	}
+}
