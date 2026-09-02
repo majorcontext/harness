@@ -23,6 +23,31 @@ func TestContextWindowOpenAI(t *testing.T) {
 	}
 }
 
+// TestContextWindowCodex proves a "codex"-provider ref (the boxes platform's
+// form for a ChatGPT Codex backend model — see
+// meetneptune/boxes internal/api/codex_models.go, which mints refs like
+// "codex/gpt-5.6-sol") resolves from the SAME openaiContextWindows table the
+// "openai" provider case already uses: gpt-5.6-sol is served over two
+// different transports (openai/gpt-5.6-sol and codex/gpt-5.6-sol) but names
+// one model, so it must report one context window.
+func TestContextWindowCodex(t *testing.T) {
+	tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-5.6-sol"})
+	if !ok || tokens != 1_050_000 {
+		t.Fatalf("ContextWindow(codex/gpt-5.6-sol) = %d, %v; want 1050000, true", tokens, ok)
+	}
+}
+
+// TestContextWindowCodexUnknownModelStillMisses proves the codex case does
+// not fall back to a stand-in figure the way claudeCodeProvider does: a
+// codex ref naming a model absent from openaiContextWindows must still miss,
+// so engine.Config.RequireContextWindow's fail-loud refusal stays armed for
+// a genuinely unknown model instead of silently reporting a guess.
+func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
+	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
+		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
+	}
+}
+
 func TestContextWindowBedrockRegionPrefixes(t *testing.T) {
 	cases := []string{
 		"anthropic.claude-opus-4-8",

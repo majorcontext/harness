@@ -205,6 +205,20 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			model = stripBedrockVersionSuffix(suffix)
 		}
 		tokens, ok = openaiContextWindows[model]
+	case codexProvider:
+		// A ref routed through the ChatGPT Codex backend (see
+		// meetneptune/boxes internal/api/codex_models.go, which mints refs
+		// like "codex/gpt-5.6-sol") names the SAME underlying OpenAI model
+		// its "openai/*" counterpart does — openaiContextWindows already
+		// keys every codex model boxes uses (gpt-5.6-sol, gpt-5.6-terra,
+		// gpt-5.6-luna) — so this case looks the model up in that one
+		// table rather than duplicating it. Unlike claudeCodeProvider
+		// below, there is no stand-in fallback: a codex model absent from
+		// the table still misses, so engine.Config.RequireContextWindow's
+		// fail-loud refusal (see engine/context_window.go) stays armed for
+		// a genuinely unknown model instead of a boxes-side override
+		// disabling it globally.
+		tokens, ok = openaiContextWindows[model]
 	case "amazon-bedrock":
 		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
@@ -236,6 +250,14 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 // already depends on modelmeta for this very function). Kept in sync by
 // engine's TestClaudeCodeProviderFamilyMatchesModelmeta.
 const claudeCodeProvider = "claude-code"
+
+// codexProvider is the message.ModelRef.Provider value the boxes platform
+// mints for a ChatGPT Codex backend model (see
+// meetneptune/boxes internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
+// — distinct from provider/openai.CodexFamily, which names an "openai"-type
+// provider's Client.Family for the same backend's wire format, not a
+// message.ModelRef.Provider value this package switches on.
+const codexProvider = "codex"
 
 // claudeCodeContextWindow is the stand-in context-window figure reported
 // for claudeCodeProvider — see the ContextWindow case above for why its
