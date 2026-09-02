@@ -87,8 +87,13 @@ func verifyImageBytes(mediaType string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("does not decode as %s: %v", mediaType, err)
 	}
-	if "image/"+format != mediaType {
-		return fmt.Errorf("does not decode as %s: the data is %s", mediaType, format)
+	if decoded := "image/" + format; decoded != mediaType {
+		// Report the DECODED MEDIA TYPE, not image.DecodeConfig's bare
+		// format name ("jpeg"): the comparison just above is between two
+		// media types, so naming one of them in the other's units leaves
+		// the caller to guess whether "jpeg" meant image/jpeg. Both sides
+		// of a mismatch now read in the same vocabulary the caller sent.
+		return fmt.Errorf("does not decode as %s: the data is %s", mediaType, decoded)
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return fmt.Errorf("does not decode as %s: it reports a %dx%d size", mediaType, cfg.Width, cfg.Height)

@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1874,4 +1875,106 @@ func TestClaudeCodeStopRetiresPumpBlockedInStdinWrite(t *testing.T) {
 			"(the claude --bg-class stdin wedge this test guards against)")
 	}
 	killLeakedFakeClaude(t, pidFile)
+}
+
+// TestClaudeCodeQueueInjectedMidTurnCarriesAttachments is the regression for
+// a mid-turn queued prompt LOSING its attachments in the claude-code lane.
+//
+// A prompt that arrives while a turn is running is queued with its blobs
+// (QueuedPrompt.Blobs), and the native loop's own drain delivers them:
+// drainQueuedPromptsIntoHistory (engine.go) builds its appended message with
+// promptParts(block, queuedBlobs(queued)), so the bytes ride as Blob parts.
+// This lane's drain appended a bare Text part and wrote stdin with no blobs,
+// so an image or PDF sent mid-turn to a claude-code session was silently
+// dropped on both halves at once — the running child never saw it, AND the
+// durable history had no record of it for the next turn's --resume to
+// recover. "A delay, never a loss" did not hold for the bytes.
+//
+// Both halves are asserted, because either alone would have passed while the
+// other still dropped the file.
+func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
+	// Reuses fakeclaude's "queue_injection" mode — the one that blocks for a
+	// SECOND stdin line mid-turn — because that is exactly the delivery this
+	// regression is about; only what is ENQUEUED differs from the sibling
+	// test above.
+	s, _ := claudeCodeTestSession(t, "queue_injection")
+	stdinLog := filepath.Join(t.TempDir(), "stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(context.Background(), "start")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("Prompt returned (%v) before fakeclaude emitted WAITING_FOR_QUEUE", err)
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+	}
+
+	// A 1x1 PNG, the same shape server/prompt_parts.go admits.
+	png := []byte("\x89PNG\r\n\x1a\nQUEUED-PNG-BYTES")
+	if _, _, err := s.EnqueuePrompt("look at this", "", &message.Blob{
+		MediaType: "image/png",
+		Data:      png,
+	}); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Prompt: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Prompt did not return within 10s of EnqueuePrompt")
+	}
+
+	// Half one: the running child actually received the bytes. The stdin
+	// line must carry an image content block, not just the prompt's text.
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("CLI stdin carried %d lines, want 2: %q", len(lines), string(stdinBytes))
+	}
+	injected := lines[1]
+	if !strings.Contains(injected, `"type":"image"`) {
+		t.Errorf("CLI stdin's injected line carried no image block, so the queued attachment never "+
+			"reached the running child: %q", injected)
+	}
+	if !strings.Contains(injected, base64.StdEncoding.EncodeToString(png)) {
+		t.Errorf("CLI stdin's injected line did not carry the queued PNG's own bytes: %q", injected)
+	}
+
+	// Half two: the durable history records the attachment too, so the next
+	// turn's --resume recovery has something to recover.
+	var blobs int
+	for _, m := range s.History() {
+		if m.Role != message.RoleUser {
+			continue
+		}
+		for _, p := range m.Parts {
+			if b, ok := p.(*message.Blob); ok && bytes.Equal(b.Data, png) {
+				blobs++
+			}
+		}
+	}
+	if blobs != 1 {
+		t.Errorf("history carried %d copies of the queued PNG, want exactly 1 (the mid-turn drain's "+
+			"appended message must hold it as a Blob part, exactly once)", blobs)
+	}
 }

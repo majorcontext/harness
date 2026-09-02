@@ -627,13 +627,26 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 				// the session transcript.
 				beforeAppendLen := len(s.History())
 				block := strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")
+				// A queued prompt can carry attachments, so this drain
+				// delivers BOTH halves, exactly as the native loop's
+				// drainQueuedPromptsIntoHistory does with the same two
+				// helpers: promptParts puts the bytes in the durable
+				// history as Blob parts, and the stdin write below hands
+				// them to the running child as content blocks. Sending
+				// only the text would be worse than dropping the file
+				// quietly -- operatorMessagesBlock has already told the
+				// model "[N attachment(s) attached below]", so the turn
+				// would promise a file that never arrives, and the
+				// history would hold no copy for the next turn's
+				// --resume recovery to make good on.
+				injected := queuedBlobs(queued)
 				s.append(message.Message{
 					ID:        newID("msg"),
 					Role:      message.RoleUser,
-					Parts:     message.Parts{&message.Text{Text: block}},
+					Parts:     promptParts(block, injected),
 					CreatedAt: time.Now().UTC(),
 				})
-				if err := writeClaudeCodeInputMessage(stdin, block, nil); err != nil {
+				if err := writeClaudeCodeInputMessage(stdin, block, injected); err != nil {
 					// Best-effort, exactly like the first write's own
 					// inputErr contract below: the prompt is already
 					// dequeued AND durably in s.history by the append
@@ -1833,12 +1846,12 @@ func claudeCodeInputContent(text string, blobs []*message.Blob) any {
 // child's stdin only ever sees this one wire shape (see runClaudeCodeTurn's
 // stdin-writer pump doc comment for the construct this mirrors).
 //
-// blobs are the attachments to carry alongside text, and only the turn's
-// FIRST message has any: a mid-turn injection arrives through the prompt
-// queue as text (EnqueuePrompt is text-only), so that call site passes nil.
-// claudeCodeInputContent decides the content shape from them — a bare
-// string when there are none, keeping the wire byte-identical to what this
-// function sent before attachments existed.
+// blobs are the attachments to carry alongside text. BOTH call sites can
+// have them: the turn's own driving message (lastUserMessageContent), and a
+// mid-turn queued-prompt injection, since EnqueuePrompt takes blobs too and
+// QueuedPrompt persists them. claudeCodeInputContent decides the content
+// shape from them — a bare string when there are none, keeping the wire
+// byte-identical to what this function sent before attachments existed.
 func writeClaudeCodeInputMessage(w io.Writer, text string, blobs []*message.Blob) error {
 	line, err := json.Marshal(claudeCodeInputMessage{
 		Type: "user",

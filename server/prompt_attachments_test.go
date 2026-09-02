@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"net/http"
 	"sync"
@@ -32,6 +33,24 @@ func testPNG(t *testing.T) []byte {
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// testJPEG returns a small, valid JPEG — used to prove a REAL image of the
+// wrong type is rejected, which is a different branch of verifyImageBytes
+// than bytes that do not decode at all.
+func testJPEG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := range 8 {
+		for x := range 8 {
+			img.Set(x, y, color.RGBA{B: 255, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
@@ -271,6 +290,18 @@ func TestPromptAsyncRejectsUnusableBlob(t *testing.T) {
 			name: "data does not decode as the claimed type",
 			part: attachmentPart("image/png", []byte("this is plain text, not a PNG")),
 			want: "does not decode",
+		},
+		{
+			// A REAL image, of the wrong type: this reaches
+			// verifyImageBytes' format comparison rather than its decode
+			// failure above, and the message must name what the data
+			// actually is in the SAME units the caller claimed it in
+			// ("image/jpeg", not the bare decoder format "jpeg") — the
+			// comparison is between two media types, so a caller should
+			// not have to guess that "jpeg" meant image/jpeg.
+			name: "a real image of a different type than claimed",
+			part: attachmentPart("image/png", testJPEG(t)),
+			want: "the data is image/jpeg",
 		},
 		{
 			name: "no data and no url",
