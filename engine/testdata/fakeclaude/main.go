@@ -13,7 +13,17 @@
 // timing fields), "thinking_interleaved" (text, then thinking, then the
 // text that completes THAT thinking block's own turn segment — proves the
 // reasoning-buffer merge in consumeClaudeCodeStream attaches only forward,
-// never sweeping in an unrelated, already-flushed text message), "subagent"
+// never sweeping in an unrelated, already-flushed text message),
+// "thinking_ratelimit_text" (thinking, then a rate_limit_event, then the
+// text that completes the thinking block's own turn segment — proves the
+// pre-switch flush guard does not treat content-free activity as ending
+// the turn segment, which would re-split it), "thinking_then_crash" (a
+// thinking block immediately followed by a nonzero exit with no "result"
+// event — proves the buffered reasoning survives the post-loop flush
+// instead of being dropped), "thinking_then_subagent" (a top-level
+// thinking block immediately followed by an assistant envelope on a
+// DIFFERENT parent_tool_use_id — proves the buffered reasoning flushes
+// standalone instead of merging across threads), "subagent"
 // (a null-then-set parent_tool_use_id pair),
 // "rate_limit_error"/"deterministic_error" (a result event this file's own
 // claudeCodeRetryableClass must classify retryable/not-retryable,
@@ -483,6 +493,111 @@ func main() {
 			"usage": map[string]any{
 				"input_tokens":  30,
 				"output_tokens": 15,
+			},
+		})
+		return
+	case "thinking_ratelimit_text":
+		// Proves the pre-switch flush guard in consumeClaudeCodeStream
+		// does NOT flush a buffered thinking block on content-free
+		// activity: a "rate_limit_event" (the CLI's own subscription
+		// signal, which its own doc comment says can arrive mid-turn,
+		// shifting limits) lands BETWEEN the thinking envelope and the
+		// text envelope that completes its own turn segment. The result
+		// must still be ONE merged [Reasoning, Text] message, exactly
+		// like the "thinking" mode above — a guard that flushes on every
+		// non-"assistant" envelope re-splits the turn right here.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Reasoning across a rate-limit event.", "signature": "sig-rl"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "rate_limit_event",
+			"rate_limit_info": map[string]any{
+				"status":        "allowed",
+				"resetsAt":      1788785267,
+				"rateLimitType": "five_hour",
+				"unifiedWindows": map[string]any{
+					"five_hour": map[string]any{"utilization": 0.02, "resetsAt": 1788785267},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Here is my answer after the rate-limit event."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Here is my answer after the rate-limit event.",
+			"usage": map[string]any{
+				"input_tokens":  22,
+				"output_tokens": 11,
+			},
+		})
+		return
+	case "thinking_then_crash":
+		// Proves flushPendingReasoning's post-loop flush: a thinking
+		// block arrives, then the child crashes (nonzero exit, no
+		// "result" event at all) — the buffered reasoning must still
+		// survive as a standalone assistant message rather than being
+		// silently dropped when consumeClaudeCodeStream's scanner loop
+		// ends via EOF. Mirrors the plain "crash" mode above, but with a
+		// thinking block emitted first.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Reasoning right before a crash.", "signature": "sig-crash"},
+				},
+			},
+		})
+		os.Exit(1)
+	case "thinking_then_subagent":
+		// Proves flushPendingReasoning's different-parent flush: a
+		// top-level (parent_tool_use_id "") thinking block is immediately
+		// followed by an assistant envelope belonging to a DIFFERENT
+		// thread (a subagent's own parent_tool_use_id) — the buffered
+		// reasoning must flush standalone rather than merge onto content
+		// from a different thread.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Reasoning about which subagent to spawn.", "signature": "sig-subagent"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Working inside the subagent."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Working inside the subagent.",
+			"usage": map[string]any{
+				"input_tokens":  18,
+				"output_tokens": 9,
 			},
 		})
 		return

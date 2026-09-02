@@ -1199,6 +1199,126 @@ func TestClaudeCodeReasoningMergeDoesNotOverMerge(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeReasoningMergeSurvivesRateLimitEvent drives fakeclaude's
+// "thinking_ratelimit_text" sequence (thinking, then a rate_limit_event,
+// then the text that completes the thinking block's own turn segment) and
+// proves the pre-switch flush guard in consumeClaudeCodeStream does not
+// treat a content-free "rate_limit_event" as ending the turn segment. A
+// guard that flushes pendingReasoning on every non-"assistant" envelope
+// re-splits the turn right here — exactly on subscription/usage sessions,
+// where rate_limit_events are common (see rate_limit_event's own doc
+// comment: "a long-running turn can see its own limits shift mid-turn").
+func TestClaudeCodeReasoningMergeSurvivesRateLimitEvent(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_ratelimit_text")
+
+	msg, err := s.Prompt(context.Background(), "think about it, with a rate limit event")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "Here is my answer after the rate-limit event." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning+text merged into ONE message) = 2
+	// messages — NOT 3 (a rate_limit_event wrongly flushing the buffer
+	// between the thinking and text envelopes).
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant || len(asst.Parts) != 2 {
+		t.Fatalf("hist[1] = %+v, want an assistant message with exactly 2 parts", asst)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning across a rate-limit event." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Reasoning across a rate-limit event.")
+	}
+	text, ok := asst.Parts[1].(*message.Text)
+	if !ok || text.Text != "Here is my answer after the rate-limit event." {
+		t.Fatalf("hist[1].Parts[1] = %+v, want a Text(%q)", asst.Parts[1], "Here is my answer after the rate-limit event.")
+	}
+
+	// The rate_limit_event itself must still be mapped onto
+	// SubscriptionUsage — this test does not just prove the merge
+	// survives it, but that the event was genuinely processed, not
+	// silently skipped.
+	usage := s.SubscriptionUsage()
+	if usage == nil || len(usage.Windows) == 0 {
+		t.Error("SubscriptionUsage() is empty, want the rate_limit_event mapped through")
+	}
+}
+
+// TestClaudeCodeReasoningFlushesStandaloneOnCrash drives fakeclaude's
+// "thinking_then_crash" sequence (a thinking block immediately followed by
+// a nonzero exit with no "result" event at all) and proves
+// flushPendingReasoning's post-loop flush: the buffered reasoning must
+// survive as a standalone assistant message rather than being silently
+// dropped when consumeClaudeCodeStream's scanner loop ends via EOF/crash
+// before any envelope ever completes its turn segment.
+func TestClaudeCodeReasoningFlushesStandaloneOnCrash(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_then_crash")
+
+	_, err := s.Prompt(context.Background(), "think about it, then crash")
+	if err == nil {
+		t.Fatal("Prompt returned no error for a child that crashed without a result event")
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning only, flushed standalone) = 2
+	// messages. NOT 1 (the reasoning silently dropped).
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant || len(asst.Parts) != 1 {
+		t.Fatalf("hist[1] = %+v, want a standalone assistant message with exactly 1 part", asst)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning right before a crash." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Reasoning right before a crash.")
+	}
+}
+
+// TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary drives
+// fakeclaude's "thinking_then_subagent" sequence (a top-level thinking
+// block, parent_tool_use_id "", immediately followed by an assistant
+// envelope on a DIFFERENT parent_tool_use_id) and proves
+// flushPendingReasoning's different-parent flush: the buffered reasoning
+// must flush standalone rather than merge onto content from a different
+// thread.
+func TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_then_subagent")
+
+	msg, err := s.Prompt(context.Background(), "think, then spawn a subagent")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "Working inside the subagent." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning only, parent ""),
+	// assistant("Working inside the subagent.", parent "toolu_parent") = 3
+	// messages — NOT a 2-message merge across the parent boundary.
+	if len(hist) != 3 {
+		t.Fatalf("History() len = %d, want 3: %+v", len(hist), hist)
+	}
+	reasoningMsg := hist[1]
+	if reasoningMsg.Role != message.RoleAssistant || len(reasoningMsg.Parts) != 1 || reasoningMsg.ParentToolUseID != "" {
+		t.Fatalf("hist[1] = %+v, want a standalone top-level assistant Reasoning message", reasoningMsg)
+	}
+	reasoning, ok := reasoningMsg.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning about which subagent to spawn." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", reasoningMsg.Parts[0], "Reasoning about which subagent to spawn.")
+	}
+	subagentMsg := hist[2]
+	if subagentMsg.Role != message.RoleAssistant || subagentMsg.ParentToolUseID != "toolu_parent" || subagentMsg.Parts.Text() != "Working inside the subagent." {
+		t.Fatalf("hist[2] = %+v, want an assistant Text on parent toolu_parent", subagentMsg)
+	}
+}
+
 // TestClaudeCodeParentToolUseIDCarriedOntoMessage proves the envelope's own
 // parent_tool_use_id (null at top level, set to the spawning tool_use id
 // inside a subagent's own turn) rides onto Message.ParentToolUseID for

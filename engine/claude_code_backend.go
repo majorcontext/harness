@@ -1105,12 +1105,22 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// see this file's package doc on permissive decoding.
 			continue
 		}
-		if env.Type != "assistant" && len(pendingReasoning) > 0 {
-			// A non-"assistant" envelope can never carry the rest of a
-			// buffered thinking block's own turn segment (the "assistant"
-			// case below is the only merge target) — flush now rather
-			// than risk losing it if the turn ends abnormally right
-			// after.
+		if (env.Type == "user" || env.Type == "result") && len(pendingReasoning) > 0 {
+			// Only a "user" (tool_result) or "result" (turn-terminal)
+			// envelope genuinely ends the turn segment a buffered
+			// thinking block started — either means the model turn that
+			// owns this reasoning is over, so flush now rather than risk
+			// losing it if the turn ends abnormally right after.
+			//
+			// Deliberately NOT any non-"assistant" type: "system" and
+			// "rate_limit_event" are content-free activity that can
+			// legitimately land BETWEEN a "thinking" envelope and the
+			// text envelope that completes its own turn segment — see
+			// rate_limit_event's own doc comment ("a long-running turn
+			// can see its own limits shift mid-turn"). Flushing on those
+			// would re-split the very turn this buffer exists to keep
+			// merged, exactly on subscription/usage sessions where
+			// rate_limit_events are common.
 			flushPendingReasoning()
 		}
 		switch env.Type {
