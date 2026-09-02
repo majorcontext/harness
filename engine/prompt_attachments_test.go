@@ -316,3 +316,86 @@ func TestEnqueuePromptDropsUnusableBlobs(t *testing.T) {
 		t.Errorf("operator block = %q, want it to count ONE attachment", block)
 	}
 }
+
+// TestEnqueuePromptDurablePersistsAttachments is EnqueuePromptDurable's
+// counterpart to TestEnqueuePromptPersistsAttachments: the durable,
+// caller-seq-idempotent primitive POST /session/{id}/enqueue calls
+// (docs/plans/2026-07-21-durable-enqueue.md) must carry a blob onto its own
+// prompt.queued record exactly like the plain queue already does — the
+// write half of a box's enqueued screenshot surviving a restart.
+func TestEnqueuePromptDurablePersistsAttachments(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir, Model: message.ModelRef{Provider: "test", Model: "m1"}})
+	if _, dup, err := s.EnqueuePromptDurable("with a picture", 1, testBlob()); err != nil || dup {
+		t.Fatalf("EnqueuePromptDurable: dup=%v err=%v", dup, err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, s.ID+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued *promptRecord
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rec record
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("unmarshaling session log line %q: %v", line, err)
+		}
+		if rec.Type == recPromptQueued {
+			queued = rec.Prompt
+		}
+	}
+	if queued == nil {
+		t.Fatalf("no prompt.queued record was written; log:\n%s", data)
+	}
+	if queued.Seq != 1 {
+		t.Errorf("record seq = %d, want 1 (the caller's idempotency seq must ride with the blob)", queued.Seq)
+	}
+	if len(queued.Blobs) != 1 || !bytes.Equal(queued.Blobs[0].Data, tinyPNGBytes) {
+		t.Fatalf("record blobs = %+v, want the enqueued image", queued.Blobs)
+	}
+
+	q := s.QueuedPrompts()
+	if len(q) != 1 || len(q[0].Blobs) != 1 || !bytes.Equal(q[0].Blobs[0].Data, tinyPNGBytes) {
+		t.Fatalf("in-memory queue = %+v, want the same attachment", q)
+	}
+}
+
+// TestEnqueuePromptDurableAllowsAttachmentOnlyPrompt mirrors
+// TestEnqueuePromptAllowsAttachmentOnlyPrompt for the durable path: an
+// uploaded screenshot with nothing typed beside it is a real prompt, not an
+// empty one, whether it arrives via the best-effort queue or the durable one.
+func TestEnqueuePromptDurableAllowsAttachmentOnlyPrompt(t *testing.T) {
+	s := NewSession(Config{SessionDir: t.TempDir(), Model: message.ModelRef{Provider: "test", Model: "m1"}})
+	if _, dup, err := s.EnqueuePromptDurable("  ", 1, testBlob()); err != nil || dup {
+		t.Fatalf("attachment-only durable enqueue: dup=%v err=%v, want it accepted", dup, err)
+	}
+	if _, _, err := s.EnqueuePromptDurable("  ", 2); err != ErrEmptyPromptText {
+		t.Fatalf("empty durable enqueue error = %v, want ErrEmptyPromptText", err)
+	}
+}
+
+// TestEnqueuePromptDurableDropsUnusableBlobs mirrors
+// TestEnqueuePromptDropsUnusableBlobs for the durable path: a blob nothing
+// can deliver (nil, or carrying neither Data nor URL) must not make an
+// otherwise-empty prompt valid, and must not survive into the persisted
+// record — the same wedge usablePromptBlobs exists to prevent for the plain
+// queue.
+func TestEnqueuePromptDurableDropsUnusableBlobs(t *testing.T) {
+	s := NewSession(Config{SessionDir: t.TempDir()})
+
+	if _, _, err := s.EnqueuePromptDurable("", 1, nil, &message.Blob{MediaType: "image/png"}); !errors.Is(err, ErrEmptyPromptText) {
+		t.Fatalf("EnqueuePromptDurable with only unusable blobs: err = %v, want ErrEmptyPromptText", err)
+	}
+	if q := s.QueuedPrompts(); len(q) != 0 {
+		t.Fatalf("queue = %+v, want nothing enqueued", q)
+	}
+
+	real := &message.Blob{MediaType: "image/png", Data: []byte("\x89PNG\r\n\x1a\n")}
+	if _, dup, err := s.EnqueuePromptDurable("look", 1, nil, real); err != nil || dup {
+		t.Fatalf("EnqueuePromptDurable: dup=%v err=%v", dup, err)
+	}
+	q := s.QueuedPrompts()
+	if len(q) != 1 || len(q[0].Blobs) != 1 || q[0].Blobs[0] != real {
+		t.Fatalf("queued blobs = %+v, want only the deliverable one", q)
+	}
+}

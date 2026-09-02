@@ -1961,9 +1961,21 @@ type enqueueResponse struct {
 // session's watermark is a 200 duplicate no-op, so upstream retries are
 // always safe. Delivery is unchanged queue machinery: idle sessions
 // dispatch the queue head immediately, busy sessions drain at turn/tool
-// boundaries. No model override (queued prompts carry text only — see
-// enqueueOrDispatch's doc comment); the workdir-busy 409, draining 503, and
-// unknown-session 404 mirror handlePrompt.
+// boundaries. No model override (a durably-enqueued prompt is subject to
+// the same no-override limit as a queued PromptRequest — see
+// enqueueOrDispatch's doc comment: there is no slot in QueuedPrompt to
+// carry one through to a future drain); the workdir-busy 409, draining 503,
+// and unknown-session 404 mirror handlePrompt.
+//
+// Text parts and attachment blob parts (images and PDFs), decoded and
+// validated by the SAME gate handlePrompt uses (decodePromptParts,
+// prompt_parts.go) — reused verbatim rather than duplicated, so `enqueue`
+// admits exactly what `prompt_async` admits, at the same per-attachment and
+// whole-body size caps. A blob rides through the durable queue on its
+// prompt's own seq (engine.Session.EnqueuePromptDurable's blobs parameter)
+// and survives a restart with it, replaying through the same drain
+// (dispatchQueueHead, tool-call-boundary append, goal-turn-boundary
+// injection) that already carries a plain-queued prompt's attachments.
 func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -1973,13 +1985,23 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Parts []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"parts"`
-		Seq int64 `json:"seq"`
+		Parts []promptPartInput `json:"parts"`
+		Seq   int64             `json:"seq"`
 	}
+	// Bound the body BEFORE decoding it, for the same reason handlePrompt
+	// does (see promptRequestMaxBytes's doc comment): blob data arrives as
+	// base64 and encoding/json allocates the decoded []byte during
+	// Unmarshal, so the per-attachment check in decodePromptParts runs only
+	// after this server has already paid for whatever the caller sent, and
+	// nothing else bounds how many attachments one body carries.
+	r.Body = http.MaxBytesReader(w, r.Body, promptRequestMaxBytes)
 	if err := decodeBody(r, &body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"request body exceeds the %d-byte limit", promptRequestMaxBytes))
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1991,26 +2013,21 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "seq must be >= 1")
 		return
 	}
-	var texts []string
-	for _, p := range body.Parts {
-		if p.Type != "text" {
-			writeErr(w, http.StatusBadRequest, "v1 accepts text parts only")
-			return
-		}
-		texts = append(texts, p.Text)
-	}
-	text := strings.Join(texts, "\n")
-	// EnqueuePromptDurable rejects empty/whitespace-only text too, but by
-	// then we'd have already taken (or failed to take) the run-slot claim,
-	// and from the handler's side that engine error is indistinguishable
-	// from a genuine persist failure — both fall through to the 500
-	// "enqueue not durable" mapping below, which tells the caller to retry
-	// with the same seq. An input that can never succeed must 400 instead,
-	// and before any claim is taken.
-	if strings.TrimSpace(text) == "" {
-		writeErr(w, http.StatusBadRequest, "text must be non-empty")
+	// Validation is total and happens BEFORE any run-slot claim or durable
+	// accept, exactly like handlePrompt: a rejected attachment must not
+	// consume the caller's seq, so a retry with the SAME seq and a fixed
+	// attachment succeeds — see decodePromptParts's own doc comment. This
+	// also folds the old handler's separate "text must be non-empty" check:
+	// decodePromptParts already rejects empty text with no attachments
+	// (errEmptyPromptParts), and accepts empty text when a usable
+	// attachment carries the message (an uploaded screenshot with nothing
+	// typed beside it).
+	parts, code, err := decodePromptParts(body.Parts)
+	if err != nil {
+		writeErr(w, code, err.Error())
 		return
 	}
+	text, blobs := parts.Text, parts.Blobs
 
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	if code != 0 {
@@ -2018,7 +2035,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		case code == http.StatusConflict && holder != "":
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
-			s.enqueueDurableBusy(w, id, text, body.Seq)
+			s.enqueueDurableBusy(w, id, text, body.Seq, blobs...)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -2030,7 +2047,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	// Idle: we hold the run slot. Durable-first, then dispatch the queue
 	// HEAD — not necessarily this request's prompt (global FIFO, same rule
 	// as handlePrompt's idle-with-queue branch).
-	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq)
+	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq, blobs...)
 	if dup {
 		s.releasePromptClaim(st)
 		// Stranded-head liveness fix: THIS request's prompt was a no-op,
@@ -2091,7 +2108,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 // failure — never a silent 2xx), then ONE claim retry to close the
 // freed-slot race. See enqueueOrDispatch's doc comment for the race
 // analysis; only the enqueue call and response shape differ.
-func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text string, seq int64) {
+func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text string, seq int64, blobs ...*message.Blob) {
 	sess := s.residentSession(id)
 	if sess == nil {
 		// Same benign race window as enqueueOrDispatch: busy occupant
@@ -2100,7 +2117,7 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, dup, err := sess.EnqueuePromptDurable(text, seq)
+	ourID, dup, err := sess.EnqueuePromptDurable(text, seq, blobs...)
 	if dup {
 		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
 		return

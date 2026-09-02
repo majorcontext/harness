@@ -1026,3 +1026,23 @@ rewritten to match.
   resident-or-transient-load helper every other read endpoint uses,
   instead of the sketch's inline `s.residentSession` + raw
   `s.opts.LoadSession` pair.
+- **`POST /enqueue` is no longer text-only.** This plan (and `handlePrompt`'s
+  own comment on the branch that added prompt attachments) scoped `enqueue`
+  to text parts because it was built before attachments existed anywhere in
+  harness — `EnqueuePromptDurable` had no `blobs` parameter and
+  `handleEnqueue` rejected any part whose type was not `text`. Once
+  `prompt_async` gained image/PDF attachments (the change that added
+  `QueuedPrompt.Blobs`/`promptRecord.Blobs` and threaded them through the
+  plain `EnqueuePrompt` queue, delivered by the same drain machinery this
+  plan's queue already uses), the remaining gap was narrow: `enqueue`'s own
+  HTTP body decode and `EnqueuePromptDurable`'s own signature. `enqueue` now
+  accepts a `blob` part exactly like `prompt_async` does — same
+  `decodePromptParts` validator, same per-attachment and whole-body caps,
+  reused verbatim rather than reimplemented — and `EnqueuePromptDurable`
+  carries a prompt's blobs on its own `promptRecord`, on the SAME `seq` as
+  its text, so an attachment durably queued behind a busy box (or across a
+  restart) survives and replays exactly like a plain-queued one already did.
+  This closed a real production 502: a caller (boxes' pending-delivery
+  drain) forwarding an attachment-bearing message through `enqueue` for any
+  box that was not mid-turn-live got rejected at the wire, with no
+  degrade-and-retry path at this layer.
