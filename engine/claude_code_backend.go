@@ -72,10 +72,11 @@
 //     would render as two separate turns. Appended via plain
 //     Session.append (no usage — see the usage-mapping note below) and
 //     emitted as EventMessage, with one EventReasoningDelta per non-empty
-//     thinking part (non-empty because runClaudeCodeTurn passes
-//     --thinking-display summarized; see that flag's own comment for what
-//     the CLI returns without it), one EventTextDelta per non-empty text
-//     part (folding
+//     thinking part (runClaudeCodeTurn asks for a summary with
+//     --thinking-display summarized, which is what makes a non-empty one
+//     the ordinary case rather than the impossible one — the emission stays
+//     conditional, since the API can still answer with an empty summary),
+//     one EventTextDelta per non-empty text part (folding
 //     the whole block's text into the message in a single "delta", the
 //     closest honest match to the native EventTextDelta/EventReasoningDelta
 //     contract given the CLI hands over complete blocks), and one
@@ -441,6 +442,17 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 			}
 		}
 	}
+	// --thinking-display is engine-owned, and ExtraArgs are appended AFTER
+	// every engine flag: the CLI keeps the LAST value of a repeated option,
+	// so an override here would win silently and restore the empty-thinking
+	// blocks the flag exists to prevent (see its own comment below). Reject
+	// it up front rather than let a config quietly defeat the driver's own
+	// wire contract — the same shape as the append-prompt conflict above.
+	for _, arg := range cfg.ExtraArgs {
+		if claudeCodeThinkingDisplayArg(arg) {
+			return nil, fmt.Errorf("engine: claude-code: Config.ClaudeCode.ExtraArgs contains %q, which is engine-owned; runClaudeCodeTurn always sends --thinking-display summarized, and an ExtraArgs value would override it and return empty thinking blocks", arg)
+		}
+	}
 
 	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
 	// written before the args slice below so its path can be included, and
@@ -494,8 +506,11 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// is the loud failure this driver wants — the box image pins its own
 		// CLI version, so an upgrade is a deliberate, testable step.
 		//
-		// Summaries only. The raw chain of thought is never exposed by any
-		// model under any setting; "summarized" is the maximum available.
+		// Summaries only, and a REQUEST rather than a guarantee: the raw
+		// chain of thought is never exposed by any model under any setting,
+		// "summarized" is the maximum available, and an empty summary is
+		// still a possible answer — every reader downstream stays guarded
+		// for it (consumeClaudeCodeStream's own `r.Text != ""`).
 		"--thinking-display", "summarized",
 		// All subagent spawning in the claude-code lane must go through
 		// harness's own cross-family "task" tool (server/mcp_history.go,
@@ -1778,6 +1793,14 @@ func claudeCodeAppendPromptArg(arg string) bool {
 		strings.HasPrefix(arg, "--append-system-prompt=") ||
 		arg == "--append-system-prompt-file" ||
 		strings.HasPrefix(arg, "--append-system-prompt-file=")
+}
+
+// claudeCodeThinkingDisplayArg reports whether an ExtraArgs entry sets the
+// engine-owned --thinking-display option, in either the separate-value or
+// the `=` form — see runClaudeCodeTurn's rejection of it.
+func claudeCodeThinkingDisplayArg(arg string) bool {
+	return arg == "--thinking-display" ||
+		strings.HasPrefix(arg, "--thinking-display=")
 }
 
 // claudeCodeRetryableClass classifies a "result" event's own reported

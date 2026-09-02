@@ -1074,6 +1074,29 @@ func TestClaudeCodeThinkingDisplayAlwaysSummarized(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeExtraArgsCannotOverrideThinkingDisplay proves a config
+// cannot quietly defeat the engine-owned --thinking-display. ExtraArgs are
+// appended AFTER every engine flag and the CLI keeps the LAST value of a
+// repeated option, so an ExtraArgs entry would win silently and restore the
+// signature-only thinking blocks the flag exists to prevent. Both wire
+// forms are rejected, matching the append-prompt conflict check.
+func TestClaudeCodeExtraArgsCannotOverrideThinkingDisplay(t *testing.T) {
+	for _, args := range [][]string{
+		{"--thinking-display", "omitted"},
+		{"--thinking-display=omitted"},
+		{"--thinking-display", "summarized"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			s, _ := claudeCodeTestSession(t, "normal")
+			s.cfg.ClaudeCode.ExtraArgs = args
+			_, err := s.Prompt(context.Background(), "hi")
+			if err == nil || !strings.Contains(err.Error(), "--thinking-display") {
+				t.Fatalf("Prompt error = %v, want a --thinking-display conflict", err)
+			}
+		})
+	}
+}
+
 // TestClaudeCodeDisallowsNativeSpawnTools proves runClaudeCodeTurn always
 // sends --disallowedTools naming every native Claude Code tool that spawns
 // a same-family subagent (Agent, Workflow). All subagent spawning in the
