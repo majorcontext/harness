@@ -80,6 +80,30 @@ Before overwriting an existing regular file, require a successful live-session
 read or write record. Compare its saved SHA-256 with current bytes. Track
 resolved absolute paths and serialize parallel mutations by file key.
 
+## Startup prewarm
+
+Start prewarm only for a fresh native session whose initially configured
+provider implements `provider.StartupPrewarmer`. Start managed roots after
+adoption and children after final lineage and tool restrictions.
+
+- Keep `NewSession` non-blocking.
+- Use one 15-second context from scheduling through discovery and completion.
+- Let the first prompt consume the task once before history mutation.
+- Wait only for the original deadline's remainder.
+- Treat failure and timeout as complete-request fallback.
+- Return prompt cancellation after canceling and detaching prewarm.
+- Cancel session-owned prewarm when the session is removed.
+- Cache deterministic instruction and Skill errors for the first prompt.
+- Emit no turn, message, usage, provider event, or `turn_metrics` for prewarm.
+
+The callback must obey context cancellation. Detach ownership at the deadline
+even if it does not. One noncompliant callback can remain as an unowned goroutine;
+Go cannot terminate it.
+
+Prewarm moves instruction reads, Skill discovery, hooks, MCP work, and provider
+activity before the first prompt. Keep this disclosure boundary documented when
+changing startup assembly or provider capability checks.
+
 ## Requests, retries, and metrics
 
 - Retry only typed retryable errors and completed empty turns.

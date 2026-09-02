@@ -2,7 +2,8 @@
 
 ## Status
 
-Approved design. This document specifies the Codex-family implementation only.
+Implemented design. This document describes the shipped Codex-family behavior
+and its engine startup boundary.
 
 Reference behavior: `openai/codex` Responses WebSocket v2 as inspected on
 2026-09-02. Harness keeps its canonical session and provider boundaries.
@@ -28,7 +29,7 @@ both mechanisms without making remote response state authoritative.
 3. Keep `store:false` and encrypted reasoning replay.
 4. Preserve complete canonical history and stateless HTTP fallback.
 5. Fall back to a full request on every uncertain lineage condition.
-6. Expose non-secret metrics for prewarm and incremental request use.
+6. Expose non-secret request-projection metrics and provider-reported cache use.
 
 ## Non-goals
 
@@ -42,18 +43,23 @@ both mechanisms without making remote response state authoritative.
 
 ## Scope gate
 
-The feature applies only when all conditions hold:
+The remote transport feature applies only when all conditions hold:
 
 - `Client.Family` resolves to `CodexFamily`.
 - `Client.UseWebSocketTransport` is true.
 - `provider.Request.SessionKey` is non-empty.
-- The native Harness engine drives the session.
 
 The existing WebSocket configuration is the feature gate. No new user-facing
-configuration controls response chaining or prewarm.
+configuration controls response chaining or remote prewarm. A native Responses
+client under another family never sends `previous_response_id` or `generate`.
 
-A native Responses client under another family keeps its current request bytes
-and behavior.
+The engine's local scheduling gate is the optional `StartupPrewarmer` interface.
+`*openai.Client` implements that interface for every Responses family, then its
+`Prewarm` method applies the Codex, WebSocket, and session-key checks above.
+Consequently, fresh non-Codex Responses sessions can perform early local
+discovery, hooks, and request assembly before `Prewarm` returns without network
+activity. This is part of the shipped disclosure boundary, not a claim that
+non-Codex requests use response chaining.
 
 ## Architecture
 
@@ -66,7 +72,7 @@ Each Codex WebSocket pool entry adds runtime-only lineage state:
 - The previous completed response ID.
 - The output items from that completed response.
 - A connection generation that rejects stale completion callbacks.
-- Prewarm completion, cancellation, timing, and status state.
+- Prewarm completion and cancellation signals owned by the engine task.
 
 The engine does not store OpenAI wire objects. The session journal, snapshots,
 and canonical messages do not change.
@@ -170,8 +176,11 @@ Only live adapter state authorizes an incremental request.
 ### Scheduling
 
 `NewSession` remains non-blocking. After a fresh session has an ID and has
-completed local construction, the engine schedules one bounded background
-prewarm when the scope gate passes.
+completed local construction, the engine schedules one bounded background task
+when its initially configured provider implements `StartupPrewarmer`. Managed
+roots wait for adoption and task-tool installation. Children wait until their
+final lineage, model, agent type, and tool restrictions exist. Loaded sessions
+do not prewarm.
 
 The prewarm task prepares the stable first-request prefix before any user input:
 
@@ -195,18 +204,21 @@ An ordinary model request still rejects an empty transcodable message set.
 
 ### First-turn resolution
 
-The first real native turn consumes the startup prewarm once.
+The first real native turn consumes the startup prewarm once before context
+validation, cached discovery-error checks, compaction, or user-history mutation.
 
 - If prewarm is ready and compatible, the request reuses its response ID and
   sends only the new user and runtime input.
 - A dedicated 15-second startup-prewarm deadline covers instruction loading,
-  tool assembly, dialing, the `generate:false` send, and terminal completion.
+  Skill discovery, hooks, tool and MCP assembly, dialing, the `generate:false`
+  send, and terminal completion.
 - If prewarm is still running, the turn waits only for the unused part of that
   dedicated deadline. The five-minute WebSocket stream-idle timeout does not
   extend prewarm.
-- If the turn context is canceled, the engine cancels prewarm.
-- If prewarm fails, times out, or becomes incompatible, the turn proceeds with
-  the normal full request.
+- If the turn context is canceled, the engine cancels and detaches prewarm, then
+  returns the context error without appending user history.
+- If prewarm fails or times out, the turn proceeds with the normal complete
+  request.
 
 Prewarm age starts when the engine schedules the background task. One dedicated
 15-second deadline owns the complete task, not only the WebSocket dial. It also
@@ -236,8 +248,11 @@ Prewarm sends no user prompt, transcript, tool result, or arbitrary project file
 content beyond existing instruction and Skill catalog discovery.
 
 This behavior deliberately changes Harness's lazy boundary. Project reads,
-plugin hooks, MCP connection attempts, and Codex network activity can begin
-after session creation and before the first prompt.
+Skill discovery, plugin hooks, MCP connection attempts, and request assembly can
+begin after fresh-session creation and before the first prompt for any provider
+that implements `StartupPrewarmer`. Provider network activity begins only if
+that implementation performs it. The shipped OpenAI implementation performs
+network prewarm only after the Codex scope gate passes.
 
 ### Validation and discovery errors
 
@@ -292,16 +307,15 @@ attempt cannot update lineage. Partial model output and partial tool intent do
 not enter the next incremental baseline.
 
 The adapter classifies the Codex `previous_response_not_found` error as a chain
-miss. If the error arrives before any model-visible output, the parser marks the
-socket reusable but clears lineage. The adapter then sends the complete request
-once on that socket. This special terminal classification is an explicit change
-to the current pool rule that invalidates every `error` event. The recovery does
-not consume the engine's user-turn retry budget.
+miss. Recovery is intentionally narrower than an ordinary "before visible
+output" check. Only a miss in the immediate first response frame can recover.
+The adapter clears lineage and sends the complete request once on the same
+socket. This recovery does not consume the engine's user-turn retry budget.
 
-If the chain-miss error arrives after visible output, the adapter invalidates the
-socket and reports the existing truncated-stream error. A second chain-miss or
-any error from the complete recovery request follows existing classification and
-retry behavior.
+Any later chain miss invalidates the socket and does not use special recovery,
+even when earlier frames contained no model-visible output. A miss after visible
+output is a typed truncated-stream error. Another non-immediate or repeated miss
+follows the normal provider error classification.
 
 ## Concurrency
 
@@ -320,43 +334,57 @@ sleep-based synchronization.
 
 Harness records no response ID value in logs or metrics.
 
-Add non-secret fields or counters for:
+A completed WebSocket model call reports `provider.RequestMetadata` on its
+`EventDone`. The engine copies these fields into `turn_metrics`:
 
-- Prewarm status: `started`, `ready`, `consumed`, `failed`, `timed_out`,
-  `cancelled`, or `stale`.
-- Prewarm duration.
-- Prewarm age when the first turn resolves it.
-- WebSocket request mode: `full`, `incremental`, or `prewarm`.
-- Complete logical input-item count.
-- Sent input-item count.
-- Whether a previous response was used.
-- Full-request recovery after `previous_response_not_found`.
+- `request_mode`: `full` or `incremental`.
+- `complete_input_items`.
+- `sent_input_items`.
+- `previous_response_used`.
+
+HTTP calls and providers that omit request metadata omit all four metric fields.
+A successful full-request recovery after `previous_response_not_found` reports
+the final projection as `full` with `previous_response_used=false`; the shipped
+metadata has no separate recovery flag.
 
 A `generate:false` prewarm is not a model inference, user turn, assistant
-message, or `turn_metrics` record.
+message, or `turn_metrics` record. The implementation does not emit prewarm
+status, duration, or age metrics.
 
 Existing `response.completed` usage remains authoritative for token accounting.
-The server reports `input_tokens_details.cached_tokens`; Harness continues to
-store the disjoint uncached and cache-read counts on the completed assistant
-message. Chaining does not synthesize cache metrics.
+The server reports inclusive `input_tokens` and
+`input_tokens_details.cached_tokens`. The OpenAI adapter stores the cached
+subset as cache-read tokens and the non-negative remainder as uncached input
+tokens. These values are disjoint in `provider.Usage` and `turn_metrics`.
+Chaining does not infer or synthesize cache metrics.
 
 ## Session and process lifecycle
 
-A prewarm task has a fixed deadline and cannot outlive its session indefinitely.
-Dropping or canceling a session cancels pending prewarm. A session that never
-receives a prompt leaves no unbounded goroutine.
+The engine creates one 15-second context when it schedules prewarm. An
+independent deadline observer detaches session ownership when that context ends,
+even if the worker callback has not returned. The first prompt waits only for
+that same boundary. Session removal and prompt cancellation also cancel and
+detach an owned task.
+
+`StartupPrewarmer.Prewarm` must return promptly after context cancellation. Go
+cannot forcibly terminate an arbitrary in-process callback. A provider or
+transitive dependency that ignores cancellation can therefore leave one
+residual, unowned callback goroutine blocked after the engine has detached it.
+The callback cannot delay the first prompt or retain the prewarm handle, but the
+engine cannot guarantee its termination. Cancellation-compliant providers leave
+no residual task.
 
 No prewarm state enters the journal or snapshot. Archive, restart, hibernation,
 and process loss discard it safely. Canonical history remains sufficient for a
-full request after recovery.
+complete request after recovery.
 
-Child sessions use the same rule as root sessions. A child can prewarm only
-after its final model, provider, tool restrictions, and session ID exist.
+Child sessions use the same rule as root sessions. A child starts only after its
+final model, provider, lineage, agent type, tool restrictions, and session ID
+exist.
 
-Goal evaluators and compaction summarizers do not run startup prewarm. They can
-use ordinary Codex response chaining only when they use the same serialized
-conversation pool and satisfy the prefix rules. Separate internal request
-shapes normally force a full request.
+Goal evaluators and compaction summarizers do not run startup prewarm. Loaded
+sessions do not restart it. Ordinary calls can use Codex response chaining only
+when their serialized session pool has compatible live lineage.
 
 ## Testing
 
@@ -397,7 +425,10 @@ Implementation follows test-driven development.
 - Prewarm invokes the effective tool plan and request hooks once per assembly.
 - A changed first-turn property makes the prewarm stale and sends a full request.
 - Prewarm emits no user turn, assistant message, usage, or `turn_metrics`.
-- Session shutdown leaves no prewarm goroutine.
+- A compatible provider that obeys context cancellation leaves no owned prewarm
+  task after session shutdown.
+- A noncompliant callback is detached at the deadline and can remain as the
+  documented residual unowned goroutine.
 
 ### Regression and race tests
 
@@ -419,14 +450,17 @@ Update these documents with implemented behavior:
 The existing Codex WebSocket switch controls rollout. Deploy the change only to
 clients already configured for the Codex WebSocket endpoint.
 
-Validate these metrics before broad rollout:
+Validate behavior and the shipped metrics before broad rollout:
 
-1. Prewarm completion and consumption rate.
-2. Incremental-request rate after the first turn.
-3. Full fallback and `previous_response_not_found` recovery rate.
-4. First-turn and later-turn time to first token.
-5. Cached-input share.
-6. Provider errors and truncated-stream rate.
+1. Confirm first-turn prewarm compatibility with a wire trace.
+2. Compare `request_mode` rates after the first turn.
+3. Compare `complete_input_items` with `sent_input_items`.
+4. Inspect first-turn and later-turn time to first token.
+5. Inspect provider-reported cache-read input.
+6. Monitor provider errors and truncated-stream rate.
+
+The shipped metrics do not identify prewarm outcomes or chain-miss recovery as
+separate counters. Use a wire trace when those distinctions are required.
 
 Rollback disables Responses WebSocket transport or reverts the adapter change.
 Canonical history and journals require no migration or repair.

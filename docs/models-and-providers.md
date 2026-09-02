@@ -293,13 +293,12 @@ merge):
 
 `provider.Request.SessionKey` carries a stable, opaque session identifier on
 every request the engine builds — one field on the same per-request struct
-`Effort` rides, though unlike `Effort` (set at one call site), the engine
-sets `SessionKey` to `Session.ID` at all three request-build sites:
-`streamTurn` (`engine/engine.go`, the main turn), `runEvaluator`
-(`engine/goal.go`, the goal-loop evaluator), and `runCompactionSummary`
-(`engine/compact.go`, the compaction summarizer). The field itself is never
-persisted; the value it carries (`Session.ID`) already is, as the session's
-own identity.
+`Effort` rides. The engine sets it to `Session.ID` for main-turn assembly,
+including its startup-prewarm request, and at the two internal request sites:
+`runEvaluator` (`engine/goal.go`, the goal-loop evaluator) and
+`runCompactionSummary` (`engine/compact.go`, the compaction summarizer). The
+field itself is never persisted; the value it carries (`Session.ID`) already
+is, as the session's own identity.
 
 Two adapters forward it, each to its own field, because each provider
 documents its own affinity hint:
@@ -348,10 +347,69 @@ and miss its own prefix cache. A live probe through Bifrost (2026-08-12)
 sent a byte-identical 150k-token prompt twice: with no `user` field, the
 second call still read `cached_tokens=0` at 10.8s time-to-first-token; with
 a stable `user` field, the second call read `cached_tokens=150,300` at 2.8s
-time-to-first-token, through the same gateway. Harness sessions re-send the
-whole history every request (stateless transcoding), so a long session on
-the openaicompat route (a gateway to Fireworks kimi-k3 and similar models)
-pays full prefill on nearly every turn without this hint.
+time-to-first-token, through the same gateway. Stateless routes re-send the
+whole history every request, so a long session on the openaicompat route (a
+gateway to Fireworks kimi-k3 and similar models) pays full prefill on nearly
+every turn without this hint.
+
+## Codex WebSocket response chaining
+
+`provider/openai` compresses compatible Codex WebSocket requests without
+changing canonical history. The transport feature requires all three values:
+
+- the resolved client family is `codex` (`openai.CodexFamily`);
+- `Client.UseWebSocketTransport` is true; and
+- `Request.SessionKey` is non-empty.
+
+Other Responses families can use the configured WebSocket transport, but they
+never send `previous_response_id` or `generate`. HTTP requests never send those
+WebSocket-only fields. Harness always keeps `store:false` and includes encrypted
+reasoning content, so a complete stateless request remains valid.
+
+Each session-keyed WebSocket pool entry keeps runtime-only lineage: the prior
+complete `apiRequest`, its non-empty completed response ID, retranscoded
+assistant output items, and the connection generation. Only a clean
+`response.completed` callback from the current generation installs lineage.
+An incomplete, failed, canceled, truncated, replaced, or concurrently used
+connection cannot install or restore it. Harness never writes this state to the
+session log or a snapshot. A restart or resume therefore starts with a complete
+request.
+
+The adapter transcodes the complete logical request before it considers
+chaining. It compares every context-bearing non-input property and then expects
+this ordered prefix:
+
+```text
+prior complete request input + prior completed assistant output items
+```
+
+If that prefix matches, the adapter sends `previous_response_id` plus only the
+remaining input suffix. JSON values compare semantically, so insignificant
+object formatting does not force a complete request. A property change, prefix
+change, missing lineage, stale generation, or empty response ID sends the
+complete request without `previous_response_id`. The complete body remains
+immutable and is also the body used for every HTTP fallback.
+
+A dial, send, or first-frame transport failure clears lineage and uses the
+existing HTTP fallback for that call. A chained request can also recover once
+on the same socket when its immediate first frame reports
+`previous_response_not_found`: the adapter clears lineage and sends the
+complete request. It does not spend an engine retry. A later chain miss never
+uses this recovery, even if earlier frames carried no visible output. A miss
+after visible output is a truncated stream; other non-immediate or repeated
+misses use the normal provider error path.
+
+A completed WebSocket call attaches request projection metadata to
+`provider.EventDone`: `request_mode` (`full` or `incremental`),
+`complete_input_items`, `sent_input_items`, and `previous_response_used`. The
+engine copies those values into `turn_metrics`. HTTP calls and providers that do
+not report the metadata omit these fields.
+
+Token accounting remains provider-reported. OpenAI reports `input_tokens` with
+`input_tokens_details.cached_tokens` included. The adapter stores the cached
+subset as `CacheReadTokens` and the non-negative remainder as `InputTokens`, so
+the fields are disjoint and their sum reconstructs the reported input total.
+Response chaining does not infer or synthesize cache usage.
 
 ## Anthropic cache TTL (default 1 hour)
 

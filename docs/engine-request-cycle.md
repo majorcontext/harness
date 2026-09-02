@@ -108,10 +108,12 @@ other arguments share that limit.
 
 ## Project instructions (AGENTS.md)
 
-The engine auto-injects a project's `AGENTS.md` into the system prompt. On the
-first `Prompt` of a session (never at `NewSession` — the startup budget rule)
-it walks up from `Config.WorkDir` for `AGENTS.md` (falling back to `AGENT.md`),
-stopping at the git root or filesystem root; the closest file wins, per the
+The engine injects a project's `AGENTS.md` into the system prompt. The first
+load normally happens during `Prompt`. A fresh session whose configured
+provider implements `provider.StartupPrewarmer` starts the same load in its
+background startup assembly instead. The engine walks up from `Config.WorkDir`
+for `AGENTS.md` (falling back to `AGENT.md`), stopping at the git root or
+filesystem root; the closest file wins, per the
 [agents.md](https://agents.md/) convention. The file is schema-less Markdown —
 no headings are required or parsed. The segment is appended after
 `Config.System` and before hook (`system.transform`) segments, cached for the
@@ -184,14 +186,16 @@ docs/design/nested-instruction-loading.md.
 ## Agent Skills
 
 The engine advertises [Agent Skills](https://agentskills.io) in the system
-prompt following the spec's progressive-disclosure model. On the first `Prompt`
-(alongside instructions loading, same load-once-cache-error pattern) it runs
-`skill.Discover` over each configured directory, merges the results sorted by
-name, and injects one system segment **after** the instructions segment and
-before hook (`system.transform`) segments. That segment is stage 1 only: a
-header telling the model it MUST read a skill's `SKILL.md` with the `read_file`
-tool before relying on it, then one line per skill — `name — description (path:
-<abs SKILL.md>)`. Stage 2 (the body) is deferred to that read.
+prompt following the spec's progressive-disclosure model. Discovery normally
+runs on the first `Prompt`, alongside instruction loading. A fresh session with
+a startup-prewarm-capable provider starts both load-once operations during
+background startup assembly. The engine runs `skill.Discover` over each
+configured directory, merges the results sorted by name, and injects one system
+segment **after** the instructions segment and before hook (`system.transform`)
+segments. That segment is stage 1 only: a header telling the model it MUST read
+a skill's `SKILL.md` with the `read_file` tool before relying on it, then one
+line per skill — `name — description (path: <abs SKILL.md>)`. Stage 2 (the body)
+is deferred to that read.
 
 `Config.SkillsDirs` selects the directories: nil (the default) uses
 `<WorkDir>/.agents/skills` when it exists; an explicit empty slice disables
@@ -643,6 +647,73 @@ from `configSnapshot`, a whole-struct copy of the parent's `engine.Config`
 a child with no separate wiring. A child that hits `max_tokens`
 auto-continues under the identical bound the root does.
 
+## Startup prewarm
+
+Fresh native sessions can prepare provider-owned transport state before the
+first prompt. `NewSession` assigns the session ID and returns without waiting.
+Managed roots start only after adoption and task-tool installation. Spawned
+children start only after their lineage, model, agent type, and tool restrictions
+are final. Loaded sessions, goal evaluators, compaction summaries, and the
+Claude Code delegated path do not schedule startup prewarm.
+
+The engine schedules the task only when the initially configured provider
+implements `provider.StartupPrewarmer`. It then performs the same stable-prefix
+assembly as a real turn:
+
+1. Load and cache project instructions.
+2. Discover and cache the Agent Skills catalog.
+3. Run `chat.params` and resolve the effective provider.
+4. Build the effective built-in, MCP, and plugin tool plan.
+5. Build ordered system segments and run `system.transform`.
+6. Build an empty-message `provider.Request` with the session key.
+7. Call the effective provider's `Prewarm` method if it still has the capability.
+
+This is an early disclosure boundary. Disk reads, hooks, MCP connection attempts,
+plugin activity, and provider work can start after fresh-session construction
+and before user input. `*openai.Client` implements the optional interface for all
+native Responses families. Therefore, its local discovery and assembly can run
+for a non-Codex Responses family, although `openai.Client.Prewarm` returns before
+network activity unless the resolved family is `codex`, WebSocket transport is
+enabled, and the session key is non-empty. A qualifying Codex call connects the
+session-keyed socket and sends an empty-input `response.create` with
+`generate:false`. It keeps `store:false` and waits for `response.completed`.
+
+The prewarm request contains the stable system and tool prefix. It can disclose
+base and appended system segments, project instructions, the Agent Skills
+catalog and local paths, tool names and schemas, a deferred MCP catalog, model
+controls, and the session ID as `prompt_cache_key`. It contains no user prompt,
+transcript, tool result, or ambient first-turn status. Ordinary OpenAI requests
+still reject an empty transcodable message set.
+
+One 15-second context covers the whole task from scheduling: discovery, hooks,
+tool and MCP assembly, dial, send, and completion. The first native `Prompt`
+consumes the handle once before context validation, cached discovery-error
+checks, compaction, or user-history append. If work is pending, the prompt waits
+only for the original deadline's remainder. It does not start another timeout.
+A ready compatible Codex lineage lets the first real call send only its new
+input. The real turn still assembles and validates its request; any mismatch
+sends a complete request.
+
+A prewarm failure or deadline does not fail the prompt. The engine detaches the
+handle and the normal call proceeds. Prompt-context cancellation cancels the
+prewarm and returns that cancellation before history mutation. Session removal
+also cancels an owned task.
+
+`StartupPrewarmer.Prewarm` must return promptly after context cancellation. The
+engine bounds prompt waiting and session ownership independently: a deadline
+signal detaches the handle even when the callback has not returned. Go cannot
+terminate an arbitrary in-process callback. A provider that ignores cancellation
+can therefore leave one residual, unowned callback goroutine blocked after the
+15-second boundary. The engine does not retain it, wait for it, or let it delay
+the first prompt. Providers must obey the cancellation contract to prevent that
+residual limitation.
+
+Prewarm emits no provider events, user or assistant messages, usage, or
+`turn_metrics`. Deterministic instruction and Skill discovery errors remain
+cached and fail the first prompt through the normal checks. Startup-only
+provider, hook, MCP, and transport failures remain best effort; the normal turn
+reports only failures it encounters itself.
+
 ## Per-turn metrics
 
 `streamTurn` (`engine/engine.go`) emits one structured `turn_metrics` line per
@@ -669,6 +740,21 @@ record (`len(strings.Join(req.System, "\n"))`, see `server/journal.go`'s
 `system_len` together are a natural join key between a `turn_metrics` stderr
 line and the durable `request.meta` record for the same request, with no new
 ID threaded through the provider boundary.
+
+An adapter can attach transport projection metadata only to `EventDone`. When
+present, `turn_metrics` also includes `request_mode`, `complete_input_items`,
+`sent_input_items`, and `previous_response_used`. Codex WebSocket calls report
+`request_mode` as `full` or `incremental`. An immediate chain-miss recovery
+reports the final complete retry as `full`; there is no separate recovery field.
+HTTP and adapters without this metadata omit all four fields. Startup prewarm
+emits no `EventDone` to the engine and therefore has no `turn_metrics` record or
+prewarm-status metric.
+
+Usage remains the completed response's provider report. For OpenAI Responses,
+`input_tokens` on the wire includes `input_tokens_details.cached_tokens`.
+`provider/openai` converts it to disjoint `provider.Usage` values: cached input
+becomes `CacheReadTokens`, and `InputTokens` is the non-negative uncached
+remainder. Chaining never estimates cache hits from item counts or request mode.
 
 `Config.OnTurnMetrics func(TurnMetrics)` is the seam. Unlike every other
 `On*` callback in `Config` (`OnEvent`, `OnRequest`, `OnStorePhase`), nil is
