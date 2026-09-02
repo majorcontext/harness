@@ -29,17 +29,32 @@ jobs:
           # currently just pgregory.net/rapid, which is why go.sum exists.
           cache: true
 
+      - name: Check formatting before tests
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf 'gofmt required before tests for:\n%s\n' "$unformatted"
+            for file in $unformatted; do
+              gofmt -d "$file"
+            done
+            exit 1
+          fi
+
       - run: go build ./...
 
       - run: go test -race ./...
 
       - run: go vet ./...
 
-      - name: Check formatting
+      - name: Check formatting after tests
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
-            printf 'gofmt required for:\n%s\n' "$unformatted"
+            printf 'gofmt required after tests for:\n%s\n' "$unformatted"
+            git status --short
+            for file in $unformatted; do
+              gofmt -d "$file"
+            done
             exit 1
           fi
 
