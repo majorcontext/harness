@@ -754,11 +754,12 @@ func NewSessionManager(baseCtx context.Context, maxDepth, maxConcurrent int) *Se
 // SessionManager at all, direct Prompt calls.
 func (m *SessionManager) NewRoot(cfg Config) *Session {
 	cfg.SessionManager = m // installs the `task` tool unconditionally — see newSession's doc comment on Config.SessionManager
-	s := NewSession(cfg)
+	s := NewSessionDeferredStartup(cfg)
 	m.mu.Lock()
 	m.adoptLocked(s, "", 0)
 	m.installTaskToolLocked(s, 0)
 	m.mu.Unlock()
+	s.startStartupPrewarm()
 	return s
 }
 
@@ -791,11 +792,14 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 	// current caller" is exactly the trap this convention exists to
 	// close before a future caller (or a test) adopts a root that DOES
 	// already have spawned children on disk.
-	defer m.unlockAndFlushPersist()
 	if _, exists := m.nodes[s.ID]; exists {
+		m.unlockAndFlushPersist()
 		return fmt.Errorf("engine: session %s already managed", s.ID)
 	}
 	m.adoptRootLocked(s)
+	m.unlockAndFlushPersist()
+	// Root policy is final only after adoption and task-tool installation.
+	s.startStartupPrewarm()
 	return nil
 }
 
@@ -2656,7 +2660,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	if opts.SystemAppend != "" {
 		childCfg.System = append(append([]string(nil), childCfg.System...), opts.SystemAppend)
 	}
-	child := NewSession(childCfg) // installs `task` unconditionally, since childCfg.SessionManager is inherited from the parent
+	child := NewSessionDeferredStartup(childCfg) // restrictions are finalized below before startup prewarm
 
 	// Validate opts.ToolNames against the child's OWN full registry —
 	// BEFORE installTaskToolLocked below can remove "task" from it (a
@@ -2793,6 +2797,9 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	m.runningByRoot[parent.rootID]++
 	m.unlockAndFlushPersist()
 
+	// All child lineage, depth, model, agent, and effective tool restrictions
+	// are final here. Start prewarm before the prompt-driving goroutine.
+	child.startStartupPrewarm()
 	go func() {
 		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt)
 		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
@@ -4506,6 +4513,9 @@ func (m *SessionManager) cancelOneNodeLocked(n *sessionNode) {
 	// always safe, and a no-op if already canceled. It does NOT abort a
 	// turn an ExternalRunner is driving on its own context — see Cancel's
 	// doc comment.
+	// Cancel the independent startup task as part of manager-owned lifetime
+	// cancellation; the node context only governs real turns.
+	n.session.cancelStartupPrewarm()
 	n.cancel()
 }
 

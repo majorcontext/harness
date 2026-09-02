@@ -9,13 +9,10 @@
 // the read_file tool. Stage 2 (the actual instructions) is deferred to that
 // read: the body is never front-loaded into the prompt.
 //
-// Discovery touches disk, so — exactly like project instructions (see
-// instructions.go) — it happens lazily on the first Prompt of a session
-// (never at NewSession, the startup budget rule) and is cached for the
-// session's life. A discovery error (a malformed SKILL.md, or a duplicate
-// skill name across dirs) fails that first Prompt loudly, mirroring the
-// present-but-unusable AGENTS.md contract: a project that ships skills must
-// not run silently without them.
+// Discovery touches disk, so fresh sessions run it in bounded asynchronous
+// startup prewarm after final construction. Loaded sessions run it on the first
+// Prompt. The load-once cache preserves success or failure for later prompts.
+// A malformed SKILL.md or duplicate skill name fails the first Prompt loudly.
 //
 // Skills are never written to the session log — the log stores only canonical
 // messages — so a resumed session rediscovers them on its first Prompt.

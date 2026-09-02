@@ -11,11 +11,10 @@
 // symlinks, so the spec's `ln -s AGENTS.md AGENT.md` compatibility setup works
 // transparently.
 //
-// Discovery touches disk, so it happens lazily on the first Prompt of a
-// session (never at NewSession — the startup budget rule) and the result is
-// cached for the session's life. Instructions are never written to the session
-// log: the log stores only canonical messages, and instructions are re-read
-// fresh whenever a session is loaded and prompted again.
+// Discovery touches disk, so fresh sessions run it in bounded asynchronous
+// startup prewarm after final construction. Loaded sessions run it lazily on
+// the first Prompt. The result is cached for the session's life. Instructions
+// are never written to the session log. A loaded session reads them fresh.
 
 package engine
 
