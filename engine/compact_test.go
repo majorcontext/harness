@@ -857,6 +857,162 @@ func TestCompactSummaryFlowsThroughEventMessageBeforeHistoryCompacted(t *testing
 	}
 }
 
+// TestCompactionStartedPrecedesSummaryAndHistoryCompacted is the red-first
+// test for EventCompactionStarted (docs/design/context-compaction.md §4
+// "Live event surface"): on a successful, triggered compaction, exactly one
+// compaction.started fires, strictly before both the summary's EventMessage
+// and the closing EventHistoryCompacted — i.e. before the summary result is
+// even available — and it carries the same CompactFirstID/CompactLastID/
+// CompactTurnsFolded the eventual EventHistoryCompacted carries, so a client
+// can correlate "compacting now" with "compaction settled".
+func TestCompactionStartedPrecedesSummaryAndHistoryCompacted(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	var evs []Event
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		OnEvent:   func(ev Event) { evs = append(evs, ev) },
+	})
+	runTurns(t, s, 2)
+	evs = nil // discard the two ordinary turns' events
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var startedIdx, messageIdx, compactedIdx = -1, -1, -1
+	var startedCount int
+	for i, ev := range evs {
+		switch ev.Type {
+		case EventCompactionStarted:
+			startedCount++
+			startedIdx = i
+		case EventMessage:
+			if ev.Message != nil && ev.Message.ID == res.Summary.ID {
+				messageIdx = i
+			}
+		case EventHistoryCompacted:
+			compactedIdx = i
+		}
+	}
+	if startedCount != 1 {
+		t.Fatalf("EventCompactionStarted count = %d, want exactly 1", startedCount)
+	}
+	if messageIdx == -1 {
+		t.Fatal("no EventMessage carrying the summary was emitted")
+	}
+	if compactedIdx == -1 {
+		t.Fatal("no EventHistoryCompacted was emitted")
+	}
+	if startedIdx >= messageIdx {
+		t.Errorf("EventCompactionStarted at %d, summary EventMessage at %d; want started strictly before the summary is even available", startedIdx, messageIdx)
+	}
+	if startedIdx >= compactedIdx {
+		t.Errorf("EventCompactionStarted at %d, EventHistoryCompacted at %d; want started strictly before", startedIdx, compactedIdx)
+	}
+
+	started := evs[startedIdx]
+	if started.CompactFirstID != res.FirstID || started.CompactLastID != res.LastID || started.CompactTurnsFolded != res.TurnsFolded {
+		t.Errorf("EventCompactionStarted = %+v, want CompactFirstID=%q CompactLastID=%q CompactTurnsFolded=%d (matching the eventual result)",
+			started, res.FirstID, res.LastID, res.TurnsFolded)
+	}
+	if started.CompactSummaryID != "" {
+		t.Errorf("EventCompactionStarted.CompactSummaryID = %q, want empty (the summary does not exist yet when started fires)", started.CompactSummaryID)
+	}
+}
+
+// TestCompactionStartedNeverOrphanedOnFailure is the red-first test for
+// EventCompactionStarted's pairing invariant on the failure path: a
+// compaction that fails AFTER starting (the summarization call itself
+// errors) still emits exactly one EventCompactionStarted, and it is always
+// followed by an EventCompactionFailed — started must never be left
+// dangling with no terminal event. Reuses
+// TestCompactFailureNoJournalNoMutation's setup: only two turns are
+// scripted, so the third provider.Stream call (the summarization call)
+// exhausts p.turns and fails.
+func TestCompactionStartedNeverOrphanedOnFailure(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+	}}
+	var evs []Event
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: t.TempDir(),
+		OnEvent:    func(ev Event) { evs = append(evs, ev) },
+	})
+	runTurns(t, s, 2)
+	evs = nil // discard the two ordinary turns' events
+
+	_, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err == nil {
+		t.Fatal("Compact succeeded, want an error (provider call exhausted)")
+	}
+
+	var startedIdx, failedIdx = -1, -1
+	var startedCount, failedCount int
+	for i, ev := range evs {
+		switch ev.Type {
+		case EventCompactionStarted:
+			startedCount++
+			startedIdx = i
+		case EventCompactionFailed:
+			failedCount++
+			failedIdx = i
+		}
+	}
+	if startedCount != 1 {
+		t.Fatalf("EventCompactionStarted count = %d, want exactly 1", startedCount)
+	}
+	if failedCount != 1 {
+		t.Fatalf("EventCompactionFailed count = %d, want exactly 1 (started must never be orphaned)", failedCount)
+	}
+	if startedIdx >= failedIdx {
+		t.Errorf("EventCompactionStarted at %d, EventCompactionFailed at %d; want started strictly before failed", startedIdx, failedIdx)
+	}
+}
+
+// TestCompactionStartedNotEmittedOnEarlyReturnSkip is the red-first test
+// for EventCompactionStarted's other half of its pairing invariant: a
+// compact call that skips BEFORE ever committing to a summary attempt
+// (fewer than the effective keep-turns floor's worth of complete turns —
+// SkipReasonNotEnoughTurns, the cheapest of the two early-return skips —
+// never calls the provider) must not emit EventCompactionStarted at all —
+// only a call that is actually going to attempt a summary ever fires it.
+func TestCompactionStartedNotEmittedOnEarlyReturnSkip(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+	}}
+	var evs []Event
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		OnEvent:   func(ev Event) { evs = append(evs, ev) },
+	})
+	runTurns(t, s, 1)
+	evs = nil // discard the one ordinary turn's events
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SkipReason != SkipReasonNotEnoughTurns {
+		t.Fatalf("SkipReason = %q, want %q", res.SkipReason, SkipReasonNotEnoughTurns)
+	}
+
+	for _, ev := range evs {
+		if ev.Type == EventCompactionStarted {
+			t.Fatalf("EventCompactionStarted emitted on a not-enough-turns skip, want none (the provider was never called)")
+		}
+	}
+}
+
 // TestCompactSurvivesReload is the red-first restart test for §2's
 // "LoadSession replay": a reloaded session replays the compact record and
 // the trimmed history — the summary lands exactly where it did live, and

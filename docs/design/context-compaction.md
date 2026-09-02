@@ -330,21 +330,34 @@ against within that section either.
 ### Live event surface
 
 Anything tailing the event stream (`GET /event`, SSE) must see the
-compaction, not just readers of durable state: a successful compaction
-emits TWO things, in order. First the summary itself flows through the
-ordinary message-event path (`EventMessage` → server journal, the same
-route every other message takes), so an `events.jsonl` tailer receives the
-summary CONTENT — the durable `compact` record carries the summary inline
-rather than as a `recMessage`, so without this emission a tailer would
-hold a dangling id for a message it never received. Then a
-`history.compacted` engine event (journaled via the server's `emitDurable`
-path like `session.status`) carrying `{first_id, last_id, turns_folded,
-summary_id}`, where `summary_id` refers to the message the tailer just
-saw. A tailer replaying from a `from` cursor older than the compaction
-sees the original messages, the summary message, and the compaction event
-— the event is the reconciliation signal telling it which prefix the
-summary replaced. The `compaction.failed` event (above) is its
-fire-and-forget counterpart.
+compaction, not just readers of durable state. A live client also wants an
+IN-PROGRESS signal, not just a settled one: `compaction.started` fires
+exactly once, immediately before the blocking summarization call begins —
+after `Compact` has committed to attempting a summary (past every
+early-return skip and every journal-boundary error), but before the
+summary exists. It carries `{first_id, last_id, turns_folded}` — the same
+fold-range fields the eventual settlement carries, computed from the same
+fold bounds, so a client can correlate "compacting N turns now" with that
+settlement — but no `summary_id`, which does not exist yet. Live only,
+like `compaction.failed` below: never journaled, since a `started` that
+never resolves has nothing durable to reconcile against on replay. It is
+always followed by exactly one of `history.compacted` or
+`compaction.failed`, never left orphaned.
+
+A successful compaction then emits TWO more things, in order. First the
+summary itself flows through the ordinary message-event path
+(`EventMessage` → server journal, the same route every other message
+takes), so an `events.jsonl` tailer receives the summary CONTENT — the
+durable `compact` record carries the summary inline rather than as a
+`recMessage`, so without this emission a tailer would hold a dangling id
+for a message it never received. Then a `history.compacted` engine event
+(journaled via the server's `emitDurable` path like `session.status`)
+carrying `{first_id, last_id, turns_folded, summary_id}`, where
+`summary_id` refers to the message the tailer just saw. A tailer replaying
+from a `from` cursor older than the compaction sees the original messages,
+the summary message, and the compaction event — the event is the
+reconciliation signal telling it which prefix the summary replaced. The
+`compaction.failed` event (above) is its fire-and-forget counterpart.
 
 ## 5. Non-goals
 

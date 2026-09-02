@@ -1152,6 +1152,7 @@ components:
             - workdir.worktree_removed
             - history.compacted
             - compaction.failed
+            - compaction.started
             - text.delta
             - reasoning.delta
             - tool.start
@@ -1307,6 +1308,14 @@ components:
             compaction.failed is compaction's fire-and-forget failure
             counterpart (never journaled — a failed compaction never mutates
             durable state), carrying the failure detail in `error`.
+            compaction.started fires once, immediately before the blocking
+            summarization call begins — live only, never journaled — and
+            carries the same compact_first_id/compact_last_id/
+            compact_turns_folded a following history.compacted or
+            compaction.failed will carry (but no compact_summary_id, which
+            does not exist yet). It is always followed by exactly one of
+            those two, so a client can pair it with the eventual settlement
+            to show a "compacting now" indicator.
         session_id: { type: string }
         seq:
           type: integer
@@ -1497,13 +1506,19 @@ components:
             workdir.worktree_removed).
         compact_first_id:
           type: string
-          description: The folded range's first message id (history.compacted).
+          description: >
+            The folded range's first message id (history.compacted,
+            compaction.started).
         compact_last_id:
           type: string
-          description: The folded range's last message id (history.compacted).
+          description: >
+            The folded range's last message id (history.compacted,
+            compaction.started).
         compact_turns_folded:
           type: integer
-          description: Number of whole turns folded (history.compacted).
+          description: >
+            Number of whole turns folded (history.compacted,
+            compaction.started).
         compact_summary_id:
           type: string
           description: >

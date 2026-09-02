@@ -125,6 +125,10 @@ type Event struct {
 	// CompactSummaryID names the summary message — already delivered via a
 	// preceding evtMessage record (see Publish/publishHistoryCompacted).
 	// evtCompactionFailed (live only, never journaled) carries only Error.
+	// evtCompactionStarted (also live only, never journaled) fires before
+	// evtHistoryCompacted/evtCompactionFailed and carries the same
+	// CompactFirstID/CompactLastID/CompactTurnsFolded, but never
+	// CompactSummaryID — the summary does not exist yet when it fires.
 	CompactFirstID     string `json:"compact_first_id,omitempty"`
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
@@ -251,6 +255,14 @@ const (
 	// counterpart — live only, never journaled (a failed compaction never
 	// mutates durable state, so there is nothing to reconcile on replay).
 	evtCompactionFailed = "compaction.failed"
+	// evtCompactionStarted mirrors engine.EventCompactionStarted: fired
+	// once, immediately before Compact's blocking summarization call
+	// begins, so a live client can show a "compacting now" indicator — see
+	// that constant's doc comment for why it is always followed by exactly
+	// one of evtHistoryCompacted or evtCompactionFailed. Live only, like
+	// evtCompactionFailed above — never journaled, since a "started" that
+	// never resolves has nothing durable to reconcile on replay.
+	evtCompactionStarted = "compaction.started"
 )
 
 const journalName = "events.jsonl"
@@ -395,6 +407,19 @@ func (s *Server) Publish(ev engine.Event) {
 		s.publishHistoryCompacted(ev)
 	case engine.EventCompactionFailed:
 		s.publishLive(Event{Type: evtCompactionFailed, SessionID: ev.SessionID, Error: ev.Text})
+	case engine.EventCompactionStarted:
+		// Live only, like evtCompactionFailed above — see
+		// engine.EventCompactionStarted's doc comment. Carries the same
+		// fold-range fields the paired evtHistoryCompacted/
+		// evtCompactionFailed will carry, minus CompactSummaryID (the
+		// summary does not exist yet).
+		s.publishLive(Event{
+			Type:               evtCompactionStarted,
+			SessionID:          ev.SessionID,
+			CompactFirstID:     ev.CompactFirstID,
+			CompactLastID:      ev.CompactLastID,
+			CompactTurnsFolded: ev.CompactTurnsFolded,
+		})
 	}
 }
 
