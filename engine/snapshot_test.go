@@ -21,33 +21,37 @@ import (
 // re-marshaling the snapshot: a test that compared snapshots to snapshots
 // would pass for a field the snapshot drops on the floor.
 type foldState struct {
-	History         json.RawMessage
-	Model           message.ModelRef
-	Effort          message.Effort
-	Usage           provider.Usage
-	LastUsage       provider.Usage
-	HaveLastUsage   bool
-	GoalActive      bool
-	GoalCondition   string
-	CompactCount    int
-	LastCompactedAt string
-	Queue           []QueuedPrompt
-	QueueNextID     int64
-	EnqueueSeq      int64
-	ToolResults     map[string]toolResultMeta
-	ToolResultNext  int64
-	ToolResultBytes int
-	MCPSelected     map[string]bool
-	SpawnedChildren []string
-	Notifications   []taskNotification
-	TurnUnsettled   bool
-	Committed       *taskNotification
-	CreatedAt       string
-	WorkDir         string
-	ParentSession   string
-	TaskParentID    string
-	TaskAgentType   string
-	TaskDepth       int
+	History                    json.RawMessage
+	Model                      message.ModelRef
+	Effort                     message.Effort
+	Usage                      provider.Usage
+	LastUsage                  provider.Usage
+	HaveLastUsage              bool
+	GoalActive                 bool
+	GoalCondition              string
+	CompactCount               int
+	LastCompactedAt            string
+	Queue                      []QueuedPrompt
+	QueueNextID                int64
+	EnqueueSeq                 int64
+	ToolResults                map[string]toolResultMeta
+	ToolResultNext             int64
+	ToolResultBytes            int
+	MCPSelected                map[string]bool
+	SpawnedChildren            []string
+	Notifications              []taskNotification
+	TurnUnsettled              bool
+	Committed                  *taskNotification
+	ClaudeCodeCLISessionID     string
+	ClaudeCodeHistoryWatermark int
+	ClaudeCodeSessionCostUSD   float64
+	HaveClaudeCodeCost         bool
+	CreatedAt                  string
+	WorkDir                    string
+	ParentSession              string
+	TaskParentID               string
+	TaskAgentType              string
+	TaskDepth                  int
 }
 
 func foldStateOf(t *testing.T, s *Session) string {
@@ -59,33 +63,37 @@ func foldStateOf(t *testing.T, s *Session) string {
 		t.Fatalf("marshal history: %v", err)
 	}
 	st := foldState{
-		History:         h,
-		Model:           s.model,
-		Effort:          s.effort,
-		Usage:           s.usage,
-		LastUsage:       s.lastUsage,
-		HaveLastUsage:   s.haveLastUsage,
-		GoalActive:      s.goalActive,
-		GoalCondition:   s.goalCondition,
-		CompactCount:    s.compactCount,
-		LastCompactedAt: s.lastCompactedAt.UTC().String(),
-		Queue:           s.promptQueue,
-		QueueNextID:     s.promptQueueNextID,
-		EnqueueSeq:      s.enqueueSeq,
-		ToolResults:     s.toolResults,
-		ToolResultNext:  s.toolResultNextID,
-		ToolResultBytes: s.toolResultBytes,
-		MCPSelected:     s.mcpSelected,
-		SpawnedChildren: s.spawnedChildIDs,
-		Notifications:   s.taskNotifications,
-		TurnUnsettled:   s.turnUnsettled,
-		Committed:       s.committedOutcome,
-		CreatedAt:       s.createdAt.UTC().String(),
-		WorkDir:         s.cfg.WorkDir,
-		ParentSession:   s.cfg.ParentSession,
-		TaskParentID:    s.cfg.TaskParentID,
-		TaskAgentType:   s.cfg.TaskAgentType,
-		TaskDepth:       s.cfg.TaskDepth,
+		History:                    h,
+		Model:                      s.model,
+		Effort:                     s.effort,
+		Usage:                      s.usage,
+		LastUsage:                  s.lastUsage,
+		HaveLastUsage:              s.haveLastUsage,
+		GoalActive:                 s.goalActive,
+		GoalCondition:              s.goalCondition,
+		CompactCount:               s.compactCount,
+		LastCompactedAt:            s.lastCompactedAt.UTC().String(),
+		Queue:                      s.promptQueue,
+		QueueNextID:                s.promptQueueNextID,
+		EnqueueSeq:                 s.enqueueSeq,
+		ToolResults:                s.toolResults,
+		ToolResultNext:             s.toolResultNextID,
+		ToolResultBytes:            s.toolResultBytes,
+		MCPSelected:                s.mcpSelected,
+		SpawnedChildren:            s.spawnedChildIDs,
+		Notifications:              s.taskNotifications,
+		TurnUnsettled:              s.turnUnsettled,
+		Committed:                  s.committedOutcome,
+		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
+		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
+		ClaudeCodeSessionCostUSD:   s.claudeCodeSessionCostUSD,
+		HaveClaudeCodeCost:         s.haveClaudeCodeCost,
+		CreatedAt:                  s.createdAt.UTC().String(),
+		WorkDir:                    s.cfg.WorkDir,
+		ParentSession:              s.cfg.ParentSession,
+		TaskParentID:               s.cfg.TaskParentID,
+		TaskAgentType:              s.cfg.TaskAgentType,
+		TaskDepth:                  s.cfg.TaskDepth,
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -648,5 +656,120 @@ func TestSnapshotAnchorSurvivesTornTail(t *testing.T) {
 	}
 	if got, want := len(reloaded.History()), len(resumed.History()); got != want {
 		t.Errorf("history = %d messages, want %d", got, want)
+	}
+}
+
+// TestSnapshotCarriesClaudeCodeSessionID pins the fix for a snapshot-based
+// cold load (hibernate -> wake) losing the Claude Code CLI's own session
+// id. Before the fix, sessionSnapshot had no field for
+// Session.claudeCodeCLISessionID or claudeCodeHistoryWatermark, both of
+// which are set ONLY by a journal-replay fold (recClaudeCodeSessionID/
+// recClaudeCodeHistoryWatermark, store.go) — a fold the snapshot path
+// skips for every record at or before its anchor. snapshotOnIdle fires
+// right after each delegated turn, right after those records are written,
+// so the anchor almost always covers them: the common case, not an edge
+// case. The result was a snapshot-loaded session with an empty CLI
+// session id, so its next delegated turn dropped --resume and started a
+// fresh CLI session (paying a needless get_conversation_history replay
+// too, since the watermark also reset to 0).
+func TestSnapshotCarriesClaudeCodeSessionID(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.cfg.SnapshotEveryRecords = idleOnly
+
+	if _, err := s.Prompt(context.Background(), "first turn"); err != nil {
+		t.Fatalf("first Prompt: %v", err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr = %v", err)
+	}
+
+	wantSessionID := s.claudeCodeSessionID()
+	if wantSessionID == "" {
+		t.Fatal("claudeCodeSessionID() empty after first delegated turn")
+	}
+	wantWatermark := s.claudeCodeHistoryWatermarkCount()
+	if wantWatermark == 0 {
+		t.Fatal("claudeCodeHistoryWatermarkCount() zero after first delegated turn")
+	}
+
+	// Snapshot at the current journal head. With the default on-idle
+	// cadence, this anchor covers the recClaudeCodeSessionID/
+	// recClaudeCodeHistoryWatermark records this turn just wrote —
+	// exactly the common case snapshotOnIdle hits right after every
+	// delegated turn (engine.go's own defer).
+	s.snapshotOnIdle()
+	s.waitSnapshots()
+
+	reloaded, err := LoadSession(Config{
+		SessionDir: s.cfg.SessionDir,
+		ClaudeCode: s.cfg.ClaudeCode,
+	}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if reloaded.replayedRecords >= reloaded.recordsWritten {
+		t.Fatalf("replayed %d of %d records — the snapshot was not used, this test proves nothing",
+			reloaded.replayedRecords, reloaded.recordsWritten)
+	}
+
+	if got := reloaded.claudeCodeSessionID(); got != wantSessionID {
+		t.Errorf("reloaded claudeCodeSessionID() = %q, want %q (snapshot must carry the CLI session id, not rely on a skipped tail replay)", got, wantSessionID)
+	}
+	if got := reloaded.claudeCodeHistoryWatermarkCount(); got != wantWatermark {
+		t.Errorf("reloaded claudeCodeHistoryWatermarkCount() = %d, want %d", got, wantWatermark)
+	}
+
+	// The next delegated turn must --resume the CLI session the snapshot
+	// restored, not silently start a fresh one.
+	if _, err := reloaded.Prompt(context.Background(), "second turn"); err != nil {
+		t.Fatalf("second Prompt (post-reload): %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if len(invocations) != 2 {
+		t.Fatalf("invocations = %d, want 2: %+v", len(invocations), invocations)
+	}
+	resumeID, ok := argvValueAfter(invocations[1], "--resume")
+	if !ok || resumeID == "" {
+		t.Fatalf("post-reload invocation argv has no non-empty --resume: %v", invocations[1])
+	}
+	if resumeID != wantSessionID {
+		t.Errorf("--resume value = %q, want %q", resumeID, wantSessionID)
+	}
+}
+
+// TestSnapshotCarriesClaudeCodeCost pins the fix for the sibling bug in the
+// same class: sessionSnapshot had no field for
+// Session.claudeCodeSessionCostUSD/haveClaudeCodeCost, both of which are
+// set ONLY by the recClaudeCodeUsage fold (store.go) — a fold a
+// snapshot-anchored load skips for every record at or before its anchor,
+// exactly like the CLI session id bug above. The result was a
+// snapshot-loaded session reporting $0/unset cumulative claude-code cost
+// even when delegated turns actually ran before the snapshot anchor.
+//
+// This drives captureSnapshotLocked/restoreSnapshot directly, rather than
+// through a full LoadSession, so it isolates the snapshot round trip from
+// the journal fold entirely: "restore into a fresh session from ONLY the
+// snapshot" is exactly what a snapshot-anchored load does for any record
+// at or before the anchor.
+func TestSnapshotCarriesClaudeCodeCost(t *testing.T) {
+	s := NewSession(Config{})
+	s.mu.Lock()
+	s.claudeCodeSessionCostUSD = 1.2345
+	s.haveClaudeCodeCost = true
+	snap := s.captureSnapshotLocked()
+	s.mu.Unlock()
+
+	fresh := NewSession(Config{})
+	fresh.restoreSnapshot(snap)
+
+	fresh.mu.Lock()
+	gotCost, gotHave := fresh.claudeCodeSessionCostUSD, fresh.haveClaudeCodeCost
+	fresh.mu.Unlock()
+
+	if !gotHave {
+		t.Error("haveClaudeCodeCost = false after restoreSnapshot, want true")
+	}
+	if gotCost != 1.2345 {
+		t.Errorf("claudeCodeSessionCostUSD = %v after restoreSnapshot, want 1.2345", gotCost)
 	}
 }

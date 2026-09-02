@@ -97,6 +97,18 @@ const defaultSnapshotEveryRecords = 64
 // whole file is built around, and making an observable field
 // (session_info's turn count) depend on whether a snapshot happened to
 // exist. The invariant governs; the field list does not.
+//
+// Every Session field (engine.go), not only these two, must be classified
+// as either round-tripped here or deliberately excluded — see
+// snapshottedSessionFields/snapshotExcludedSessionFields and
+// TestEverySessionFieldIsClassifiedForSnapshotting in
+// engine/snapshot_field_coverage_test.go. A new Session field the author
+// forgets to add to this struct (and forgets to wire into
+// captureSnapshotLocked/restoreSnapshot below) fails that test, closed by
+// construction rather than by remembering to update it: this is the guard
+// that would have caught claudeCodeCLISessionID/claudeCodeHistoryWatermark/
+// claudeCodeSessionCostUSD/haveClaudeCodeCost going missing before they
+// shipped missing.
 type sessionSnapshot struct {
 	Version int    `json:"version"`
 	ID      string `json:"id"`
@@ -147,6 +159,27 @@ type sessionSnapshot struct {
 
 	TurnUnsettled    bool              `json:"turn_unsettled,omitempty"`
 	CommittedOutcome *taskNotification `json:"committed_outcome,omitempty"`
+
+	// ClaudeCodeCLISessionID, ClaudeCodeHistoryWatermark,
+	// ClaudeCodeSessionCostUSD and HaveClaudeCodeCost mirror
+	// Session.claudeCodeCLISessionID/claudeCodeHistoryWatermark/
+	// claudeCodeSessionCostUSD/haveClaudeCodeCost — see their own doc
+	// comments (engine.go). All four are set ONLY by a fold
+	// (recClaudeCodeSessionID/recClaudeCodeHistoryWatermark/
+	// recClaudeCodeUsage, store.go), so without a snapshot field for them
+	// a snapshot-anchored load silently drops whichever of those records
+	// fell at or before the anchor: --resume is never passed on the next
+	// delegated turn (a needless fresh CLI session), the watermark resets
+	// to 0 (a needless get_conversation_history directive), and the
+	// cumulative claude-code dollar cost resets to 0/unset (as if no
+	// delegated turn had ever completed). Empty/zero on an OLD snapshot
+	// written before these fields existed — the same pre-fix behavior,
+	// not a load failure.
+	ClaudeCodeCLISessionID     string `json:"claude_code_cli_session_id,omitempty"`
+	ClaudeCodeHistoryWatermark int    `json:"claude_code_history_watermark,omitempty"`
+
+	ClaudeCodeSessionCostUSD float64 `json:"claude_code_session_cost_usd,omitempty"`
+	HaveClaudeCodeCost       bool    `json:"have_claude_code_cost,omitempty"`
 }
 
 // sessionSnapshotFile is the on-disk wrapper: the snapshot bytes plus a
@@ -432,6 +465,12 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		ToolResultBytes:   s.toolResultBytes,
 		SpawnedChildIDs:   append([]string(nil), s.spawnedChildIDs...),
 		TurnUnsettled:     s.turnUnsettled,
+
+		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
+		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
+
+		ClaudeCodeSessionCostUSD: s.claudeCodeSessionCostUSD,
+		HaveClaudeCodeCost:       s.haveClaudeCodeCost,
 	}
 	if len(s.toolResults) > 0 {
 		snap.ToolResults = make(map[string]toolResultMeta, len(s.toolResults))
@@ -515,6 +554,15 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.spawnedChildIDs = append([]string(nil), snap.SpawnedChildIDs...)
 	s.taskNotifications = append([]taskNotification(nil), snap.TaskNotifications...)
 	s.turnUnsettled = snap.TurnUnsettled
+	// Mirrors recClaudeCodeSessionID/recClaudeCodeHistoryWatermark/
+	// recClaudeCodeUsage's own unconditional folds (store.go) — an
+	// empty/zero snapshot value (an old snapshot predating these fields,
+	// or a session never delegated) restores to exactly the zero value a
+	// full replay would also leave.
+	s.claudeCodeCLISessionID = snap.ClaudeCodeCLISessionID
+	s.claudeCodeHistoryWatermark = snap.ClaudeCodeHistoryWatermark
+	s.claudeCodeSessionCostUSD = snap.ClaudeCodeSessionCostUSD
+	s.haveClaudeCodeCost = snap.HaveClaudeCodeCost
 	if snap.CommittedOutcome != nil {
 		oc := *snap.CommittedOutcome
 		s.committedOutcome = &oc
