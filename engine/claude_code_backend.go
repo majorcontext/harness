@@ -71,7 +71,9 @@
 //     two adjacent assistant messages a one-bubble-per-message console
 //     would render as two separate turns. Appended via plain
 //     Session.append (no usage — see the usage-mapping note below) and
-//     emitted as EventMessage, with one EventReasoningDelta per non-empty
+//     emitted as its own parts' deltas FOLLOWED BY EventMessage — the
+//     native lane's order, which a consumer's fold depends on (see the
+//     emission site's own comment), with one EventReasoningDelta per non-empty
 //     thinking part (runClaudeCodeTurn asks for a summary with
 //     --thinking-display summarized, which is what makes a non-empty one
 //     the ordinary case rather than the impossible one — the emission stays
@@ -1226,6 +1228,15 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			if len(msg.Parts) == 0 {
 				continue
 			}
+			// alreadyStreamed counts the LEADING parts whose delta this
+			// envelope must not repeat. The buffering path streams a
+			// reasoning-only envelope's delta the moment it arrives, so
+			// live streaming is unaffected by the buffering, and the merge
+			// below puts that very part at the front of msg.Parts —
+			// emitting the whole slice would send the same thinking text
+			// twice, and a consumer that APPENDS deltas would show it
+			// twice until EventMessage replaced the row.
+			alreadyStreamed := 0
 			if len(pendingReasoning) > 0 {
 				if env.ParentToolUseID == pendingReasoningParent {
 					// The common case: this envelope is the rest of the
@@ -1237,6 +1248,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					merged = append(merged, pendingReasoning...)
 					merged = append(merged, msg.Parts...)
 					msg.Parts = merged
+					alreadyStreamed = len(pendingReasoning)
 				} else {
 					// A different parent thread interrupted the buffered
 					// thinking block: flush it standalone rather than
@@ -1262,9 +1274,30 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				}
 				continue
 			}
+			// Durable first, then the stream: append writes the record
+			// before any client can see a token of it, so a crash can
+			// never leave a consumer holding content the journal lost.
 			s.append(msg)
-			s.emit(Event{Type: EventMessage, Message: &msg})
-			for _, p := range msg.Parts {
+			// The DELTAS precede their own EventMessage. This is the
+			// native lane's contract -- deltas stream while a turn is
+			// open, and the durable message finalizes what they built --
+			// and a consumer's fold is written against exactly that
+			// order: deltas grow an open row, EventMessage replaces that
+			// row IN PLACE and adopts the durable id.
+			//
+			// Emitting EventMessage first inverted it, and the inversion
+			// duplicated the turn on screen. A consumer that had no open
+			// row when the message arrived appended it as a finished row,
+			// then the deltas that followed opened a SECOND row and
+			// rebuilt the very same reasoning and text inside it -- one
+			// model response rendered twice, verbatim. It resolved only
+			// if a LATER envelope's own message happened to overwrite the
+			// stranded row, so a turn ending on its text (no tool call
+			// after it) left the duplicate on screen until the viewer
+			// reloaded. Reported twice against the boxes console
+			// (meetneptune/boxes#599 fixed a different orphan shape; this
+			// is the one that produced the plain-text repro).
+			for _, p := range msg.Parts[alreadyStreamed:] {
 				switch part := p.(type) {
 				case *message.Text:
 					if part.Text != "" {
@@ -1278,6 +1311,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					s.emit(Event{Type: EventToolStart, ToolCall: part})
 				}
 			}
+			s.emit(Event{Type: EventMessage, Message: &msg})
 			finalMsg = &msg
 		case "user":
 			msg := claudeCodeToolResultMessage(env.Message, env.ParentToolUseID)

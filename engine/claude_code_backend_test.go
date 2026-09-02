@@ -1119,6 +1119,96 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeBufferedReasoningStreamsOnce proves a buffered thinking
+// block's delta is emitted exactly once.
+//
+// The buffering path streams a reasoning-only envelope's delta the moment
+// it arrives, so live streaming is unaffected by the buffering. The merge
+// then puts that same part at the FRONT of the next envelope's message, so
+// a delta loop over the whole merged slice sends the thinking text a second
+// time — and a consumer that appends deltas renders it twice until the
+// EventMessage that follows replaces the row.
+func TestClaudeCodeBufferedReasoningStreamsOnce(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.Prompt(context.Background(), "think about it"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	var reasoningDeltas int
+	for _, ev := range events {
+		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
+			reasoningDeltas++
+		}
+	}
+	if reasoningDeltas != 1 {
+		t.Errorf("reasoning.delta for the buffered thinking block emitted %d times, want exactly 1", reasoningDeltas)
+	}
+}
+
+// TestClaudeCodeDeltasPrecedeTheirMessage proves every delta for a turn
+// segment reaches the consumer BEFORE that segment's own EventMessage.
+//
+// This is the native lane's contract, and a consumer's fold is written
+// against it: deltas grow an open row, and EventMessage replaces that row
+// in place and adopts the durable id. Emitting EventMessage first inverted
+// it, and the inversion duplicated the turn on screen — a consumer with no
+// open row appended the message as a finished row, then the deltas that
+// followed opened a SECOND row and rebuilt the same reasoning and text
+// inside it. One model response, rendered twice, verbatim. It cleared only
+// when a later envelope's message happened to overwrite the stranded row,
+// so a turn ending on its own text left the duplicate up until reload.
+func TestClaudeCodeDeltasPrecedeTheirMessage(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.Prompt(context.Background(), "think about it"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	firstMessage := -1
+	for i, ev := range events {
+		if ev.Type == EventMessage {
+			firstMessage = i
+			break
+		}
+	}
+	if firstMessage < 0 {
+		t.Fatalf("no EventMessage emitted: %+v", events)
+	}
+	// Both deltas belong to the message at firstMessage (one merged
+	// reasoning+text turn — see TestClaudeCodeThinkingBlockDecodesToReasoningPart),
+	// so both must sit ahead of it.
+	for _, want := range []struct {
+		kind string
+		text string
+	}{
+		{EventReasoningDelta, "Let me reason about this."},
+		{EventTextDelta, "Here is my answer."},
+	} {
+		at := -1
+		for i, ev := range events {
+			if ev.Type == want.kind && ev.Text == want.text {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			t.Errorf("no %s carrying %q: %+v", want.kind, want.text, events)
+			continue
+		}
+		if at > firstMessage {
+			t.Errorf("%s for %q emitted at %d, AFTER its own EventMessage at %d; deltas must precede the message they build",
+				want.kind, want.text, at, firstMessage)
+		}
+	}
+}
+
 // TestClaudeCodeThinkingBlockDecodesToReasoningPart proves a "thinking"
 // content block — previously silently dropped (see claudeCodeContentBlock's
 // switch in claudeCodeAssistantMessage) — decodes into a message.Reasoning
