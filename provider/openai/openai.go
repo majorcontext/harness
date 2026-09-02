@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -338,6 +339,12 @@ type stream struct {
 	// has assembled a clean response.completed message. It is nil for HTTP.
 	onComplete func(responseID string, assistant *message.Message)
 
+	requestMetadata *provider.RequestMetadata
+	// recoverChainMiss retries one immediate incremental chain miss as the
+	// immutable complete request on the same socket. It is nil for HTTP.
+	recoverChainMiss func(visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error)
+	visibleOutput    bool
+
 	queue []provider.Event
 	done  bool
 }
@@ -386,6 +393,22 @@ func (s *stream) Next() (provider.Event, error) {
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
 		if err := s.handle(name, data); err != nil {
+			var miss *previousResponseNotFoundError
+			if errors.As(err, &miss) && s.recoverChainMiss != nil {
+				source, metadata, recoverErr := s.recoverChainMiss(s.visibleOutput, err)
+				s.recoverChainMiss = nil
+				if recoverErr != nil {
+					return provider.Event{}, recoverErr
+				}
+				s.wsConn = source
+				s.requestMetadata = metadata
+				s.respID = ""
+				s.items = nil
+				s.usage = provider.Usage{}
+				s.hasToolCall = false
+				s.queue = nil
+				continue
+			}
 			return provider.Event{}, err
 		}
 		if len(s.queue) == 0 && !s.done {
@@ -470,6 +493,44 @@ func (s *stream) itemAt(idx int) (*assembledItem, error) {
 	return s.items[idx], nil
 }
 
+type previousResponseNotFoundError struct {
+	message string
+}
+
+func (e *previousResponseNotFoundError) Error() string {
+	return fmt.Sprintf("openai: %s (previous_response_not_found)", e.message)
+}
+
+func streamError(code, message string) error {
+	if code == "previous_response_not_found" {
+		return &previousResponseNotFoundError{message: message}
+	}
+	err := fmt.Errorf("openai: %s (%s)", message, code)
+	if class, ok := classifyErrorCode(code); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
+	if name != "response.failed" && name != "error" {
+		return false
+	}
+	var ev struct {
+		Code     string `json:"code"`
+		Response struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"response"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(data, &ev) == nil &&
+		(ev.Code == "previous_response_not_found" || ev.Response.Error.Code == "previous_response_not_found" || ev.Error.Code == "previous_response_not_found")
+}
+
 func (s *stream) handle(name string, data []byte) error {
 	switch name {
 	case "response.created":
@@ -499,6 +560,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.kind = "message"
 		}
 		it.text.WriteString(ev.Delta)
+		s.visibleOutput = true
 		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta})
 
 	case "response.reasoning_summary_text.delta":
@@ -517,6 +579,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.kind = "reasoning"
 		}
 		it.text.WriteString(ev.Delta)
+		s.visibleOutput = true
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta})
 
 	case "response.output_item.done":
@@ -547,6 +610,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.name = head.Name
 			it.args = argsRaw(head.Arguments)
 			s.hasToolCall = true
+			s.visibleOutput = true
 			s.queue = append(s.queue, provider.Event{Type: provider.EventToolCall, ToolCall: it.toolCall()})
 		case "reasoning":
 			it.kind = "reasoning"
@@ -613,11 +677,13 @@ func (s *stream) handle(name string, data []byte) error {
 			StopReason:        stop,
 			Usage:             s.usage,
 			SubscriptionUsage: s.subUsage,
+			RequestMetadata:   s.requestMetadata,
 		})
 		s.done = true
 
 	case "response.failed", "error":
 		var ev struct {
+			Code     string `json:"code"`
 			Message  string `json:"message"`
 			Response struct {
 				Error struct {
@@ -635,19 +701,11 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		switch {
 		case ev.Response.Error.Message != "":
-			err := fmt.Errorf("openai: %s (%s)", ev.Response.Error.Message, ev.Response.Error.Code)
-			if class, ok := classifyErrorCode(ev.Response.Error.Code); ok {
-				return provider.MarkRetryable(err, class)
-			}
-			return err
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
 		case ev.Error.Message != "":
-			err := fmt.Errorf("openai: %s (%s)", ev.Error.Message, ev.Error.Code)
-			if class, ok := classifyErrorCode(ev.Error.Code); ok {
-				return provider.MarkRetryable(err, class)
-			}
-			return err
+			return streamError(ev.Error.Code, ev.Error.Message)
 		case ev.Message != "":
-			return fmt.Errorf("openai: %s", ev.Message)
+			return streamError(ev.Code, ev.Message)
 		default:
 			return fmt.Errorf("openai: stream error: %s", data)
 		}

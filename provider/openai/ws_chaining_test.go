@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -497,5 +498,111 @@ func TestWebSocketResponseItemsMatchTextCallsAndReasoning(t *testing.T) {
 	}
 	if suffix["type"] != "function_call_output" {
 		t.Fatalf("mixed suffix = %s, want only function_call_output", second.Input)
+	}
+}
+
+func chainMissFrame() string {
+	return `{"type":"error","code":"previous_response_not_found","message":"lineage expired"}`
+}
+
+func drainLineageStream(stream provider.Stream) ([]provider.Event, error) {
+	var events []provider.Event
+	for {
+		event, err := stream.Next()
+		if err != nil {
+			return events, err
+		}
+		events = append(events, event)
+	}
+}
+
+func establishRecoveryLineage(t *testing.T, server *wsLineageServer, client *Client, session string) {
+	t.Helper()
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_secret_lineage", "two")}
+	streamLineageTurn(t, client, lineageRequest(session, userMessage("one")))
+	<-server.frames
+}
+
+func TestPreviousResponseNotFoundRetriesFullRequestOnce(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-recovery")
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("chain-miss-recovery", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	incremental := decodeResponseCreate(t, <-server.frames)
+	fullRetry := decodeResponseCreate(t, <-server.frames)
+	if incremental.PreviousResponseID != "resp_secret_lineage" || len(incremental.Input) != 1 {
+		t.Fatalf("initial request = previous %q, %d items; want incremental lineage request", incremental.PreviousResponseID, len(incremental.Input))
+	}
+	if fullRetry.PreviousResponseID != "" || len(fullRetry.Input) != 3 {
+		t.Fatalf("recovery request = previous %q, %d items; want complete request without lineage", fullRetry.PreviousResponseID, len(fullRetry.Input))
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil {
+		t.Fatalf("terminal event = %+v, want EventDone with request metadata", terminal)
+	}
+	want := provider.RequestMetadata{Mode: provider.RequestModeFull, CompleteInputItems: 3, SentInputItems: 3, PreviousResponseUsed: false}
+	if !reflect.DeepEqual(*terminal.RequestMetadata, want) {
+		t.Fatalf("request metadata = %+v, want %+v", *terminal.RequestMetadata, want)
+	}
+	raw, err := json.Marshal(terminal.RequestMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "resp_secret_lineage") {
+		t.Fatalf("terminal metadata leaked response ID: %s", raw)
+	}
+}
+
+func TestPreviousResponseNotFoundAfterVisibleOutputDoesNotRetry(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-visible")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"response.output_text.delta","output_index":0,"delta":"visible"}`,
+		chainMissFrame(),
+	}}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("chain-miss-visible", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	events, streamErr := drainLineageStream(stream)
+	if len(events) != 1 || events[0].Type != provider.EventTextDelta {
+		t.Fatalf("events = %+v, want one visible text delta", events)
+	}
+	class, ok := provider.AsRetryable(streamErr)
+	if !ok || class != provider.RetryableStreamTruncated {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q, true", streamErr, class, ok, provider.RetryableStreamTruncated)
+	}
+	<-server.frames
+	if got := len(server.frames); got != 0 {
+		t.Fatalf("extra websocket frames = %d, want no local retry after visible output", got)
+	}
+}
+
+func TestPreviousResponseNotFoundSecondFailureEscapes(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-twice")
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("chain-miss-twice", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	_, streamErr := drainLineageStream(stream)
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "previous_response_not_found") {
+		t.Fatalf("stream error = %v, want second chain miss to escape", streamErr)
+	}
+	<-server.frames
+	<-server.frames
+	if got := len(server.frames); got != 0 {
+		t.Fatalf("extra websocket frames = %d, want exactly one local retry", got)
 	}
 }

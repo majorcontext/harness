@@ -3223,6 +3223,15 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
 			doneAt := s.cfg.Now()
+			var requestMode provider.RequestMode
+			var completeInputItems, sentInputItems int
+			var previousResponseUsed bool
+			if ev.RequestMetadata != nil {
+				requestMode = ev.RequestMetadata.Mode
+				completeInputItems = ev.RequestMetadata.CompleteInputItems
+				sentInputItems = ev.RequestMetadata.SentInputItems
+				previousResponseUsed = ev.RequestMetadata.PreviousResponseUsed
+			}
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
 				Model:            params.Model,
@@ -3237,8 +3246,12 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				// exactly (len of the "\n"-joined system slice) so the two
 				// records join on session_id+model+system_len — see
 				// TurnMetrics's doc comment.
-				SystemLen:  len(strings.Join(system, "\n")),
-				ToolsCount: len(tools),
+				SystemLen:            len(strings.Join(system, "\n")),
+				ToolsCount:           len(tools),
+				RequestMode:          requestMode,
+				CompleteInputItems:   completeInputItems,
+				SentInputItems:       sentInputItems,
+				PreviousResponseUsed: previousResponseUsed,
 			})
 			if ev.SubscriptionUsage != nil {
 				// See provider.Event.SubscriptionUsage's own doc comment:

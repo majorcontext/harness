@@ -123,6 +123,25 @@ const (
 	EventActivity EventType = "activity"
 )
 
+// RequestMode describes how an adapter projected the complete logical request
+// onto its transport. The zero value means the adapter did not report transport
+// projection metadata.
+type RequestMode string
+
+const (
+	RequestModeFull        RequestMode = "full"
+	RequestModeIncremental RequestMode = "incremental"
+)
+
+// RequestMetadata contains non-secret transport projection facts for one
+// completed provider call. It never contains a provider response identifier.
+type RequestMetadata struct {
+	Mode                 RequestMode `json:"mode"`
+	CompleteInputItems   int         `json:"complete_input_items"`
+	SentInputItems       int         `json:"sent_input_items"`
+	PreviousResponseUsed bool        `json:"previous_response_used"`
+}
+
 // Event is one streaming event from a model call.
 type Event struct {
 	Type       EventType
@@ -131,6 +150,9 @@ type Event struct {
 	Message    *message.Message
 	StopReason StopReason
 	Usage      Usage
+	// RequestMetadata is set only on EventDone when an adapter reports how
+	// it projected the complete logical request onto its transport.
+	RequestMetadata *RequestMetadata
 	// SubscriptionUsage carries a subscription lane's captured rate-limit/
 	// quota snapshot (see message.SubscriptionUsage's own doc comment),
 	// set only on EventDone by an adapter that captured one on THIS call —

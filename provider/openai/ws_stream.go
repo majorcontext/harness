@@ -31,7 +31,7 @@ type wsFrameSource struct {
 	// does not double-report. name is the event's wire type. A clean terminal
 	// only releases the socket here; stream.handle publishes lineage after it
 	// assembles the canonical assistant message.
-	onTerminal func(name string)
+	onTerminal func(name string, data []byte)
 	// onBroken fires when the connection dies before a terminal event is
 	// observed: a read error, or Close() called while the stream is still
 	// mid-flight (context canceled, engine gave up on the turn). It never
@@ -47,7 +47,7 @@ func (w *wsFrameSource) next() (string, []byte, error) {
 	if w.buffered != nil {
 		f := w.buffered
 		w.buffered = nil
-		w.observe(f.name, nil)
+		w.observe(f.name, f.data, nil)
 		return f.name, f.data, nil
 	}
 	ctx := context.Background()
@@ -58,16 +58,16 @@ func (w *wsFrameSource) next() (string, []byte, error) {
 	}
 	name, data, err := readResponsesFrame(ctx, w.conn)
 	if err != nil {
-		w.observe("", err)
+		w.observe("", nil, err)
 		return "", nil, err
 	}
-	w.observe(name, nil)
+	w.observe(name, data, nil)
 	return name, data, nil
 }
 
 // observe records a successfully read event's terminality, or a read
 // failure — each reported to the pool at most once per source.
-func (w *wsFrameSource) observe(name string, err error) {
+func (w *wsFrameSource) observe(name string, data []byte, err error) {
 	if w.terminal {
 		return
 	}
@@ -80,7 +80,7 @@ func (w *wsFrameSource) observe(name string, err error) {
 	case isWSTerminalEvent(name):
 		w.terminal = true
 		if w.onTerminal != nil {
-			w.onTerminal(name)
+			w.onTerminal(name, data)
 		}
 	}
 }
@@ -98,6 +98,6 @@ func (w *wsFrameSource) close(clean bool) error {
 	if clean {
 		return nil
 	}
-	w.observe("", errStreamClosedEarly)
+	w.observe("", nil, errStreamClosedEarly)
 	return w.conn.Close(websocket.StatusNormalClosure, "")
 }

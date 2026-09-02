@@ -237,36 +237,59 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		return nil, false
 	}
 
-	src := &wsFrameSource{
-		conn:        conn,
-		idleTimeout: p.idleTimeout,
-		buffered:    &wsFrame{name: firstName, data: firstData},
-		onTerminal: func(name string) {
-			entry.mu.Lock()
-			entry.busy = false
-			entry.lastUsedAt = time.Now()
-			entry.streamFailures = 0
-			keep := isWSCleanTerminalEvent(name)
-			entry.mu.Unlock()
-			if !keep {
-				p.invalidate(entry)
-			}
-		},
-		onBroken: func(err error) {
-			p.release(entry)
-			if errors.Is(err, errStreamClosedEarly) {
-				p.invalidate(entry)
-				return
-			}
-			p.handleTransportError(entry, err)
-		},
+	recoveryAttempted := false
+	chainedRequest := createOptions.PreviousResponseID != ""
+	newSource := func(name string, data []byte) *wsFrameSource {
+		return &wsFrameSource{
+			conn:        conn,
+			idleTimeout: p.idleTimeout,
+			buffered:    &wsFrame{name: name, data: data},
+			onTerminal: func(name string, data []byte) {
+				// Keep an immediate first chain miss on the socket until stream.Next
+				// replaces it with the immutable complete request below.
+				if chainedRequest && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
+					return
+				}
+				entry.mu.Lock()
+				entry.busy = false
+				entry.lastUsedAt = time.Now()
+				entry.streamFailures = 0
+				keep := isWSCleanTerminalEvent(name)
+				entry.mu.Unlock()
+				if !keep {
+					p.invalidate(entry)
+				}
+			},
+			onBroken: func(err error) {
+				p.release(entry)
+				if errors.Is(err, errStreamClosedEarly) {
+					p.invalidate(entry)
+					return
+				}
+				p.handleTransportError(entry, err)
+			},
+		}
 	}
 
-	return &stream{
-		wsConn:   src,
-		model:    req.Model,
-		family:   req.Family,
-		subUsage: subUsage,
+	metadata := &provider.RequestMetadata{
+		Mode:                 provider.RequestModeFull,
+		CompleteInputItems:   len(completeRequest.Input),
+		SentInputItems:       len(completeRequest.Input),
+		PreviousResponseUsed: false,
+	}
+	if chainedRequest {
+		metadata.Mode = provider.RequestModeIncremental
+		metadata.SentInputItems = len(createOptions.Input)
+		metadata.PreviousResponseUsed = true
+	}
+
+	st := &stream{
+		wsConn:           newSource(firstName, firstData),
+		model:            req.Model,
+		family:           req.Family,
+		subUsage:         subUsage,
+		requestMetadata:  metadata,
+		recoverChainMiss: nil,
 		onComplete: func(responseID string, assistant *message.Message) {
 			if req.Family != CodexFamily {
 				return
@@ -295,7 +318,37 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 				generation:  generation,
 			}
 		},
-	}, true
+	}
+	if chainedRequest {
+		st.recoverChainMiss = func(visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error) {
+			recoveryAttempted = true
+			p.clearLineage(entry, generation)
+			if visible {
+				p.invalidate(entry)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(chainErr)
+			}
+			if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
+				p.handleTransportError(entry, err)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(err)
+			}
+			name, data, err := readFirstFrame(ctx, conn, p.idleTimeout)
+			if err != nil {
+				p.handleTransportError(entry, err)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(err)
+			}
+			fullMetadata := &provider.RequestMetadata{
+				Mode:                 provider.RequestModeFull,
+				CompleteInputItems:   len(completeRequest.Input),
+				SentInputItems:       len(completeRequest.Input),
+				PreviousResponseUsed: false,
+			}
+			return newSource(name, data), fullMetadata, nil
+		}
+	}
+	return st, true
 }
 
 func readFirstFrame(ctx context.Context, conn *websocket.Conn, idleTimeout time.Duration) (string, []byte, error) {

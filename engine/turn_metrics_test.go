@@ -1,7 +1,10 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -284,5 +287,61 @@ func TestDefaultTurnMetricsLogDoesNotPanic(t *testing.T) {
 	})
 	if _, err := s.Prompt(context.Background(), "go"); err != nil {
 		t.Fatalf("Prompt err = %v", err)
+	}
+}
+
+func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
+	const responseID = "resp_must_not_escape"
+	metadata := &provider.RequestMetadata{
+		Mode:                 provider.RequestModeIncremental,
+		CompleteInputItems:   7,
+		SentInputItems:       2,
+		PreviousResponseUsed: true,
+	}
+	prov := &scriptedProvider{name: "codex", turns: [][]provider.Event{{
+		{Type: provider.EventDone, Message: &message.Message{ID: responseID, Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}, StopReason: provider.StopEndTurn, RequestMetadata: metadata},
+	}}}
+	var recorded []TurnMetrics
+	s := NewSession(Config{
+		Providers:     provider.Registry{"codex": prov},
+		Model:         message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		OnTurnMetrics: func(m TurnMetrics) { recorded = append(recorded, m) },
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("metrics records = %d, want 1", len(recorded))
+	}
+	got := recorded[0]
+	if got.RequestMode != provider.RequestModeIncremental || got.CompleteInputItems != 7 || got.SentInputItems != 2 || !got.PreviousResponseUsed {
+		t.Fatalf("projection metrics = %+v, want incremental 7 complete, 2 sent, previous response used", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), responseID) {
+		t.Fatalf("serialized metrics leaked response ID: %s", raw)
+	}
+
+	var log bytes.Buffer
+	oldLogger := defaultTurnMetricsStderr
+	defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(&log, nil))
+	t.Cleanup(func() { defaultTurnMetricsStderr = oldLogger })
+	defaultTurnMetricsLog(got)
+	record := log.String()
+	for _, field := range []string{
+		`"request_mode":"incremental"`,
+		`"complete_input_items":7`,
+		`"sent_input_items":2`,
+		`"previous_response_used":true`,
+	} {
+		if !strings.Contains(record, field) {
+			t.Errorf("serialized turn_metrics record %q does not contain %s", record, field)
+		}
+	}
+	if strings.Contains(record, responseID) {
+		t.Fatalf("serialized turn_metrics record leaked response ID: %s", record)
 	}
 }

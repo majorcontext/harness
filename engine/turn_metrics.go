@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TurnMetrics summarizes one completed streamTurn model call: request
@@ -55,6 +56,12 @@ type TurnMetrics struct {
 	SystemLen int
 	// ToolsCount is the number of tools offered on this request.
 	ToolsCount int
+	// RequestMode and the item counts report optional provider transport
+	// projection metadata. RequestMode is empty when the provider omitted it.
+	RequestMode          provider.RequestMode
+	CompleteInputItems   int
+	SentInputItems       int
+	PreviousResponseUsed bool
 }
 
 // defaultTurnMetricsStderr is the JSON handler every default turn_metrics
@@ -78,7 +85,7 @@ var defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 // Field names match the wire vocabulary a log query (grep, a BetterStack/
 // Vector-style query) is expected to filter on.
 func defaultTurnMetricsLog(m TurnMetrics) {
-	defaultTurnMetricsStderr.Info("turn_metrics",
+	args := []any{
 		"session_id", m.SessionID,
 		"model", m.Model.String(),
 		"ttft_ms", m.TTFTMillis,
@@ -90,7 +97,16 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 		"system_len", m.SystemLen,
 		"tools_count", m.ToolsCount,
 		"retry", m.Attempt,
-	)
+	}
+	if m.RequestMode != "" {
+		args = append(args,
+			"request_mode", m.RequestMode,
+			"complete_input_items", m.CompleteInputItems,
+			"sent_input_items", m.SentInputItems,
+			"previous_response_used", m.PreviousResponseUsed,
+		)
+	}
+	defaultTurnMetricsStderr.Info("turn_metrics", args...)
 }
 
 // emitTurnMetrics dispatches m to Config.OnTurnMetrics, or
