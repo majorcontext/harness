@@ -117,7 +117,7 @@ Name the failure before you write the test. State the input, the state, and the
 wrong output. A test that cannot fail for one named reason has no value.
 
 For behavior-changing code, add and confirm the failing test first. Then implement
-the change. The red step also proves that the agent did the work. For prose-only
+the change. That failing test also proves that the agent did the work. For prose-only
 changes, validate links, formatting, and loaders.
 
 Do not write a test that can only restate the implementation. Use the check that
@@ -189,7 +189,7 @@ Use active voice, common words, and one stable term for each concept.
 Keep instructions at 20 words or fewer when practical. Name code elements
 instead of using vague references. Quote identifiers and error strings exactly.
 
-Default to no comment. Prefer a clearer name or a smaller function over an
+Default to no code comment. Prefer a clearer name or a smaller function over an
 explanation. Comment only what the code cannot show: a constraint, a hazard, a
 rejected alternative, or a non-obvious reason. Keep it to the shortest form that
 carries the reason.
