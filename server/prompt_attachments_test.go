@@ -393,14 +393,25 @@ func TestPromptAsyncOversizeBodyRejectedBeforeDecode(t *testing.T) {
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
 
-	// Two attachments, each UNDER the per-attachment cap, that together
-	// exceed the request bound: exactly the case the per-blob check alone
-	// cannot catch.
-	half := append(testPNG(t), bytes.Repeat([]byte("x"), promptRequestMaxBytes*2/3)...)
+	// Two attachments, each genuinely UNDER the per-attachment cap, that
+	// together exceed the request bound once base64 encoding is paid for:
+	// exactly the case the per-blob check alone cannot catch. Sized at 2/3
+	// of the per-attachment cap, so two are ~26.7 MiB decoded and ~35.6 MiB
+	// on the wire, against a 32 MiB bound.
+	each := append(testPNG(t), bytes.Repeat([]byte("x"), promptAttachmentMaxBytes*2/3)...)
+	// Pin the premise rather than trusting the arithmetic above: if a future
+	// change to either constant made these attachments individually oversize,
+	// the request would still 413 and this test would still pass while
+	// silently testing the per-blob path instead of the body bound.
+	if len(each) >= promptAttachmentMaxBytes {
+		t.Fatalf("each attachment is %d bytes, which is not under the %d-byte per-attachment cap — "+
+			"this test would no longer prove the body bound catches what the per-blob check cannot",
+			len(each), promptAttachmentMaxBytes)
+	}
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []any{
-			attachmentPart("image/png", half),
-			attachmentPart("image/png", half),
+			attachmentPart("image/png", each),
+			attachmentPart("image/png", each),
 		},
 	})
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {

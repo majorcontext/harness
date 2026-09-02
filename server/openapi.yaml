@@ -947,6 +947,17 @@ components:
             be persisted into the durable transcript and re-sent on every
             later turn. A prompt carrying at least one attachment is valid
             with no text part at all.
+
+
+            Those 400s are per-attachment judgments, made after the body is
+            decoded. The WHOLE body is separately bounded at 33554432 bytes
+            and answered with 413 before any of it is decoded, since blob
+            `data` is base64 and decoding it allocates — so a client can tell
+            the two apart: a 400 means this attachment is unusable, a 413
+            means the request was too large to inspect at all. Base64 costs
+            about 4/3, so the body bound is reached by roughly 24 MiB of
+            attachment bytes however they are divided up, which is why
+            several individually-legal attachments can still exceed it.
         model:
           $ref: "#/components/schemas/ModelRef"
           description: >
@@ -2341,6 +2352,16 @@ paths:
               schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "413":
+          description: >
+            The request body exceeds 33554432 bytes and was refused before
+            being decoded — blob `data` is base64 and decoding it allocates,
+            so an oversized body is stopped at the read rather than after
+            the cost is paid. Distinct from the per-attachment 400s in
+            `parts`: this one says nothing about any individual attachment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: >
             Another currently-running session holds the same workdir and
