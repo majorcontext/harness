@@ -173,19 +173,38 @@ func TestTranscodeUserImage(t *testing.T) {
 	}
 }
 
-func TestTranscodeUserNonImageBlobErrors(t *testing.T) {
+// TestTranscodeUserNonImageBlobOmitted: a non-image blob in a USER message
+// is dropped with a note rather than failing the request.
+//
+// This test asserted the opposite until 2026-09-02 — that the request
+// errors. That was safe while prompt_async took text only, because a
+// non-image blob could then only come from a tool result. Once a person can
+// ATTACH one, the same error becomes a permanent wedge: the attachment is
+// in durable history, so a session that attached a PDF under anthropic and
+// then switched to a provider on this lane would fail every later turn with
+// no repair path. The error still exists in blobURL for any caller that
+// reaches it directly; transcodeUserMessage just no longer lets it escape
+// for the one shape a person can create.
+func TestTranscodeUserNonImageBlobOmitted(t *testing.T) {
 	req := baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{
 			&message.Text{Text: "what is this"},
 			&message.Blob{MediaType: "application/pdf", Data: []byte{1, 2, 3}},
 		}},
 	)
-	_, err := transcodeRequest(req, testFamily)
-	if err == nil {
-		t.Fatal("expected error for non-image blob, got nil")
+	got, err := transcodeRequest(req, testFamily)
+	if err != nil {
+		t.Fatalf("transcodeRequest: %v, want the PDF omitted rather than an error", err)
 	}
-	if !strings.Contains(err.Error(), "application/pdf") {
-		t.Errorf("error = %q, want it to name the media type application/pdf", err.Error())
+	body, mErr := json.Marshal(got)
+	if mErr != nil {
+		t.Fatal(mErr)
+	}
+	if !strings.Contains(string(body), "attachment(s) omitted: application/pdf") {
+		t.Errorf("request = %s, want it to name the omitted attachment", body)
+	}
+	if !strings.Contains(string(body), "what is this") {
+		t.Errorf("request = %s, want the user's text preserved", body)
 	}
 }
 
@@ -1007,5 +1026,67 @@ func TestTranscodeAssistantEngineContextRendered(t *testing.T) {
 	}
 	if !strings.Contains(got, "reply") {
 		t.Errorf("assistant Text content dropped:\n%s", got)
+	}
+}
+
+// TestUserPDFOmittedWithNoteInsteadOfError is the durability regression for
+// the narrowest lane. This transcoder has no wire form for a non-image blob
+// (message/wire_normalize.go's intersection comment says so explicitly), and
+// blobURL errors on one. Returning that error from here would not fail a
+// single request: an attachment lives in the session's DURABLE history, so a
+// session that attached a PDF under anthropic and then switched to a
+// provider on this lane would fail EVERY later turn, forever, with no repair
+// path — imageclamp downscales an oversized image but cannot rewrite a
+// document.
+//
+// So the blob is dropped and the model is TOLD, which is the honest
+// degradation: sending nothing silently would leave it answering about a
+// file it never received.
+func TestUserPDFOmittedWithNoteInsteadOfError(t *testing.T) {
+	msgs, err := transcodeUserMessage(&message.Message{
+		Role: message.RoleUser,
+		Parts: message.Parts{
+			&message.Text{Text: "what does this say?"},
+			&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 body")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("transcodeUserMessage: %v, want a successful transcode with the PDF omitted", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d, want 1", len(msgs))
+	}
+	body := string(msgs[0].Content)
+	if !strings.Contains(body, "what does this say?") {
+		t.Errorf("content = %s, want it to keep the user's text", body)
+	}
+	if !strings.Contains(body, "attachment(s) omitted: application/pdf") {
+		t.Errorf("content = %s, want it to name the omitted attachment", body)
+	}
+	if strings.Contains(body, "JVBERi") || strings.Contains(body, "%PDF-") {
+		t.Errorf("content = %s, want the PDF's bytes NOT on the wire", body)
+	}
+}
+
+// TestUserImageStillCarriedAlongsideOmittedPDF: the omission is per blob,
+// not per message. An image in the same message must still ride as a real
+// image part — dropping it too would turn a narrow gap into a wide one.
+func TestUserImageStillCarriedAlongsideOmittedPDF(t *testing.T) {
+	msgs, err := transcodeUserMessage(&message.Message{
+		Role: message.RoleUser,
+		Parts: message.Parts{
+			&message.Blob{MediaType: "image/png", Data: []byte("\x89PNG\r\n\x1a\n")},
+			&message.Blob{MediaType: "application/pdf", Data: []byte("%PDF-1.4 body")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("transcodeUserMessage: %v", err)
+	}
+	body := string(msgs[0].Content)
+	if !strings.Contains(body, "image_url") || !strings.Contains(body, "data:image/png;base64,") {
+		t.Errorf("content = %s, want the PNG carried as an image part", body)
+	}
+	if !strings.Contains(body, "attachment(s) omitted: application/pdf") {
+		t.Errorf("content = %s, want the PDF named as omitted", body)
 	}
 }

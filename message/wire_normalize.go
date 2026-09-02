@@ -553,10 +553,12 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 //     ANY MediaType — image/* becomes an "image" block, anything else a
 //     "document" block — as long as Data or URL is present; a blob with
 //     neither errors "blob has neither data nor url".
+//
 //   - provider/openai/transcode.go's transcodeBlob (~line 298) accepts
 //     image/* (Data or URL) or application/pdf (Data only — a PDF by URL
 //     errors "is not supported"); anything else errors "unsupported blob
 //     media type".
+//
 //   - provider/openaicompat/transcode.go's blobURL (~line 343) accepts
 //     ONLY image/* (Data or URL); anything else — including
 //     application/pdf, which openai alone tolerates — errors "unsupported
@@ -564,6 +566,14 @@ func demoteWireInvalidToolResults(messages []Message) []Message {
 //     intersection below: no PDF (openaicompat has no wire form for one at
 //     all), and never a data-less, URL-less blob (every transcoder errors
 //     on that regardless of media type).
+//
+//     transcodeUserMessage does not let that error escape for a USER
+//     message: it drops the un-carryable blob and appends the same
+//     "[N attachment(s) omitted: ...]" note used below, because a user
+//     attachment is durable history and erroring would fail every later
+//     turn of a session that merely switched providers. The intersection
+//     here is still what a blob must satisfy to ride as REAL bytes on
+//     every lane.
 func buildSafeBlob(b *Blob) bool {
 	return strings.HasPrefix(b.MediaType, "image/") && (len(b.Data) > 0 || b.URL != "")
 }

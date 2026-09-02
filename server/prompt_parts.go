@@ -54,12 +54,24 @@ import (
 //     openai an input_file. Verified against the real claude-code CLI, which
 //     read a PDF's text back through its stream-json stdin.
 //
+// PDF is the one entry that does NOT clear that bar on every lane, and the
+// exception is deliberate rather than overlooked. provider/openaicompat has
+// no wire form for a document at all (message/wire_normalize.go's
+// intersection comment), so it OMITS a non-image blob and tells the model
+// "[N attachment(s) omitted: application/pdf]" instead of erroring. That
+// keeps the durability rule this list exists to serve: a session that
+// attached a PDF under anthropic and later switched to an openaicompat
+// provider degrades for that turn rather than failing every turn forever
+// from inside its own transcript. A caller that wants a PDF actually READ
+// should keep the session on a lane that carries one; the boxes console
+// gates its attach control per model for exactly this reason.
+//
 // Everything else stays out for a concrete reason, not caution: a
 // text/plain or docx blob reaches openai's transcodeBlob as "unsupported
-// blob media type" and openaicompat's blobURL the same way, so accepting
-// one here would be a promise two lanes cannot keep. Widening this set is a
-// row plus a verifier — and a check that every provider adapter transcodes
-// the new type.
+// blob media type", so accepting one here would be a promise that lane
+// cannot keep even in degraded form. Widening this set is a row plus a
+// verifier — and a check of what EVERY provider adapter does with the new
+// type, including whether it can degrade instead of erroring.
 var promptAttachmentTypes = map[string]func(mediaType string, data []byte) error{
 	"image/png":       verifyImageBytes,
 	"image/jpeg":      verifyImageBytes,

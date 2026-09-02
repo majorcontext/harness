@@ -278,6 +278,10 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 	var texts []string
 	var parts []apiContentPart
 	hasBlob := false
+	// omittedBlobTypes collects the media types dropped below, so the model
+	// is told a file was withheld rather than left to answer about bytes it
+	// never received.
+	var omittedBlobTypes []string
 	for _, p := range m.Parts {
 		switch v := p.(type) {
 		case *message.Text:
@@ -301,6 +305,26 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 			texts = append(texts, t)
 			parts = append(parts, apiContentPart{Type: "text", Text: t})
 		case *message.Blob:
+			// A blob this wire has no form for is OMITTED with a note, not
+			// an error. This lane is the narrowest of the three (see
+			// message/wire_normalize.go's intersection comment: no PDF at
+			// all), and an attachment lives in a session's DURABLE history
+			// — so erroring here would not fail one request, it would fail
+			// every turn from now on, permanently, for a session that
+			// merely switched to this provider after attaching a file the
+			// previous one accepted. There is no repair path: imageclamp
+			// downscales an oversized image but cannot rewrite a document.
+			//
+			// The note is the same shape wire_normalize already uses when
+			// it drops a tool-result blob, and it matters that the model
+			// SEES it: silently sending nothing would leave the model
+			// answering about a file it was never given, with no way to
+			// know. Dropping the bytes while saying so is the honest
+			// degradation.
+			if !strings.HasPrefix(v.MediaType, "image/") {
+				omittedBlobTypes = append(omittedBlobTypes, v.MediaType)
+				continue
+			}
 			hasBlob = true
 			url, err := blobURL(v)
 			if err != nil {
@@ -309,6 +333,17 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 			parts = append(parts, apiContentPart{Type: "image_url", ImageURL: &apiImageURL{URL: url}})
 		default:
 			return nil, fmt.Errorf("unsupported part type %T in user message", p)
+		}
+	}
+
+	if len(omittedBlobTypes) > 0 {
+		// Same wording wire_normalize uses for a dropped tool-result blob,
+		// so one vocabulary covers every omission the model can see.
+		note := fmt.Sprintf("[%d attachment(s) omitted: %s]",
+			len(omittedBlobTypes), strings.Join(omittedBlobTypes, ", "))
+		texts = append(texts, note)
+		if hasBlob {
+			parts = append(parts, apiContentPart{Type: "text", Text: note})
 		}
 	}
 
