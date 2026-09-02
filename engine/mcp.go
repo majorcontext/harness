@@ -960,6 +960,66 @@ func sanitizeMCPCallError(server string, err error) error {
 	return fmt.Errorf("engine: mcp: server %q: call failed: connection failed", server)
 }
 
+// MCPServerInstructions is one connected server's own usage guidance from
+// initialize (mcp.Client.Instructions), paired with the namespaced tool
+// names it contributed. Returned by MCPManager.Instructions and rendered by
+// mcp_instructions.go's mcpInstructionsSegment.
+type MCPServerInstructions struct {
+	// Name is the server's configured name.
+	Name string
+	// Text is InitializeResult.Instructions verbatim, as the server sent it.
+	// Never empty: Instructions omits a server that set none.
+	Text string
+	// Tools are this server's namespaced tool names, sorted, so the model
+	// can tie the guidance to the tools it can actually call.
+	Tools []string
+}
+
+// Instructions returns a point-in-time, sorted-by-name snapshot of every
+// CONNECTED server that supplied initialize instructions — the read side of
+// mcp.Client.Instructions, and the native loop's answer to a gap the
+// claude-code lane never had (the CLI receives servers via --mcp-config and
+// surfaces their instructions itself, so before this the same box behaved
+// differently depending on which lane served it).
+//
+// Like Status, it never triggers a connect: a manager whose first batch has
+// not run returns nil. A server that is configured but not connected
+// contributes nothing — there is no instructions text to report until
+// initialize has actually returned one.
+func (m *MCPManager) Instructions() []MCPServerInstructions {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.state) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(m.state))
+	for name := range m.state {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]MCPServerInstructions, 0, len(names))
+	for _, name := range names {
+		e := m.state[name]
+		if !e.Connected || e.client == nil {
+			continue
+		}
+		text := strings.TrimSpace(e.client.Instructions())
+		if text == "" {
+			continue
+		}
+		tools := make([]string, 0, len(e.tools))
+		for toolName := range e.tools {
+			tools = append(tools, toolName)
+		}
+		sort.Strings(tools)
+		out = append(out, MCPServerInstructions{Name: name, Text: text, Tools: tools})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // MCPServerStatus is one server's live connection-state snapshot, as
 // returned by MCPManager.Status — a point-in-time copy of mcpServerEntry's
 // exported fields, safe for a caller to hold onto after the RLock that

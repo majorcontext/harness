@@ -51,6 +51,7 @@ type Client struct {
 	serverInfo      Implementation
 	protocolVersion string
 	serverCaps      ServerCapabilities
+	instructions    string
 }
 
 // NewClient opens the given transport (spawning a child process for
@@ -114,6 +115,7 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	c.serverInfo = result.ServerInfo
 	c.protocolVersion = result.ProtocolVersion
 	c.serverCaps = result.Capabilities
+	c.instructions = result.Instructions
 	c.mu.Unlock()
 	return &result, nil
 }
@@ -140,6 +142,16 @@ func (c *Client) ServerCapabilities() ServerCapabilities {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.serverCaps
+}
+
+// Instructions returns the server's own usage guidance from initialize —
+// InitializeResult.Instructions, the spec's channel for "how to use this
+// server" text that no tool description carries. Empty for a server that
+// sets none. Only meaningful after Initialize has returned successfully.
+func (c *Client) Instructions() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.instructions
 }
 
 // ListTools requests one page of the server's tool list. Pass the previous
