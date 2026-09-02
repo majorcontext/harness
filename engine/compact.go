@@ -21,6 +21,24 @@ import (
 const (
 	EventHistoryCompacted = "history.compacted"
 	EventCompactionFailed = "compaction.failed"
+	// EventCompactionStarted fires exactly once, immediately before the
+	// blocking runCompactionSummary call begins (see Session.Compact) —
+	// only once Compact is fully committed to attempting a summary, past
+	// every early-return skip (not-enough-turns, lone-existing-summary)
+	// and every journal-boundary error above it. It is therefore always
+	// followed by exactly one of EventHistoryCompacted (success) or
+	// EventCompactionFailed (any failure, including the benign
+	// empty-summary skip, which still fires EventCompactionFailed for
+	// observability) — never left orphaned. It carries the same
+	// CompactFirstID/CompactLastID/CompactTurnsFolded a following
+	// EventHistoryCompacted will carry, computed from the same fold
+	// bounds before the summary call runs, so a client can correlate
+	// "compacting N turns now" with the eventual settlement — but no
+	// CompactSummaryID, which does not exist yet at this point. Live
+	// only, like EventCompactionFailed: not journaled, since a "started"
+	// that never resolves has nothing durable to reconcile against on
+	// replay.
+	EventCompactionStarted = "compaction.started"
 )
 
 // defaultCompactionThreshold is Config.CompactionThreshold's zero-fills-a-
@@ -350,6 +368,20 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	if model.IsZero() {
 		model = s.Model()
 	}
+
+	// Past this point Compact is committed to attempting a summary: every
+	// early-return skip (not-enough-turns, lone-existing-summary) and every
+	// journal-boundary error above have already returned. Emit the started
+	// signal now, immediately before the blocking summary call, so a live
+	// client can show a "compacting now" indicator — see
+	// EventCompactionStarted's doc comment for why this is always paired
+	// with a following EventHistoryCompacted or EventCompactionFailed.
+	s.emit(Event{
+		Type:               EventCompactionStarted,
+		CompactFirstID:     journaledFirstID,
+		CompactLastID:      journaledLastID,
+		CompactTurnsFolded: foldTurns,
+	})
 
 	summaryText, usage, err := s.runCompactionSummary(ctx, model, history[foldStart:foldEnd+1])
 	if err != nil {

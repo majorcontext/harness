@@ -201,8 +201,12 @@ type Event struct {
 	// EventHistoryCompacted: CompactFirstID/CompactLastID name the folded
 	// range, CompactTurnsFolded is the fold count, and CompactSummaryID
 	// names the summary message (already delivered via a preceding
-	// EventMessage — see Session.Compact). EventCompactionFailed carries
-	// only Text (the error detail).
+	// EventMessage — see Session.Compact). EventCompactionStarted carries
+	// the same CompactFirstID/CompactLastID/CompactTurnsFolded (computed
+	// before the summary call, so it always precedes and matches the
+	// EventHistoryCompacted or EventCompactionFailed that follows it), but
+	// never CompactSummaryID — the summary does not exist yet when it
+	// fires. EventCompactionFailed carries only Text (the error detail).
 	CompactFirstID     string `json:"compact_first_id,omitempty"`
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
