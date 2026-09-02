@@ -369,7 +369,7 @@ An entry written after that point can never be read again. The boundary
 entry ends where the bytes stop changing, so the next turn reads the whole
 conversation through the previous turn and writes only that turn's delta.
 A request with no ambient block gets no boundary marker: its tail entry is
-already reusable. Three markers stays under the API's limit of four.
+already reusable. Three markers stay under the API's limit of four.
 
 This is an opt-OUT default, and it changes the wire for an operator who
 configures nothing: every anthropic request carries the beta header and
