@@ -450,6 +450,160 @@ func main() {
 			"duration_ms": 800,
 		})
 		return
+	case "parallel_tools":
+		// One upstream API response carrying a thinking block and TWO
+		// parallel tool_use blocks, streamed the way a real `claude`
+		// 2.1.251 binary streams it (verified live): one envelope per
+		// content block, every envelope repeating the SAME upstream
+		// message.id, and the FIRST tool's result interleaved before the
+		// second tool_use envelope is sent. A separate response with its
+		// own id closes the turn, so the test can prove the grouping ends
+		// at the id boundary rather than swallowing everything.
+		const parallelID = "msg_011FAKEPARALLEL"
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   parallelID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Two commands, one response.", "signature": "sig-par"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   parallelID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_alpha", "name": "Bash", "input": map[string]any{"command": "echo alpha"}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "user",
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_alpha", "content": "alpha"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   parallelID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_beta", "name": "Bash", "input": map[string]any{"command": "echo beta"}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "user",
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_beta", "content": "beta"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   "msg_011FAKEFINAL",
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "done"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "done",
+			"usage": map[string]any{
+				"input_tokens":  20,
+				"output_tokens": 10,
+			},
+		})
+		return
+	case "parallel_tools_crossing":
+		// The two boundary cases the grouping must not cross, in one
+		// stream. A SUBAGENT response calls a tool on its own
+		// parent_tool_use_id thread and is journaled when the main
+		// thread's response opens; its tool_result then arrives while
+		// that main-thread response is still being assembled, so it
+		// answers a call that IS already journaled and must not be held
+		// behind an unrelated response. Then a THINKING-ONLY envelope
+		// opens the next response: its id differs, so it must close the
+		// open one rather than slip past on the reasoning-buffer path.
+		const subagentID = "msg_011FAKECROSSSUB"
+		const firstID = "msg_011FAKECROSSA"
+		const secondID = "msg_011FAKECROSSB"
+		emit(map[string]any{
+			"type":               "assistant",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"id":   subagentID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_child", "name": "Bash", "input": map[string]any{"command": "echo child"}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   firstID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "tool_use", "id": "toolu_main", "name": "Bash", "input": map[string]any{"command": "echo main"}},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":               "user",
+			"parent_tool_use_id": "toolu_parent",
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_child", "content": "child"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   secondID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Next response opens with thinking.", "signature": "sig-cross"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   secondID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "done"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "done",
+			"usage": map[string]any{
+				"input_tokens":  20,
+				"output_tokens": 10,
+			},
+		})
+		return
 	case "thinking_interleaved":
 		// Proves the reasoning-buffer merge (claude_code_backend.go's
 		// pendingReasoning) attaches ONLY forward, to the envelope that
