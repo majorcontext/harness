@@ -1073,7 +1073,19 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 // TestClaudeCodeThinkingBlockDecodesToReasoningPart proves a "thinking"
 // content block — previously silently dropped (see claudeCodeContentBlock's
 // switch in claudeCodeAssistantMessage) — decodes into a message.Reasoning
-// part, is appended to history, and is emitted as EventReasoningDelta.
+// part, is appended to history AS PART OF THE SAME MESSAGE as the text that
+// follows it, and is emitted as EventReasoningDelta.
+//
+// The real `claude` binary streams the "thinking" block and the "text"
+// block that completes the same turn segment as TWO separate stream-json
+// "assistant" envelopes (see fakeclaude's "thinking" mode and
+// consumeClaudeCodeStream's pendingReasoning doc comment). Before the fix
+// this regresses, the engine appended one message.Message per envelope,
+// so a single reasoning turn persisted as two adjacent assistant
+// messages — one Reasoning-only, one Text-only — which a one-bubble-
+// per-message console rendered as two separate "Agent" bubbles for one
+// turn. The correct shape is ONE assistant message carrying both parts,
+// in emission order.
 func TestClaudeCodeThinkingBlockDecodesToReasoningPart(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "thinking")
 
@@ -1089,26 +1101,221 @@ func TestClaudeCodeThinkingBlockDecodesToReasoningPart(t *testing.T) {
 	}
 
 	hist := s.History()
-	// user prompt, assistant(thinking), assistant(text) = 3 messages.
-	if len(hist) != 3 {
-		t.Fatalf("History() len = %d, want 3: %+v", len(hist), hist)
+	// user prompt, assistant(reasoning+text merged into ONE message) = 2
+	// messages — NOT 3 (the pre-fix shape: user, assistant(thinking),
+	// assistant(text)).
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
 	}
-	reasoning, ok := hist[1].Parts[0].(*message.Reasoning)
-	if hist[1].Role != message.RoleAssistant || !ok || reasoning.Text != "Let me reason about this." {
-		t.Fatalf("hist[1] = %+v, want an assistant Reasoning(%q)", hist[1], "Let me reason about this.")
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant {
+		t.Fatalf("hist[1].Role = %q, want assistant", asst.Role)
+	}
+	if len(asst.Parts) != 2 {
+		t.Fatalf("hist[1].Parts = %+v, want exactly 2 parts (Reasoning then Text)", asst.Parts)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Let me reason about this." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Let me reason about this.")
 	}
 	if len(reasoning.ProviderData) == 0 {
 		t.Error("Reasoning.ProviderData is empty, want the thinking block's signature carried through")
 	}
+	text, ok := asst.Parts[1].(*message.Text)
+	if !ok || text.Text != "Here is my answer." {
+		t.Fatalf("hist[1].Parts[1] = %+v, want a Text(%q)", asst.Parts[1], "Here is my answer.")
+	}
 
-	var sawReasoningDelta bool
+	var sawReasoningDelta, sawTextDelta bool
 	for _, ev := range events {
 		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
 			sawReasoningDelta = true
 		}
+		if ev.Type == EventTextDelta && ev.Text == "Here is my answer." {
+			sawTextDelta = true
+		}
 	}
 	if !sawReasoningDelta {
 		t.Error("no EventReasoningDelta for the thinking block")
+	}
+	if !sawTextDelta {
+		t.Error("no EventTextDelta for the text block")
+	}
+
+	// Exactly one EventMessage for the whole merged turn (not one per
+	// envelope): proves the reasoning-only envelope was buffered, not
+	// flushed as its own message.
+	var messageEvents int
+	for _, ev := range events {
+		if ev.Type == EventMessage {
+			messageEvents++
+		}
+	}
+	if messageEvents != 1 {
+		t.Errorf("EventMessage count = %d, want 1 (one merged message for the turn)", messageEvents)
+	}
+}
+
+// TestClaudeCodeReasoningMergeDoesNotOverMerge drives fakeclaude's
+// "thinking_interleaved" sequence (text, then thinking, then the text that
+// completes THAT thinking block's own turn segment) and proves the
+// pendingReasoning merge in consumeClaudeCodeStream attaches ONLY forward:
+// the independent leading text stays its own message, and only the
+// reasoning + the text immediately after it merge into one. A merge rule
+// that instead swept every adjacent assistant envelope together (or
+// merged backward) would either over-merge this into a single message or
+// drop the leading text — this proves neither happens.
+func TestClaudeCodeReasoningMergeDoesNotOverMerge(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_interleaved")
+
+	msg, err := s.Prompt(context.Background(), "think about it, twice")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "And here is the rest." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant("First, a quick note."),
+	// assistant(reasoning+"And here is the rest." merged) = 3 messages.
+	if len(hist) != 3 {
+		t.Fatalf("History() len = %d, want 3: %+v", len(hist), hist)
+	}
+	if hist[1].Role != message.RoleAssistant || len(hist[1].Parts) != 1 || hist[1].Parts.Text() != "First, a quick note." {
+		t.Fatalf("hist[1] = %+v, want a standalone assistant Text(%q)", hist[1], "First, a quick note.")
+	}
+	asst := hist[2]
+	if asst.Role != message.RoleAssistant || len(asst.Parts) != 2 {
+		t.Fatalf("hist[2] = %+v, want an assistant message with exactly 2 parts", asst)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Now let me reason about the rest." {
+		t.Fatalf("hist[2].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Now let me reason about the rest.")
+	}
+	text, ok := asst.Parts[1].(*message.Text)
+	if !ok || text.Text != "And here is the rest." {
+		t.Fatalf("hist[2].Parts[1] = %+v, want a Text(%q)", asst.Parts[1], "And here is the rest.")
+	}
+}
+
+// TestClaudeCodeReasoningMergeSurvivesRateLimitEvent drives fakeclaude's
+// "thinking_ratelimit_text" sequence (thinking, then a rate_limit_event,
+// then the text that completes the thinking block's own turn segment) and
+// proves the pre-switch flush guard in consumeClaudeCodeStream does not
+// treat a content-free "rate_limit_event" as ending the turn segment. A
+// guard that flushes pendingReasoning on every non-"assistant" envelope
+// re-splits the turn right here — exactly on subscription/usage sessions,
+// where rate_limit_events are common (see rate_limit_event's own doc
+// comment: "a long-running turn can see its own limits shift mid-turn").
+func TestClaudeCodeReasoningMergeSurvivesRateLimitEvent(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_ratelimit_text")
+
+	msg, err := s.Prompt(context.Background(), "think about it, with a rate limit event")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "Here is my answer after the rate-limit event." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning+text merged into ONE message) = 2
+	// messages — NOT 3 (a rate_limit_event wrongly flushing the buffer
+	// between the thinking and text envelopes).
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant || len(asst.Parts) != 2 {
+		t.Fatalf("hist[1] = %+v, want an assistant message with exactly 2 parts", asst)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning across a rate-limit event." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Reasoning across a rate-limit event.")
+	}
+	text, ok := asst.Parts[1].(*message.Text)
+	if !ok || text.Text != "Here is my answer after the rate-limit event." {
+		t.Fatalf("hist[1].Parts[1] = %+v, want a Text(%q)", asst.Parts[1], "Here is my answer after the rate-limit event.")
+	}
+
+	// The rate_limit_event itself must still be mapped onto
+	// SubscriptionUsage — this test does not just prove the merge
+	// survives it, but that the event was genuinely processed, not
+	// silently skipped.
+	usage := s.SubscriptionUsage()
+	if usage == nil || len(usage.Windows) == 0 {
+		t.Error("SubscriptionUsage() is empty, want the rate_limit_event mapped through")
+	}
+}
+
+// TestClaudeCodeReasoningFlushesStandaloneOnCrash drives fakeclaude's
+// "thinking_then_crash" sequence (a thinking block immediately followed by
+// a nonzero exit with no "result" event at all) and proves
+// flushPendingReasoning's post-loop flush: the buffered reasoning must
+// survive as a standalone assistant message rather than being silently
+// dropped when consumeClaudeCodeStream's scanner loop ends via EOF/crash
+// before any envelope ever completes its turn segment.
+func TestClaudeCodeReasoningFlushesStandaloneOnCrash(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_then_crash")
+
+	_, err := s.Prompt(context.Background(), "think about it, then crash")
+	if err == nil {
+		t.Fatal("Prompt returned no error for a child that crashed without a result event")
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning only, flushed standalone) = 2
+	// messages. NOT 1 (the reasoning silently dropped).
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if asst.Role != message.RoleAssistant || len(asst.Parts) != 1 {
+		t.Fatalf("hist[1] = %+v, want a standalone assistant message with exactly 1 part", asst)
+	}
+	reasoning, ok := asst.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning right before a crash." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", asst.Parts[0], "Reasoning right before a crash.")
+	}
+}
+
+// TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary drives
+// fakeclaude's "thinking_then_subagent" sequence (a top-level thinking
+// block, parent_tool_use_id "", immediately followed by an assistant
+// envelope on a DIFFERENT parent_tool_use_id) and proves
+// flushPendingReasoning's different-parent flush: the buffered reasoning
+// must flush standalone rather than merge onto content from a different
+// thread.
+func TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_then_subagent")
+
+	msg, err := s.Prompt(context.Background(), "think, then spawn a subagent")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if got := msg.Parts.Text(); got != "Working inside the subagent." {
+		t.Errorf("final message text = %q", got)
+	}
+
+	hist := s.History()
+	// user prompt, assistant(reasoning only, parent ""),
+	// assistant("Working inside the subagent.", parent "toolu_parent") = 3
+	// messages — NOT a 2-message merge across the parent boundary.
+	if len(hist) != 3 {
+		t.Fatalf("History() len = %d, want 3: %+v", len(hist), hist)
+	}
+	reasoningMsg := hist[1]
+	if reasoningMsg.Role != message.RoleAssistant || len(reasoningMsg.Parts) != 1 || reasoningMsg.ParentToolUseID != "" {
+		t.Fatalf("hist[1] = %+v, want a standalone top-level assistant Reasoning message", reasoningMsg)
+	}
+	reasoning, ok := reasoningMsg.Parts[0].(*message.Reasoning)
+	if !ok || reasoning.Text != "Reasoning about which subagent to spawn." {
+		t.Fatalf("hist[1].Parts[0] = %+v, want a Reasoning(%q)", reasoningMsg.Parts[0], "Reasoning about which subagent to spawn.")
+	}
+	subagentMsg := hist[2]
+	if subagentMsg.Role != message.RoleAssistant || subagentMsg.ParentToolUseID != "toolu_parent" || subagentMsg.Parts.Text() != "Working inside the subagent." {
+		t.Fatalf("hist[2] = %+v, want an assistant Text on parent toolu_parent", subagentMsg)
 	}
 }
 

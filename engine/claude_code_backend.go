@@ -55,19 +55,29 @@
 //     (claudeCodeCLISessionID) for --resume on this harness session's next
 //     delegated turn. Any other subtype (e.g. "api_retry") is activity
 //     only — observed, never fatal.
-//   - "assistant": one COMPLETE API-level assistant message (text, thinking,
-//     and/or tool_use content blocks together) — NOT a token-by-token
-//     delta; this driver does not pass --include-partial-messages, so
-//     there is nothing more granular to forward. Decoded into one
-//     message.Message (Reasoning, Text, and ToolCall parts, in order),
-//     appended via plain Session.append (no usage — see the usage-mapping
-//     note below) and emitted as EventMessage, with one EventReasoningDelta
-//     per non-empty thinking part, one EventTextDelta per non-empty text
-//     part (folding the whole block's text into the message in a single
-//     "delta", the closest honest match to the native
-//     EventTextDelta/EventReasoningDelta contract given the CLI hands over
-//     complete blocks), and one EventToolStart per tool_use part. The
-//     envelope's own parent_tool_use_id (null at top level, the spawning
+//   - "assistant": one COMPLETE content block (text, thinking, or a single
+//     tool_use), NOT a token-by-token delta; this driver does not pass
+//     --include-partial-messages, so there is nothing more granular to
+//     forward. A real `claude` binary streams each content block of one
+//     logical model turn as its OWN "assistant" envelope — most visibly, a
+//     "thinking" block arrives as a complete envelope on its own,
+//     immediately followed by a SEPARATE envelope for whatever the model
+//     emits next. consumeClaudeCodeStream's pendingReasoning buffers a
+//     reasoning-only envelope and reattaches it to the front of the very
+//     next envelope's own parts, so a reasoning turn still persists (and
+//     replays) as ONE message.Message with a Reasoning part followed by
+//     whatever completed that turn segment (Text and/or ToolCall parts),
+//     matching message.Message.Parts's own documented shape — rather than
+//     two adjacent assistant messages a one-bubble-per-message console
+//     would render as two separate turns. Appended via plain
+//     Session.append (no usage — see the usage-mapping note below) and
+//     emitted as EventMessage, with one EventReasoningDelta per non-empty
+//     thinking part, one EventTextDelta per non-empty text part (folding
+//     the whole block's text into the message in a single "delta", the
+//     closest honest match to the native EventTextDelta/EventReasoningDelta
+//     contract given the CLI hands over complete blocks), and one
+//     EventToolStart per tool_use part. The envelope's own
+//     parent_tool_use_id (null at top level, the spawning
 //     tool_use id inside a subagent's own turn) rides onto the appended
 //     message as Message.ParentToolUseID, unmodified.
 //   - "user": Claude Code's own tool execution results, arriving in the
@@ -1017,6 +1027,72 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// any realistic single stream-json line without an unbounded read.
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
+	// pendingReasoning buffers the Parts of an "assistant" envelope whose
+	// ONLY content is a "thinking"/"redacted_thinking" block — see the
+	// "assistant" case below and reasoningOnlyParts. A real `claude`
+	// binary streams every content block of one logical model-turn
+	// segment as its OWN top-level "assistant" envelope: a "thinking"
+	// block arrives as a complete envelope on its own, immediately
+	// followed by a SEPARATE envelope for whatever the model emits next
+	// (the answer text, a tool_use, or more thinking), even though
+	// Anthropic's own Messages API returns all of it as ONE assistant
+	// message with multiple content blocks. Appending each envelope as
+	// its own message.Message therefore persisted a reasoning turn as
+	// two adjacent assistant messages — one Reasoning-only, one
+	// Text-only — which a one-bubble-per-message console rendered as two
+	// separate "Agent" bubbles for a single turn ("Thought for a few
+	// seconds" then the answer). Buffering a reasoning-only envelope and
+	// reattaching it to the FRONT of the next envelope's own parts
+	// (below) restores the one-message-per-turn-segment shape this
+	// file's event-mapping doc above already assumed.
+	//
+	// Durability: this narrows the crash-durability grain for a
+	// reasoning-only envelope from "one content block" to "one turn
+	// segment" — a process crash in the brief window between reading this
+	// stdout line and the next one (both already written by the child;
+	// no external call or delay separates them) now loses the buffered
+	// reasoning instead of leaving it journaled as an orphaned message.
+	// This is not a new class of risk, only a narrower window on an
+	// already-accepted one: this driver's durability was never per-token
+	// (the "assistant" case above is NOT a token-by-token delta — nothing
+	// is durable before a whole content block has been read), and a turn
+	// that dies mid-stream with an orphaned final message is an existing,
+	// named failure mode the engine surfaces as such rather than
+	// preventing (see server/journal.go's recordTurnEnd doc comment,
+	// "final assistant message reasoning-only, no text, no tool call").
+	var pendingReasoning message.Parts
+	var pendingReasoningParent string
+
+	// flushPendingReasoning appends any buffered reasoning as a
+	// standalone assistant message. This is the uncommon path: it fires
+	// only when a differently-parented envelope interrupts a buffered
+	// thinking block (a subagent frame interleaving with the main
+	// thread's own reasoning — never observed live against a real
+	// binary, but never silently dropped either) or when the stream ends
+	// before a reasoning-only envelope is ever followed by another one
+	// (an aborted or crashed turn). The common case — thinking
+	// immediately followed by the rest of its own turn segment — never
+	// reaches here; it merges instead, in the "assistant" case below.
+	flushPendingReasoning := func() {
+		if len(pendingReasoning) == 0 {
+			return
+		}
+		msg := message.Message{
+			ID:              newID("msg"),
+			Role:            message.RoleAssistant,
+			Parts:           pendingReasoning,
+			Model:           model,
+			Origin:          message.OriginClaudeCode,
+			CreatedAt:       time.Now().UTC(),
+			ParentToolUseID: pendingReasoningParent,
+		}
+		s.append(msg)
+		s.emit(Event{Type: EventMessage, Message: &msg})
+		finalMsg = &msg
+		pendingReasoning = nil
+		pendingReasoningParent = ""
+	}
+
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -1028,6 +1104,24 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// turn over one malformed/unexpected line from the child —
 			// see this file's package doc on permissive decoding.
 			continue
+		}
+		if (env.Type == "user" || env.Type == "result") && len(pendingReasoning) > 0 {
+			// Only a "user" (tool_result) or "result" (turn-terminal)
+			// envelope genuinely ends the turn segment a buffered
+			// thinking block started — either means the model turn that
+			// owns this reasoning is over, so flush now rather than risk
+			// losing it if the turn ends abnormally right after.
+			//
+			// Deliberately NOT any non-"assistant" type: "system" and
+			// "rate_limit_event" are content-free activity that can
+			// legitimately land BETWEEN a "thinking" envelope and the
+			// text envelope that completes its own turn segment — see
+			// rate_limit_event's own doc comment ("a long-running turn
+			// can see its own limits shift mid-turn"). Flushing on those
+			// would re-split the very turn this buffer exists to keep
+			// merged, exactly on subscription/usage sessions where
+			// rate_limit_events are common.
+			flushPendingReasoning()
 		}
 		switch env.Type {
 		case "system":
@@ -1047,6 +1141,42 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		case "assistant":
 			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
+				continue
+			}
+			if len(pendingReasoning) > 0 {
+				if env.ParentToolUseID == pendingReasoningParent {
+					// The common case: this envelope is the rest of the
+					// turn segment the buffered thinking block started —
+					// reattach it to the front rather than flush it as
+					// its own message. A fresh backing array avoids
+					// aliasing either slice's own storage.
+					merged := make(message.Parts, 0, len(pendingReasoning)+len(msg.Parts))
+					merged = append(merged, pendingReasoning...)
+					merged = append(merged, msg.Parts...)
+					msg.Parts = merged
+				} else {
+					// A different parent thread interrupted the buffered
+					// thinking block: flush it standalone rather than
+					// merge reasoning from one thread onto content from
+					// another.
+					flushPendingReasoning()
+				}
+				pendingReasoning = nil
+				pendingReasoningParent = ""
+			}
+			if reasoningOnlyParts(msg.Parts) {
+				// Buffer it — do not append or emit EventMessage yet —
+				// and wait for the envelope that completes this turn
+				// segment (see pendingReasoning's own doc comment). Still
+				// emit EventReasoningDelta immediately below so live
+				// streaming UX is unaffected by the buffering.
+				pendingReasoning = msg.Parts
+				pendingReasoningParent = env.ParentToolUseID
+				for _, p := range msg.Parts {
+					if r, ok := p.(*message.Reasoning); ok && r.Text != "" {
+						s.emit(Event{Type: EventReasoningDelta, Text: r.Text})
+					}
+				}
 				continue
 			}
 			s.append(msg)
@@ -1149,7 +1279,28 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		// Any other top-level "type" (this driver has none documented
 		// beyond the four above) is inert activity, per the package doc.
 	}
+	// The scanner loop ended without ever reaching "result" (a crashed or
+	// truncated stream) — flush any buffered thinking block now rather
+	// than silently drop it. See flushPendingReasoning's own doc comment.
+	flushPendingReasoning()
 	return finalMsg, started, turnErr
+}
+
+// reasoningOnlyParts reports whether parts is non-empty and every part is
+// a *message.Reasoning — the shape claudeCodeAssistantMessage produces for
+// an "assistant" envelope carrying nothing but "thinking"/
+// "redacted_thinking" blocks. See pendingReasoning's own doc comment in
+// consumeClaudeCodeStream.
+func reasoningOnlyParts(parts message.Parts) bool {
+	if len(parts) == 0 {
+		return false
+	}
+	for _, p := range parts {
+		if _, ok := p.(*message.Reasoning); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // claudeCodeEnvelope is the outer discriminator every line of `claude
