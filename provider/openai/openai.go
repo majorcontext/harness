@@ -342,8 +342,9 @@ type stream struct {
 	requestMetadata *provider.RequestMetadata
 	// recoverChainMiss retries one immediate incremental chain miss as the
 	// immutable complete request on the same socket. It is nil for HTTP.
-	recoverChainMiss func(visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error)
+	recoverChainMiss func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error)
 	visibleOutput    bool
+	responseFrames   int
 
 	queue []provider.Event
 	done  bool
@@ -392,10 +393,11 @@ func (s *stream) Next() (provider.Event, error) {
 			// retryable.
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
+		s.responseFrames++
 		if err := s.handle(name, data); err != nil {
 			var miss *previousResponseNotFoundError
 			if errors.As(err, &miss) && s.recoverChainMiss != nil {
-				source, metadata, recoverErr := s.recoverChainMiss(s.visibleOutput, err)
+				source, metadata, recoverErr := s.recoverChainMiss(s.responseFrames == 1, s.visibleOutput, err)
 				s.recoverChainMiss = nil
 				if recoverErr != nil {
 					return provider.Event{}, recoverErr
@@ -406,6 +408,7 @@ func (s *stream) Next() (provider.Event, error) {
 				s.items = nil
 				s.usage = provider.Usage{}
 				s.hasToolCall = false
+				s.responseFrames = 0
 				s.queue = nil
 				continue
 			}
@@ -503,6 +506,9 @@ func (e *previousResponseNotFoundError) Error() string {
 
 func streamError(code, message string) error {
 	if code == "previous_response_not_found" {
+		if message == "" {
+			message = "previous response not found"
+		}
 		return &previousResponseNotFoundError{message: message}
 	}
 	err := fmt.Errorf("openai: %s (%s)", message, code)
@@ -700,6 +706,12 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("openai: stream error: %s", data)
 		}
 		switch {
+		case ev.Response.Error.Code == "previous_response_not_found":
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
+		case ev.Error.Code == "previous_response_not_found":
+			return streamError(ev.Error.Code, ev.Error.Message)
+		case ev.Code == "previous_response_not_found":
+			return streamError(ev.Code, ev.Message)
 		case ev.Response.Error.Message != "":
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
 		case ev.Error.Message != "":

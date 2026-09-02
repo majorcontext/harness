@@ -31,14 +31,15 @@ type wsFrameSource struct {
 	// does not double-report. name is the event's wire type. A clean terminal
 	// only releases the socket here; stream.handle publishes lineage after it
 	// assembles the canonical assistant message.
-	onTerminal func(name string, data []byte)
+	onTerminal func(name string, data []byte, first bool)
 	// onBroken fires when the connection dies before a terminal event is
 	// observed: a read error, or Close() called while the stream is still
 	// mid-flight (context canceled, engine gave up on the turn). It never
 	// fires after onTerminal has already fired for this source.
 	onBroken func(err error)
 
-	terminal bool
+	terminal   bool
+	framesRead int
 }
 
 // next returns the next (name, data) pair, buffered first-frame included.
@@ -71,6 +72,9 @@ func (w *wsFrameSource) observe(name string, data []byte, err error) {
 	if w.terminal {
 		return
 	}
+	if err == nil {
+		w.framesRead++
+	}
 	switch {
 	case err != nil:
 		w.terminal = true
@@ -80,7 +84,7 @@ func (w *wsFrameSource) observe(name string, data []byte, err error) {
 	case isWSTerminalEvent(name):
 		w.terminal = true
 		if w.onTerminal != nil {
-			w.onTerminal(name, data)
+			w.onTerminal(name, data, w.framesRead == 1)
 		}
 	}
 }

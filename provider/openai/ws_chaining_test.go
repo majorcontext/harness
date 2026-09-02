@@ -606,3 +606,59 @@ func TestPreviousResponseNotFoundSecondFailureEscapes(t *testing.T) {
 		t.Fatalf("extra websocket frames = %d, want exactly one local retry", got)
 	}
 }
+
+func TestPreviousResponseNotFoundAfterResponseCreatedDoesNotRetry(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-after-created")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"response.created","response":{"id":"resp_started"}}`,
+		chainMissFrame(),
+	}}
+	// Keep the old, incorrect retry path bounded: it consumes this script.
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_wrong_retry", "wrong")}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("chain-miss-after-created", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	<-server.frames
+	events, streamErr := drainLineageStream(stream)
+	if streamErr == nil || streamErr == io.EOF || !strings.Contains(streamErr.Error(), "previous_response_not_found") {
+		t.Fatalf("stream error = %v, want chain miss after preceding response.created to escape", streamErr)
+	}
+	if len(events) != 1 || events[0].Type != provider.EventActivity {
+		t.Fatalf("events = %+v, want only response.created activity before chain miss", events)
+	}
+	if got := len(server.frames); got != 0 {
+		t.Fatalf("extra websocket frames = %d, want no local retry when chain miss is not first frame", got)
+	}
+}
+
+func TestPreviousResponseNotFoundCodeOnlyDoesNotLeaveEntryBusy(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-code-only")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"error","code":"previous_response_not_found"}`,
+	}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("chain-miss-code-only", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	incremental := decodeResponseCreate(t, <-server.frames)
+	fullRetry := decodeResponseCreate(t, <-server.frames)
+	if incremental.PreviousResponseID == "" || fullRetry.PreviousResponseID != "" {
+		t.Fatalf("requests = incremental previous %q, retry previous %q; want chained request then complete recovery", incremental.PreviousResponseID, fullRetry.PreviousResponseID)
+	}
+	if terminal := events[len(events)-1]; terminal.Type != provider.EventDone {
+		t.Fatalf("terminal event = %+v, want recovered EventDone", terminal)
+	}
+	entry := client.wsPoolFor().entryFor("chain-miss-code-only")
+	entry.mu.Lock()
+	busy := entry.busy
+	entry.mu.Unlock()
+	if busy {
+		t.Fatal("pool entry remains busy after code-only chain-miss recovery")
+	}
+}

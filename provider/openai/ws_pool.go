@@ -244,10 +244,10 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			conn:        conn,
 			idleTimeout: p.idleTimeout,
 			buffered:    &wsFrame{name: name, data: data},
-			onTerminal: func(name string, data []byte) {
-				// Keep an immediate first chain miss on the socket until stream.Next
+			onTerminal: func(name string, data []byte, first bool) {
+				// Keep only a first-frame chain miss on the socket until stream.Next
 				// replaces it with the immutable complete request below.
-				if chainedRequest && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
+				if first && chainedRequest && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
 					return
 				}
 				entry.mu.Lock()
@@ -320,13 +320,16 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		},
 	}
 	if chainedRequest {
-		st.recoverChainMiss = func(visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error) {
+		st.recoverChainMiss = func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error) {
 			recoveryAttempted = true
 			p.clearLineage(entry, generation)
-			if visible {
+			if !first || visible {
 				p.invalidate(entry)
 				p.release(entry)
-				return nil, nil, provider.MarkStreamTruncated(chainErr)
+				if visible {
+					return nil, nil, provider.MarkStreamTruncated(chainErr)
+				}
+				return nil, nil, chainErr
 			}
 			if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
 				p.handleTransportError(entry, err)
