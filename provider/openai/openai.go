@@ -130,11 +130,20 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+type preparedRequest struct {
+	body    []byte
+	url     string
+	headers http.Header
+	client  *http.Client
+}
+
+func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
-	wire, err := transcodeRequestFamily(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas)
+	wire, err := transcodeRequestFamilyWithOptions(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas, transcodeRequestOptions{
+		allowEmptyInput: allowEmptyInput,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -142,14 +151,27 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
+	return &preparedRequest{
+		body: body,
+		url:  responsesURL(c.BaseURL, c.ResponsesPath),
+		headers: http.Header{
+			"Content-Type":  []string{"application/json"},
+			"Accept":        []string{"text/event-stream"},
+			"Authorization": []string{"Bearer " + c.APIKey},
+		},
+		client: c.httpClient(),
+	}, nil
+}
 
-	url := responsesURL(c.BaseURL, c.ResponsesPath)
-	headers := http.Header{
-		"Content-Type":  []string{"application/json"},
-		"Accept":        []string{"text/event-stream"},
-		"Authorization": []string{"Bearer " + c.APIKey},
+func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	prepared, err := c.prepareRequest(req, false)
+	if err != nil {
+		return nil, err
 	}
-	hc := c.httpClient()
+	body := prepared.body
+	url := prepared.url
+	headers := prepared.headers
+	hc := prepared.client
 
 	// The websocket transport sends this SAME url/headers/body — the
 	// Authorization header included — so whatever credential injection
@@ -195,6 +217,41 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		family:   c.family(),
 		subUsage: c.codexSubscriptionUsage(resp.Header),
 	}, nil
+}
+
+// Prewarm prepares a Codex websocket session without generating assistant
+// output. Other families and transports do not have startup state to prepare.
+func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
+	if c.family() != CodexFamily || !c.UseWebSocketTransport || req.SessionKey == "" {
+		return nil
+	}
+	prepared, err := c.prepareRequest(req, true)
+	if err != nil {
+		return err
+	}
+	st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
+		SessionKey: req.SessionKey,
+		URL:        prepared.url,
+		Headers:    prepared.headers,
+		Body:       prepared.body,
+		Model:      req.Model,
+		Family:     c.family(),
+		HTTPClient: prepared.client,
+		Prewarm:    true,
+	})
+	if !ok {
+		return errors.New("openai: websocket prewarm failed")
+	}
+	defer st.Close()
+	for {
+		_, err := st.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // codexSubscriptionUsage reads h for the x-codex-* subscription-usage

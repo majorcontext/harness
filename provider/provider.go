@@ -185,6 +185,12 @@ type Stream interface {
 	Close() error
 }
 
+// StartupPrewarmer is an optional provider capability that prepares transport-local
+// state before the first model call. Prewarm must not emit provider events.
+type StartupPrewarmer interface {
+	Prewarm(context.Context, *Request) error
+}
+
 // Provider is one model API family.
 type Provider interface {
 	// Name is the provider family key: it matches ModelRef.Provider and the

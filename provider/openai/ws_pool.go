@@ -137,6 +137,7 @@ type wsStreamRequest struct {
 	Model      message.ModelRef
 	Family     string
 	HTTPClient *http.Client
+	Prewarm    bool
 }
 
 // stream attempts to serve req over this pool's session-affine websocket,
@@ -212,7 +213,12 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	var createOptions responseCreateOptions
 	entry.mu.Lock()
 	generation := entry.generation
-	if req.Family == CodexFamily && entry.lineage != nil &&
+	if req.Prewarm {
+		generate := false
+		createOptions.Input = make([]json.RawMessage, 0)
+		createOptions.InputSet = true
+		createOptions.Generate = &generate
+	} else if req.Family == CodexFamily && entry.lineage != nil &&
 		entry.lineage.responseID != "" &&
 		entry.lineage.generation == generation &&
 		responsesRequestPropertiesMatch(entry.lineage.request, &completeRequest) {
@@ -298,10 +304,14 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 				p.clearLineage(entry, generation)
 				return
 			}
-			outputItems, err := transcodeMessage(assistant, false, req.Family)
-			if err != nil {
-				p.clearLineage(entry, generation)
-				return
+			var outputItems []json.RawMessage
+			if !req.Prewarm {
+				var err error
+				outputItems, err = transcodeMessage(assistant, false, req.Family)
+				if err != nil {
+					p.clearLineage(entry, generation)
+					return
+				}
 			}
 			if outputItems == nil {
 				outputItems = make([]json.RawMessage, 0)

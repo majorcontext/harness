@@ -250,7 +250,15 @@ func transcodeRequest(req *provider.Request) (*apiRequest, error) {
 // on out.Tools (Client.SanitizeToolSchemas / config.Provider's field of the
 // same name) — false (the default) leaves every schema byte-identical to
 // req.Tools, matching this adapter's behavior before the field existed.
+type transcodeRequestOptions struct {
+	allowEmptyInput bool
+}
+
 func transcodeRequestFamily(req *provider.Request, family string, omitParams []string, sanitizeSchemas bool) (*apiRequest, error) {
+	return transcodeRequestFamilyWithOptions(req, family, omitParams, sanitizeSchemas, transcodeRequestOptions{})
+}
+
+func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omitParams []string, sanitizeSchemas bool, options transcodeRequestOptions) (*apiRequest, error) {
 	out := &apiRequest{
 		Model:           req.Model.Model,
 		Instructions:    strings.Join(req.System, "\n\n"),
@@ -341,7 +349,10 @@ func transcodeRequestFamily(req *provider.Request, family string, omitParams []s
 		out.Input = append(out.Input, items...)
 	}
 	if len(out.Input) == 0 {
-		return nil, fmt.Errorf("openai: request has no transcodable messages")
+		if !options.allowEmptyInput {
+			return nil, fmt.Errorf("openai: request has no transcodable messages")
+		}
+		out.Input = make([]json.RawMessage, 0)
 	}
 	applyOmitResponseParams(out, omitParams)
 	return out, nil
