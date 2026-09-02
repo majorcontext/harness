@@ -99,19 +99,8 @@ spawn a replacement.
 Fail closed unless the CLI explicitly selects an allowed unauthenticated mode.
 Do not infer unauthenticated service from an empty token inside `server.New`.
 
-Keep monitor HTML unauthenticated because it contains no secret. Keep API
-routes under the normal auth policy. Apply CORS only from configured origins.
-
-## Session monitor
-
-`GET /monitor` serves bytes supplied through `Options.MonitorPage`.
-`GET /{$}` redirects only when that page exists. Do not add a catch-all
-route.
-
-Keep the embedded page's CSP same-origin. Cross-origin monitoring uses a
-separately hosted page.
-
-Read `tools/AGENTS.md` before changing monitor behavior.
+Keep `/health` unauthenticated. Keep every other route under the normal
+auth policy. Apply CORS only from configured origins.
 
 ## Serve-mode latency diagnostics
 

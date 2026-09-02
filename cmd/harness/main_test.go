@@ -142,35 +142,6 @@ func TestEnvUnauthenticated(t *testing.T) {
 	}
 }
 
-// TestMonitorTerminalHint covers monitorTerminalHint's full decision table
-// (the untestable half — the real os.Stderr.Stat() tty check — is
-// deliberately excluded via the explicit isTTY bool; see stderrIsTerminal's
-// own doc comment for why that piece is manually verified instead).
-func TestMonitorTerminalHint(t *testing.T) {
-	cases := []struct {
-		name           string
-		monitorEnabled bool
-		isTTY          bool
-		token          string
-		want           string
-	}{
-		{"tty, monitor enabled, token set: tokenized URL", true, true, "secret-tok", "monitor: http://localhost:4096/monitor#t=secret-tok\n"},
-		{"tty, monitor enabled, NO token (loopback-Unauthenticated): plain URL, no #t= at all", true, true, "", "monitor: http://localhost:4096/monitor\n"},
-		{"not a tty: nothing printed, even with a token", true, false, "secret-tok", ""},
-		{"monitor not enabled: nothing printed, even on a tty with a token", false, true, "secret-tok", ""},
-		{"neither tty nor monitor enabled: nothing printed", false, false, "secret-tok", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf strings.Builder
-			monitorTerminalHint(&buf, tc.monitorEnabled, tc.isTTY, "localhost:4096", tc.token)
-			if got := buf.String(); got != tc.want {
-				t.Errorf("monitorTerminalHint(...) wrote %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestSessionDir(t *testing.T) {
 	t.Run("no-save disables persistence", func(t *testing.T) {
 		t.Setenv("HARNESS_SESSION_DIR", "/somewhere")
