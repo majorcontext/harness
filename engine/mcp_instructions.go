@@ -69,8 +69,24 @@ func renderMCPInstructions(reg MCPRegistry) string {
 	if !ok {
 		return ""
 	}
+	// Drop an entry with nothing to say BEFORE anything is written. The
+	// contract above is "" when no connected server set instructions, and
+	// this function takes the narrow mcpInstructionsReader — it cannot
+	// assume its caller filtered the way MCPManager.Instructions does, and
+	// an unfiltered entry would otherwise render an empty <server> element
+	// and a block that says nothing at full prefix cost. Trimming once here
+	// also settles the display form for the write loop below.
 	entries := reader.Instructions()
-	if len(entries) == 0 {
+	kept := make([]MCPServerInstructions, 0, len(entries))
+	for _, e := range entries {
+		text := strings.TrimSpace(e.Text)
+		if text == "" {
+			continue
+		}
+		e.Text = text
+		kept = append(kept, e)
+	}
+	if len(kept) == 0 {
 		return ""
 	}
 	// Sort here as well as in MCPManager.Instructions. This string is a
@@ -78,7 +94,7 @@ func renderMCPInstructions(reg MCPRegistry) string {
 	// ordering: a registry that ever returned map order would otherwise
 	// hand a different system prompt to every session for the same set of
 	// servers, and the defect would show up only as a bill.
-	entries = append([]MCPServerInstructions(nil), entries...)
+	entries = kept
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	var b strings.Builder
 	b.WriteString(mcpInstructionsOpenTag)
@@ -97,7 +113,7 @@ func renderMCPInstructions(reg MCPRegistry) string {
 			b.WriteString("\"")
 		}
 		b.WriteString(">\n")
-		b.WriteString(neutralizeMCPInstructions(strings.TrimSpace(e.Text)))
+		b.WriteString(neutralizeMCPInstructions(e.Text))
 		b.WriteString("\n</server>")
 	}
 	b.WriteString("\n")

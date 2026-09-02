@@ -86,7 +86,17 @@ func TestRenderMCPInstructionsAbsentCases(t *testing.T) {
 		{"nil registry", nil},
 		{"registry without an instructions surface", plainRegistry{}},
 		{"no servers connected", &fakeInstructionsRegistry{}},
-		{"connected servers set no instructions", &fakeInstructionsRegistry{entries: nil}},
+		// An entry whose Text is empty or whitespace-only must not render a
+		// <server> element at all. MCPManager.Instructions already drops
+		// these, but renderMCPInstructions takes the narrow
+		// mcpInstructionsReader, so any other implementation can hand it
+		// one — and the doc promises "" for this case.
+		{"connected server set empty instructions", &fakeInstructionsRegistry{entries: []MCPServerInstructions{
+			{Name: "boxes-orchestration", Text: "", Tools: []string{"mcp__boxes-orchestration__spawn_box"}},
+		}}},
+		{"connected server set whitespace-only instructions", &fakeInstructionsRegistry{entries: []MCPServerInstructions{
+			{Name: "parcels", Text: " \n\t ", Tools: []string{"mcp__parcels__get_parcel"}},
+		}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
