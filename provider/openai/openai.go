@@ -334,6 +334,10 @@ type stream struct {
 	// incomplete" case below.
 	subUsage *message.SubscriptionUsage
 
+	// onComplete publishes transport-local response lineage after stream.handle
+	// has assembled a clean response.completed message. It is nil for HTTP.
+	onComplete func(responseID string, assistant *message.Message)
+
 	queue []provider.Event
 	done  bool
 }
@@ -558,6 +562,7 @@ func (s *stream) handle(name string, data []byte) error {
 		// response whose incomplete_details.reason maps to the stop reason.
 		var ev struct {
 			Response struct {
+				ID                string `json:"id"`
 				IncompleteDetails struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
@@ -595,9 +600,16 @@ func (s *stream) handle(name string, data []byte) error {
 		default:
 			stop = provider.StopEndTurn
 		}
+		if ev.Response.ID != "" {
+			s.respID = ev.Response.ID
+		}
+		assistant := s.assemble()
+		if name == "response.completed" && s.onComplete != nil {
+			s.onComplete(s.respID, assistant)
+		}
 		s.queue = append(s.queue, provider.Event{
 			Type:              provider.EventDone,
-			Message:           s.assemble(),
+			Message:           assistant,
 			StopReason:        stop,
 			Usage:             s.usage,
 			SubscriptionUsage: s.subUsage,

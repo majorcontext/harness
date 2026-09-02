@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
@@ -28,6 +29,13 @@ const (
 // drives wsPool's failure bookkeeping (see wsFrameSource.close).
 var errStreamClosedEarly = errors.New("openai: websocket stream closed before a terminal event")
 
+type wsLineage struct {
+	request     *apiRequest
+	responseID  string
+	outputItems []json.RawMessage
+	generation  uint64
+}
+
 // wsPoolEntry is one pooled session's websocket state — the Go analog of
 // opencode's ws-pool.ts PoolEntry. This session's next request reuses conn
 // as long as it is still open, younger than maxConnectionAge, and the
@@ -40,6 +48,8 @@ type wsPoolEntry struct {
 	busy           bool
 	fallback       bool // permanent: this session never uses ws again
 	streamFailures int
+	generation     uint64
+	lineage        *wsLineage
 	// subUsage is the subscription-usage snapshot captured off conn's own
 	// dial (upgrade response) headers — see codexSubscriptionUsageFromHeaders
 	// and dialResponsesWebSocket's doc comment. Only ever set for a
@@ -145,6 +155,10 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 
 	entry.mu.Lock()
 	if entry.fallback || entry.busy {
+		// A competing request falls back to HTTP. Invalidate the generation so
+		// the in-flight WebSocket completion cannot publish stale lineage.
+		entry.lineage = nil
+		entry.generation++
 		entry.mu.Unlock()
 		return nil, false
 	}
@@ -178,6 +192,8 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		entry.conn = newConn
 		entry.connectedAt = time.Now()
 		entry.subUsage = subUsage
+		entry.lineage = nil
+		entry.generation++
 		entry.mu.Unlock()
 		conn = newConn
 	} else {
@@ -186,7 +202,28 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		entry.mu.Unlock()
 	}
 
-	if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
+	var completeRequest apiRequest
+	if err := json.Unmarshal(req.Body, &completeRequest); err != nil {
+		p.invalidate(entry)
+		p.release(entry)
+		return nil, false
+	}
+
+	var createOptions responseCreateOptions
+	entry.mu.Lock()
+	generation := entry.generation
+	if req.Family == CodexFamily && entry.lineage != nil &&
+		entry.lineage.generation == generation &&
+		responsesRequestPropertiesMatch(entry.lineage.request, &completeRequest) {
+		if suffix, ok := incrementalInput(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
+			createOptions.PreviousResponseID = entry.lineage.responseID
+			createOptions.Input = suffix
+			createOptions.InputSet = true
+		}
+	}
+	entry.mu.Unlock()
+
+	if err := sendResponseCreate(ctx, conn, req.Body, createOptions); err != nil {
 		p.handleTransportError(entry, err)
 		p.release(entry)
 		return nil, false
@@ -229,6 +266,30 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		model:    req.Model,
 		family:   req.Family,
 		subUsage: subUsage,
+		onComplete: func(responseID string, assistant *message.Message) {
+			if req.Family != CodexFamily {
+				return
+			}
+			outputItems, err := transcodeMessage(assistant, false, req.Family)
+			if err != nil {
+				p.clearLineage(entry, generation)
+				return
+			}
+			if outputItems == nil {
+				outputItems = make([]json.RawMessage, 0)
+			}
+			entry.mu.Lock()
+			defer entry.mu.Unlock()
+			if entry.generation != generation {
+				return
+			}
+			entry.lineage = &wsLineage{
+				request:     &completeRequest,
+				responseID:  responseID,
+				outputItems: outputItems,
+				generation:  generation,
+			}
+		},
 	}, true
 }
 
@@ -282,6 +343,14 @@ func (p *wsPool) release(entry *wsPoolEntry) {
 	entry.mu.Unlock()
 }
 
+func (p *wsPool) clearLineage(entry *wsPoolEntry, generation uint64) {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.generation == generation {
+		entry.lineage = nil
+	}
+}
+
 // invalidate closes and clears entry's connection, if any, so the next
 // stream() call for this session dials fresh. Closing is best-effort: the
 // connection is already known bad, terminal, or about to be discarded
@@ -291,6 +360,8 @@ func (p *wsPool) invalidate(entry *wsPoolEntry) {
 	conn := entry.conn
 	entry.conn = nil
 	entry.connectedAt = time.Time{}
+	entry.lineage = nil
+	entry.generation++
 	entry.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")

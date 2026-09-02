@@ -28,7 +28,9 @@ type wsFrameSource struct {
 	// onTerminal fires exactly once, the first time a terminal event type
 	// is observed (from the buffered first frame or a later read) — never
 	// from Close, so a stream that is Closed after reaching Next() io.EOF
-	// does not double-report. name is the event's wire type.
+	// does not double-report. name is the event's wire type. A clean terminal
+	// only releases the socket here; stream.handle publishes lineage after it
+	// assembles the canonical assistant message.
 	onTerminal func(name string)
 	// onBroken fires when the connection dies before a terminal event is
 	// observed: a read error, or Close() called while the stream is still
