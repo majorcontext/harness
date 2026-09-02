@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -267,5 +268,51 @@ func TestLastUserMessageContentReturnsAttachments(t *testing.T) {
 
 	if text, blobs := lastUserMessageContent(history[:1]); text != "" || blobs != nil {
 		t.Errorf("assistant tail = (%q, %+v), want empty", text, blobs)
+	}
+}
+
+// TestEnqueuePromptDropsUnusableBlobs: a blob that cannot be delivered must
+// not make an empty prompt valid, and must not be counted in the operator
+// block's attachment marker.
+//
+// EnqueuePrompt used to check len(blobs) directly, so a caller passing a
+// single nil satisfied "empty text is fine when a blob came with it". The
+// queued prompt then persisted an unusable Blobs slice, and
+// operatorMessagesBlock announced "[1 attachment(s) attached below]" to the
+// model while promptParts skipped the nil on delivery — the marker
+// promising a file that never arrives, the same defect the claude-code
+// mid-turn drain had.
+func TestEnqueuePromptDropsUnusableBlobs(t *testing.T) {
+	s := NewSession(Config{SessionDir: t.TempDir()})
+
+	// Empty text plus only unusable blobs is an EMPTY prompt.
+	for _, blobs := range [][]*message.Blob{
+		{nil},
+		{{MediaType: "image/png"}},            // neither Data nor URL
+		{nil, {MediaType: "application/pdf"}}, // several, all unusable
+	} {
+		if _, _, err := s.EnqueuePrompt("", "", blobs...); !errors.Is(err, ErrEmptyPromptText) {
+			t.Errorf("EnqueuePrompt(%v) error = %v, want ErrEmptyPromptText", blobs, err)
+		}
+	}
+	if q := s.QueuedPrompts(); len(q) != 0 {
+		t.Fatalf("queue = %+v, want nothing enqueued", q)
+	}
+
+	// A real blob beside an unusable one enqueues, carrying only the real
+	// one — so the marker counts what will actually be delivered.
+	real := &message.Blob{MediaType: "image/png", Data: []byte("\x89PNG\r\n\x1a\n")}
+	if _, _, err := s.EnqueuePrompt("look", "", nil, real); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+	q := s.QueuedPrompts()
+	if len(q) != 1 {
+		t.Fatalf("queue = %d prompts, want 1", len(q))
+	}
+	if len(q[0].Blobs) != 1 || q[0].Blobs[0] != real {
+		t.Errorf("queued blobs = %+v, want only the deliverable one", q[0].Blobs)
+	}
+	if block := operatorMessagesBlock(q, operatorContextTask); !strings.Contains(block, "[1 attachment(s) attached below]") {
+		t.Errorf("operator block = %q, want it to count ONE attachment", block)
 	}
 }

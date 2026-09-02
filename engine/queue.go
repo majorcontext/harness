@@ -207,14 +207,44 @@ var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or wh
 // rule, rather than a second near-identical method growing beside it. A
 // prompt carrying at least one blob is valid with EMPTY text: an uploaded
 // screenshot with nothing typed beside it is a real prompt, not an empty one.
+// usablePromptBlobs drops the blobs a queued prompt cannot actually deliver:
+// a nil entry, and one carrying neither Data nor URL (every provider
+// transcoder errors on that shape regardless of media type — see
+// message/wire_normalize.go's intersection comment).
+//
+// It runs BEFORE the empty-prompt check, because the raw count is not a
+// count of attachments. A caller passing a single nil would otherwise
+// satisfy "empty text is fine when a blob came with it", persist a prompt
+// with an unusable Blobs slice, and then have operatorMessagesBlock
+// announce "[1 attachment(s) attached below]" to the model while
+// promptParts silently skipped the nil — the marker promising a file that
+// never arrives, which is the same defect the claude-code drain had.
+//
+// Returns nil for an all-unusable input, so len() answers "how many
+// attachments will really be delivered".
+func usablePromptBlobs(blobs []*message.Blob) []*message.Blob {
+	usable := make([]*message.Blob, 0, len(blobs))
+	for _, b := range blobs {
+		if b == nil || (len(b.Data) == 0 && b.URL == "") {
+			continue
+		}
+		usable = append(usable, b)
+	}
+	if len(usable) == 0 {
+		return nil
+	}
+	return usable
+}
+
 func (s *Session) EnqueuePrompt(text string, messageID string, blobs ...*message.Blob) (id int64, resolvedMessageID string, err error) {
 	trimmed := strings.TrimSpace(text)
-	if trimmed == "" && len(blobs) == 0 {
+	usable := usablePromptBlobs(blobs)
+	if trimmed == "" && len(usable) == 0 {
 		return 0, "", ErrEmptyPromptText
 	}
 	resolved := ResolveMessageID(messageID)
 	s.mu.Lock()
-	p := s.enqueueMemoryOnlyLocked(trimmed, resolved, blobs...)
+	p := s.enqueueMemoryOnlyLocked(trimmed, resolved, usable...)
 	s.persistPromptQueueLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs})
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
