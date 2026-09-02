@@ -2350,18 +2350,20 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "413":
+        "400":
           description: >
-            The request body exceeds 33554432 bytes and was refused before
-            being decoded — blob `data` is base64 and decoding it allocates,
-            so an oversized body is stopped at the read rather than after
-            the cost is paid. Distinct from the per-attachment 400s in
-            `parts`: this one says nothing about any individual attachment.
+            The body is malformed, `parts` is empty, or an attachment is
+            unusable — an unsupported media type, a url instead of inline
+            `data`, bytes that are not the type they claim, or one
+            attachment past 20971520 bytes. Each is a judgment about a
+            specific part, made after the body is decoded; contrast the 413
+            below, which is about the request as a whole. The error message
+            names which attachment and why.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409":
           description: >
             Another currently-running session holds the same workdir and
@@ -2369,6 +2371,16 @@ paths:
             session set workdir_isolation="worktree" (the error names the
             holder session). Same-session busy (another prompt or a running
             goal loop) no longer reaches this response — see the 202 case.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: >
+            The request body exceeds 33554432 bytes and was refused before
+            being decoded — blob `data` is base64 and decoding it allocates,
+            so an oversized body is stopped at the read rather than after
+            the cost is paid. Distinct from the per-attachment 400s in
+            `parts`: this one says nothing about any individual attachment.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
