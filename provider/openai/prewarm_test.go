@@ -58,6 +58,34 @@ func TestCodexPrewarmEstablishesEmptyOutputLineage(t *testing.T) {
 	}
 }
 
+func TestCodexPrewarmExistingInputDoesNotDropRealRequestInput(t *testing.T) {
+	server := newWSLineageServer(t)
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"response.created","response":{"id":"resp_warm"}}`,
+		`{"type":"response.completed","response":{"id":"resp_warm"}}`,
+	}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_real", "answer")}
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	if err := client.Prewarm(context.Background(), lineageRequest("prewarm-existing-input", userMessage("existing"))); err != nil {
+		t.Fatalf("Prewarm: %v", err)
+	}
+	streamLineageTurn(t, client, lineageRequest("prewarm-existing-input", userMessage("existing"), userMessage("new")))
+
+	<-server.frames
+	real := decodeResponseCreate(t, <-server.frames)
+	if real.PreviousResponseID != "resp_warm" {
+		t.Fatalf("previous_response_id = %q, want resp_warm", real.PreviousResponseID)
+	}
+	wantInput := rawItems(
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"existing"}]}`,
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"new"}]}`,
+	)
+	if !reflect.DeepEqual(real.Input, wantInput) {
+		t.Fatalf("real input = %s, want all real-request input %s", real.Input, wantInput)
+	}
+}
+
 func TestOpenAIFamilyPrewarmDoesNothing(t *testing.T) {
 	client := &Client{Family: Family, UseWebSocketTransport: true}
 	if err := client.Prewarm(context.Background(), &provider.Request{}); err != nil {

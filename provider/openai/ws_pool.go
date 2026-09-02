@@ -215,7 +215,8 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	generation := entry.generation
 	if req.Prewarm {
 		generate := false
-		createOptions.Input = make([]json.RawMessage, 0)
+		completeRequest.Input = make([]json.RawMessage, 0)
+		createOptions.Input = completeRequest.Input
 		createOptions.InputSet = true
 		createOptions.Generate = &generate
 	} else if req.Family == CodexFamily && entry.lineage != nil &&
