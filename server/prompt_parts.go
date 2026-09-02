@@ -42,8 +42,12 @@ import (
 // promptAttachmentTypes is the set of attachment media types a prompt may
 // carry, each paired with the check that proves the bytes really are that
 // type. A media type belongs here only when EVERY provider lane harness can
-// dispatch to actually delivers it, because a session switches models
-// freely and the attachment stays in its history forever:
+// dispatch to either delivers it, or degrades visibly -- drops it and tells
+// the model so -- rather than failing the request. That is the real bar,
+// and it is set by durability rather than by capability: a session switches
+// models freely and the attachment stays in its history forever, so a lane
+// that ERRORS on a type would fail every later turn of a session that
+// merely switched into it, with no repair path.
 //
 //   - Images (the same set engine's read_file returns as a blob, see
 //     readFileImageMediaTypes): anthropic and claude-code send an image
@@ -54,8 +58,8 @@ import (
 //     openai an input_file. Verified against the real claude-code CLI, which
 //     read a PDF's text back through its stream-json stdin.
 //
-// PDF is the one entry that does NOT clear that bar on every lane, and the
-// exception is deliberate rather than overlooked. provider/openaicompat has
+// PDF is the entry that relies on the degrade half of that bar rather than
+// the deliver half. provider/openaicompat has
 // no wire form for a document at all (message/wire_normalize.go's
 // intersection comment), so it OMITS a non-image blob and tells the model
 // "[N attachment(s) omitted: application/pdf]" instead of erroring. That
