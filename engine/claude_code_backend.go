@@ -72,7 +72,10 @@
 //     would render as two separate turns. Appended via plain
 //     Session.append (no usage — see the usage-mapping note below) and
 //     emitted as EventMessage, with one EventReasoningDelta per non-empty
-//     thinking part, one EventTextDelta per non-empty text part (folding
+//     thinking part (non-empty because runClaudeCodeTurn passes
+//     --thinking-display summarized; see that flag's own comment for what
+//     the CLI returns without it), one EventTextDelta per non-empty text
+//     part (folding
 //     the whole block's text into the message in a single "delta", the
 //     closest honest match to the native EventTextDelta/EventReasoningDelta
 //     contract given the CLI hands over complete blocks), and one
@@ -465,6 +468,35 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// which this driver always sets, so it is safe to pass
 		// unconditionally.
 		"--forward-subagent-text",
+		// Opus 4.7 silently flipped the API default of thinking.display from
+		// "summarized" to "omitted", and every model after it kept that
+		// default. Under "omitted" the API still THINKS and still bills for
+		// it, but returns the thinking block with an empty `thinking` field
+		// and only its provider signature: claudeCodeAssistantMessage stores
+		// message.Reasoning{Text: ""}, consumeClaudeCodeStream's
+		// `if r.Text != ""` guard emits no EventReasoningDelta, and every
+		// consumer sees a signature-only part it can neither render nor
+		// align against a streamed row. The boxes console rendered a turn
+		// TWICE off that asymmetry (meetneptune/boxes#599).
+		//
+		// --thinking-display is the CLI's own override for that default and
+		// the ONLY channel that carries it: the `showThinkingSummaries`
+		// setting does not reach the request (verified — it returns an empty
+		// thinking field), and the API parameter is not otherwise reachable
+		// through the CLI. Verified end to end against a live Opus
+		// subscription session: 383 characters of summarized thinking where
+		// the same prompt without the flag returned 0.
+		//
+		// The flag is real but NOT listed in `claude --help` (`claude
+		// --thinking-display bogus` answers "Allowed choices are summarized,
+		// omitted"), so treat it as a pinned-CLI dependency: a CLI that drops
+		// it fails the spawn outright rather than silently degrading, which
+		// is the loud failure this driver wants — the box image pins its own
+		// CLI version, so an upgrade is a deliberate, testable step.
+		//
+		// Summaries only. The raw chain of thought is never exposed by any
+		// model under any setting; "summarized" is the maximum available.
+		"--thinking-display", "summarized",
 		// All subagent spawning in the claude-code lane must go through
 		// harness's own cross-family "task" tool (server/mcp_history.go,
 		// #223), never the CLI's native same-family equivalent — the two

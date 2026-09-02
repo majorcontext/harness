@@ -1049,6 +1049,31 @@ func TestClaudeCodeForwardSubagentTextAlwaysSet(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeThinkingDisplayAlwaysSummarized proves runClaudeCodeTurn
+// always sends --thinking-display summarized. Opus 4.7 and later default
+// thinking.display to "omitted", under which the API returns a thinking
+// block whose `thinking` field is empty and whose signature is the only
+// content: claudeCodeAssistantMessage then stores an empty
+// message.Reasoning, consumeClaudeCodeStream emits no EventReasoningDelta
+// for it (its `r.Text != ""` guard), and a consumer gets a durable part it
+// cannot render and cannot align against the row that streamed the turn.
+// The flag is the only channel that overrides that default — the
+// showThinkingSummaries setting does not reach the request.
+func TestClaudeCodeThinkingDisplayAlwaysSummarized(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	got, ok := argvValueAfter(invocations[0], "--thinking-display")
+	if !ok {
+		t.Fatalf("argv has no --thinking-display: %v", invocations[0])
+	}
+	if want := "summarized"; got != want {
+		t.Errorf("--thinking-display = %q, want %q", got, want)
+	}
+}
+
 // TestClaudeCodeDisallowsNativeSpawnTools proves runClaudeCodeTurn always
 // sends --disallowedTools naming every native Claude Code tool that spawns
 // a same-family subagent (Agent, Workflow). All subagent spawning in the
