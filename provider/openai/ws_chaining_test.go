@@ -318,6 +318,29 @@ func TestWebSocketSecondTurnSendsOnlyIncrementalSuffix(t *testing.T) {
 	}
 }
 
+func TestWebSocketEmptyResponseIDDoesNotPublishLineage(t *testing.T) {
+	server := newWSLineageServer(t)
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"response.output_text.delta","output_index":0,"delta":"two"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"two"}]}}`,
+		`{"type":"response.completed","response":{}}`,
+	}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_two", "four")}
+	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	streamLineageTurn(t, client, lineageRequest("empty-response-id", userMessage("one")))
+	streamLineageTurn(t, client, lineageRequest("empty-response-id", userMessage("one"), assistantMessage("", "two"), userMessage("three")))
+
+	<-server.frames
+	second := decodeResponseCreate(t, <-server.frames)
+	if second.PreviousResponseID != "" {
+		t.Fatalf("previous_response_id = %q, want empty", second.PreviousResponseID)
+	}
+	if len(second.Input) != 3 {
+		t.Fatalf("second input has %d items, want complete history after empty response ID: %s", len(second.Input), second.Input)
+	}
+}
+
 func TestWebSocketToolRoundContinuesResponseLineage(t *testing.T) {
 	server := newWSLineageServer(t)
 	server.scripts <- wsLineageScript{beforeWait: []string{

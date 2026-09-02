@@ -213,6 +213,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	entry.mu.Lock()
 	generation := entry.generation
 	if req.Family == CodexFamily && entry.lineage != nil &&
+		entry.lineage.responseID != "" &&
 		entry.lineage.generation == generation &&
 		responsesRequestPropertiesMatch(entry.lineage.request, &completeRequest) {
 		if suffix, ok := incrementalInput(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
@@ -268,6 +269,10 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		subUsage: subUsage,
 		onComplete: func(responseID string, assistant *message.Message) {
 			if req.Family != CodexFamily {
+				return
+			}
+			if responseID == "" {
+				p.clearLineage(entry, generation)
 				return
 			}
 			outputItems, err := transcodeMessage(assistant, false, req.Family)
