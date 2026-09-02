@@ -294,6 +294,20 @@ components:
         captured_at:
           type: integer
           description: When this snapshot was captured, Unix seconds.
+        session_cost_usd:
+          type: number
+          nullable: true
+          description: >
+            This session's cumulative dollar cost across every completed
+            "claude"-lane delegated turn, summed turn over turn from the
+            `claude` CLI's own per-turn total_cost_usd accounting. The CLI
+            reports total_cost_usd on EVERY delegated turn's result, not
+            only during pay-as-you-go overage, so this goes non-null the
+            moment a session completes its first "claude"-lane turn and
+            only grows from there — non-null does not by itself mean the
+            user was actually billed; check overage.in_use for that.
+            Always null for provider "codex" and for a session that has
+            not yet completed a "claude"-lane turn in this process.
 
     SubscriptionUsageWindow:
       type: object

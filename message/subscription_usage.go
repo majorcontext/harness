@@ -38,6 +38,30 @@ type SubscriptionUsage struct {
 	// CapturedAt is when this snapshot was captured — harness's own clock
 	// (Config.Now), not a provider-reported time — Unix seconds.
 	CapturedAt int64 `json:"captured_at"`
+	// SessionCostUSD is this session's cumulative dollar cost across every
+	// completed "claude"-lane delegated turn, summed turn over turn from
+	// the `claude` CLI's own per-turn total_cost_usd accounting (see
+	// engine/claude_code_backend.go's claudeCodeEnvelope.TotalCostUSD).
+	// Always nil for provider "codex" (its x-codex-* headers carry no
+	// cost figure).
+	//
+	// The `claude` CLI reports total_cost_usd on EVERY delegated turn's
+	// "result" event, live-verified against a real `claude` 2.1.252
+	// binary — not only during pay-as-you-go overage. A plain-
+	// subscription turn still carries the dollar figure that turn would
+	// have cost at metered API rates, informational even though the user
+	// is not actually billed it. So this field goes non-nil the moment a
+	// session completes its FIRST "claude"-lane turn, whether or not
+	// Overage is ever set, and only grows from there. nil means "no
+	// delegated turn has completed in this process yet" — never "zero
+	// spend so far" — matching this type's own process-local capture
+	// contract (see this type's own doc comment).
+	//
+	// A caller that wants to gate a dollar readout on ACTUAL pay-as-you-go
+	// billing, not a hypothetical subscription-turn equivalent, must check
+	// Overage.InUse alongside this field — a non-nil SessionCostUSD alone
+	// is not proof the user was charged anything.
+	SessionCostUSD *float64 `json:"session_cost_usd,omitempty"`
 }
 
 // SubscriptionUsageWindow is one rate-limit window inside a

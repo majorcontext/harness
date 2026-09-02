@@ -102,7 +102,11 @@
 //     for a known-transient shape (see claudeCodeRetryableClass), a plain
 //     error otherwise. TotalCostUSD has no home in provider.Usage (no
 //     adapter carries a cost field — every consumer derives cost from
-//     token counts) and is deliberately dropped, not persisted.
+//     token counts); applyClaudeCodeUsage instead sums it directly into
+//     the session's own message.SubscriptionUsage.SessionCostUSD, durable
+//     via the same recClaudeCodeUsage record as the token usage above —
+//     see that field's own doc comment for why this is reported every
+//     turn, not only during pay-as-you-go overage.
 //   - "rate_limit_event": the CLI's own subscription rate-limit/quota
 //     signal, typically the SECOND event of a turn (right after
 //     "system"/"init"). Never appended as a message — it carries no
@@ -326,7 +330,10 @@ func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
 // applyClaudeCodeUsage folds a delegated turn's AGGREGATE usage (the
 // "result" event's own usage field, covering every internal API call
 // Claude Code made across the whole turn — not just the closing one) into
-// Session.Usage()/LastUsage(), durably (recClaudeCodeUsage, store.go).
+// Session.Usage()/LastUsage(), and costUSD (the same event's own
+// total_cost_usd) into the session's cumulative
+// message.SubscriptionUsage.SessionCostUSD (see that field's own doc
+// comment), durably (recClaudeCodeUsage, store.go carries both).
 //
 // This is deliberately NOT routed through appendWithUsage: by the time a
 // "result" event arrives, every message this turn produced has already
@@ -343,7 +350,12 @@ func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
 // compaction never runs for a delegated session (see PromptWithOrigin's
 // dispatch), so there is no native trigger signal here to protect, and
 // GET /session should still report an accurate last-turn size.
-func (s *Session) applyClaudeCodeUsage(usage provider.Usage) {
+//
+// costUSD is summed unconditionally, every turn, not gated on overage:
+// see claudeCodeEnvelope.TotalCostUSD's own doc comment for why a plain
+// subscription turn reports a real (if not actually billed) dollar
+// figure too, live-verified against a real `claude` 2.1.252 binary.
+func (s *Session) applyClaudeCodeUsage(usage provider.Usage, costUSD float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usage.InputTokens += usage.InputTokens
@@ -352,7 +364,9 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage) {
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.lastUsage = usage
 	s.haveLastUsage = true
-	s.persistClaudeCodeUsage(usage)
+	s.claudeCodeSessionCostUSD += costUSD
+	s.haveClaudeCodeCost = true
+	s.persistClaudeCodeUsage(usage, costUSD)
 }
 
 // runClaudeCodeTurn drives ONE turn through the `claude` CLI against s's
@@ -1215,7 +1229,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			}
 		case "result":
 			usage := mapClaudeCodeUsage(env.Usage)
-			s.applyClaudeCodeUsage(usage)
+			s.applyClaudeCodeUsage(usage, env.TotalCostUSD)
 			streamMillis := env.DurationMillis - env.TTFTMillis
 			if streamMillis < 0 {
 				// A CLI build that sends duration_ms but not ttft_ms (or
@@ -1243,9 +1257,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					turnErr = provider.MarkRetryable(turnErr, class)
 				}
 			}
-			// TotalCostUSD is intentionally dropped here — see the
-			// package doc's "result" bullet: provider.Usage has no cost
-			// field for it to occupy.
+			// TotalCostUSD was already folded into the session's
+			// cumulative SessionCostUSD by applyClaudeCodeUsage above —
+			// see that call's own comment and message.SubscriptionUsage.
+			// SessionCostUSD's own doc comment.
 			//
 			// Return NOW rather than falling through to another
 			// scanner.Scan(): "result" is the documented terminal event
@@ -1317,8 +1332,14 @@ type claudeCodeEnvelope struct {
 	Result    string           `json:"result,omitempty"`
 	Usage     *claudeCodeUsage `json:"usage,omitempty"`
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
-	// whole delegated turn — read but deliberately never mapped onto
-	// anything (see this file's package doc, "result" bullet).
+	// whole delegated turn — folded into the session's cumulative
+	// message.SubscriptionUsage.SessionCostUSD by applyClaudeCodeUsage
+	// (see this file's package doc, "result" bullet, and that field's own
+	// doc comment). Reported on every "result" event a real `claude`
+	// 2.1.252 binary sends, not only during pay-as-you-go overage; zero,
+	// not an error, for an older build that omits the field — this file's
+	// usual permissive-decoding philosophy, same as TTFTMillis/
+	// DurationMillis below.
 	TotalCostUSD float64 `json:"total_cost_usd,omitempty"`
 	// ParentToolUseID is null (so absent, or explicit JSON null — either
 	// decodes to "" for a plain string field, encoding/json's documented

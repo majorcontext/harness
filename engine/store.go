@@ -345,6 +345,14 @@ type record struct {
 	// is never called with 0 in practice (a delegated turn always appends
 	// at least the pending trigger message before this is recorded).
 	ClaudeCodeHistoryWatermark int `json:"claude_code_history_watermark,omitempty"`
+	// ClaudeCodeCostUSD carries a recClaudeCodeUsage record's own
+	// per-turn total_cost_usd (see Session.applyClaudeCodeUsage and
+	// message.SubscriptionUsage.SessionCostUSD's own doc comment) — a
+	// pointer, not a plain float64, so a record written before this field
+	// existed decodes to nil (no cost accrual on replay) rather than
+	// being indistinguishable from an explicit zero-cost turn written by
+	// the current code, which always sets this non-nil (even to &0.0).
+	ClaudeCodeCostUSD *float64 `json:"claude_code_cost_usd,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -743,9 +751,11 @@ func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
 }
 
 // persistClaudeCodeUsage appends a claude_code.usage record to the session
-// log. It mirrors persistModel/persistEffort exactly: a no-op until the
-// log exists (lazy creation), caller holds s.mu.
-func (s *Session) persistClaudeCodeUsage(usage provider.Usage) {
+// log, carrying both the turn's token usage and its own costUSD (see
+// record.ClaudeCodeCostUSD's own doc comment). It mirrors persistModel/
+// persistEffort exactly: a no-op until the log exists (lazy creation),
+// caller holds s.mu.
+func (s *Session) persistClaudeCodeUsage(usage provider.Usage, costUSD float64) {
 	if s.cfg.SessionDir == "" || !s.logStarted {
 		return
 	}
@@ -753,7 +763,7 @@ func (s *Session) persistClaudeCodeUsage(usage provider.Usage) {
 		s.lastPersistErr = err
 		return
 	}
-	if err := s.writeRecord(record{Type: recClaudeCodeUsage, Usage: &usage}); err != nil {
+	if err := s.writeRecord(record{Type: recClaudeCodeUsage, Usage: &usage, ClaudeCodeCostUSD: &costUSD}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1579,6 +1589,15 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+			}
+			// See record.ClaudeCodeCostUSD's own doc comment: nil means a
+			// record written before cost tracking existed, not a
+			// zero-cost turn, so this deliberately leaves
+			// haveClaudeCodeCost false in that case rather than folding a
+			// phantom zero into the running total.
+			if rec.ClaudeCodeCostUSD != nil {
+				s.claudeCodeSessionCostUSD += *rec.ClaudeCodeCostUSD
+				s.haveClaudeCodeCost = true
 			}
 		case recMCPToolsSelected:
 			// Union every record, in log order, into the restored selected
