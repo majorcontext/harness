@@ -187,6 +187,9 @@ type Stream interface {
 
 // StartupPrewarmer is an optional provider capability that prepares transport-local
 // state before the first model call. Prewarm must not emit provider events.
+// Prewarm MUST return promptly when ctx is canceled. The engine bounds prompt
+// waiting and session ownership at that deadline, but Go cannot forcibly stop a
+// callback that ignores cancellation.
 type StartupPrewarmer interface {
 	Prewarm(context.Context, *Request) error
 }

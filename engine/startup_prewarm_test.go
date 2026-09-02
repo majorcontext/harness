@@ -18,11 +18,12 @@ import (
 type startupPrewarmProvider struct {
 	name string
 
-	prewarmRequests chan *provider.Request
-	prewarmReturned chan struct{}
-	release         <-chan struct{}
-	prewarmErr      error
-	returnOnce      sync.Once
+	prewarmRequests    chan *provider.Request
+	prewarmReturned    chan struct{}
+	release            <-chan struct{}
+	prewarmErr         error
+	ignoreCancellation bool
+	returnOnce         sync.Once
 
 	mu             sync.Mutex
 	streamRequests []*provider.Request
@@ -42,10 +43,14 @@ func (p *startupPrewarmProvider) Prewarm(ctx context.Context, req *provider.Requ
 	p.prewarmRequests <- cloneStartupRequest(req)
 	defer p.returnOnce.Do(func() { close(p.prewarmReturned) })
 	if p.release != nil {
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return ctx.Err()
+		if p.ignoreCancellation {
+			<-p.release
+		} else {
+			select {
+			case <-p.release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 	return p.prewarmErr
@@ -161,6 +166,44 @@ func TestFirstPromptWaitsOnlyForRemainingPrewarmDeadline(t *testing.T) {
 		if got := time.Since(started); got != 5*time.Second {
 			t.Fatalf("first prompt prewarm wait = %s, want remaining 5s", got)
 		}
+	})
+}
+
+func TestFirstPromptDeadlineDetachesNoncooperativeStartupPrewarm(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		p := newStartupPrewarmProvider("test")
+		p.release = release
+		p.ignoreCancellation = true
+		s := NewSession(startupConfig(p))
+		requirePrewarmRequest(t, p)
+
+		go func() {
+			timer := time.NewTimer(startupPrewarmTimeout + time.Second)
+			defer timer.Stop()
+			<-timer.C
+			close(release)
+		}()
+		started := time.Now()
+		got, err := s.Prompt(context.Background(), "hello")
+		elapsed := time.Since(started)
+
+		s.mu.Lock()
+		retained := s.startupPrewarm != nil
+		s.mu.Unlock()
+		if err != nil {
+			t.Fatalf("Prompt error = %v, want normal prompt after prewarm deadline", err)
+		}
+		if got == nil || got.Parts.Text() != "ready" {
+			t.Fatalf("Prompt result = %#v, want ready", got)
+		}
+		if elapsed != startupPrewarmTimeout {
+			t.Fatalf("Prompt elapsed = %s, want %s", elapsed, startupPrewarmTimeout)
+		}
+		if retained {
+			t.Fatal("session retained startup-prewarm handle after deadline")
+		}
+		<-p.prewarmReturned
 	})
 }
 
