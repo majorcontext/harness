@@ -129,7 +129,7 @@ type responseCreatePayload struct {
 func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte, options ...responseCreateOptions) error {
 	var request apiRequest
 	if err := json.Unmarshal(body, &request); err != nil {
-		return fmt.Errorf("openai: websocket request.create: decoding request body: %w", err)
+		return fmt.Errorf("openai: websocket response.create: decoding request body: %w", err)
 	}
 	var option responseCreateOptions
 	if len(options) != 0 {

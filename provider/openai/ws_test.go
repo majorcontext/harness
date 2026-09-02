@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -522,5 +523,15 @@ func TestWebSocketIncompleteAndFailedResponsesClearLineage(t *testing.T) {
 				t.Fatalf("third frame retained bad lineage: previous=%q input=%s", third.PreviousResponseID, third.Input)
 			}
 		})
+	}
+}
+
+func TestSendResponseCreateDecodeErrorNamesResponseCreate(t *testing.T) {
+	err := sendResponseCreate(context.Background(), nil, []byte("{"))
+	if err == nil {
+		t.Fatal("sendResponseCreate returned nil error for invalid request JSON")
+	}
+	if got := err.Error(); !strings.Contains(got, "websocket response.create") || strings.Contains(got, "request.create") {
+		t.Fatalf("error = %q, want response.create and no request.create", got)
 	}
 }

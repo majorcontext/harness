@@ -271,6 +271,12 @@ func TestStreamInlineError(t *testing.T) {
 	}
 }
 
+func TestStreamErrorWithoutCodeOmitsEmptyParentheses(t *testing.T) {
+	if got := streamError("", "boom").Error(); got != "openai: boom" {
+		t.Fatalf("streamError = %q, want %q", got, "openai: boom")
+	}
+}
+
 func TestStreamNoAPIKey(t *testing.T) {
 	c := &Client{}
 	_, err := c.Stream(context.Background(), &provider.Request{

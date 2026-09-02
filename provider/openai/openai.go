@@ -574,6 +574,9 @@ func streamError(code, message string) error {
 		}
 		return &previousResponseNotFoundError{message: message}
 	}
+	if code == "" {
+		return fmt.Errorf("openai: %s", message)
+	}
 	err := fmt.Errorf("openai: %s (%s)", message, code)
 	if class, ok := classifyErrorCode(code); ok {
 		return provider.MarkRetryable(err, class)
