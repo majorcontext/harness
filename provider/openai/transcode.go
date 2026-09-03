@@ -323,6 +323,9 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 			reasoningObj.Effort = effort
 		}
 		out.Reasoning = reasoningObj
+		// Codex rejects temperature and top_p when reasoning is active.
+		out.Temperature = nil
+		out.TopP = nil
 	} else if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
 	}

@@ -41,7 +41,8 @@ func TestStreamReasoningDetailsExtracted(t *testing.T) {
 		if ev.Type == provider.EventReasoningDelta {
 			reasoningDeltas = append(reasoningDeltas, ev.Text)
 		} else if ev.Type == provider.EventDone {
-			done = &ev
+			e := ev
+			done = &e
 		}
 	}
 
@@ -91,7 +92,8 @@ func TestStreamReasoningDetailsWithReasoningContentAdditive(t *testing.T) {
 		if ev.Type == provider.EventReasoningDelta {
 			reasoningDeltas = append(reasoningDeltas, ev.Text)
 		} else if ev.Type == provider.EventDone {
-			done = &ev
+			e := ev
+			done = &e
 		}
 	}
 
