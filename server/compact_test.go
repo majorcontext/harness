@@ -460,6 +460,117 @@ func TestCompactPanicReleasesClaim(t *testing.T) {
 	}
 }
 
+// TestCompactPanicDoesNotStrandSessionBusy is the regression test for the
+// gap TestCompactPanicReleasesClaim's own doc comment deliberately leaves
+// open: that test proves s.wg (Drain) recovers after a forced Compact
+// panic, but says nothing about the SESSION itself. Before this fix,
+// handleCompact called s.freeRunSlotAndEmitIdle and s.sessMgr.ReportTurnEnd
+// as plain, non-deferred statements after st.sess.Compact — reached only on
+// a normal return. net/http recovers a panicking handler per CONNECTION
+// (net/http.(*conn).serve's own recover), not per PROCESS, so a panic
+// inside Compact (or anything it calls, e.g. a native provider's
+// transcoder choking on claude-code-produced history after an operator
+// switches a delegated session's model mid-incident and then compacts) logs
+// "http: panic serving ..." and closes that one connection, but the harness
+// process stays up -- while this session's residency (st.running) and
+// SessionManager node (status) are NEVER released, because the release
+// statements were never reached. The session is left reporting status
+// "busy", state "busy", and lineage.status "running" forever, with no
+// runner process alive to ever finish it -- the exact shape of the live
+// incident on session ses_01m1ht79e5fgfbx2cjx4cf4xm8.
+//
+// Red-verified: against the pre-fix handleCompact, this test times out
+// waiting for lineage.status to leave "running" (waitForLineageStatus's own
+// failure mode) after the forced panic.
+func TestCompactPanicDoesNotStrandSessionBusy(t *testing.T) {
+	prov := &panicAtCallProv{
+		name: "test",
+		turns: [][]provider.Event{
+			compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+			compactAsstTurn("three", provider.Usage{InputTokens: 10}),
+		},
+		panicAt: 3, // the compaction summarization call, right after the 3 prompt turns above
+	}
+	// recoveryProv is a SEPARATE, healthy provider for the "run slot is
+	// actually free" check at the end: panicAtCallProv panics on every call
+	// once its own counter reaches panicAt (it never advances past the
+	// panic), so re-prompting the SAME provider would panic again — this
+	// time inside the async runPrompt goroutine handlePrompt spawns, which
+	// nothing recovers, crashing the whole test binary rather than just
+	// this one connection. A later prompt against a DIFFERENT provider
+	// (mirroring an operator switching away after the failure, exactly
+	// like the live incident's own model switch) proves the claim without
+	// that trap.
+	recoveryProv := &scriptedProvider{name: "recovery", turns: [][]provider.Event{asstTurn("still alive")}}
+	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
+	h := multiProviderHarness(t, model, nil, prov, recoveryProv)
+	id := h.createSession("")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+	h.promptAndWaitIdle(id, "go3")
+
+	req, err := http.NewRequest("POST", h.ts.URL+"/session/"+id+"/compact",
+		bytes.NewReader([]byte(`{"keep_turns":1}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	req.Header.Set("Content-Type", "application/json")
+	// Deliberately not h.do: the forced panic aborts net/http's connection
+	// mid-response, so the client call errors -- that is the expected shape
+	// here, not a test failure. See TestCompactPanicReleasesClaim.
+	if resp, err := h.ts.Client().Do(req); err == nil {
+		resp.Body.Close()
+	}
+
+	// The process is still up (this HTTP call above returned/errored
+	// instead of the whole test binary dying), so a plain, bounded poll
+	// is enough to prove the session recovers -- or, before the fix,
+	// times out here, which is the whole point of this regression test.
+	lineage := waitForLineageStatus(t, h, id, "idle", 5*time.Second)
+	if lineage["status"] != "idle" {
+		t.Fatalf("lineage.status = %v after the forced compact panic, want idle", lineage["status"])
+	}
+
+	resp, data := h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", resp.StatusCode, data)
+	}
+	var got struct {
+		Status string `json:"status"`
+		State  string `json:"state"`
+		Queued int    `json:"queued"`
+	}
+	mustUnmarshal(t, data, &got)
+	if got.Status != "idle" || got.State != "idle" {
+		t.Errorf("after the forced compact panic, status=%q state=%q, want idle/idle", got.Status, got.State)
+	}
+	if got.Queued != 0 {
+		t.Errorf("after the forced compact panic, queued = %d, want 0", got.Queued)
+	}
+
+	// A later, ordinary prompt on a DIFFERENT provider (see recoveryProv's
+	// own doc comment above) must still be able to run -- proving the run
+	// slot itself, not just its wire-visible status, is actually free.
+	resp, data = h.do("POST", "/session/"+id+"/model", map[string]string{"model": "recovery/m1"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set model status %d: %s", resp.StatusCode, data)
+	}
+	h.promptAndWaitIdle(id, "still alive")
+	resp, data = h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", resp.StatusCode, data)
+	}
+	var final struct {
+		LastTurn *lastTurnJSONForTest `json:"last_turn"`
+	}
+	mustUnmarshal(t, data, &final)
+	if final.LastTurn == nil || final.LastTurn.Outcome != "completed" {
+		t.Errorf("final last_turn = %+v, want outcome completed", final.LastTurn)
+	}
+}
+
 // TestCompactEndpointUnknownSessionIs404 mirrors prompt_async/goal's
 // unknown-session handling.
 func TestCompactEndpointUnknownSessionIs404(t *testing.T) {
