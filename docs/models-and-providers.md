@@ -413,6 +413,27 @@ subset as `CacheReadTokens` and the non-negative remainder as `InputTokens`, so
 the fields are disjoint and their sum reconstructs the reported input total.
 Response chaining does not infer or synthesize cache usage.
 
+## Codex HTTP request compression
+
+`provider/openai` compresses every Codex-family HTTP Responses body with zstd
+level 3. This includes a direct HTTP request and the full-body HTTP fallback
+after a WebSocket dial, send, or first-frame failure. The request sends
+`Content-Encoding: zstd`; decompression reproduces the complete JSON body.
+
+The adapter compresses only after the WebSocket path declines the request.
+WebSocket `response.create` frames therefore remain ordinary JSON and do not use
+this encoder. WebSocket compression is a separate protocol extension.
+
+The family gate is strict. A generic native OpenAI Responses client remains
+uncompressed because compatible third-party endpoints may not accept zstd
+request bodies. The `github.com/klauspost/compress/zstd` encoder initializes
+lazily, uses compression level 3, and is pooled for concurrent HTTP calls. Debug
+logs report only compression duration and byte counts.
+
+An encoder initialization failure aborts the HTTP request before any bytes are
+sent. The adapter never labels uncompressed bytes with `Content-Encoding:
+zstd`.
+
 ## Anthropic cache TTL (default 1 hour)
 
 `provider/anthropic` marks two prompt-cache breakpoints on every request —

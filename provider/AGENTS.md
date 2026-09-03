@@ -72,6 +72,7 @@ compaction request behavior.
 
 - OpenAI-compatible sends `user` and, unless disabled, `prompt_cache_key`.
 - Native OpenAI Responses sends `prompt_cache_key`.
+- Codex-family HTTP Responses bodies use zstd level 3. Generic OpenAI stays uncompressed.
 - Anthropic ignores `SessionKey` and uses explicit cache markers.
 
 Omit empty keys. Do not replace the gateway `user` field with the native
