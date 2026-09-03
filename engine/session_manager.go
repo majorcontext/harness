@@ -200,6 +200,41 @@ const (
 
 type ExternalRunner func(id, text string) RunnerOutcome
 
+// ChildTurnObserver is notified once a CHILD's (depth>0) turn settles —
+// done, failed, or canceled — mirroring the fact a root's own
+// completion is already visible to its driver via ReportTurnEnd's
+// return value (server's runPrompt/runGoal). A child has no such
+// external driver to notify: Spawn/Send/SendToDescendant/SendOrQueue
+// all launch it in their own goroutine and report nothing back
+// directly (see Send's own "non-blocking execution" doc comment) — this
+// is the seam a server layer installs (SetChildTurnObserver) to learn
+// the same "a turn just ended" fact for a child that server/handlers.go's
+// runPrompt already has for a root, so it can emit the SAME turn.end/
+// session.status/session.aborted wire events for both (see
+// finalizeTurnFrom's own call site for exactly when this fires and what
+// canceled means).
+//
+// msg is the turn's own final assistant message (nil when none was
+// produced — a failed or canceled turn, or a caller like ReportTurnEnd's
+// goal path that never has one to give — see finalizeTurnFrom's msg==nil
+// handling for the identical case). err is the turn's own error (nil on
+// success). canceled is true only for a StatusCanceled settle — mirroring
+// runPrompt's own context.Canceled special case, which emits
+// session.aborted instead of turn.end and skips recordTurnEnd entirely;
+// err on that path may itself be nil (a genuine success can race a
+// Cancel call — see finalizeTurnFrom's alreadyCanceled branch).
+//
+// A hook body runs OUTSIDE m.mu (queued via deferPersist, invoked by
+// unlockAndFlushPersist once m.mu is released — see finalizeTurnFrom's
+// call site) — mirroring every other deferred side effect in this file
+// (persistQueuedTaskNotification, the queue-record flush). It may block
+// or call back into this manager (e.g. Info) without risk of deadlock,
+// unlike this file's OTHER, m.mu-HELD test hooks (testResumeClaimedHook
+// et al.) — but it runs synchronously in the same goroutine that just
+// finished the turn, so a slow observer delays that goroutine's own next
+// step (Spawn's caller has already returned by this point regardless).
+type ChildTurnObserver func(id string, msg *message.Message, err error, canceled bool)
+
 // SessionManager owns every session — one root plus its descendant
 // children — spawned as a tree in one harness process. It is the
 // engine-level home for the subagent-sessions primitive (see the design
@@ -240,6 +275,13 @@ type SessionManager struct {
 	// with no server layered over it) means m drives every turn itself,
 	// root or child, exactly as before ExternalRunner existed.
 	externalRunner ExternalRunner
+
+	// childTurnObserver, when set, is notified once per settled CHILD
+	// turn — see ChildTurnObserver's own doc comment. Nil (the default)
+	// means nothing is notified, exactly as before this hook existed —
+	// a bare-engine/CLI SessionManager with no server layered over it
+	// has no wire events to emit in the first place.
+	childTurnObserver ChildTurnObserver
 
 	// maxTreeTokens is the opt-in per-tree token budget (see
 	// ErrBudgetExceeded's own doc comment) — 0 (the default; SetMaxTreeTokens
@@ -548,6 +590,15 @@ func (m *SessionManager) SetExternalRunner(runner ExternalRunner) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.externalRunner = runner
+}
+
+// SetChildTurnObserver installs observer as described on the
+// ChildTurnObserver type — nil (the default) disables it. Safe to call
+// at any time; takes effect on the next settled child turn.
+func (m *SessionManager) SetChildTurnObserver(observer ChildTurnObserver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.childTurnObserver = observer
 }
 
 // SetMaxTreeTokens installs n as the opt-in per-tree token budget — see
@@ -2801,7 +2852,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// are final here. Start prewarm before the prompt-driving goroutine.
 	child.startStartupPrewarm()
 	go func() {
-		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt)
+		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt, "", nil)
 		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
 			go resume()
 		}
@@ -2864,7 +2915,21 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // child's leftover queue simply sits inert until the node itself is
 // eventually Reaped — "stays queued," not "discarded" by any explicit
 // step.
-func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message.Message, error) {
+//
+// msgID and blobs are the FIRST call's own — a caller that already
+// resolved a client message id or attachments for text (SendOrQueue) —
+// threaded through PromptWithOrigin exactly like the server's own
+// runPrompt does for a root (see PromptWithOrigin's doc comment); every
+// call with no id/attachments of its own (Spawn's initial prompt, Send,
+// SendToDescendant) passes "", nil, unchanged from this function's
+// former plain-Prompt behavior. Every SUBSEQUENT drained item uses ITS
+// OWN QueuedPrompt.MessageID/Blobs, not the first call's — a queued
+// prompt's own id and attachments must reach its own eventual turn, not
+// silently borrow the turn that happened to drain it. This is what
+// makes an attachment survive a child's queue (item 4 of the
+// session.send unification): the old text-only signature dropped
+// QueuedPrompt.Blobs entirely on every dequeue.
+func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, blobs []*message.Blob) (*message.Message, error) {
 	// The FIRST call is guarded too, not just the loop — a review
 	// finding: on the finalizeTurn re-drive and settled-relaunch paths a
 	// cancel landing between the closure's creation and its `go resume()`
@@ -2875,7 +2940,7 @@ func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	msg, err := s.Prompt(ctx, text)
+	msg, err := s.PromptWithOrigin(ctx, text, "", msgID, blobs...)
 	for {
 		if ctx.Err() != nil {
 			return msg, err
@@ -2884,7 +2949,7 @@ func drainQueueAndPrompt(ctx context.Context, s *Session, text string) (*message
 		if !ok {
 			return msg, err
 		}
-		msg, err = s.Prompt(ctx, next.Text)
+		msg, err = s.PromptWithOrigin(ctx, next.Text, "", next.MessageID, next.Blobs...)
 	}
 }
 
@@ -2966,7 +3031,7 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	defer stop()
 	var msg *message.Message
 	if isChild {
-		msg, err = drainQueueAndPrompt(runCtx, s, text)
+		msg, err = drainQueueAndPrompt(runCtx, s, text, "", nil)
 	} else {
 		msg, err = s.Prompt(runCtx, text)
 	}
@@ -2974,6 +3039,123 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 		go resume()
 	}
 	return msg, err
+}
+
+// SendOrQueue is Send extended with SendToDescendant's own busy-target
+// queuing (see that method's own doc comment for the full mechanism and
+// the two live-review findings that produced it) — but reachable for ANY
+// id this manager tracks, with no ancestor/caller id and no lineage
+// gate. It is the single-owner send path server/session_tree.go's
+// unified session.send endpoint uses for a managed CHILD: a busy child
+// used to have no queue at all (Send's own reserveSendLocked refuses any
+// Running target with ErrSessionBusy), so the server had nowhere to put
+// a real user message but drop it behind a 409 — exactly the gap a root
+// never had, since the server's own claimForPrompt/runOrQueueText
+// machinery already queues a busy root. SendOrQueue closes that gap by
+// reusing the SAME memory-append-then-deferred-persist machinery
+// SendToDescendant's running-target branch already uses, generalized to
+// skip that method's ancestry check (a first-party HTTP endpoint
+// addressing id directly is not the `task` tool acting on behalf of a
+// spawning parent, and has no callerID of its own to validate against).
+//
+// A RUNNING target gets text (with optional blobs) appended to its own
+// durable prompt queue and this returns (true, nil) at once; delivery
+// happens at the target's own next tool-call boundary or via
+// drainQueueAndPrompt's own post-turn drain, exactly like
+// SendToDescendant. A SETTLED (idle/done/failed) target is reserved
+// (reserveSendLocked, the SAME admission checks Send itself uses) and
+// driven in a freshly launched goroutine — non-blocking here too, like
+// every other entry point in this package (Spawn, Send,
+// SendToDescendant) — returning (false, nil); the caller learns the
+// turn's outcome the same way it learns a Spawn'd child's own result
+// (session.info polling, or the ChildTurnObserver hook this same PR
+// adds for a depth>0 target). Returns ErrUnknownSession,
+// ErrSessionCanceled, or ErrConcurrencyLimit exactly like Send/CanSend's
+// own admission errors on refusal — never ErrSessionBusy, which Send
+// alone can still return: a Running target queues here instead of
+// refusing.
+//
+// msgID and blobs are threaded straight through to whichever path
+// actually delivers text: the queue branch via enqueueMemoryOnlyLocked
+// (QueuedPrompt.MessageID/Blobs, restored by a later
+// drainQueueAndPrompt dequeue), the settled branch via
+// PromptWithOrigin directly — see drainQueueAndPrompt's own doc comment
+// for why a queued prompt's own id/attachments, not the turn that
+// happens to drain it, is what must reach PromptWithOrigin.
+func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string, blobs ...*message.Blob) (queued bool, err error) {
+	// Trim and filter ONCE, before either delivery path — mirrors
+	// SendToDescendant's identical up-front validation (see its own doc
+	// comment for the asymmetry this closes: an earlier revision let a
+	// blank re-run turn slip through the settled path while the running
+	// path already rejected it).
+	text = strings.TrimSpace(text)
+	usable := usablePromptBlobs(blobs)
+	if text == "" && len(usable) == 0 {
+		return false, ErrEmptyPromptText
+	}
+	resolvedID := ResolveMessageID(msgID)
+
+	m.mu.Lock()
+	n, ok := m.nodes[id]
+	if !ok {
+		m.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if n.status == StatusCanceled {
+		m.mu.Unlock()
+		return false, ErrSessionCanceled
+	}
+	if n.status == StatusRunning {
+		// See SendToDescendant's running-target branch for the full
+		// reasoning behind every step here — this is that same
+		// sequence, verbatim, minus the caller-id it has no use for:
+		// mutate the queue and park its durable record while STILL
+		// HOLDING m.mu (atomic with respect to finalizeTurn's own
+		// matching re-check), defer the actual disk write via
+		// deferPersist/unlockAndFlushPersist so it runs after m.mu
+		// releases rather than stalling every OTHER session's own
+		// Info/Reap/Spawn/finalize call on this ONE session's fsync.
+		s := n.session
+		s.mu.Lock()
+		p := s.enqueueMemoryOnlyLocked(text, resolvedID, usable...)
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs},
+			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+		s.mu.Unlock()
+		m.deferQueueRecordFlush(s)
+		m.unlockAndFlushPersist()
+		return true, nil
+	}
+	// Settled: reserve the turn HERE, inside this SAME m.mu critical
+	// section that just checked id's existence/status — not via a
+	// separate later call re-acquiring m.mu from scratch. See
+	// reserveSendLocked's own doc comment for the Reap race this avoids
+	// (a concurrent Reap collecting an already-terminal leaf in the gap
+	// between a released lock and a fresh re-acquire).
+	s, nodeCtx, isChild, rerr := m.reserveSendLocked(id)
+	m.unlockAndFlushPersist()
+	if rerr != nil {
+		// ErrSessionCanceled/ErrConcurrencyLimit: reachable.
+		// ErrSessionBusy/ErrUnknownSession are NOT reachable from here —
+		// status was already confirmed not Running and id confirmed
+		// tracked moments ago, under this one unbroken m.mu hold —
+		// mirrors SendToDescendant's identical defensive-dead-code note.
+		return false, rerr
+	}
+	go func() {
+		runCtx, stop := mergeCancel(ctx, nodeCtx)
+		defer stop()
+		var msg *message.Message
+		var perr error
+		if isChild {
+			msg, perr = drainQueueAndPrompt(runCtx, s, text, resolvedID, usable)
+		} else {
+			msg, perr = s.PromptWithOrigin(runCtx, text, "", resolvedID, usable...)
+		}
+		if resume := m.finalizeTurn(id, msg, perr); resume != nil {
+			go resume()
+		}
+	}()
+	return false, nil
 }
 
 // reserveSendLocked performs Send's own admission checks and slot
@@ -3740,7 +3922,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// descendant here (isDescendantLocked guaranteed it above), so
 		// isChild is always true — this call can never actually reach a
 		// root.
-		msg, perr := drainQueueAndPrompt(nodeCtx, s, text)
+		msg, perr := drainQueueAndPrompt(nodeCtx, s, text, "", nil)
 		if resume := m.finalizeTurn(targetID, msg, perr); resume != nil {
 			go resume()
 		}
@@ -3927,7 +4109,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 			nodeCtx := n.ctx
 			m.unlockAndFlushPersist()
 			return func() {
-				nmsg, nperr := drainQueueAndPrompt(nodeCtx, s, next.Text)
+				nmsg, nperr := drainQueueAndPrompt(nodeCtx, s, next.Text, next.MessageID, next.Blobs)
 				// go, not inline — matching every other recursive resume
 				// invocation in this file (triggerResumeLocked's own
 				// closures): keeps a pathological repeatedly-re-enqueued
@@ -4064,6 +4246,24 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 			n.result = msg.Parts.Text()
 		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
+	}
+	// ChildTurnObserver fires for exactly the same terminal transition
+	// notify above was built for — n.parentID != "" is precisely the
+	// three non-root cases (alreadyCanceled/perr!=nil/default), never
+	// the root's own idle-or-re-triggered branch above (see
+	// ChildTurnObserver's own doc comment for why a root must never
+	// double-fire this alongside server/handlers.go's own recordTurnEnd).
+	// Queued via deferPersist — run AFTER m.mu releases, in this same
+	// goroutine, in order — rather than called inline here under m.mu:
+	// the same discipline this method already applies to every other
+	// side effect a hook or a persist call might do (see deferPersist's
+	// own doc comment), so an observer that does real work (a durable
+	// journal write, in server's own wiring) never runs under the
+	// tree-wide lock every OTHER session's own Info/Reap/Spawn/finalize
+	// call also needs.
+	if n.parentID != "" && m.childTurnObserver != nil {
+		observer, cid, cmsg, cerr, canceled := m.childTurnObserver, n.id, msg, perr, alreadyCanceled
+		m.deferPersist(func() { observer(cid, cmsg, cerr, canceled) })
 	}
 	// One notification for the whole terminal transition above: every
 	// field it writes (finalized, status, result, failReason) is set
