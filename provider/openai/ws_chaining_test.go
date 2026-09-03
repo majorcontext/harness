@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -228,6 +229,14 @@ type wsLineageServer struct {
 	*httptest.Server
 	scripts chan wsLineageScript
 	frames  chan []byte
+	// conns counts accepted websocket upgrades, so a recovery test can
+	// assert a retry landed on a genuinely new connection instead of the
+	// one whose conversation the server just rejected.
+	conns int32
+}
+
+func (ts *wsLineageServer) connCount() int32 {
+	return atomic.LoadInt32(&ts.conns)
 }
 
 func newWSLineageServer(t *testing.T) *wsLineageServer {
@@ -248,6 +257,7 @@ func newWSLineageServer(t *testing.T) *wsLineageServer {
 		if err != nil {
 			return
 		}
+		atomic.AddInt32(&ts.conns, 1)
 		defer conn.Close(websocket.StatusNormalClosure, "")
 		for {
 			_, frame, err := conn.Read(r.Context())
@@ -697,5 +707,132 @@ func TestPreviousResponseNotFoundCodeOnlyDoesNotLeaveEntryBusy(t *testing.T) {
 	entry.mu.Unlock()
 	if busy {
 		t.Fatal("pool entry remains busy after code-only chain-miss recovery")
+	}
+}
+
+// http404ChainMissFrame mirrors chainMissFrame's shape but with the plain
+// HTTP-status vocabulary ("404") the live Codex backend has also been
+// observed using for an identical "this response/conversation is gone"
+// rejection, instead of the literal previous_response_not_found code.
+func http404ChainMissFrame() string {
+	return `{"type":"error","code":"404","message":"conversation not found"}`
+}
+
+func TestNotFoundHTTPStatusCodeRecoversLikeChainMiss(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "http-status-recovery")
+	server.scripts <- wsLineageScript{beforeWait: []string{http404ChainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("http-status-recovery", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	incremental := decodeResponseCreate(t, <-server.frames)
+	fullRetry := decodeResponseCreate(t, <-server.frames)
+	if incremental.PreviousResponseID != "resp_secret_lineage" {
+		t.Fatalf("initial request previous_response_id = %q, want resp_secret_lineage", incremental.PreviousResponseID)
+	}
+	if fullRetry.PreviousResponseID != "" || len(fullRetry.Input) != 3 {
+		t.Fatalf("recovery request = previous %q, %d items; want complete request without lineage", fullRetry.PreviousResponseID, len(fullRetry.Input))
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("terminal event = %+v, want a recovered EventDone", terminal)
+	}
+}
+
+func TestChainMissRecoveryDialsFreshConnection(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "fresh-dial-recovery")
+	connsBefore := server.connCount()
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	streamLineageTurn(t, client, lineageRequest("fresh-dial-recovery", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+
+	if connsAfter := server.connCount(); connsAfter != connsBefore+1 {
+		t.Fatalf("connection count after recovery = %d, want %d: recovery must dial a fresh connection instead of resending on the one the server just rejected", connsAfter, connsBefore+1)
+	}
+}
+
+// TestPropertyMismatchNotFoundOnReusedConnectionRecovers covers a model
+// switch: responsesRequestPropertiesMatch already refuses to chain a
+// request whose properties (e.g. Model) changed, so the request that hits
+// the wire is a FULL request with no previous_response_id. But the pooled
+// connection sending it can still be the same socket the server evicted —
+// so a not-found on that connection's first frame must recover exactly
+// like an explicit previous_response_id chain miss, not hard-error.
+func TestPropertyMismatchNotFoundOnReusedConnectionRecovers(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "mismatch-recovery")
+	connsBefore := server.connCount()
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_after_switch", "done")}
+
+	mismatch := lineageRequest("mismatch-recovery", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three"))
+	mismatch.MaxTokens = 200 // forces a property mismatch: a complete, non-chained request
+	events := streamLineageTurn(t, client, mismatch)
+
+	sent := decodeResponseCreate(t, <-server.frames)
+	if sent.PreviousResponseID != "" || len(sent.Input) != 3 {
+		t.Fatalf("mismatched request = previous %q, %d items; want a complete request with no chaining", sent.PreviousResponseID, len(sent.Input))
+	}
+	fullRetry := decodeResponseCreate(t, <-server.frames)
+	if fullRetry.PreviousResponseID != "" || len(fullRetry.Input) != 3 {
+		t.Fatalf("recovery retry = previous %q, %d items; want complete request without lineage", fullRetry.PreviousResponseID, len(fullRetry.Input))
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("terminal event = %+v, want a recovered EventDone", terminal)
+	}
+	if connsAfter := server.connCount(); connsAfter != connsBefore+1 {
+		t.Fatalf("connection count after recovery = %d, want %d", connsAfter, connsBefore+1)
+	}
+}
+
+// TestFreshDialFirstTurnNotFoundDoesNotRecover guards the other edge: a
+// session's very first request, on a freshly dialed connection, that is
+// also not chained has no stale conversation to recover from — a
+// not-found there is a genuine error, not a chain miss.
+func TestFreshDialFirstTurnNotFoundDoesNotRecover(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("cold-start", userMessage("one")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	_, streamErr := drainLineageStream(stream)
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "previous_response_not_found") {
+		t.Fatalf("stream error = %v, want a cold-start chain miss (nothing stale to recover from) to escape", streamErr)
+	}
+	<-server.frames // the one legitimate request
+	if got := len(server.frames); got != 0 {
+		t.Fatalf("extra websocket frames = %d, want no retry on a fresh dial's first-ever request", got)
+	}
+}
+
+func TestNotFoundAfterRecoveryDialEscapesWithoutInfiniteRetry(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "double-miss")
+	connsBefore := server.connCount()
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: []string{chainMissFrame()}}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("double-miss", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	_, streamErr := drainLineageStream(stream)
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "previous_response_not_found") {
+		t.Fatalf("stream error = %v, want the second chain miss (on the freshly dialed connection) to escape", streamErr)
+	}
+	if connsAfter := server.connCount(); connsAfter != connsBefore+1 {
+		t.Fatalf("connection count = %d, want exactly %d: one recovery dial and no further retries", connsAfter, connsBefore+1)
 	}
 }

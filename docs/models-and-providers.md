@@ -391,13 +391,21 @@ complete request without `previous_response_id`. The complete body remains
 immutable and is also the body used for every HTTP fallback.
 
 A dial, send, or first-frame transport failure clears lineage and uses the
-existing HTTP fallback for that call. A chained request can also recover once
-on the same socket when its immediate first frame reports
-`previous_response_not_found`: the adapter clears lineage and sends the
-complete request. It does not spend an engine retry. A later chain miss never
-uses this recovery, even if earlier frames carried no visible output. A miss
-after visible output is a truncated stream; other non-immediate or repeated
-misses use the normal provider error path.
+existing HTTP fallback for that call. A request can also recover once when its
+immediate first frame reports a chain miss — the documented
+`previous_response_not_found` code, or the `404`/`not_found` HTTP-status
+vocabulary the same rejection has also carried — as long as the request was
+chained, or its connection was reused: a reused connection can carry the
+server's own implicit session state even when the local request is already
+complete (a model switch, for example, whose next request the property
+comparison above already refuses to chain). Recovery dials a fresh connection,
+clears lineage, and sends the complete request there rather than resending on
+the connection that produced the miss. It does not spend an engine retry. A
+later chain miss never uses this recovery, even if earlier frames carried no
+visible output; nor does a first-frame miss on a freshly dialed connection
+carrying a non-chained request, which has nothing stale to recover from. A miss
+after visible output is a truncated stream; other non-immediate, repeated, or
+non-recoverable misses use the normal provider error path.
 
 A completed WebSocket call attaches request projection metadata to
 `provider.EventDone`: `request_mode` (`full` or `incremental`),

@@ -246,6 +246,16 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 
 	recoveryAttempted := false
 	chainedRequest := createOptions.PreviousResponseID != ""
+	// recoverable gates chain-miss recovery beyond an explicit
+	// previous_response_id: a REUSED pooled connection can carry the
+	// server's own implicit session/conversation state even when this
+	// particular request is already a complete, non-chained one (for
+	// example the first request after a model switch, which
+	// responsesRequestPropertiesMatch already refuses to chain). A
+	// not-found on that connection is still recoverable. A brand-new dial
+	// serving a non-chained request has nothing stale to recover from, so
+	// its not-found is a genuine error.
+	recoverable := !req.Prewarm && (chainedRequest || reuse)
 	newSource := func(name string, data []byte) *wsFrameSource {
 		return &wsFrameSource{
 			ctx:         ctx,
@@ -255,7 +265,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			onTerminal: func(name string, data []byte, first bool) {
 				// Keep only a first-frame chain miss on the socket until stream.Next
 				// replaces it with the immutable complete request below.
-				if first && chainedRequest && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
+				if first && recoverable && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
 					return
 				}
 				entry.mu.Lock()
@@ -331,10 +341,9 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			}
 		},
 	}
-	if chainedRequest {
+	if recoverable {
 		st.recoverChainMiss = func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error) {
 			recoveryAttempted = true
-			p.clearLineage(entry, generation)
 			if !first || visible {
 				// wsFrameSource.onTerminal already released and invalidated this
 				// non-first error. Repeating that cleanup here can race with and
@@ -344,6 +353,33 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 				}
 				return nil, nil, chainErr
 			}
+			// The server just rejected this socket's conversation/response
+			// reference — whether we explicitly sent one (previous_response_id)
+			// or the connection was reused and carried the server's own implicit
+			// session state. Resending on the SAME socket risks the server
+			// tying the rejection to the connection itself, not only to one
+			// response ID, so drop this session's entire pooled connection and
+			// lineage and dial a genuinely new one before retrying — the same
+			// generation-bump-twice pattern stream() itself uses on a non-reuse
+			// dial, so a concurrent invalidation cannot resurrect stale state.
+			p.invalidate(entry)
+			newConn, dialResp, dialErr := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
+			if dialErr != nil {
+				p.recordFailure(entry)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(dialErr)
+			}
+			entry.mu.Lock()
+			entry.conn = newConn
+			entry.connectedAt = time.Now()
+			if req.Family == CodexFamily && dialResp != nil {
+				entry.subUsage = codexSubscriptionUsageFromHeaders(dialResp.Header)
+			}
+			entry.lineage = nil
+			entry.generation++
+			generation = entry.generation
+			entry.mu.Unlock()
+			conn = newConn
 			if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
 				p.handleTransportError(entry, err)
 				p.release(entry)

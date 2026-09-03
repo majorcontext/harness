@@ -579,8 +579,24 @@ func (e *previousResponseNotFoundError) Error() string {
 	return fmt.Sprintf("openai: %s (previous_response_not_found)", e.message)
 }
 
+// isNotFoundErrorCode reports whether code identifies a Codex Responses
+// rejection meaning "the referenced prior response/conversation no longer
+// exists": the API's documented previous_response_not_found code, plus the
+// plain HTTP-status vocabulary ("404", "not_found") the same condition has
+// also been observed to arrive as. Both streamError and
+// isPreviousResponseNotFoundFrame classify on this one predicate, so a chain
+// miss recovers the same way regardless of which vocabulary the backend used.
+func isNotFoundErrorCode(code string) bool {
+	switch code {
+	case "previous_response_not_found", "404", "not_found":
+		return true
+	default:
+		return false
+	}
+}
+
 func streamError(code, message string) error {
-	if code == "previous_response_not_found" {
+	if isNotFoundErrorCode(code) {
 		if message == "" {
 			message = "previous response not found"
 		}
@@ -612,7 +628,7 @@ func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
 		} `json:"error"`
 	}
 	return json.Unmarshal(data, &ev) == nil &&
-		(ev.Code == "previous_response_not_found" || ev.Response.Error.Code == "previous_response_not_found" || ev.Error.Code == "previous_response_not_found")
+		(isNotFoundErrorCode(ev.Code) || isNotFoundErrorCode(ev.Response.Error.Code) || isNotFoundErrorCode(ev.Error.Code))
 }
 
 func (s *stream) handle(name string, data []byte) error {
@@ -784,11 +800,11 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("openai: stream error: %s", data)
 		}
 		switch {
-		case ev.Response.Error.Code == "previous_response_not_found":
+		case isNotFoundErrorCode(ev.Response.Error.Code):
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
-		case ev.Error.Code == "previous_response_not_found":
+		case isNotFoundErrorCode(ev.Error.Code):
 			return streamError(ev.Error.Code, ev.Error.Message)
-		case ev.Code == "previous_response_not_found":
+		case isNotFoundErrorCode(ev.Code):
 			return streamError(ev.Code, ev.Message)
 		case ev.Response.Error.Message != "":
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
