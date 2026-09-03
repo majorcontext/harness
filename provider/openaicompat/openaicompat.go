@@ -465,9 +465,12 @@ func (s *stream) handle(data []byte) error {
 		s.text.WriteString(choice.Delta.Content)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content})
 	}
-	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost),
-	// reasoning (OpenRouter), or reasoning_details (Gemini via Bifrost).
-	// Surface whichever is present as a Reasoning part.
+	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
+	// reasoning (OpenRouter), and Gemini via Bifrost delivers structured
+	// reasoning_details. Surface whichever is present as a Reasoning part.
+	// reasoning_content and reasoning are alternative spellings for the same
+	// field (else-if) to avoid double-counting if a proxy echoes both.
+	// reasoning_details is parsed independently.
 	if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
@@ -476,13 +479,12 @@ func (s *stream) handle(data []byte) error {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
-	} else if len(choice.Delta.ReasoningDetails) > 0 {
-		for _, rd := range choice.Delta.ReasoningDetails {
-			if rd.Text != "" {
-				s.haveReasoning = true
-				s.reasoningText.WriteString(rd.Text)
-				s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
-			}
+	}
+	for _, rd := range choice.Delta.ReasoningDetails {
+		if rd.Text != "" {
+			s.haveReasoning = true
+			s.reasoningText.WriteString(rd.Text)
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
 		}
 	}
 	for _, tc := range choice.Delta.ToolCalls {
