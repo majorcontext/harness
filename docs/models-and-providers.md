@@ -431,8 +431,8 @@ lazily, uses compression level 3, and is pooled for concurrent HTTP calls. Debug
 logs report only compression duration and byte counts.
 
 An encoder initialization failure aborts the HTTP request before any bytes are
-sent. The adapter never labels uncompressed bytes with `Content-Encoding:
-zstd`.
+sent. The adapter never labels uncompressed bytes with the zstd
+`Content-Encoding` value.
 
 ## Anthropic cache TTL (default 1 hour)
 

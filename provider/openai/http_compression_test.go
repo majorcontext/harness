@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +50,22 @@ func compressionRequest(family string) *provider.Request {
 	}
 }
 
+func compressionRequestGolden(t *testing.T) []byte {
+	t.Helper()
+	text, err := json.Marshal(strings.Repeat("compressible input ", 128))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []byte(`{"model":"gpt-test","instructions":"stable system","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(text) + `}]}],"max_output_tokens":64,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"prompt_cache_key":"session-compression"}`)
+}
+
+func assertCompressionRequestGolden(t *testing.T, body []byte) {
+	t.Helper()
+	if want := compressionRequestGolden(t); !bytes.Equal(body, want) {
+		t.Fatalf("request body differs from golden\n got: %s\nwant: %s", body, want)
+	}
+}
+
 func writeCompletedResponse(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_compressed"}}`))
@@ -71,13 +88,7 @@ func TestCodexHTTPCompressesRequestWithZstd(t *testing.T) {
 	defer stream.Close()
 	collect(t, stream)
 
-	var wire apiRequest
-	if err := json.Unmarshal(decoded, &wire); err != nil {
-		t.Fatalf("decompressed request is not JSON: %v", err)
-	}
-	if wire.Model != "gpt-test" || wire.PromptCacheKey != "session-compression" || wire.Store {
-		t.Fatalf("decompressed request = %+v", wire)
-	}
+	assertCompressionRequestGolden(t, decoded)
 }
 
 func TestWebSocketFailureFallsBackToZstdHTTP(t *testing.T) {
@@ -89,9 +100,7 @@ func TestWebSocketFailureFallsBackToZstdHTTP(t *testing.T) {
 		}
 		httpCalls++
 		decoded := decodeZstdRequest(t, r)
-		if !json.Valid(decoded) {
-			t.Fatalf("decompressed fallback body is not JSON: %q", decoded)
-		}
+		assertCompressionRequestGolden(t, decoded)
 		writeCompletedResponse(w)
 	}))
 	defer server.Close()
@@ -130,7 +139,18 @@ func TestGenericOpenAIHTTPRemainsUncompressed(t *testing.T) {
 	}
 	defer stream.Close()
 	collect(t, stream)
-	if !json.Valid(body) {
-		t.Fatalf("generic OpenAI body is not plain JSON: %q", body)
+	assertCompressionRequestGolden(t, body)
+}
+
+func TestZstdEncoderPoolWaitHonorsCancellation(t *testing.T) {
+	pool := zstdRequestEncoderPool{capacity: 1}
+	pool.initialize()
+	pool.slots <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := pool.compress(ctx, []byte("request"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("compress error = %v, want context.Canceled", err)
 	}
+	<-pool.slots
 }

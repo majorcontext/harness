@@ -204,7 +204,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 
 	httpBody := body
 	if c.family() == CodexFamily {
-		httpBody, err = compressCodexHTTPRequest(body)
+		httpBody, err = compressCodexHTTPRequest(ctx, body)
 		if err != nil {
 			return nil, err
 		}
