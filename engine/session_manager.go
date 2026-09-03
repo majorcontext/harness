@@ -4170,7 +4170,19 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// maybeDispatchQueued's "No-double-delivery equivalence", invariant
 	// 7, server/handlers.go). Every item still IN the queue is untouched,
 	// exactly as documented.
-	if !external && n.parentID != "" && n.status != StatusCanceled && n.ctx.Err() == nil {
+	//
+	// n.depth > 0, not n.parentID != "" — a live review finding, the
+	// SAME fix and the SAME reason as ChildTurnObserver's own gate
+	// below: a WARM ORPHAN (depth > 0, restored from its durable
+	// TaskDepth, but live n.parentID left empty — see
+	// adoptReloadedLocked's "true depth is unrecoverable" branch and
+	// TestReloadedChildWithUnknownParentUsesDurableTaskDepth) used to
+	// skip this re-drive entirely, silently stranding a message queued
+	// against it in this exact finalize window — never delivered, never
+	// even attempted, with no error surfaced anywhere. depth > 0 is
+	// never true for a root, so this is a pure widening for the
+	// warm-orphan case, not a behavior change for an ordinary child.
+	if !external && n.depth > 0 && n.status != StatusCanceled && n.ctx.Err() == nil {
 		s := n.session
 		s.mu.Lock()
 		next, ok := s.dequeueMemoryOnlyLocked()
@@ -4220,7 +4232,29 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// launching its goroutine — see triggerResumeLocked's doc comment.
 	var notify *taskNotification
 	switch {
-	case n.parentID == "":
+	case n.depth == 0:
+		// n.depth == 0, not n.parentID == "" — a live review finding,
+		// the SAME class of fix as ChildTurnObserver's and the
+		// queued-message re-drive's own gates above: a WARM ORPHAN
+		// (depth > 0, restored from its durable TaskDepth, but live
+		// n.parentID left empty — see adoptReloadedLocked's "true depth
+		// is unrecoverable" branch) used to take THIS root branch,
+		// settling at StatusIdle — a status value no depth>0 node
+		// should ever carry — instead of its genuine terminal outcome
+		// (done/failed/canceled) below. Two concrete, observable
+		// consequences: Reap's own eligibility switch never collects a
+		// node stuck at StatusIdle (a permanent per-process leak for
+		// every warm orphan that ever settles), and any caller polling
+		// this node's status over the wire saw "idle" — a live,
+		// resumable-sounding state — for a session that had, in fact,
+		// already finished for good. n.depth == 0 is true for a root
+		// and ONLY a root (a live parent always implies depth =
+		// parent.depth + 1 > 0, and a warm orphan's depth is restored
+		// from its own durable TaskDepth specifically so this reads
+		// correctly even with no live parent to derive it from) — a
+		// pure correctness fix, not a behavior change for either a
+		// genuine root or an ordinary, non-orphaned child.
+		//
 		// Root sessions have no parent to notify and no assignment to
 		// complete — see SessionStatus's doc comment. A root already
 		// marked canceled (Cancel() raced ahead of this call) STAYS
@@ -4326,12 +4360,41 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
 	}
-	// ChildTurnObserver fires for exactly the same terminal transition
-	// notify above was built for — n.parentID != "" is precisely the
-	// three non-root cases (alreadyCanceled/perr!=nil/default), never
-	// the root's own idle-or-re-triggered branch above (see
-	// ChildTurnObserver's own doc comment for why a root must never
-	// double-fire this alongside server/handlers.go's own recordTurnEnd).
+	// ChildTurnObserver fires for exactly the same node ChildTurnStart
+	// Observer already fired for — n.depth > 0, the SAME predicate
+	// reserveSendLocked's own start-side gate uses, NOT n.parentID != ""
+	// — a live review finding: a WARM ORPHAN (a child reloaded and
+	// adopted while its true parent is untracked — adoptReloadedLocked's
+	// "true depth is unrecoverable" branch — has depth > 0, restored
+	// from its own durable TaskDepth, but its LIVE n.parentID is left
+	// EMPTY, since only depth, not the parent id itself, is recoverable
+	// in that case; see TestReloadedChildWithUnknownParentUsesDurable
+	// TaskDepth) is depth > 0 but n.parentID == "" — gating on parentID
+	// fired the START observer (reserveSendLocked already used depth)
+	// but skipped this END one entirely, permanently stranding the node
+	// "busy" from a consumer's point of view with no matching idle/
+	// turn.end ever coming, and (see the sibling gate just above this
+	// method's queued-message re-drive check, which had the identical
+	// bug) silently dropping a message queued against it during this
+	// exact finalize window. depth > 0 is never true for a root (see
+	// ChildTurnStartObserver's own doc comment), so this remains exactly
+	// as scoped to non-root nodes as the old check was for every OTHER
+	// (non-orphan) child — a pure widening, not a behavior change for
+	// the ordinary case.
+	//
+	// !external, matching the re-drive gate's own identical guard just
+	// above: this fires for a turn THIS package drove directly (Spawn,
+	// Send, SendOrQueue, SendToDescendant, triggerResumeLocked) — a
+	// depth>0 node driven externally via ReportTurnEnd(external=true)
+	// would otherwise double-emit turn.end, once from this observer and
+	// once from the external driver's own completion handling (today
+	// only a ROOT reaches ReportTurnEnd through this server's runPrompt/
+	// runGoal, so external is always false for a depth>0 node in
+	// practice — this guard closes the latent gap for a future caller
+	// that adopts a depth>0 node into its own external scheduler,
+	// exactly as unlikely-but-cheap-to-guard-against as the re-drive
+	// gate's own identical check already treats it).
+	//
 	// Queued via deferPersist — run AFTER m.mu releases, in this same
 	// goroutine, in order — rather than called inline here under m.mu:
 	// the same discipline this method already applies to every other
@@ -4340,7 +4403,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// journal write, in server's own wiring) never runs under the
 	// tree-wide lock every OTHER session's own Info/Reap/Spawn/finalize
 	// call also needs.
-	if n.parentID != "" && m.childTurnObserver != nil {
+	if !external && n.depth > 0 && m.childTurnObserver != nil {
 		observer, cid, cmsg, cerr, canceled := m.childTurnObserver, n.id, msg, perr, alreadyCanceled
 		m.deferPersist(func() { observer(cid, cmsg, cerr, canceled) })
 	}
@@ -4350,18 +4413,23 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// fully settled node. See markChangedLocked's own doc comment.
 	m.markChangedLocked()
 
-	// n.parentID != "" here exactly when notify != nil was possible (the
-	// three non-root cases above) — a CHILD that just went terminal
-	// itself (done/failed/canceled) will never run another turn of its
-	// own (see SessionStatus's doc comment), so if it was ALSO a parent
-	// with its own pending notifications (from grandchildren that
-	// completed too late for it to ever check out itself), those would
-	// be stranded forever on a node that will never read its queue again
-	// — forward them to the SAME nearest-live-ancestor target its own
-	// completion notification uses, rather than dropping them. A live
-	// review caught this exact gap.
+	// n.depth > 0 here exactly when notify != nil was possible (the
+	// three non-root cases above, now gated on n.depth == 0 rather than
+	// n.parentID == "" — see that switch's own doc comment for why) — a
+	// CHILD that just went terminal itself (done/failed/canceled) will
+	// never run another turn of its own (see SessionStatus's doc
+	// comment), so if it was ALSO a parent with its own pending
+	// notifications (from grandchildren that completed too late for it
+	// to ever check out itself), those would be stranded forever on a
+	// node that will never read its queue again — forward them to the
+	// SAME nearest-live-ancestor target its own completion notification
+	// uses, rather than dropping them. A live review caught this exact
+	// gap; matching this gate to the switch's own predicate closes the
+	// identical gap for a warm orphan specifically (n.parentID == ""
+	// here used to skip forwarding entirely for one, silently dropping
+	// any pending grandchild notification it was carrying).
 	var forwarded []taskNotification
-	if n.parentID != "" && n.session.hasPendingTaskNotifications() {
+	if n.depth > 0 && n.session.hasPendingTaskNotifications() {
 		forwarded = n.session.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 

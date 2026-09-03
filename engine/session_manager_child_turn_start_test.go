@@ -303,3 +303,133 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 		}
 	}
 }
+
+// TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize is the regression
+// test for a live review finding: a WARM ORPHAN — a child reloaded and
+// adopted while its true parent is untracked (adoptReloadedLocked's
+// "true depth is unrecoverable" branch: depth is restored from the
+// child's own durable TaskDepth, but its live parentID is left empty —
+// see TestReloadedChildWithUnknownParentUsesDurableTaskDepth) — is
+// depth > 0 but parentID == "". Both routing endpoints
+// (server/handlers.go, server/session_tree.go) already route such a
+// session down the CHILD path on the durable TaskParentID() signal, so
+// this shape is reachable in practice, not merely theoretical.
+//
+// Before the fix, ChildTurnObserver and finalizeTurnFrom's own
+// queued-message re-drive both gated on the LIVE n.parentID != "" —
+// disagreeing with ChildTurnStartObserver's own n.depth > 0 gate (the
+// same predicate reserveSendLocked's start-side check already used). A
+// warm orphan's relaunch fired a start (busy) but never a matching end
+// (idle/turn.end) — permanently stuck "busy" from a consumer's point of
+// view — and a message enqueued against it in the finalize window was
+// silently stranded rather than delivered. Both gates now key on
+// n.depth > 0, exactly matching the start side.
+func TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize(t *testing.T) {
+	dir := t.TempDir()
+
+	// mgr1: spawn a child under a tracked root and let it settle done —
+	// ordinary, well-tracked shape.
+	childProv1 := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "first done"})}}
+	cfg1 := managedConfig("root", scriptedTurns("root", nil), childProv1)
+	cfg1.SessionDir = dir
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root := mgr1.NewRoot(cfg1)
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+
+	// mgr2: a FRESH SessionManager (a different process, or this same
+	// process after Reap collected the root while the child stayed
+	// live) reloads ONLY the child from disk and adopts it directly —
+	// its true parent is untracked here, producing the warm-orphan
+	// shape (depth > 0, parentID == "") this test targets.
+	release := make(chan struct{})
+	started := make(chan struct{})
+	childProv2 := &blockFirstThenScriptedProvider{
+		name: "child", release: release, started: started,
+		turns: [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "second done"})},
+	}
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	reloaded, err := LoadSession(Config{SessionDir: dir, Providers: provider.Registry{"child": childProv2}, Model: modelFor("child")}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if err := mgr2.AdoptReloaded(reloaded); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("Info after AdoptReloaded: not found")
+	}
+	if info.ParentID != "" || info.Depth != 1 {
+		t.Fatalf("adopted warm-orphan info = %+v, want ParentID empty and Depth 1 — test setup invalid", info)
+	}
+	if info.Status != StatusDone {
+		t.Fatalf("adopted warm-orphan status = %s, want done (recover=true should restore its true settled state) — test setup invalid", info.Status)
+	}
+
+	starts := make(chan string, 2)
+	ends := make(chan string, 2)
+	mgr2.SetChildTurnStartObserver(func(id string) { starts <- id })
+	mgr2.SetChildTurnObserver(func(id string, _ *message.Message, _ error, _ bool) { ends <- id })
+
+	// SendOrQueue's settled-target relaunch: a genuinely NEW,
+	// internally-driven (external=false) turn — the exact path
+	// reserveSendLocked/finalizeTurnFrom's fixed gates cover, unlike
+	// ReportTurnStart/ReportTurnEnd's external=true path, which this
+	// fix deliberately does NOT touch (see the !external guard).
+	queued, err := mgr2.SendOrQueue(context.Background(), childID, "second turn", "")
+	if err != nil {
+		t.Fatalf("SendOrQueue: %v", err)
+	}
+	if queued {
+		t.Fatal("SendOrQueue on a done warm orphan: queued = true, want false")
+	}
+
+	select {
+	case id := <-starts:
+		if id != childID {
+			t.Fatalf("start observer id = %q, want %q", id, childID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ChildTurnStartObserver never fired for the warm orphan's relaunch")
+	}
+	<-started // the relaunch turn is genuinely in flight
+
+	// Queue a follow-up while the warm orphan is busy: proves the
+	// message is not merely accepted but genuinely DELIVERED once the
+	// current turn ends, end to end, for a warm orphan exactly like an
+	// ordinary child.
+	queued2, err := mgr2.SendOrQueue(context.Background(), childID, "queued follow-up", "")
+	if err != nil {
+		t.Fatalf("SendOrQueue (follow-up): %v", err)
+	}
+	if !queued2 {
+		t.Fatal("SendOrQueue on a running warm orphan: queued = false, want true")
+	}
+
+	close(release)
+
+	select {
+	case id := <-ends:
+		if id != childID {
+			t.Fatalf("end observer id = %q, want %q", id, childID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ChildTurnObserver (end) never fired for the warm orphan — the bug this test guards against: stuck busy with no matching idle/turn.end")
+	}
+
+	waitForStatus(t, mgr2, childID, StatusDone, time.Second)
+
+	if len(childProv2.requests) != 2 {
+		t.Fatalf("child provider requests = %d, want 2 (the queued follow-up must run as a genuine second turn, not be silently stranded)", len(childProv2.requests))
+	}
+	last := childProv2.requests[1]
+	lastText := last.Messages[len(last.Messages)-1].Parts.Text()
+	if lastText != "queued follow-up" {
+		t.Errorf("second turn's trailing message = %q, want the queued follow-up delivered verbatim", lastText)
+	}
+}
