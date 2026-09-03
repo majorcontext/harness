@@ -1100,11 +1100,15 @@ func TestClaudeCodeExtraArgsCannotOverrideThinkingDisplay(t *testing.T) {
 
 // TestClaudeCodeDisallowsNativeSpawnTools proves runClaudeCodeTurn always
 // sends --disallowedTools naming every native Claude Code tool that spawns
-// a same-family subagent (Agent, Workflow). All subagent spawning in the
-// claude-code lane must go through harness's own cross-family "task" tool
-// (server/mcp_history.go, #223), never the CLI's native same-family
-// equivalent, so those tools are blocked at the argv level rather than
-// relying on the model to prefer one path over the other.
+// a same-family subagent (Agent, Workflow) or binds to Claude Code's own
+// /loop and cron runtime (ScheduleWakeup, CronCreate, CronDelete,
+// CronList). All subagent spawning in the claude-code lane must go through
+// harness's own cross-family "task" tool (server/mcp_history.go, #223),
+// never the CLI's native same-family equivalent. All looping and
+// scheduling inside a box must go through the boxes orchestration MCP's
+// schedule_task and cron tools, never the CLI's native loop runtime, which
+// a box lacks. So these tools are blocked at the argv level rather than
+// relying on the model to prefer the working path on its own.
 func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 	s, logPath := claudeCodeTestSession(t, "normal")
 	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
@@ -1115,7 +1119,7 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("argv has no --disallowedTools: %v", invocations[0])
 	}
-	if want := "Agent,Workflow"; got != want {
+	if want := "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList"; got != want {
 		t.Errorf("--disallowedTools = %q, want %q", got, want)
 	}
 }
