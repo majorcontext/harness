@@ -145,16 +145,32 @@ then `turn.end(<classified outcome>)` — always followed by
 `session.status(idle)`, mirroring `freeRunSlotAndEmitIdle`'s unconditional
 idle emission. A child now streams the identical vocabulary a root does.
 
-**Scope note.** This change adds the SETTLE-side events only (a child's
-turn ending) — it does not add a `session.status(busy)` emission at a
-child's turn START. A root's own zero-events problem was total; a child's
-was too, at the terminal transition this change now covers. Adding a
-symmetric turn-START hook is a separate, smaller feature (a
-`ChildTurnStartObserver` companion, or folding the busy-emission into
-`Spawn`/`SendOrQueue`'s own reservation) left for the coordinator to scope
-separately if wanted — a child's busy state remains discoverable via
-`session.info`/lineage polling in the meantime, exactly as it already was
-before this change.
+The turn-START side is symmetric: `engine.SessionManager` also gains
+`ChildTurnStartObserver`/`SetChildTurnStartObserver`, fired from every
+choke point that transitions a child node into `StatusRunning` to drive
+an actual turn — `reserveSendLocked` (shared by `Send`, `SendOrQueue`'s
+settled-target relaunch, and `SendToDescendant`'s settled-target
+relaunch, gated on `n.depth > 0` so a root sharing that same helper in
+bare-CLI/engine usage never fires it) and `Spawn`'s own initial
+reservation (which never calls `reserveSendLocked`, since it creates a
+brand-new node rather than reserving an existing one). `server.New`
+installs `onChildTurnStart` (`server/journal.go`), which emits the exact
+same event a root's own admission path already emits at the identical
+moment — `Event{Type: evtSessionStatus, Status: "busy"}`, the identical
+type/field shape `sendTextToRoot`/`dispatchQueueHead`/`handleGoal`/
+`handleCompact` all already use.
+
+`ChildTurnStartObserver` stays deliberately 1:1 with `ChildTurnObserver`
+rather than firing once per item `drainQueueAndPrompt` drains internally:
+a message queued against an ALREADY-running child (`SendOrQueue`'s/
+`SendToDescendant`'s running-target branch) is delivered within the SAME
+reserved run the preceding start already announced, and does not get its
+own settle either — the whole drained sequence still starts once and
+settles once. Firing a start per drained item without a matching
+per-item settle would leave more starts than ends for one child, a
+worse mismatch with a root's own well-formed busy/idle bracket than the
+coarser, but internally consistent, one-reservation/one-settle pairing
+this change ships.
 
 ## What is NOT unified, and why
 

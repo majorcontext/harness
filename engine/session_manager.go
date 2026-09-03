@@ -235,6 +235,49 @@ type ExternalRunner func(id, text string) RunnerOutcome
 // step (Spawn's caller has already returned by this point regardless).
 type ChildTurnObserver func(id string, msg *message.Message, err error, canceled bool)
 
+// ChildTurnStartObserver is notified once a CHILD's (depth>0) turn is
+// ADMITTED to run — the mirror-image moment to ChildTurnObserver's own
+// "turn settled" notification. A root's own turn-start is already
+// visible to its driver: this server's own admission path
+// (claimForPrompt/dispatchQueueHead, session_tree.go's sendTextToRoot)
+// emits a "busy" wire event itself, synchronously, the instant it
+// dispatches a turn -- there is no engine-side gap to close for a root.
+// A child has no such external driver: Spawn/Send/SendOrQueue/
+// SendToDescendant all reserve and launch a child's turn from INSIDE
+// this package, with nothing outside it watching that reservation
+// happen -- this is the seam a server layer installs
+// (SetChildTurnStartObserver) to learn the same "a turn is starting"
+// fact for a child that its own admission path already has for a root.
+//
+// Fires from every choke point that transitions a child node into
+// StatusRunning to drive an ACTUAL turn: reserveSendLocked (shared by
+// Send, SendOrQueue's settled-target relaunch, and SendToDescendant's
+// settled-target relaunch, gated there on n.depth > 0 so a root sharing
+// that same helper in bare-CLI/engine usage never fires it) and Spawn's
+// own initial reservation (which never calls reserveSendLocked, since it
+// creates a brand-new node rather than reserving an existing one).
+//
+// Deliberately NOT fired once per item drainQueueAndPrompt drains
+// internally when a message was queued against an ALREADY-running
+// child (SendOrQueue's/SendToDescendant's running-target branch): that
+// queued delivery is delivered within the SAME reserved run the
+// preceding start already announced, and does not get its own
+// ChildTurnObserver settle either -- the whole drained sequence still
+// settles, and this whole run still started, exactly once each. Keeping
+// this 1:1 with ChildTurnObserver (rather than firing once per
+// drained item, which would leave nothing to pair a "second start"
+// with until the SAME single eventual end) is what keeps a consumer's
+// busy/idle bracket well-formed: never more starts than ends for one
+// child.
+//
+// A hook body runs OUTSIDE m.mu -- queued via deferPersist, invoked by
+// whichever caller's own subsequent unlockAndFlushPersist call runs
+// next (reserveSendLocked itself neither locks nor unlocks m.mu; every
+// caller that invokes it already calls unlockAndFlushPersist
+// immediately after -- see that method's own doc comment), mirroring
+// ChildTurnObserver's identical discipline.
+type ChildTurnStartObserver func(id string)
+
 // SessionManager owns every session — one root plus its descendant
 // children — spawned as a tree in one harness process. It is the
 // engine-level home for the subagent-sessions primitive (see the design
@@ -282,6 +325,12 @@ type SessionManager struct {
 	// a bare-engine/CLI SessionManager with no server layered over it
 	// has no wire events to emit in the first place.
 	childTurnObserver ChildTurnObserver
+
+	// childTurnStartObserver, when set, is notified once per ADMITTED
+	// CHILD turn — see ChildTurnStartObserver's own doc comment. Nil
+	// (the default) means nothing is notified, mirroring
+	// childTurnObserver's identical default.
+	childTurnStartObserver ChildTurnStartObserver
 
 	// maxTreeTokens is the opt-in per-tree token budget (see
 	// ErrBudgetExceeded's own doc comment) — 0 (the default; SetMaxTreeTokens
@@ -599,6 +648,15 @@ func (m *SessionManager) SetChildTurnObserver(observer ChildTurnObserver) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.childTurnObserver = observer
+}
+
+// SetChildTurnStartObserver installs observer as described on the
+// ChildTurnStartObserver type — nil (the default) disables it. Safe to
+// call at any time; takes effect on the next admitted child turn.
+func (m *SessionManager) SetChildTurnStartObserver(observer ChildTurnStartObserver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.childTurnStartObserver = observer
 }
 
 // SetMaxTreeTokens installs n as the opt-in per-tree token budget — see
@@ -2846,6 +2904,15 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	n.status = StatusRunning
 	m.markChangedLocked()
 	m.runningByRoot[parent.rootID]++
+	// ChildTurnStartObserver fires for a spawned child's own initial
+	// turn too — Spawn never calls reserveSendLocked (it is creating a
+	// brand-new node, not reserving an existing one), so it needs this
+	// same deferred-observer call inline. See ChildTurnStartObserver's
+	// own doc comment.
+	if m.childTurnStartObserver != nil {
+		observer, cid := m.childTurnStartObserver, child.ID
+		m.deferPersist(func() { observer(cid) })
+	}
 	m.unlockAndFlushPersist()
 
 	// All child lineage, depth, model, agent, and effective tool restrictions
@@ -3227,6 +3294,18 @@ func (m *SessionManager) reserveSendLocked(id string) (s *Session, nodeCtx conte
 	m.markChangedLocked()
 	if n.depth > 0 {
 		m.runningByRoot[n.rootID]++
+		// ChildTurnStartObserver fires HERE, not for a root sharing this
+		// same helper in bare-CLI/engine usage (see ChildTurnStartObserver's
+		// own doc comment for why a root needs no such notification: its
+		// own admission path already emits its "busy" event itself).
+		// Deferred via deferPersist — this method neither locks nor
+		// unlocks m.mu itself, so the closure runs whenever the CALLER's
+		// own subsequent unlockAndFlushPersist call drains it, exactly
+		// like every other deferred side effect in this file.
+		if m.childTurnStartObserver != nil {
+			observer, cid := m.childTurnStartObserver, id
+			m.deferPersist(func() { observer(cid) })
+		}
 	}
 	// isChild gates drainQueueAndPrompt to CHILDREN only — see its own
 	// doc comment for why a child needs it (no external tail dispatch).

@@ -755,6 +755,24 @@ func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 // entirely) — a child's Cancel-driven settle is the SAME "the caller
 // asked for this to stop" shape a root's aborted turn is, not an
 // ordinary completion or failure.
+// onChildTurnStart is engine.SessionManager's ChildTurnStartObserver —
+// installed via SetChildTurnStartObserver in server.New, called once a
+// CHILD's own Spawn/Send/SendOrQueue-driven turn is ADMITTED to run
+// (see that hook's own doc comment, engine/session_manager.go). It
+// emits the EXACT SAME event this server's own root admission path
+// already emits at the identical moment for a root — see, for one
+// example among several identical call sites, session_tree.go's
+// sendTextToRoot ("s.emitDurable(Event{Type: evtSessionStatus,
+// SessionID: id, Status: "busy"})") — so a client watching a child's
+// SSE stream sees the identical busy signal it already gets for a
+// root, not just the settle-side turn.end/session.status(idle) pair
+// onChildTurnEnd (below) already provides. A child previously emitted
+// NONE of these: a caller had to poll session.info to learn a child
+// had even started.
+func (s *Server) onChildTurnStart(id string) {
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+}
+
 func (s *Server) onChildTurnEnd(id string, msg *message.Message, err error, canceled bool) {
 	s.syncMessages(id)
 	switch {

@@ -865,6 +865,13 @@ func New(opts Options) (*Server, error) {
 	// server's own runPrompt already emits for a root, instead of a child
 	// streaming no lifecycle events at all.
 	sessMgr.SetChildTurnObserver(s.onChildTurnEnd)
+	// SetChildTurnStartObserver is onChildTurnEnd's mirror-image
+	// counterpart: it is what makes a CHILD's own turn ADMISSION emit
+	// the same "busy" event this server's own root admission path
+	// (claimForPrompt/dispatchQueueHead, sendTextToRoot) already emits
+	// for a root at the identical moment, instead of a child streaming
+	// no start signal at all before this.
+	sessMgr.SetChildTurnStartObserver(s.onChildTurnStart)
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}

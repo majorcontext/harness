@@ -1748,6 +1748,105 @@ func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
 	})
 }
 
+// TestChildTurnStartEmitsBusyEventMatchingRoot proves the turn-START
+// half of item 5: a child's turn admission now emits
+// session.status(busy) — the EXACT event type/field shape a root's own
+// admission path emits at the identical moment (see, for one example
+// among several identical call sites, session_tree.go's sendTextToRoot)
+// — via ChildTurnStartObserver (server.New's onChildTurnStart wiring,
+// journal.go). Before this, a child emitted no start signal at all;
+// only its settle (turn.end/session.status(idle)/session.aborted,
+// TestChildTurnEndEmitsSameEventsAsRoot below) existed.
+//
+// Also asserts ORDERING: the busy record's seq must be strictly less
+// than the eventual idle record's seq for the SAME session, so a
+// consumer never sees them out of order — indistinguishable from a
+// root's own busy-then-idle bracket.
+//
+// Uses the SAME observer-wrapping synchronization technique as
+// TestChildTurnEndEmitsSameEventsAsRoot, for the identical reason: a
+// child's SessionManager-level status transition happens-before either
+// observer is actually invoked, so waiting on lineage status alone
+// would race the very journal writes under test.
+func TestChildTurnStartEmitsBusyEventMatchingRoot(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	started := make(chan struct{})
+	ended := make(chan struct{})
+	mgr := h.srv.SessionManager()
+	mgr.SetChildTurnStartObserver(func(id string) {
+		h.srv.onChildTurnStart(id)
+		close(started)
+	})
+	mgr.SetChildTurnObserver(func(id string, msg *message.Message, err error, canceled bool) {
+		h.srv.onChildTurnEnd(id, msg, err, canceled)
+		close(ended)
+	})
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onChildTurnStart never ran")
+	}
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onChildTurnEnd never ran")
+	}
+
+	h.srv.mu.Lock()
+	var busySeq, idleSeq int64
+	for _, ev := range h.srv.journal {
+		if ev.SessionID != child.ID || ev.Type != evtSessionStatus {
+			continue
+		}
+		switch ev.Status {
+		case "busy":
+			if busySeq == 0 {
+				busySeq = ev.Seq
+			}
+			if ev.SessionID != child.ID || ev.Message != nil || ev.Error != "" {
+				t.Errorf("busy record carries unexpected fields: %+v", ev)
+			}
+		case "idle":
+			if idleSeq == 0 {
+				idleSeq = ev.Seq
+			}
+		}
+	}
+	h.srv.mu.Unlock()
+	if busySeq == 0 {
+		t.Fatal("no session.status(busy) record for the child in the server journal")
+	}
+	if idleSeq == 0 {
+		t.Fatal("no session.status(idle) record for the child in the server journal")
+	}
+	if busySeq >= idleSeq {
+		t.Errorf("busy record seq %d is not strictly before idle record seq %d", busySeq, idleSeq)
+	}
+}
+
 // TestChildTurnEndEmitsSameEventsAsRoot proves item 5 of the
 // unification at the server wire level: a child's settled turn now
 // emits turn.end and session.status(idle) — the SAME durable event
