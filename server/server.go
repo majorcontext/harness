@@ -857,6 +857,21 @@ func New(opts Options) (*Server, error) {
 	// this ordering avoids), so this method value is safe to hand out
 	// immediately, before New even returns.
 	sessMgr.SetExternalRunner(s.resumeSessionForTaskNotification)
+	// SetChildTurnObserver, for the identical reason and at the identical
+	// point as SetExternalRunner just above: it is what makes a CHILD's
+	// own settled turn (Spawn/Send/SendOrQueue-driven — see
+	// ChildTurnObserver's own doc comment, engine/session_manager.go) emit
+	// the SAME turn.end/session.status/session.aborted wire events this
+	// server's own runPrompt already emits for a root, instead of a child
+	// streaming no lifecycle events at all.
+	sessMgr.SetChildTurnObserver(s.onChildTurnEnd)
+	// SetChildTurnStartObserver is onChildTurnEnd's mirror-image
+	// counterpart: it is what makes a CHILD's own turn ADMISSION emit
+	// the same "busy" event this server's own root admission path
+	// (claimForPrompt/dispatchQueueHead, sendTextToRoot) already emits
+	// for a root at the identical moment, instead of a child streaming
+	// no start signal at all before this.
+	sessMgr.SetChildTurnStartObserver(s.onChildTurnStart)
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}

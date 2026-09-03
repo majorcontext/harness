@@ -37,3 +37,4 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 | [managed-processes.md](design/managed-processes.md) | Box-scoped managed process lifecycle |
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |
 | [nested-instruction-loading.md](design/nested-instruction-loading.md) | Project instruction discovery and truncation |
+| [session-send-unification.md](design/session-send-unification.md) | Single-owner session.send/prompt_async routing for a root and a managed child |

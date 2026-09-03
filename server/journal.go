@@ -731,6 +731,62 @@ func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 	s.logWarn("turn end", attrs...)
 }
 
+// onChildTurnEnd is engine.SessionManager's ChildTurnObserver — installed
+// via SetChildTurnObserver in server.New, called once a CHILD's own
+// Spawn/Send/SendOrQueue-driven turn settles (see that hook's own doc
+// comment, engine/session_manager.go). It gives a child the SAME
+// turn.end/session.error/session.aborted/session.status wire events
+// runPrompt already emits for a root, mirroring runPrompt's own
+// err/cancellation switch exactly (server/handlers.go) so a client
+// watching a child's SSE stream sees the identical vocabulary it already
+// gets for a root — a child previously emitted NONE of these, forcing a
+// caller to poll session.info for busy-state instead.
+//
+// syncMessages runs first, exactly like runPrompt's own "catch any
+// message not yet journaled" call: a child's Config.OnEvent is normally
+// wired to this server's Publish (inherited from its parent's own
+// Config, set at session construction — see Spawn's configSnapshot call)
+// so its messages ordinarily already streamed to the journal as they
+// were produced; this is the same harmless, idempotent backstop
+// runPrompt's tail relies on for a root, not a new requirement.
+//
+// canceled reports session.aborted instead of turn.end, matching
+// runPrompt's context.Canceled branch (which also skips recordTurnEnd
+// entirely) — a child's Cancel-driven settle is the SAME "the caller
+// asked for this to stop" shape a root's aborted turn is, not an
+// ordinary completion or failure.
+// onChildTurnStart is engine.SessionManager's ChildTurnStartObserver —
+// installed via SetChildTurnStartObserver in server.New, called once a
+// CHILD's own Spawn/Send/SendOrQueue-driven turn is ADMITTED to run
+// (see that hook's own doc comment, engine/session_manager.go). It
+// emits the EXACT SAME event this server's own root admission path
+// already emits at the identical moment for a root — see, for one
+// example among several identical call sites, session_tree.go's
+// sendTextToRoot ("s.emitDurable(Event{Type: evtSessionStatus,
+// SessionID: id, Status: "busy"})") — so a client watching a child's
+// SSE stream sees the identical busy signal it already gets for a
+// root, not just the settle-side turn.end/session.status(idle) pair
+// onChildTurnEnd (below) already provides. A child previously emitted
+// NONE of these: a caller had to poll session.info to learn a child
+// had even started.
+func (s *Server) onChildTurnStart(id string) {
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+}
+
+func (s *Server) onChildTurnEnd(id string, msg *message.Message, err error, canceled bool) {
+	s.syncMessages(id)
+	switch {
+	case canceled:
+		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
+	case err == nil:
+		s.recordTurnEnd(id, "completed", nil)
+	default:
+		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
+		s.recordTurnEnd(id, turnEndOutcome(err), err)
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
+}
+
 // requestSnapshot is the latest fully-assembled model request for a session,
 // held in memory only (never persisted) to answer GET /session/{id}/request.
 type requestSnapshot struct {

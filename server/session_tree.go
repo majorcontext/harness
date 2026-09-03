@@ -300,7 +300,7 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 // of EnqueuePrompt or runPrompt actually delivers text, so the caller's
 // own response always names the id that ends up in the transcript, never
 // a second, independently-minted one.
-func (s *Server) sendTextToRoot(id, text string, msgID string) (status string, queuedDepth int, errCode int, holder string) {
+func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message.Blob) (status string, queuedDepth int, errCode int, holder string) {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
@@ -333,7 +333,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string) (status string, q
 			// this reason; mirror it. A live review caught this.
 			return "", 0, http.StatusConflict, ""
 		}
-		ourID, _, err := sess.EnqueuePrompt(text, msgID)
+		ourID, _, err := sess.EnqueuePrompt(text, msgID, blobs...)
 		if err != nil {
 			return "", 0, http.StatusBadRequest, ""
 		}
@@ -354,7 +354,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string) (status string, q
 		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
-			if _, _, err := st.sess.EnqueuePrompt(text, msgID); err != nil {
+			if _, _, err := st.sess.EnqueuePrompt(text, msgID, blobs...); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
@@ -366,7 +366,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string) (status string, q
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
 		// goes exclusively through runOrQueueText above.
-		go s.runPrompt(ctx, id, st, text, "", msgID)
+		go s.runPrompt(ctx, id, st, text, "", msgID, blobs...)
 		return "started", 0, 0, ""
 	}
 }
@@ -450,24 +450,95 @@ func (s *Server) writeSendToRootResult(w http.ResponseWriter, id, status string,
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
+// handleSessionSend's request body: `text` is the original, back-compat
+// shape; `parts` is a `text`/`blob` array, the same wire shape
+// handlePrompt's own body.Parts uses (decodePromptParts, prompt_parts.go)
+// — the superset that makes this endpoint canonical for a caller that
+// needs an attachment, not just text (see this file's own package doc
+// comment on the unification). A body carrying `parts` uses it
+// exclusively; `text` is read only when `parts` is empty, so an existing
+// text-only caller's request body is accepted completely unchanged.
+type sessionSendBody struct {
+	Text  string            `json:"text"`
+	Parts []promptPartInput `json:"parts"`
+	// ID mirrors prompt_async's optional client-minted message id (see
+	// handlePrompt's body.ID doc comment) — used verbatim with the same
+	// single fail-safe guard, never validated or rejected.
+	ID string `json:"id"`
+}
+
+// decodeSessionSendBody resolves body into the text-plus-attachments pair
+// handleSessionSend's root and child branches both deliver, applying
+// decodePromptParts' full validation (attachment type/size, empty-parts)
+// whenever the caller used the `parts` shape, and the original
+// empty-text-is-a-400 rule when it used the legacy `text` shape — so an
+// existing text-only client's exact error behavior is unchanged.
+func decodeSessionSendBody(body sessionSendBody) (text string, blobs []*message.Blob, code int, err error) {
+	if len(body.Parts) > 0 {
+		parts, code, err := decodePromptParts(body.Parts)
+		if err != nil {
+			return "", nil, code, err
+		}
+		return parts.Text, parts.Blobs, 0, nil
+	}
+	if body.Text == "" {
+		return "", nil, http.StatusBadRequest, errors.New("text is required")
+	}
+	return body.Text, nil, 0, nil
+}
+
+// handleSessionSend is the canonical session.send endpoint (design doc,
+// Stage 4): deliver a user-role message — text, or text plus attachments
+// via `parts` — to any session this server's SessionManager tracks, root
+// or child, with NO functional difference between the two beyond which
+// admission path each already uses for its own, pre-existing reasons.
+//
+// It is NOT an extension of POST /session/{id}/prompt_async (handlePrompt):
+// a ROOT is routed through sendTextToRoot, the SAME claimForPrompt
+// admission gate prompt_async itself uses — never through
+// SessionManager.SendOrQueue, which would compete with an ordinary
+// prompt_async request for the same root (see ExternalRunner's doc
+// comment on the class of bug this avoids: two independent schedulers
+// both able to start a Session.Prompt call on the same session). A CHILD
+// is routed through SessionManager.SendOrQueue directly — SessionManager
+// is a child's SOLE scheduler, so this can never race a concurrent
+// prompt_async on the same child either: handlePrompt's own child branch
+// (see its doc comment) goes through the exact same SendOrQueue call,
+// the ONE single-owner path either endpoint ever drives a child through.
+//
+// Always asynchronous (like prompt_async): the turn runs in a background
+// goroutine (or is claimed-and-dispatched synchronously by
+// runOrQueueText/SendOrQueue, themselves launching their own goroutine)
+// and this handler returns 202 immediately — the caller polls
+// session.info (GET /session/{id}) for the outcome, exactly like the
+// `task` tool's own callers do, or watches the child's own turn.end/
+// session.status events (see server/journal.go's onChildTurnEnd wiring)
+// exactly like it would for a root.
 func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
 		return
 	}
-	var body struct {
-		Text string `json:"text"`
-		// ID mirrors prompt_async's optional client-minted message id (see
-		// handlePrompt's body.ID doc comment) — used verbatim with the same
-		// single fail-safe guard, never validated or rejected.
-		ID string `json:"id"`
-	}
+	// Bound the body BEFORE decoding it — see handlePrompt's identical
+	// guard (promptRequestMaxBytes's own doc comment): blob data arrives
+	// as base64 and encoding/json allocates the decoded []byte during
+	// Unmarshal, so decodePromptParts' own per-attachment check runs only
+	// after this server has already paid for whatever the caller sent.
+	r.Body = http.MaxBytesReader(w, r.Body, promptRequestMaxBytes)
+	var body sessionSendBody
 	if err := decodeBody(r, &body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+				"request body exceeds the %d-byte limit", promptRequestMaxBytes))
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if body.Text == "" {
-		writeErr(w, http.StatusBadRequest, "text is required")
+	text, blobs, code, err := decodeSessionSendBody(body)
+	if err != nil {
+		writeErr(w, code, err.Error())
 		return
 	}
 	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc
@@ -487,7 +558,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// SessionManager registers it the instant Spawn creates it, so
 		// "not a node" here only ever means "an as-yet-unadopted root" or
 		// "genuinely unknown."
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text, msgID)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
@@ -511,67 +582,55 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// later reloaded: claimForPrompt's own cold-load path covers it,
 		// unlike an earlier version of this handler that drove a stale
 		// SessionManager-cached object in that case.
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, body.Text, msgID)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
-	// Child: SessionManager is its sole scheduler, always safe. Unlike a
-	// root, a child has no prompt queue (SessionManager.Send's own
-	// ErrSessionBusy check has nowhere to defer to) — firing Send in a
-	// background goroutine and discarding its error unconditionally, as
-	// an earlier version of this handler did, meant a message sent to an
-	// already-running, already-canceled, or at-the-tree's-concurrency-cap
-	// child was silently dropped while the caller still got 202 "sent".
-	// CanSend surfaces all three of Send's real, deterministic admission
-	// errors up front (an earlier revision of this fix only pre-checked
-	// info.Status == StatusRunning, missing ErrConcurrencyLimit and
-	// ErrSessionCanceled entirely — a live review caught this: a
-	// concurrency-cap refusal is not a race, it is Send's ordinary,
-	// expected outcome whenever the tree is already busy elsewhere, and a
-	// canceled child is a permanent, deterministic state, not a fleeting
-	// window). CanSend's own doc comment covers the genuinely small
-	// residual race that remains between this check and the Send call
-	// below.
-	if err := s.sessMgr.CanSend(id); err != nil {
-		if errors.Is(err, engine.ErrUnknownSession) {
+	// Child: SessionManager.SendOrQueue is its sole scheduler, always
+	// safe, and — unlike the old CanSend+Send pair this replaced — gives
+	// a BUSY child the same durable FIFO queue a root already has
+	// (runOrQueueText/claimForPrompt) instead of a bare 409: see
+	// SendOrQueue's own doc comment for why a child's own missing queue
+	// used to be a real, reported gap (a real user message dropped
+	// behind a 409 that a caller had no reason to treat as retryable —
+	// unlike a genuinely busy root, which queues). SendOrQueue itself
+	// admits, reserves, and launches (or appends to the queue)
+	// synchronously and atomically under its own lock — nothing here
+	// needs the s.wg/draining dance sendTextToRoot's own root path still
+	// does, because SendOrQueue's async turn is SessionManager's own
+	// lifecycle to own, not this server's — exactly like Spawn's
+	// launched goroutine already is for handleSpawnChild.
+	queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, blobs...)
+	if sendErr != nil {
+		switch {
+		case errors.Is(sendErr, engine.ErrUnknownSession):
 			writeErr(w, http.StatusNotFound, "no such session")
-		} else {
-			// ErrSessionBusy/ErrConcurrencyLimit/ErrSessionCanceled: all
-			// short, fixed, secret-free sentinel strings — safe to
-			// surface directly (see classifySpawnFailure's doc comment for
-			// the same reasoning on this error set elsewhere).
-			writeErr(w, http.StatusConflict, err.Error())
+		default:
+			// ErrConcurrencyLimit/ErrSessionCanceled/ErrEmptyPromptText:
+			// all short, fixed, secret-free sentinel strings — safe to
+			// surface directly (see classifySpawnFailure's doc comment
+			// for the same reasoning on this error set elsewhere).
+			// ErrSessionBusy is NOT reachable here: SendOrQueue queues a
+			// running target instead of ever returning it.
+			writeErr(w, http.StatusConflict, sendErr.Error())
 		}
 		return
 	}
-	// s.wg.Add must happen inside the SAME s.mu critical section that
-	// observes s.draining==false — the invariant every other s.wg.Add
-	// call site in this package upholds (claimForPrompt, handlers.go),
-	// so that by mutex ordering every Add happens-before Drain sets
-	// draining=true and calls wg.Wait(). A bare, unguarded Add here (an
-	// earlier revision of this branch) could run concurrently with, or
-	// after, wg.Wait() — a WaitGroup misuse that can panic, or let this
-	// goroutine escape the drain wait entirely and keep writing to the
-	// journal after Close, racing shutdown. A live review caught this.
-	s.mu.Lock()
-	if s.draining {
-		s.mu.Unlock()
-		writeErr(w, http.StatusServiceUnavailable, "server shutting down")
-		return
+	resp := map[string]any{"session_id": id, "status": "sent", "message_id": msgID}
+	if queued {
+		resp["status"] = "queued"
+		// Read AFTER SendOrQueue's own enqueue, not a value it returns
+		// directly: SendOrQueue reports only queued/not-queued (see its
+		// own doc comment) — the depth is this handler's own best-effort
+		// read for parity with sendTextToRoot's identical field, and may
+		// already be stale by the time the caller sees it (an ordinary,
+		// accepted race for a depth reported on a 202 — the caller's own
+		// eventual session.info read is the authority).
+		if child, ok := s.sessMgr.Session(id); ok {
+			resp["queued"] = len(child.QueuedPrompts())
+		}
 	}
-	s.wg.Add(1)
-	s.mu.Unlock()
-	go func() {
-		defer s.wg.Done()
-		// context.Background(), not r.Context(): this handler has already
-		// returned 202 by the time this runs, and a draining server
-		// cannot cancel this specific turn through this path either way
-		// (SessionManager.Send has no notion of the server's own drain
-		// signal) — the same shape sessMgr.Send's other async callers in
-		// this package already accept.
-		s.sessMgr.Send(context.Background(), id, body.Text) //nolint:errcheck // async: outcome read back via session.info; CanSend above already surfaced the deterministic admission errors synchronously, so what remains here is only the genuinely racy window CanSend's own doc comment covers
-	}()
-	writeJSON(w, http.StatusAccepted, map[string]string{"session_id": id, "status": "sent"})
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 // handleCancelTree cancels id and its entire SessionManager subtree —

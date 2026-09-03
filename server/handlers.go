@@ -439,16 +439,37 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 // SessionManager is a child's SOLE scheduler. The generic per-{id} routes
 // that can drive a turn or persist a durable record directly against
 // whatever *engine.Session claimForPrompt (or an equivalent cold-load)
-// hands them — prompt_async, goal, enqueue, compact, model, thinking —
-// have no notion of that at all. Without this guard, a request against a
-// child's id cold-loads a SECOND, independent *engine.Session for the SAME
-// on-disk log and drives Session.Prompt (or persists a recModel/recEffort
-// record) on it CONCURRENTLY with the child's own Spawn-driven turn on the
-// FIRST object — both appending to the same session log at once, the
-// exact "never call Prompt concurrently with itself" contract violation
+// hands them have no notion of that at all. Without this guard, a
+// request against a child's id cold-loads a SECOND, independent
+// *engine.Session for the SAME on-disk log and drives Session.Prompt on
+// it CONCURRENTLY with the child's own Spawn-driven turn on the FIRST
+// object — both appending to the same session log at once, the exact
+// "never call Prompt concurrently with itself" contract violation
 // ExternalRunner exists to prevent for roots, left wide open for children
 // (which get addressable ids from handleSpawnChild's 201 and
 // session.info's lineage). A live review caught this.
+//
+// Still guards handleGoal/handleGoalDelete/handleEnqueue/
+// handleQueueDelete/handleCompact — every one of them, like the ORIGINAL
+// prompt_async and model/thinking/service-tier routes this guard used to
+// cover too, resolves via claimForPrompt or the s.sessions residency map,
+// which — for an id no ordinary root path has touched yet — cold-loads
+// exactly the second object this guard exists to prevent. prompt_async
+// (handlePrompt) and the model/thinking/service-tier swaps
+// (handleSetModel/handleSetThinking/handleSetServiceTier) no longer call
+// this: each now resolves a managed child straight from SessionManager's
+// own resident node instead (handlePrompt routes it through
+// SessionManager.SendOrQueue, the SAME single-owner path
+// handleSessionSend's own child branch uses; the three knob swaps mutate
+// the resident *engine.Session directly, exactly like handleAbort already
+// did) — single-owner routing removes the hazard this guard exists to
+// prevent, rather than merely refusing the request that would have hit
+// it. handleGoal/handleGoalDelete/handleEnqueue/handleCompact all
+// synchronously drive (or would drive) a turn against whatever
+// claimForPrompt hands them — the hazard this guard exists for is fully
+// live for them — and handleQueueDelete shares handleEnqueue's own
+// claimForPrompt-based resolution; none of the five is in this change's
+// scope.
 //
 // "Is a managed CHILD" is decided on sess.TaskParentID() != "" — the
 // DURABLE signal, restored by LoadSession unconditionally — never
@@ -459,7 +480,10 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 // lineageJSONFor's identical ParentID fallback just above in this file).
 // A warm orphan slipped through the old check entirely, letting exactly
 // the concurrent-Session corruption this guard exists to prevent happen
-// to precisely the child shape it was least equipped to protect.
+// to precisely the child shape it was least equipped to protect. Every
+// call site that resolves a managed child WITHOUT this guard now (see
+// above) uses the SAME sess.TaskParentID() predicate for the identical
+// reason.
 //
 // Returns true (having already written a 409) if id is a managed child
 // and the caller must stop; false — safe to proceed through the ordinary
@@ -1566,9 +1590,6 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		Parts []promptPartInput `json:"parts"`
 		Model message.ModelRef  `json:"model"`
@@ -1624,6 +1645,43 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// second, differently-minted id ends up in the transcript instead. See
 	// engine.ResolveMessageID's own doc comment.
 	msgID := engine.ResolveMessageID(body.ID)
+
+	// A managed CHILD routes through SessionManager.SendOrQueue instead
+	// of claimForPrompt below — the SAME single-owner path
+	// handleSessionSend's own child branch uses (session_tree.go), so
+	// prompt_async and session.send can never drive two independent
+	// *engine.Session objects against the same child log (see
+	// rejectManagedChildTurn's OLD doc comment, handlers.go, for the
+	// hazard this used to guard against by refusing a child outright —
+	// SendOrQueue's single-owner routing removes the hazard instead of
+	// merely refusing the request that would have hit it). A model
+	// override on a child is silently NOT applied here — the same
+	// documented rule enqueueOrDispatch already uses for any prompt that
+	// ends up queued rather than started immediately (see its own doc
+	// comment): SendOrQueue's queue branch carries no model-ref slot,
+	// and a settled child's own next turn keeps whatever model
+	// SetModel/Spawn last gave it. Checked via sess.TaskParentID()
+	// (durable), not the live tree's ParentID — see
+	// handleSessionSend's identical warm-orphan doc comment for why.
+	if sess, ok := s.sessMgr.Session(id); ok && sess.TaskParentID() != "" {
+		queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, blobs...)
+		if sendErr != nil {
+			switch {
+			case errors.Is(sendErr, engine.ErrUnknownSession):
+				writeErr(w, http.StatusNotFound, "no such session")
+			default:
+				writeErr(w, http.StatusConflict, sendErr.Error())
+			}
+			return
+		}
+		resp := promptAsyncResponse{Seq: s.currentSeq(), Status: "started", MessageID: msgID}
+		if queued {
+			resp.Status = "queued"
+			resp.Queued = len(sess.QueuedPrompts())
+		}
+		writeJSON(w, http.StatusAccepted, resp)
+		return
+	}
 
 	// Resolve the session and atomically claim its prompt slot (also does the
 	// wg.Add under the admission gate). See claimForPrompt for the ordering that
@@ -2965,9 +3023,6 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		Model message.ModelRef `json:"model"`
 	}
@@ -2976,31 +3031,44 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the session, loading a cold one into residency with the same
-	// race handling handleGoalDelete uses (two *engine.Session for one log must
-	// never both be mutated — SetModel persists the durable recModel record).
-	// Resolve BEFORE validating the body so an unknown session is 404, not a
-	// 400 that hides the missing session behind an empty-model complaint.
-	s.mu.Lock()
-	st := s.sessions[id]
-	s.mu.Unlock()
-	if st == nil {
-		sess, err := s.opts.LoadSession(id)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, "no such session")
-			return
-		}
+	// Resolve the *engine.Session to mutate. A managed CHILD is resolved
+	// straight from SessionManager's own resident node — never a second
+	// cold-loaded object over the same on-disk log (see this method's OLD
+	// rejectManagedChildTurn guard, and that helper's own doc comment for
+	// the concurrent-Session corruption this single-owner read avoids
+	// instead of merely refusing the request that would have hit it). A
+	// root goes through the ordinary s.sessions residency map, loading a
+	// cold one with the same race handling handleGoalDelete uses (two
+	// *engine.Session for one log must never both be mutated — SetModel
+	// persists the durable recModel record). Resolve BEFORE validating
+	// the body so an unknown session is 404, not a 400 that hides the
+	// missing session behind an empty-model complaint.
+	var sess *engine.Session
+	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
+		sess = child
+	} else {
 		s.mu.Lock()
-		var evicted []*engine.Session
-		if ex := s.sessions[id]; ex != nil {
-			st = ex // a resident appeared while we loaded; use the winner
-		} else {
-			st = &sessionState{sess: sess, lastUsed: time.Now()}
-			s.sessions[id] = st
-			evicted = s.evictResidentLocked()
-		}
+		st := s.sessions[id]
 		s.mu.Unlock()
-		releaseEvicted(evicted)
+		if st == nil {
+			loaded, err := s.opts.LoadSession(id)
+			if err != nil {
+				writeErr(w, http.StatusNotFound, "no such session")
+				return
+			}
+			s.mu.Lock()
+			var evicted []*engine.Session
+			if ex := s.sessions[id]; ex != nil {
+				st = ex // a resident appeared while we loaded; use the winner
+			} else {
+				st = &sessionState{sess: loaded, lastUsed: time.Now()}
+				s.sessions[id] = st
+				evicted = s.evictResidentLocked()
+			}
+			s.mu.Unlock()
+			releaseEvicted(evicted)
+		}
+		sess = st.sess
 	}
 
 	if body.Model.IsZero() {
@@ -3008,7 +3076,7 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !st.sess.ModelSupported(body.Model) {
+	if !sess.ModelSupported(body.Model) {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("provider %q is not configured", body.Model.Provider))
 		return
 	}
@@ -3017,12 +3085,12 @@ func (s *Server) handleSetModel(w http.ResponseWriter, r *http.Request) {
 	// with no context management at all, and SetModel would already have
 	// persisted the durable recModel record by the time the first Prompt
 	// failed. See engine.Session.CheckModel.
-	if err := st.sess.CheckModel(body.Model); err != nil {
+	if err := sess.CheckModel(body.Model); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	st.sess.SetModel(body.Model)
-	writeJSON(w, http.StatusOK, setModelResponseJSON{Model: st.sess.Model()})
+	sess.SetModel(body.Model)
+	writeJSON(w, http.StatusOK, setModelResponseJSON{Model: sess.Model()})
 }
 
 // setThinkingResponseJSON is the POST /session/{id}/thinking response shape:
@@ -3049,9 +3117,6 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		Effort string `json:"effort"`
 	}
@@ -3060,32 +3125,42 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the session FIRST, loading a cold one into residency with the same
-	// race handling handleSetModel uses (two *engine.Session for one log must
-	// never both be mutated — SetEffort persists the durable recEffort record).
-	// Resolve BEFORE validating the effort so an unknown session is 404, not a
-	// 400 that hides the missing session behind an invalid-effort complaint —
-	// exactly the order handleSetModel uses.
-	s.mu.Lock()
-	st := s.sessions[id]
-	s.mu.Unlock()
-	if st == nil {
-		sess, err := s.opts.LoadSession(id)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, "no such session")
-			return
-		}
+	// Resolve the *engine.Session to mutate FIRST — a managed CHILD comes
+	// straight from SessionManager's own resident node, never a second
+	// cold-loaded object over the same log (see handleSetModel's
+	// identical resolution and its own doc comment for why); a root
+	// loads a cold one into residency with the same race handling
+	// handleSetModel uses (two *engine.Session for one log must never
+	// both be mutated — SetEffort persists the durable recEffort
+	// record). Resolve BEFORE validating the effort so an unknown
+	// session is 404, not a 400 that hides the missing session behind an
+	// invalid-effort complaint — exactly the order handleSetModel uses.
+	var sess *engine.Session
+	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
+		sess = child
+	} else {
 		s.mu.Lock()
-		var evicted []*engine.Session
-		if ex := s.sessions[id]; ex != nil {
-			st = ex
-		} else {
-			st = &sessionState{sess: sess, lastUsed: time.Now()}
-			s.sessions[id] = st
-			evicted = s.evictResidentLocked()
-		}
+		st := s.sessions[id]
 		s.mu.Unlock()
-		releaseEvicted(evicted)
+		if st == nil {
+			loaded, err := s.opts.LoadSession(id)
+			if err != nil {
+				writeErr(w, http.StatusNotFound, "no such session")
+				return
+			}
+			s.mu.Lock()
+			var evicted []*engine.Session
+			if ex := s.sessions[id]; ex != nil {
+				st = ex
+			} else {
+				st = &sessionState{sess: loaded, lastUsed: time.Now()}
+				s.sessions[id] = st
+				evicted = s.evictResidentLocked()
+			}
+			s.mu.Unlock()
+			releaseEvicted(evicted)
+		}
+		sess = st.sess
 	}
 
 	effort, err := message.ParseEffort(body.Effort)
@@ -3093,8 +3168,8 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	st.sess.SetEffort(effort)
-	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: st.sess.Effort()})
+	sess.SetEffort(effort)
+	writeJSON(w, http.StatusOK, setThinkingResponseJSON{Effort: sess.Effort()})
 }
 
 // setServiceTierResponseJSON is the POST /session/{id}/service-tier response
@@ -3121,9 +3196,6 @@ func (s *Server) handleSetServiceTier(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		ServiceTier string `json:"service_tier"`
 	}
@@ -3132,34 +3204,44 @@ func (s *Server) handleSetServiceTier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the session FIRST, loading a cold one into residency with the
-	// same race handling handleSetThinking uses (two *engine.Session for one
-	// log must never both be mutated — SetServiceTier persists the durable
+	// Resolve the *engine.Session to mutate FIRST — a managed CHILD comes
+	// straight from SessionManager's own resident node, never a second
+	// cold-loaded object over the same log (see handleSetModel's
+	// identical resolution and its own doc comment for why); a root
+	// loads a cold one into residency with the same race handling
+	// handleSetThinking uses (two *engine.Session for one log must
+	// never both be mutated — SetServiceTier persists the durable
 	// recServiceTier record).
-	s.mu.Lock()
-	st := s.sessions[id]
-	s.mu.Unlock()
-	if st == nil {
-		sess, err := s.opts.LoadSession(id)
-		if err != nil {
-			writeErr(w, http.StatusNotFound, "no such session")
-			return
-		}
+	var sess *engine.Session
+	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
+		sess = child
+	} else {
 		s.mu.Lock()
-		var evicted []*engine.Session
-		if ex := s.sessions[id]; ex != nil {
-			st = ex
-		} else {
-			st = &sessionState{sess: sess, lastUsed: time.Now()}
-			s.sessions[id] = st
-			evicted = s.evictResidentLocked()
-		}
+		st := s.sessions[id]
 		s.mu.Unlock()
-		releaseEvicted(evicted)
+		if st == nil {
+			loaded, err := s.opts.LoadSession(id)
+			if err != nil {
+				writeErr(w, http.StatusNotFound, "no such session")
+				return
+			}
+			s.mu.Lock()
+			var evicted []*engine.Session
+			if ex := s.sessions[id]; ex != nil {
+				st = ex
+			} else {
+				st = &sessionState{sess: loaded, lastUsed: time.Now()}
+				s.sessions[id] = st
+				evicted = s.evictResidentLocked()
+			}
+			s.mu.Unlock()
+			releaseEvicted(evicted)
+		}
+		sess = st.sess
 	}
 
-	st.sess.SetServiceTier(body.ServiceTier)
-	writeJSON(w, http.StatusOK, setServiceTierResponseJSON{ServiceTier: st.sess.ServiceTier()})
+	sess.SetServiceTier(body.ServiceTier)
+	writeJSON(w, http.StatusOK, setServiceTierResponseJSON{ServiceTier: sess.ServiceTier()})
 }
 
 // evictResidentLocked unloads the longest-idle non-busy sessions from
