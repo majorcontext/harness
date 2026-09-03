@@ -1543,6 +1543,15 @@ func TestSessionEndForgetsRootFromSessionManager(t *testing.T) {
 // durable record on it CONCURRENTLY with the child's own Spawn-driven
 // turn on a DIFFERENT object for the SAME on-disk log. Proves each
 // route now refuses a managed child with 409 instead.
+// TestGenericTurnRoutesRejectManagedChild covers the generic per-{id}
+// routes that STILL guard against a managed child with
+// rejectManagedChildTurn: each synchronously drives (or would drive) a
+// turn against whatever claimForPrompt hands it, and none of them routes
+// a child through SessionManager's own single-owner send path (see
+// rejectManagedChildTurn's own doc comment for exactly why each of
+// these five is still in scope and prompt_async/model/thinking/
+// service-tier no longer are — TestGenericTurnRoutesUnifiedSendAllows
+// ManagedChild covers those).
 func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
 	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
 		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}})
@@ -1574,18 +1583,73 @@ func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
 		path   string
 		body   any
 	}{
-		{"prompt_async", "POST", "/session/" + child.ID + "/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}},
 		{"goal", "POST", "/session/" + child.ID + "/goal", map[string]string{"condition": "done"}},
 		{"enqueue", "POST", "/session/" + child.ID + "/enqueue", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}, "seq": 1}},
 		{"compact", "POST", "/session/" + child.ID + "/compact", map[string]any{}},
-		{"model", "POST", "/session/" + child.ID + "/model", map[string]string{"model": "root/m1"}},
-		{"thinking", "POST", "/session/" + child.ID + "/thinking", map[string]string{"effort": "high"}},
+		{"queue_delete", "DELETE", "/session/" + child.ID + "/queue", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			resp, data := h.do(tc.method, tc.path, tc.body)
 			if resp.StatusCode != 409 {
 				t.Errorf("%s %s status = %d, want 409: %s", tc.method, tc.path, resp.StatusCode, data)
+			}
+		})
+	}
+}
+
+// TestGenericTurnRoutesUnifiedSendAllowsManagedChild is the positive
+// counterpart to TestGenericTurnRoutesRejectManagedChild: prompt_async
+// and the three knob swaps (model/thinking/service-tier) now resolve a
+// managed child straight from SessionManager's own resident node (see
+// rejectManagedChildTurn's doc comment) instead of refusing it — "child
+// works identically to parent" for messaging and per-session settings,
+// the unification's core requirement. A DONE child accepts a fresh
+// prompt_async (SendOrQueue's settled-target path, mirroring
+// session.send) and all three knob swaps unconditionally.
+func TestGenericTurnRoutesUnifiedSendAllowsManagedChild(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{
+			asstTurn("child done"), asstTurn("child done again"),
+		}})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   any
+	}{
+		{"prompt_async", "POST", "/session/" + child.ID + "/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}},
+		{"model", "POST", "/session/" + child.ID + "/model", map[string]string{"model": "root/m1"}},
+		{"thinking", "POST", "/session/" + child.ID + "/thinking", map[string]string{"effort": "high"}},
+		{"service-tier", "POST", "/session/" + child.ID + "/service-tier", map[string]string{"service_tier": "priority"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, data := h.do(tc.method, tc.path, tc.body)
+			if resp.StatusCode/100 != 2 {
+				t.Errorf("%s %s status = %d, want 2xx: %s", tc.method, tc.path, resp.StatusCode, data)
 			}
 		})
 	}
@@ -1656,7 +1720,6 @@ func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
 		path   string
 		body   any
 	}{
-		{"prompt_async", "POST", "/session/" + child.ID + "/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}},
 		{"goal", "POST", "/session/" + child.ID + "/goal", map[string]string{"condition": "done"}},
 		{"enqueue", "POST", "/session/" + child.ID + "/enqueue", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}, "seq": 1}},
 	}
@@ -1668,9 +1731,249 @@ func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
 			}
 		})
 	}
+
+	// prompt_async, unlike goal/enqueue above, must recognize this SAME
+	// warm orphan as a managed child too — via the identical
+	// sess.TaskParentID() predicate — and route it through
+	// SessionManager.SendOrQueue instead of refusing it (see
+	// rejectManagedChildTurn's own doc comment). This is the positive
+	// counterpart proving the warm-orphan detection fix
+	// (TestWarmOrphanChildLineageKeepsDurableParentID) applies equally
+	// to the routes that no longer call rejectManagedChildTurn at all.
+	t.Run("prompt_async", func(t *testing.T) {
+		resp, data := h2.do("POST", "/session/"+child.ID+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}})
+		if resp.StatusCode/100 != 2 {
+			t.Errorf("prompt_async status = %d, want 2xx (warm orphan must route through SendOrQueue, not be refused): %s", resp.StatusCode, data)
+		}
+	})
 }
 
-func TestSessionSendToBusyChildIs409NotLost(t *testing.T) {
+// TestChildTurnEndEmitsSameEventsAsRoot proves item 5 of the
+// unification at the server wire level: a child's settled turn now
+// emits turn.end and session.status(idle) — the SAME durable event
+// types a root's runPrompt already emits (recordTurnEnd,
+// freeRunSlotAndEmitIdle) — via ChildTurnObserver
+// (server.New's onChildTurnEnd wiring, journal.go). Before this, a
+// child emitted NONE of these on the SSE/journal stream; a caller had
+// to poll session.info instead.
+//
+// The test WRAPS the production observer (rather than replacing it),
+// calling the real, unexported onChildTurnEnd directly (this file is
+// package server) and closing a channel right after — deliberately NOT
+// waitForLineageStatus (SessionManager-level Changed()/status): that
+// transition happens-before ChildTurnObserver is even INVOKED (see its
+// own doc comment — the hook fires via deferPersist, after m.mu
+// releases), so waiting on lineage status alone would race the very
+// journal writes this test wants to observe, rather than prove they
+// happened.
+func TestChildTurnEndEmitsSameEventsAsRoot(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	observed := make(chan struct{})
+	h.srv.SessionManager().SetChildTurnObserver(func(id string, msg *message.Message, err error, canceled bool) {
+		h.srv.onChildTurnEnd(id, msg, err, canceled)
+		close(observed)
+	})
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+
+	select {
+	case <-observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onChildTurnEnd never ran")
+	}
+
+	h.srv.mu.Lock()
+	var haveTurnEnd, haveIdle bool
+	for _, ev := range h.srv.journal {
+		if ev.SessionID != child.ID {
+			continue
+		}
+		if ev.Type == evtTurnEnd && ev.Outcome == "completed" {
+			haveTurnEnd = true
+		}
+		if ev.Type == evtSessionStatus && ev.Status == "idle" {
+			haveIdle = true
+		}
+	}
+	h.srv.mu.Unlock()
+	if !haveTurnEnd {
+		t.Error("no turn.end(completed) record for the child in the server journal")
+	}
+	if !haveIdle {
+		t.Error("no session.status(idle) record for the child in the server journal")
+	}
+}
+
+// TestChildTurnEmitsSessionAbortedOnCancel proves the OTHER half of
+// item 5: a canceled child reports session.aborted, not turn.end —
+// mirroring runPrompt's own context.Canceled branch, which emits
+// session.aborted and skips recordTurnEnd entirely (server/handlers.go).
+// Uses the same observer-wrapping technique as
+// TestChildTurnEndEmitsSameEventsAsRoot for the same reason.
+func TestChildTurnEmitsSessionAbortedOnCancel(t *testing.T) {
+	blocker := newBlockingProvider("blocker")
+	t.Cleanup(blocker.releaseAll)
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, blocker)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	observed := make(chan struct{})
+	h.srv.SessionManager().SetChildTurnObserver(func(id string, msg *message.Message, err error, canceled bool) {
+		h.srv.onChildTurnEnd(id, msg, err, canceled)
+		close(observed)
+	})
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "blocker/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
+
+	resp, data = h.do("DELETE", "/session/"+child.ID+"/cancel_tree", nil)
+	if resp.StatusCode != 204 {
+		t.Fatalf("cancel_tree status %d: %s", resp.StatusCode, data)
+	}
+
+	select {
+	case <-observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onChildTurnEnd never ran")
+	}
+
+	h.srv.mu.Lock()
+	var haveAborted, haveTurnEnd bool
+	for _, ev := range h.srv.journal {
+		if ev.SessionID != child.ID {
+			continue
+		}
+		if ev.Type == evtSessionAborted {
+			haveAborted = true
+		}
+		if ev.Type == evtTurnEnd {
+			haveTurnEnd = true
+		}
+	}
+	h.srv.mu.Unlock()
+	if !haveAborted {
+		t.Error("no session.aborted record for the canceled child in the server journal")
+	}
+	if haveTurnEnd {
+		t.Error("turn.end recorded for a canceled child; want session.aborted only, mirroring a root's context.Canceled turn")
+	}
+}
+
+// TestSessionSendBlobReachesChildTurn proves item 4 of the unification
+// at the server wire level: a blob attached to POST /session/{id}/send's
+// `parts` array reaches a CHILD's own turn as a message.Blob part —
+// SendOrQueue's settled-target path threading blobs into
+// PromptWithOrigin (see its own doc comment) — not merely accepted and
+// silently dropped, the gap this endpoint's old text-only `text` field
+// had no way to even express.
+func TestSessionSendBlobReachesChildTurn(t *testing.T) {
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
+		&scriptedProvider{name: "root"}, &scriptedProvider{name: "child", turns: [][]provider.Event{
+			asstTurn("child done"), asstTurn("child done again"),
+		}})
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	resp, data = h.do("POST", "/session/"+child.ID+"/send", map[string]any{
+		"parts": []map[string]string{
+			{"type": "text", "text": "see attached"},
+			{"type": "blob", "media_type": "image/png", "data": png},
+		},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("send status %d: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	transcript, meta := getTranscript(t, h, child.ID)
+	if meta.status != 200 {
+		t.Fatalf("get transcript status %d: %s", meta.status, meta.body)
+	}
+	var found bool
+	for _, m := range transcript.Messages {
+		if m.Role != message.RoleUser {
+			continue
+		}
+		for _, p := range m.Parts {
+			if b, ok := p.(*message.Blob); ok && b.MediaType == "image/png" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("child transcript has no image/png blob part; the attachment was dropped")
+	}
+}
+
+// TestSessionSendToBusyChildIsQueuedNotLost is the unification's own
+// regression test for the gap it closes (design doc, item 3): a busy
+// child used to have no queue at all, so session.send answered a 409
+// and the caller's text was silently dropped with no retry contract (a
+// 409 here reads as "try something else," not "retry me" — unlike a
+// genuinely busy ROOT, which was ALREADY queued, never refused). This
+// is the RENAMED, behavior-updated form of the test that used to pin
+// the old 409 contract; the underlying concern it protects — a real
+// user message sent to a busy child must not vanish — is unchanged,
+// only the mechanism (queue, not refuse) is new. See SendOrQueue's own
+// doc comment (engine/session_manager.go).
+func TestSessionSendToBusyChildIsQueuedNotLost(t *testing.T) {
 	blocker := newBlockingProvider("blocker")
 	t.Cleanup(blocker.releaseAll)
 	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,
@@ -1702,8 +2005,43 @@ func TestSessionSendToBusyChildIs409NotLost(t *testing.T) {
 	waitForLineageStatus(t, h, child.ID, "running", 2*time.Second)
 
 	resp, data = h.do("POST", "/session/"+child.ID+"/send", map[string]string{"text": "follow-up while busy"})
-	if resp.StatusCode != 409 {
-		t.Fatalf("send-to-busy-child status %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != 202 {
+		t.Fatalf("send-to-busy-child status %d, want 202: %s", resp.StatusCode, data)
+	}
+	var sendResp struct {
+		Status string `json:"status"`
+		Queued int    `json:"queued"`
+	}
+	mustUnmarshal(t, data, &sendResp)
+	if sendResp.Status != "queued" {
+		t.Fatalf("send-to-busy-child status field = %q, want %q: %s", sendResp.Status, "queued", data)
+	}
+	if sendResp.Queued != 1 {
+		t.Errorf("send-to-busy-child queued depth = %d, want 1: %s", sendResp.Queued, data)
+	}
+
+	// Release the first (blocking) turn — the SAME release channel a
+	// second, queue-drained turn also reads from (already closed by
+	// then), so both complete without blocking further — then confirm
+	// the queued text actually reached the child's transcript, not just
+	// its queue: the whole point of queuing over refusing is that the
+	// message survives to be delivered.
+	blocker.releaseAll()
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	transcript, meta := getTranscript(t, h, child.ID)
+	if meta.status != 200 {
+		t.Fatalf("get transcript status %d: %s", meta.status, meta.body)
+	}
+	var found bool
+	for _, m := range transcript.Messages {
+		if m.Role == message.RoleUser && m.Parts.Text() == "follow-up while busy" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("child transcript does not contain the queued message %q — it was lost, not merely delayed", "follow-up while busy")
 	}
 }
 
