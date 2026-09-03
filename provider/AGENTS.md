@@ -87,6 +87,33 @@ Anthropic uses two cache breakpoints. The default TTL is one hour.
 - Reject `cache_ttl` on an entry that does not build the native Anthropic
   adapter.
 
+## Codex WebSocket lineage
+
+Only `CodexFamily` requests with WebSocket transport and a non-empty
+`SessionKey` can send `previous_response_id` or `generate:false`.
+
+- Keep lineage runtime-only and keyed by the session pool entry.
+- Install lineage only after clean `response.completed` with a non-empty ID.
+- Bind completion callbacks to the current connection generation.
+- Compare every context-bearing property before projecting an input suffix.
+- Match `prior input + prior assistant output` before sending the suffix.
+- Keep the complete request immutable for mismatch and HTTP fallback.
+- Recover only an immediate first-frame `previous_response_not_found` once.
+- Send that recovery as the complete request on the same socket.
+- Invalidate later, repeated, partial, failed, canceled, or truncated lineage.
+- Never log, persist, or export a response ID as projection metadata.
+
+`generate:false` prewarm can accept empty input. Ordinary requests cannot.
+`StartupPrewarmEnabled` returns true only for `CodexFamily` with WebSocket
+transport. Prewarm emits no provider events. `Prewarm` must return promptly when
+its context is canceled; the engine cannot terminate a callback that ignores
+cancellation.
+
+Completed WebSocket streams can report `RequestMetadata` as `full` or
+`incremental`. Report complete and sent item counts and `chain_recovered` without
+response IDs. Keep OpenAI usage provider-reported: subtract `cached_tokens` from
+inclusive input and expose the cached subset as `CacheReadTokens`.
+
 ## Native OpenAI Responses endpoints
 
 A configured provider with type `"openai"` builds the Responses adapter under

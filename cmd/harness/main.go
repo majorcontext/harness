@@ -1778,7 +1778,9 @@ func newSessionFn(mkCfg func(message.ModelRef) engine.Config, defModel message.M
 		// session-agnostic func value fixes this for every Spawn
 		// generation. See Config.OnRequest's doc comment.
 		cfg.OnRequest = onRequest
-		return engine.NewSession(cfg), nil
+		// The server persists this root before AdoptRoot finalizes manager
+		// policy. AdoptRoot starts startup prewarm after that gate.
+		return engine.NewSessionDeferredStartup(cfg), nil
 	}
 }
 

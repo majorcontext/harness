@@ -123,6 +123,28 @@ const (
 	EventActivity EventType = "activity"
 )
 
+// RequestMode describes how an adapter projected the complete logical request
+// onto its transport. The zero value means the adapter did not report transport
+// projection metadata.
+type RequestMode string
+
+const (
+	RequestModeFull        RequestMode = "full"
+	RequestModeIncremental RequestMode = "incremental"
+)
+
+// RequestMetadata contains non-secret transport projection facts for one
+// completed provider call. It never contains a provider response identifier.
+type RequestMetadata struct {
+	Mode                 RequestMode `json:"mode"`
+	CompleteInputItems   int         `json:"complete_input_items"`
+	SentInputItems       int         `json:"sent_input_items"`
+	PreviousResponseUsed bool        `json:"previous_response_used"`
+	// ChainRecovered is true when an incremental request received an immediate
+	// chain miss and completed after one full-request retry.
+	ChainRecovered bool `json:"chain_recovered"`
+}
+
 // Event is one streaming event from a model call.
 type Event struct {
 	Type       EventType
@@ -131,6 +153,9 @@ type Event struct {
 	Message    *message.Message
 	StopReason StopReason
 	Usage      Usage
+	// RequestMetadata is set only on EventDone when an adapter reports how
+	// it projected the complete logical request onto its transport.
+	RequestMetadata *RequestMetadata
 	// SubscriptionUsage carries a subscription lane's captured rate-limit/
 	// quota snapshot (see message.SubscriptionUsage's own doc comment),
 	// set only on EventDone by an adapter that captured one on THIS call —
@@ -161,6 +186,17 @@ type Event struct {
 type Stream interface {
 	Next() (Event, error)
 	Close() error
+}
+
+// StartupPrewarmer is an optional provider capability that prepares transport-local
+// state before the first model call. StartupPrewarmEnabled must be side-effect free;
+// the engine calls it before startup discovery, hooks, or tool assembly. Prewarm must
+// not emit provider events and MUST return promptly when ctx is canceled. The engine
+// bounds prompt waiting and session ownership at that deadline, but Go cannot forcibly
+// stop a callback that ignores cancellation.
+type StartupPrewarmer interface {
+	StartupPrewarmEnabled() bool
+	Prewarm(context.Context, *Request) error
 }
 
 // Provider is one model API family.

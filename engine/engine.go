@@ -591,6 +591,13 @@ type Config struct {
 	// the default first.
 	OnTurnMetrics func(TurnMetrics)
 
+	// OnStartupPrewarmMetrics receives non-secret startup-prewarm lifecycle
+	// records. Nil writes structured records to stderr. The callback can run
+	// from the startup worker and must be fast and concurrency-safe. Outcome
+	// state is committed before invocation. Timeout and cancellation release
+	// session ownership before invocation.
+	OnStartupPrewarmMetrics func(StartupPrewarmMetrics)
+
 	// Now is the clock TurnMetrics timing reads: streamTurn calls it just
 	// before the provider call, at the first non-activity stream event, and
 	// at EventDone, to compute TTFTMillis/StreamMillis (see TurnMetrics).
@@ -1243,12 +1250,18 @@ type Session struct {
 	// must never be reported to a caller as a durability failure.
 	lastIndexErr error
 
-	// Project-instruction segment, loaded once on the first Prompt (see
-	// instructions.go). instrLoaded gates the one-time disk read; instrSeg is
-	// the cached system-prompt segment (empty when none); instrErr records a
-	// present-but-unusable instructions file so every Prompt fails alike;
-	// instrPath is the display path of the source file (empty when none), used
-	// by the session_info tool to report instruction provenance.
+	// startupPrewarm is installed once after this fresh session reaches its
+	// final local or manager-owned construction gate. LoadSession leaves it nil.
+	startupPrewarm           *startupPrewarm
+	startupPrewarmResolution *startupPrewarmResolution
+	startupPrewarmEligible   bool
+
+	// Project-instruction segment, loaded once during startup prewarm or, for a
+	// loaded session, on the first Prompt (see instructions.go). instrLoaded gates
+	// the one-time disk read; instrSeg is the cached system-prompt segment (empty
+	// when none); instrErr records a present-but-unusable instructions file so
+	// every Prompt fails alike; instrPath is the display path of the source file
+	// (empty when none), used by the session_info tool to report provenance.
 	instrLoaded bool
 	instrSeg    string
 	instrErr    error
@@ -1529,13 +1542,29 @@ type Session struct {
 	agentDefsErr    error
 }
 
-// NewSession creates a session. Nothing touches the network, spawns
-// processes, or writes to disk here — provider auth and plugin spawns happen
-// on first use, and the session log is created on first message append.
+// NewSession creates a fresh session and can schedule nonblocking asynchronous
+// startup prewarm for an eligible provider. That task can read disk, invoke
+// hooks, connect MCP dependencies, and use the network. Use
+// NewSessionDeferredStartup when manager adoption must finish first.
 func NewSession(cfg Config) *Session {
+	return newFreshSession(cfg, true)
+}
+
+// NewSessionDeferredStartup creates a fresh session whose startup prewarm is
+// finalized later by SessionManager.AdoptRoot. It exists for served roots that
+// must persist before adoption; other callers use NewSession.
+func NewSessionDeferredStartup(cfg Config) *Session {
+	return newFreshSession(cfg, false)
+}
+
+func newFreshSession(cfg Config, startPrewarm bool) *Session {
 	s := newSession(cfg)
 	s.ID = newID("ses")
+	s.startupPrewarmEligible = true
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
+	if startPrewarm {
+		s.startStartupPrewarm()
+	}
 	return s
 }
 
@@ -2636,13 +2665,20 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 		})
 		return s.runAgenticLoop(ctx)
 	}
-	// Refuse a model with no known context window, before anything else
-	// happens: no history append, no provider call, no instructions read.
-	// Running one anyway is running with NO context management at all,
-	// which ends in "context exhausted" rather than a compaction — see
-	// Config.RequireContextWindow. Same shape as the instructions check
-	// below: a present-but-unusable configuration fails every Prompt
-	// identically, loudly, and without recording a user message.
+	// A fresh native session consumes startup prewarm exactly once before any
+	// prompt mutation. Prompt cancellation also cancels the prewarm task.
+	if err := s.consumeStartupPrewarm(ctx); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
+	defer s.clearStartupPrewarmResolution()
+	// Refuse a model with no known context window before this Prompt mutates
+	// history or sends an inference request. An eligible fresh session can
+	// already have read instructions and Skills and sent a no-generation
+	// startup prewarm before this check. Running an inference anyway is
+	// running with NO context management at all, which ends in "context
+	// exhausted" rather than a compaction — see Config.RequireContextWindow.
+	// A rejected Prompt still records no user message.
 	if err := s.ContextWindowErr(); err != nil {
 		s.emitSessionError(err)
 		return nil, err
@@ -2960,6 +2996,71 @@ func (s *Session) drainQueuedPromptsIntoHistory() {
 	}
 }
 
+type assembledRequest struct {
+	provider provider.Provider
+	request  *provider.Request
+	params   plugin.ChatParams
+}
+
+// assembleRequest builds the stable request prefix shared by startup prewarm
+// and real turns. Callers add only their own messages and turn lifecycle.
+func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error) {
+	params := plugin.ChatParams{Model: s.Model()}
+	if s.cfg.Hooks != nil {
+		params = s.cfg.Hooks.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.ID, Params: params})
+		if params.Model.IsZero() {
+			params.Model = s.Model()
+		}
+	}
+
+	prov, err := s.cfg.Providers.For(params.Model)
+	if err != nil {
+		return nil, err
+	}
+	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
+
+	system := append([]string(nil), s.cfg.System...)
+	system = append(system, s.cfg.AppendSystemPrompt...)
+	if seg := s.toolBatchingSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	if seg := s.instructionSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	if seg := s.skillsSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	if mcpCatalog != "" {
+		system = append(system, mcpCatalog)
+	}
+	if s.cfg.Hooks != nil {
+		system = append(system, s.cfg.Hooks.SystemTransform(ctx, &plugin.SystemTransformRequest{
+			SessionID: s.ID,
+			Model:     params.Model,
+		})...)
+	}
+
+	maxTokens := s.cfg.MaxTokens
+	if params.MaxTokens != nil {
+		maxTokens = *params.MaxTokens
+	}
+	return &assembledRequest{
+		provider: prov,
+		params:   params,
+		request: &provider.Request{
+			Model:       params.Model,
+			System:      system,
+			Tools:       tools,
+			Temperature: params.Temperature,
+			TopP:        params.TopP,
+			MaxTokens:   maxTokens,
+			Effort:      s.Effort(),
+			ServiceTier: s.ServiceTier(),
+			SessionKey:  s.ID,
+		},
+	}, nil
+}
+
 // streamTurn makes one model call and returns the assembled assistant
 // message.
 // attempt is streamTurnWithRetry's 1-indexed attempt counter for this turn
@@ -2991,63 +3092,15 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	//     mcpStatusSegment, or Status() is read against stale pre-connect
 	//     state and this turn's own connect failure is reported one turn
 	//     late.
-	params := plugin.ChatParams{Model: s.Model()}
-	if s.cfg.Hooks != nil {
-		params = s.cfg.Hooks.ChatParams(ctx, &plugin.ChatParamsRequest{SessionID: s.ID, Params: params})
-		if params.Model.IsZero() {
-			params.Model = s.Model()
-		}
-	}
-
-	prov, err := s.cfg.Providers.For(params.Model)
+	assembled, err := s.assembleRequest(ctx)
 	if err != nil {
 		return nil, "", provider.Usage{}, err
 	}
-
-	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
-
-	system := append([]string(nil), s.cfg.System...)
-	// Operator-supplied environment segments (config `append_system_prompt`)
-	// sit with the base prompt, ahead of every engine-assembled segment:
-	// they describe the environment the session runs in, which the model
-	// needs before it reads anything about tools, the project, or skills.
-	system = append(system, s.cfg.AppendSystemPrompt...)
-	// Tool-batching guidance sits with the base system prompt, ahead of
-	// project instructions: it describes how this engine executes tools,
-	// not anything about the project. Empty for a session that runs tools
-	// one at a time (see toolBatchingSegment in toolexec.go).
-	if seg := s.toolBatchingSegment(); seg != "" {
-		system = append(system, seg)
-	}
-	// Project instructions sit after the base system prompt and before any
-	// hook-contributed segments (see ensureInstructions in instructions.go).
-	if seg := s.instructionSegment(); seg != "" {
-		system = append(system, seg)
-	}
-	// The Agent Skills catalog sits after project instructions and, like
-	// them, before any hook-contributed segments (see ensureSkills in
-	// skills.go).
-	if seg := s.skillsSegment(); seg != "" {
-		system = append(system, seg)
-	}
-	// The deferred-MCP catalog sits after the skills catalog — the same
-	// progressive-disclosure stage-1 role — and, like it, before any
-	// hook-contributed segments. Empty for every session that defers
-	// nothing (see mcp_lazy.go).
-	if mcpCatalog != "" {
-		system = append(system, mcpCatalog)
-	}
-	if s.cfg.Hooks != nil {
-		system = append(system, s.cfg.Hooks.SystemTransform(ctx, &plugin.SystemTransformRequest{
-			SessionID: s.ID,
-			Model:     params.Model,
-		})...)
-	}
-
-	maxTokens := s.cfg.MaxTokens
-	if params.MaxTokens != nil {
-		maxTokens = *params.MaxTokens
-	}
+	prov := assembled.provider
+	req := assembled.request
+	params := assembled.params
+	system := req.System
+	tools := req.Tools
 	// Ambient process-status, MCP-status, parked-goal-status, and
 	// engine-identity injection (see processStatusSegment,
 	// mcpStatusSegment, goalParkedSegment, identityStatusSegment):
@@ -3098,43 +3151,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	if seg := s.continuationNudgeSegment(); seg != "" {
 		messages = appendContinuationNudgeMessage(messages, seg)
 	}
-	req := &provider.Request{
-		Model:       params.Model,
-		System:      system,
-		Messages:    messages,
-		Tools:       tools,
-		Temperature: params.Temperature,
-		TopP:        params.TopP,
-		MaxTokens:   maxTokens,
-		// Effort is read straight from session state, deliberately NOT routed
-		// through the chat.params hook (v1 scope). The design gives per-model
-		// level gating to the CALLER's own layer (the boxes API validates a
-		// level against the model before POST /session/{id}/thinking), not to a
-		// harness plugin, so a chat.params Effort override buys nothing the box
-		// path uses. Adding Effort to plugin.ChatParams is a clean future
-		// enhancement if a plugin ever needs to rewrite it per request.
-		//
-		// This reads s.Effort() fresh every request (and every tool round, since
-		// runAgenticLoop rebuilds the request per round), so a SetModel swap to a
-		// non-reasoning model while effort stays non-off ships a reasoning
-		// control that model rejects — the SAME caller-gated trigger as the
-		// off-toggle the adapters' downgrade strip handles. The caller therefore
-		// re-validates/clears effort on every MODEL swap, not only before
-		// POST /thinking; the boxes picker does this by clamping the level to the
-		// new model's supported set on switch.
-		Effort: s.Effort(),
-		// ServiceTier is read straight from session state, mirroring Effort
-		// immediately above — read fresh every request (and every tool
-		// round) so a SetServiceTier swap takes effect on the NEXT request,
-		// with no chat.params routing (same v1 scope rationale as Effort:
-		// the boxes API owns per-model/per-plan tier gating, not a harness
-		// plugin).
-		ServiceTier: s.ServiceTier(),
-		// SessionKey names this session for an adapter that forwards it as
-		// a routing/cache-affinity hint (see provider.Request.SessionKey
-		// doc comment; openaicompat sends it as the wire "user" field).
-		SessionKey: s.ID,
-	}
+	req.Messages = messages
 
 	// Record this turn's assembled system for the session_info tool, bump the
 	// per-session turn counter, then hand the exact final request to the
@@ -3223,6 +3240,17 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:
 			doneAt := s.cfg.Now()
+			s.resolveStartupPrewarm(ev.RequestMetadata)
+			var requestMode provider.RequestMode
+			var completeInputItems, sentInputItems int
+			var previousResponseUsed, chainRecovered bool
+			if ev.RequestMetadata != nil {
+				requestMode = ev.RequestMetadata.Mode
+				completeInputItems = ev.RequestMetadata.CompleteInputItems
+				sentInputItems = ev.RequestMetadata.SentInputItems
+				previousResponseUsed = ev.RequestMetadata.PreviousResponseUsed
+				chainRecovered = ev.RequestMetadata.ChainRecovered
+			}
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
 				Model:            params.Model,
@@ -3237,8 +3265,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				// exactly (len of the "\n"-joined system slice) so the two
 				// records join on session_id+model+system_len — see
 				// TurnMetrics's doc comment.
-				SystemLen:  len(strings.Join(system, "\n")),
-				ToolsCount: len(tools),
+				SystemLen:            len(strings.Join(system, "\n")),
+				ToolsCount:           len(tools),
+				RequestMode:          requestMode,
+				CompleteInputItems:   completeInputItems,
+				SentInputItems:       sentInputItems,
+				PreviousResponseUsed: previousResponseUsed,
+				ChainRecovered:       chainRecovered,
 			})
 			if ev.SubscriptionUsage != nil {
 				// See provider.Event.SubscriptionUsage's own doc comment:

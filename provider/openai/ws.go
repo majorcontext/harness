@@ -94,20 +94,67 @@ func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header
 	return conn, resp, nil
 }
 
+// responseCreateOptions contains WebSocket-only response.create controls.
+// InputSet distinguishes an explicit empty input override from no override.
+type responseCreateOptions struct {
+	PreviousResponseID string
+	Input              []json.RawMessage
+	InputSet           bool
+	Generate           *bool
+}
+
+type responseCreatePayload struct {
+	Type               string            `json:"type"`
+	Model              string            `json:"model"`
+	Instructions       string            `json:"instructions,omitempty"`
+	Input              []json.RawMessage `json:"input"`
+	Tools              []apiToolDef      `json:"tools,omitempty"`
+	Temperature        *float64          `json:"temperature,omitempty"`
+	TopP               *float64          `json:"top_p,omitempty"`
+	MaxOutputTokens    int               `json:"max_output_tokens,omitempty"`
+	Store              bool              `json:"store"`
+	Include            []string          `json:"include"`
+	Reasoning          *apiReasoning     `json:"reasoning,omitempty"`
+	PromptCacheKey     string            `json:"prompt_cache_key,omitempty"`
+	ServiceTier        string            `json:"service_tier,omitempty"`
+	PreviousResponseID string            `json:"previous_response_id,omitempty"`
+	Generate           *bool             `json:"generate,omitempty"`
+}
+
 // sendResponseCreate frames body (the same JSON the HTTP path POSTs,
 // {"model":..., "input":..., "stream":true, ...}) as a Codex websocket
-// request: {"type":"response.create", ...body-minus-stream}. "stream" is
-// dropped because it is meaningless once the transport itself IS the
-// streaming channel — ported from opencode's ws.ts streamResponsesWebSocket
-// (the payload destructure that drops "stream"/"background").
-func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return fmt.Errorf("openai: websocket request.create: decoding request body: %w", err)
+// request: {"type":"response.create", ...body-minus-stream}. WebSocket-only
+// options can replace input or add chaining and generation controls without
+// mutating the complete HTTP request body.
+func sendResponseCreate(ctx context.Context, conn *websocket.Conn, body []byte, options ...responseCreateOptions) error {
+	var request apiRequest
+	if err := json.Unmarshal(body, &request); err != nil {
+		return fmt.Errorf("openai: websocket response.create: decoding request body: %w", err)
 	}
-	delete(fields, "stream")
-	fields["type"] = json.RawMessage(`"response.create"`)
-	payload, err := json.Marshal(fields)
+	var option responseCreateOptions
+	if len(options) != 0 {
+		option = options[0]
+	}
+	if option.InputSet {
+		request.Input = option.Input
+	}
+	payload, err := json.Marshal(responseCreatePayload{
+		Type:               "response.create",
+		Model:              request.Model,
+		Instructions:       request.Instructions,
+		Input:              request.Input,
+		Tools:              request.Tools,
+		Temperature:        request.Temperature,
+		TopP:               request.TopP,
+		MaxOutputTokens:    request.MaxOutputTokens,
+		Store:              request.Store,
+		Include:            request.Include,
+		Reasoning:          request.Reasoning,
+		PromptCacheKey:     request.PromptCacheKey,
+		ServiceTier:        request.ServiceTier,
+		PreviousResponseID: option.PreviousResponseID,
+		Generate:           option.Generate,
+	})
 	if err != nil {
 		return fmt.Errorf("openai: websocket response.create: encoding request: %w", err)
 	}

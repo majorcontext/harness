@@ -129,6 +129,9 @@ var snapshotExcludedSessionFields = map[string]string{
 	"agentDefsLoaded":           "lazy discovery cache (triggered by the task tool's first call), same load-once pattern as instrLoaded/skillsLoaded",
 	"agentDefs":                 "lazy discovery cache payload, same pattern as agentDefsLoaded",
 	"agentDefsErr":              "lazy discovery cache error, same pattern as agentDefsLoaded",
+	"startupPrewarm":            "runtime-only startup task handle; loaded sessions never resume or restore prewarm",
+	"startupPrewarmResolution":  "runtime-only first-turn metric state; loaded sessions never resume or restore prewarm",
+	"startupPrewarmEligible":    "fresh-session construction gate; loaded sessions deliberately remain ineligible",
 }
 
 // TestEverySessionFieldIsClassifiedForSnapshotting is the fail-closed net:

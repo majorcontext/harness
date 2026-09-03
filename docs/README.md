@@ -30,6 +30,7 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 | Design | Subject |
 |---|---|
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
+| [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |
 | [goal-retry-directive-reuse.md](design/goal-retry-directive-reuse.md) | Durable directive reuse across goal retries |
 | [journal-snapshotting.md](design/journal-snapshotting.md) | Journal snapshot format and recovery |

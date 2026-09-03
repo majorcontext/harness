@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,6 +118,12 @@ func (c *Client) family() string { return familyOrDefault(c.Family) }
 
 func (c *Client) Name() string { return c.family() }
 
+// StartupPrewarmEnabled reports whether engine startup assembly can produce
+// transport state for this client without relying on request data.
+func (c *Client) StartupPrewarmEnabled() bool {
+	return c.family() == CodexFamily && c.UseWebSocketTransport
+}
+
 // httpClient returns the *http.Client this adapter makes every request
 // with — c.HTTPClient, or http.DefaultClient when unset. Both the HTTP POST
 // path and the websocket dial (see Stream, wsPoolFor) use this exact value,
@@ -129,11 +136,20 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
-func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+type preparedRequest struct {
+	body    []byte
+	url     string
+	headers http.Header
+	client  *http.Client
+}
+
+func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
-	wire, err := transcodeRequestFamily(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas)
+	wire, err := transcodeRequestFamilyWithOptions(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas, transcodeRequestOptions{
+		allowEmptyInput: allowEmptyInput,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -141,14 +157,27 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if err != nil {
 		return nil, err
 	}
+	return &preparedRequest{
+		body: body,
+		url:  responsesURL(c.BaseURL, c.ResponsesPath),
+		headers: http.Header{
+			"Content-Type":  []string{"application/json"},
+			"Accept":        []string{"text/event-stream"},
+			"Authorization": []string{"Bearer " + c.APIKey},
+		},
+		client: c.httpClient(),
+	}, nil
+}
 
-	url := responsesURL(c.BaseURL, c.ResponsesPath)
-	headers := http.Header{
-		"Content-Type":  []string{"application/json"},
-		"Accept":        []string{"text/event-stream"},
-		"Authorization": []string{"Bearer " + c.APIKey},
+func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	prepared, err := c.prepareRequest(req, false)
+	if err != nil {
+		return nil, err
 	}
-	hc := c.httpClient()
+	body := prepared.body
+	url := prepared.url
+	headers := prepared.headers
+	hc := prepared.client
 
 	// The websocket transport sends this SAME url/headers/body — the
 	// Authorization header included — so whatever credential injection
@@ -194,6 +223,41 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		family:   c.family(),
 		subUsage: c.codexSubscriptionUsage(resp.Header),
 	}, nil
+}
+
+// Prewarm prepares a Codex websocket session without generating assistant
+// output. Other families and transports do not have startup state to prepare.
+func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
+	if c.family() != CodexFamily || !c.UseWebSocketTransport || req.SessionKey == "" {
+		return nil
+	}
+	prepared, err := c.prepareRequest(req, true)
+	if err != nil {
+		return err
+	}
+	st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
+		SessionKey: req.SessionKey,
+		URL:        prepared.url,
+		Headers:    prepared.headers,
+		Body:       prepared.body,
+		Model:      req.Model,
+		Family:     c.family(),
+		HTTPClient: prepared.client,
+		Prewarm:    true,
+	})
+	if !ok {
+		return errors.New("openai: websocket prewarm failed")
+	}
+	defer st.Close()
+	for {
+		_, err := st.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 // codexSubscriptionUsage reads h for the x-codex-* subscription-usage
@@ -334,6 +398,17 @@ type stream struct {
 	// incomplete" case below.
 	subUsage *message.SubscriptionUsage
 
+	// onComplete publishes transport-local response lineage after stream.handle
+	// has assembled a clean response.completed message. It is nil for HTTP.
+	onComplete func(responseID string, assistant *message.Message)
+
+	requestMetadata *provider.RequestMetadata
+	// recoverChainMiss retries one immediate incremental chain miss as the
+	// immutable complete request on the same socket. It is nil for HTTP.
+	recoverChainMiss func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error)
+	visibleOutput    bool
+	responseFrames   int
+
 	queue []provider.Event
 	done  bool
 }
@@ -381,7 +456,25 @@ func (s *stream) Next() (provider.Event, error) {
 			// retryable.
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
+		s.responseFrames++
 		if err := s.handle(name, data); err != nil {
+			var miss *previousResponseNotFoundError
+			if errors.As(err, &miss) && s.recoverChainMiss != nil {
+				source, metadata, recoverErr := s.recoverChainMiss(s.responseFrames == 1, s.visibleOutput, err)
+				s.recoverChainMiss = nil
+				if recoverErr != nil {
+					return provider.Event{}, recoverErr
+				}
+				s.wsConn = source
+				s.requestMetadata = metadata
+				s.respID = ""
+				s.items = nil
+				s.usage = provider.Usage{}
+				s.hasToolCall = false
+				s.responseFrames = 0
+				s.queue = nil
+				continue
+			}
 			return provider.Event{}, err
 		}
 		if len(s.queue) == 0 && !s.done {
@@ -466,6 +559,50 @@ func (s *stream) itemAt(idx int) (*assembledItem, error) {
 	return s.items[idx], nil
 }
 
+type previousResponseNotFoundError struct {
+	message string
+}
+
+func (e *previousResponseNotFoundError) Error() string {
+	return fmt.Sprintf("openai: %s (previous_response_not_found)", e.message)
+}
+
+func streamError(code, message string) error {
+	if code == "previous_response_not_found" {
+		if message == "" {
+			message = "previous response not found"
+		}
+		return &previousResponseNotFoundError{message: message}
+	}
+	if code == "" {
+		return fmt.Errorf("openai: %s", message)
+	}
+	err := fmt.Errorf("openai: %s (%s)", message, code)
+	if class, ok := classifyErrorCode(code); ok {
+		return provider.MarkRetryable(err, class)
+	}
+	return err
+}
+
+func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
+	if name != "response.failed" && name != "error" {
+		return false
+	}
+	var ev struct {
+		Code     string `json:"code"`
+		Response struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		} `json:"response"`
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(data, &ev) == nil &&
+		(ev.Code == "previous_response_not_found" || ev.Response.Error.Code == "previous_response_not_found" || ev.Error.Code == "previous_response_not_found")
+}
+
 func (s *stream) handle(name string, data []byte) error {
 	switch name {
 	case "response.created":
@@ -495,6 +632,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.kind = "message"
 		}
 		it.text.WriteString(ev.Delta)
+		s.visibleOutput = true
 		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta})
 
 	case "response.reasoning_summary_text.delta":
@@ -513,6 +651,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.kind = "reasoning"
 		}
 		it.text.WriteString(ev.Delta)
+		s.visibleOutput = true
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta})
 
 	case "response.output_item.done":
@@ -543,6 +682,7 @@ func (s *stream) handle(name string, data []byte) error {
 			it.name = head.Name
 			it.args = argsRaw(head.Arguments)
 			s.hasToolCall = true
+			s.visibleOutput = true
 			s.queue = append(s.queue, provider.Event{Type: provider.EventToolCall, ToolCall: it.toolCall()})
 		case "reasoning":
 			it.kind = "reasoning"
@@ -558,6 +698,7 @@ func (s *stream) handle(name string, data []byte) error {
 		// response whose incomplete_details.reason maps to the stop reason.
 		var ev struct {
 			Response struct {
+				ID                string `json:"id"`
 				IncompleteDetails struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
@@ -595,17 +736,26 @@ func (s *stream) handle(name string, data []byte) error {
 		default:
 			stop = provider.StopEndTurn
 		}
+		if ev.Response.ID != "" {
+			s.respID = ev.Response.ID
+		}
+		assistant := s.assemble()
+		if name == "response.completed" && s.onComplete != nil {
+			s.onComplete(ev.Response.ID, assistant)
+		}
 		s.queue = append(s.queue, provider.Event{
 			Type:              provider.EventDone,
-			Message:           s.assemble(),
+			Message:           assistant,
 			StopReason:        stop,
 			Usage:             s.usage,
 			SubscriptionUsage: s.subUsage,
+			RequestMetadata:   s.requestMetadata,
 		})
 		s.done = true
 
 	case "response.failed", "error":
 		var ev struct {
+			Code     string `json:"code"`
 			Message  string `json:"message"`
 			Response struct {
 				Error struct {
@@ -622,20 +772,18 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("openai: stream error: %s", data)
 		}
 		switch {
+		case ev.Response.Error.Code == "previous_response_not_found":
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
+		case ev.Error.Code == "previous_response_not_found":
+			return streamError(ev.Error.Code, ev.Error.Message)
+		case ev.Code == "previous_response_not_found":
+			return streamError(ev.Code, ev.Message)
 		case ev.Response.Error.Message != "":
-			err := fmt.Errorf("openai: %s (%s)", ev.Response.Error.Message, ev.Response.Error.Code)
-			if class, ok := classifyErrorCode(ev.Response.Error.Code); ok {
-				return provider.MarkRetryable(err, class)
-			}
-			return err
+			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
 		case ev.Error.Message != "":
-			err := fmt.Errorf("openai: %s (%s)", ev.Error.Message, ev.Error.Code)
-			if class, ok := classifyErrorCode(ev.Error.Code); ok {
-				return provider.MarkRetryable(err, class)
-			}
-			return err
+			return streamError(ev.Error.Code, ev.Error.Message)
 		case ev.Message != "":
-			return fmt.Errorf("openai: %s", ev.Message)
+			return streamError(ev.Code, ev.Message)
 		default:
 			return fmt.Errorf("openai: stream error: %s", data)
 		}

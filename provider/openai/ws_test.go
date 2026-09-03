@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -486,5 +487,51 @@ func TestIsWSCleanTerminalEvent(t *testing.T) {
 		if isWSCleanTerminalEvent(name) {
 			t.Errorf("isWSCleanTerminalEvent(%q) = true, want false", name)
 		}
+	}
+}
+
+func TestWebSocketIncompleteAndFailedResponsesClearLineage(t *testing.T) {
+	for _, terminal := range []string{
+		`{"type":"response.incomplete","response":{"id":"resp_bad","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		`{"type":"response.failed","response":{"error":{"code":"server_error","message":"boom"}}}`,
+	} {
+		t.Run(wsFrameEventName(terminal), func(t *testing.T) {
+			server := newWSLineageServer(t)
+			server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_one", "two")}
+			server.scripts <- wsLineageScript{beforeWait: []string{terminal}}
+			server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_three", "six")}
+			client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+			streamLineageTurn(t, client, lineageRequest("bad-"+wsFrameEventName(terminal), userMessage("one")))
+			stream, err := client.Stream(context.Background(), lineageRequest("bad-"+wsFrameEventName(terminal), userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three")))
+			if err != nil {
+				t.Fatalf("second Stream: %v", err)
+			}
+			for {
+				_, err = stream.Next()
+				if err != nil {
+					break
+				}
+			}
+			_ = stream.Close()
+			streamLineageTurn(t, client, lineageRequest("bad-"+wsFrameEventName(terminal), userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"), assistantMessage("resp_bad", "four"), userMessage("five")))
+
+			<-server.frames
+			<-server.frames
+			third := decodeResponseCreate(t, <-server.frames)
+			if third.PreviousResponseID != "" || len(third.Input) != 5 {
+				t.Fatalf("third frame retained bad lineage: previous=%q input=%s", third.PreviousResponseID, third.Input)
+			}
+		})
+	}
+}
+
+func TestSendResponseCreateDecodeErrorNamesResponseCreate(t *testing.T) {
+	err := sendResponseCreate(context.Background(), nil, []byte("{"))
+	if err == nil {
+		t.Fatal("sendResponseCreate returned nil error for invalid request JSON")
+	}
+	if got := err.Error(); !strings.Contains(got, "websocket response.create") || strings.Contains(got, "request.create") {
+		t.Fatalf("error = %q, want response.create and no request.create", got)
 	}
 }

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
@@ -28,6 +29,13 @@ const (
 // drives wsPool's failure bookkeeping (see wsFrameSource.close).
 var errStreamClosedEarly = errors.New("openai: websocket stream closed before a terminal event")
 
+type wsLineage struct {
+	request     *apiRequest
+	responseID  string
+	outputItems []json.RawMessage
+	generation  uint64
+}
+
 // wsPoolEntry is one pooled session's websocket state — the Go analog of
 // opencode's ws-pool.ts PoolEntry. This session's next request reuses conn
 // as long as it is still open, younger than maxConnectionAge, and the
@@ -40,6 +48,8 @@ type wsPoolEntry struct {
 	busy           bool
 	fallback       bool // permanent: this session never uses ws again
 	streamFailures int
+	generation     uint64
+	lineage        *wsLineage
 	// subUsage is the subscription-usage snapshot captured off conn's own
 	// dial (upgrade response) headers — see codexSubscriptionUsageFromHeaders
 	// and dialResponsesWebSocket's doc comment. Only ever set for a
@@ -127,6 +137,7 @@ type wsStreamRequest struct {
 	Model      message.ModelRef
 	Family     string
 	HTTPClient *http.Client
+	Prewarm    bool
 }
 
 // stream attempts to serve req over this pool's session-affine websocket,
@@ -145,6 +156,10 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 
 	entry.mu.Lock()
 	if entry.fallback || entry.busy {
+		// A competing request falls back to HTTP. Invalidate the generation so
+		// the in-flight WebSocket completion cannot publish stale lineage.
+		entry.lineage = nil
+		entry.generation++
 		entry.mu.Unlock()
 		return nil, false
 	}
@@ -178,6 +193,8 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		entry.conn = newConn
 		entry.connectedAt = time.Now()
 		entry.subUsage = subUsage
+		entry.lineage = nil
+		entry.generation++
 		entry.mu.Unlock()
 		conn = newConn
 	} else {
@@ -186,7 +203,35 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		entry.mu.Unlock()
 	}
 
-	if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
+	var completeRequest apiRequest
+	if err := json.Unmarshal(req.Body, &completeRequest); err != nil {
+		p.invalidate(entry)
+		p.release(entry)
+		return nil, false
+	}
+
+	var createOptions responseCreateOptions
+	entry.mu.Lock()
+	generation := entry.generation
+	if req.Prewarm {
+		generate := false
+		completeRequest.Input = make([]json.RawMessage, 0)
+		createOptions.Input = completeRequest.Input
+		createOptions.InputSet = true
+		createOptions.Generate = &generate
+	} else if req.Family == CodexFamily && entry.lineage != nil &&
+		entry.lineage.responseID != "" &&
+		entry.lineage.generation == generation &&
+		responsesRequestPropertiesMatch(entry.lineage.request, &completeRequest) {
+		if suffix, ok := incrementalInput(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
+			createOptions.PreviousResponseID = entry.lineage.responseID
+			createOptions.Input = suffix
+			createOptions.InputSet = true
+		}
+	}
+	entry.mu.Unlock()
+
+	if err := sendResponseCreate(ctx, conn, req.Body, createOptions); err != nil {
 		p.handleTransportError(entry, err)
 		p.release(entry)
 		return nil, false
@@ -199,37 +244,128 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		return nil, false
 	}
 
-	src := &wsFrameSource{
-		conn:        conn,
-		idleTimeout: p.idleTimeout,
-		buffered:    &wsFrame{name: firstName, data: firstData},
-		onTerminal: func(name string) {
-			entry.mu.Lock()
-			entry.busy = false
-			entry.lastUsedAt = time.Now()
-			entry.streamFailures = 0
-			keep := isWSCleanTerminalEvent(name)
-			entry.mu.Unlock()
-			if !keep {
-				p.invalidate(entry)
-			}
-		},
-		onBroken: func(err error) {
-			p.release(entry)
-			if errors.Is(err, errStreamClosedEarly) {
-				p.invalidate(entry)
-				return
-			}
-			p.handleTransportError(entry, err)
-		},
+	recoveryAttempted := false
+	chainedRequest := createOptions.PreviousResponseID != ""
+	newSource := func(name string, data []byte) *wsFrameSource {
+		return &wsFrameSource{
+			ctx:         ctx,
+			conn:        conn,
+			idleTimeout: p.idleTimeout,
+			buffered:    &wsFrame{name: name, data: data},
+			onTerminal: func(name string, data []byte, first bool) {
+				// Keep only a first-frame chain miss on the socket until stream.Next
+				// replaces it with the immutable complete request below.
+				if first && chainedRequest && !recoveryAttempted && isPreviousResponseNotFoundFrame(name, data) {
+					return
+				}
+				entry.mu.Lock()
+				entry.busy = false
+				entry.lastUsedAt = time.Now()
+				entry.streamFailures = 0
+				keep := isWSCleanTerminalEvent(name)
+				entry.mu.Unlock()
+				if !keep {
+					p.invalidate(entry)
+				}
+			},
+			onBroken: func(err error) {
+				p.release(entry)
+				if errors.Is(err, errStreamClosedEarly) {
+					p.invalidate(entry)
+					return
+				}
+				p.handleTransportError(entry, err)
+			},
+		}
 	}
 
-	return &stream{
-		wsConn:   src,
-		model:    req.Model,
-		family:   req.Family,
-		subUsage: subUsage,
-	}, true
+	metadata := &provider.RequestMetadata{
+		Mode:                 provider.RequestModeFull,
+		CompleteInputItems:   len(completeRequest.Input),
+		SentInputItems:       len(completeRequest.Input),
+		PreviousResponseUsed: false,
+	}
+	if chainedRequest {
+		metadata.Mode = provider.RequestModeIncremental
+		metadata.SentInputItems = len(createOptions.Input)
+		metadata.PreviousResponseUsed = true
+	}
+
+	st := &stream{
+		wsConn:           newSource(firstName, firstData),
+		model:            req.Model,
+		family:           req.Family,
+		subUsage:         subUsage,
+		requestMetadata:  metadata,
+		recoverChainMiss: nil,
+		onComplete: func(responseID string, assistant *message.Message) {
+			if req.Family != CodexFamily {
+				return
+			}
+			if responseID == "" {
+				p.clearLineage(entry, generation)
+				return
+			}
+			var outputItems []json.RawMessage
+			if !req.Prewarm {
+				var err error
+				outputItems, err = transcodeMessage(assistant, false, req.Family)
+				if err != nil {
+					p.clearLineage(entry, generation)
+					return
+				}
+			}
+			if outputItems == nil {
+				outputItems = make([]json.RawMessage, 0)
+			}
+			entry.mu.Lock()
+			defer entry.mu.Unlock()
+			if entry.generation != generation {
+				return
+			}
+			entry.lineage = &wsLineage{
+				request:     &completeRequest,
+				responseID:  responseID,
+				outputItems: outputItems,
+				generation:  generation,
+			}
+		},
+	}
+	if chainedRequest {
+		st.recoverChainMiss = func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error) {
+			recoveryAttempted = true
+			p.clearLineage(entry, generation)
+			if !first || visible {
+				// wsFrameSource.onTerminal already released and invalidated this
+				// non-first error. Repeating that cleanup here can race with and
+				// close a newer request's connection for the same session.
+				if visible {
+					return nil, nil, provider.MarkStreamTruncated(chainErr)
+				}
+				return nil, nil, chainErr
+			}
+			if err := sendResponseCreate(ctx, conn, req.Body); err != nil {
+				p.handleTransportError(entry, err)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(err)
+			}
+			name, data, err := readFirstFrame(ctx, conn, p.idleTimeout)
+			if err != nil {
+				p.handleTransportError(entry, err)
+				p.release(entry)
+				return nil, nil, provider.MarkStreamTruncated(err)
+			}
+			fullMetadata := &provider.RequestMetadata{
+				Mode:                 provider.RequestModeFull,
+				CompleteInputItems:   len(completeRequest.Input),
+				SentInputItems:       len(completeRequest.Input),
+				PreviousResponseUsed: false,
+				ChainRecovered:       true,
+			}
+			return newSource(name, data), fullMetadata, nil
+		}
+	}
+	return st, true
 }
 
 func readFirstFrame(ctx context.Context, conn *websocket.Conn, idleTimeout time.Duration) (string, []byte, error) {
@@ -282,6 +418,14 @@ func (p *wsPool) release(entry *wsPoolEntry) {
 	entry.mu.Unlock()
 }
 
+func (p *wsPool) clearLineage(entry *wsPoolEntry, generation uint64) {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.generation == generation {
+		entry.lineage = nil
+	}
+}
+
 // invalidate closes and clears entry's connection, if any, so the next
 // stream() call for this session dials fresh. Closing is best-effort: the
 // connection is already known bad, terminal, or about to be discarded
@@ -291,6 +435,8 @@ func (p *wsPool) invalidate(entry *wsPoolEntry) {
 	conn := entry.conn
 	entry.conn = nil
 	entry.connectedAt = time.Time{}
+	entry.lineage = nil
+	entry.generation++
 	entry.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
