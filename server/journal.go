@@ -939,6 +939,28 @@ func (s *Server) syncMessages(sessionID string) {
 // session's journal between "the snapshot is fully durable" and "the
 // watermark was read," because emitDurableLocked never runs without s.mu.
 //
+// liveFrom is a SECOND, separate cursor — see docs/design/live-event-tip-
+// cursor.md for the full argument this doc comment only summarizes. seq
+// (the message watermark above) only ever counts a message present in the
+// returned history, so a session with a lot of OTHER durable journal
+// activity under the same id — any event type, or an evtMessage excluded
+// from history for any reason — sits far below the box-global event tip,
+// and a client resuming GET /event from it replays all of that activity
+// as an unwanted backlog. liveFrom is that tip instead, computed as
+// max(seq, tipAtStart): tipAtStart is s.seq sampled (via currentSeq)
+// before this function reads anything else, so it is a fresh, empty
+// upper bound before this call has journaled or observed a single byte.
+// Both terms are individually proven, in the design doc, never to reach
+// the seq of a record this call must keep replayable — seq by the same
+// proof this function's own doc comment already gives for it, tipAtStart
+// because any record excluded from the history this call returns was, by
+// definition, appended to the session strictly after this call's own
+// sess.History() read, which itself runs strictly after tipAtStart's
+// already-released critical section — so their max inherits the same
+// guarantee. In the common case (nothing durable for this session
+// predates this call) tipAtStart is 0 or otherwise below seq, and
+// liveFrom collapses to exactly seq.
+//
 // It returns the SAME history slice it just journaled — never a second
 // sess.History() call, and never syncMessages followed by a re-read — both
 // of which would reopen an identical race one level down instead of closing
@@ -950,11 +972,15 @@ func (s *Server) syncMessages(sessionID string) {
 // already does. This is a GET, not a journaling trigger tied to a live turn,
 // so a caller must never be told "no such session" just because nothing in
 // this process happens to be driving it right now.
-func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, ok bool) {
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, ok bool) {
 	sess, ok := s.lookupSession(id)
 	if !ok {
-		return nil, 0, false
+		return nil, 0, 0, false
 	}
+	// Sampled first, before anything else this function does — see the
+	// doc comment above for why tipAtStart must precede sess.History().
+	tipAtStart := s.currentSeq()
+
 	history = sess.History()
 	persistErr := sess.PersistErr()
 
@@ -991,12 +1017,16 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	}
 	reportErr := s.checkPersistErrLocked(id, persistErr)
 	seq = s.transcriptWatermarkLocked(id, history)
+	liveFrom = tipAtStart
+	if seq > liveFrom {
+		liveFrom = seq
+	}
 	s.mu.Unlock()
 
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
-	return history, seq, true
+	return history, seq, liveFrom, true
 }
 
 // transcriptWatermarkLocked returns the durable seq up to which sessionID's

@@ -34,6 +34,7 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |
 | [goal-retry-directive-reuse.md](design/goal-retry-directive-reuse.md) | Durable directive reuse across goal retries |
 | [journal-snapshotting.md](design/journal-snapshotting.md) | Journal snapshot format and recovery |
+| [live-event-tip-cursor.md](design/live-event-tip-cursor.md) | Backlog-free SSE resume cursor for the console bootstrap read |
 | [managed-processes.md](design/managed-processes.md) | Box-scoped managed process lifecycle |
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |
 | [nested-instruction-loading.md](design/nested-instruction-loading.md) | Project instruction discovery and truncation |

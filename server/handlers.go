@@ -1177,7 +1177,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if query.Has("stream_from") {
-		msgs, seq, ok := s.transcriptSyncedThrough(id)
+		msgs, seq, liveFrom, ok := s.transcriptSyncedThrough(id)
 		if !ok {
 			writeErr(w, http.StatusNotFound, "no such session")
 			return
@@ -1185,6 +1185,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, transcriptJSON{
 			Messages:   marshalMessages(msgs),
 			StreamFrom: seq,
+			LiveFrom:   liveFrom,
 		})
 		return
 	}
@@ -1209,9 +1210,17 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 // parameter) and the before_seq/limit messagePageJSON page: a caller that
 // never names stream_from keeps getting exactly what it always got, byte
 // for byte.
+//
+// LiveFrom is an ADDITIVE second cursor (see
+// docs/design/live-event-tip-cursor.md): the box-global event-journal tip,
+// sampled in the same locked section as StreamFrom, for a caller that wants
+// GET /event?from=<live_from> to resume the LIVE stream with no backlog —
+// at the cost of giving up StreamFrom's own narrower self-heal guarantee.
+// A caller that only ever reads StreamFrom is unaffected.
 type transcriptJSON struct {
 	Messages   []json.RawMessage `json:"messages"`
 	StreamFrom int64             `json:"stream_from"`
+	LiveFrom   int64             `json:"live_from"`
 }
 
 // marshalMessages renders messages for the wire, one at a time, replacing
