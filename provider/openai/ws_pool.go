@@ -336,8 +336,9 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			recoveryAttempted = true
 			p.clearLineage(entry, generation)
 			if !first || visible {
-				p.invalidate(entry)
-				p.release(entry)
+				// wsFrameSource.onTerminal already released and invalidated this
+				// non-first error. Repeating that cleanup here can race with and
+				// close a newer request's connection for the same session.
 				if visible {
 					return nil, nil, provider.MarkStreamTruncated(chainErr)
 				}

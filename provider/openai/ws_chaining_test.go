@@ -638,6 +638,10 @@ func TestPreviousResponseNotFoundAfterResponseCreatedDoesNotRetry(t *testing.T) 
 	server := newWSLineageServer(t)
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 	establishRecoveryLineage(t, server, client, "chain-miss-after-created")
+	entry := client.wsPoolFor().entryFor("chain-miss-after-created")
+	entry.mu.Lock()
+	generationBefore := entry.generation
+	entry.mu.Unlock()
 	server.scripts <- wsLineageScript{beforeWait: []string{
 		`{"type":"response.created","response":{"id":"resp_started"}}`,
 		chainMissFrame(),
@@ -660,6 +664,12 @@ func TestPreviousResponseNotFoundAfterResponseCreatedDoesNotRetry(t *testing.T) 
 	}
 	if got := len(server.frames); got != 0 {
 		t.Fatalf("extra websocket frames = %d, want no local retry when chain miss is not first frame", got)
+	}
+	entry.mu.Lock()
+	generationAfter := entry.generation
+	entry.mu.Unlock()
+	if generationAfter != generationBefore+1 {
+		t.Fatalf("connection generation = %d after non-first chain miss, want one invalidation from %d to %d", generationAfter, generationBefore, generationBefore+1)
 	}
 }
 
