@@ -402,6 +402,11 @@ type wireChunk struct {
 			// reasoning_content carries on DeepSeek/Bifrost. A gateway sends
 			// one or the other, never both, so handle both fields.
 			Reasoning string `json:"reasoning"`
+			// ReasoningDetails is Vertex/Gemini via Bifrost: an array of
+			// {"index":0,"type":"reasoning.text","text":"..."} blocks.
+			ReasoningDetails []struct {
+				Text string `json:"text"`
+			} `json:"reasoning_details"`
 			ToolCalls []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -460,10 +465,9 @@ func (s *stream) handle(data []byte) error {
 		s.text.WriteString(choice.Delta.Content)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content})
 	}
-	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
-	// reasoning (OpenRouter). Surface whichever is present as a Reasoning part.
-	// The two are mutually exclusive (else-if): a gateway that echoed BOTH in one
-	// chunk would otherwise double-count the same reasoning text.
+	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost),
+	// reasoning (OpenRouter), or reasoning_details (Gemini via Bifrost).
+	// Surface whichever is present as a Reasoning part.
 	if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
@@ -472,6 +476,14 @@ func (s *stream) handle(data []byte) error {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
+	} else if len(choice.Delta.ReasoningDetails) > 0 {
+		for _, rd := range choice.Delta.ReasoningDetails {
+			if rd.Text != "" {
+				s.haveReasoning = true
+				s.reasoningText.WriteString(rd.Text)
+				s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
+			}
+		}
 	}
 	for _, tc := range choice.Delta.ToolCalls {
 		if s.toolCalls == nil {
