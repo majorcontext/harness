@@ -18,6 +18,7 @@ import (
 type transcriptResponse struct {
 	Messages   []message.Message `json:"messages"`
 	StreamFrom int64             `json:"stream_from"`
+	LiveFrom   int64             `json:"live_from"`
 }
 
 // getTranscript issues GET /session/{id}/message?stream_from=1 and decodes

@@ -781,7 +781,22 @@ components:
         position — correct for THIS session (nothing to duplicate or drop),
         but an unfiltered GET /event?from=<stream_from> would then replay
         every OTHER session's events with a higher seq too.
-      required: [messages, stream_from]
+
+        `live_from` is a second, additive cursor for a client that wants a
+        backlog-free live resume instead: the box-global event-journal tip
+        at the same instant `stream_from` was sampled. A session with a lot
+        of OTHER durable journal activity under its id (nested subagent
+        turns, in particular) can sit far below that tip even once
+        `stream_from` already accounts for every message in `messages` —
+        GET /event?from=<stream_from>&session=<id> then replays all of that
+        extra activity as backlog the client immediately discards. Passing
+        `live_from` instead resumes strictly after it: no backlog, at the
+        cost of `stream_from`'s own narrower self-heal guarantee for a
+        message excluded from `messages` by a read-time race. See
+        docs/design/live-event-tip-cursor.md for the full argument. A
+        client that only ever reads `stream_from` is unaffected — nothing
+        about it changed.
+      required: [messages, stream_from, live_from]
       properties:
         messages:
           type: array
@@ -799,6 +814,15 @@ components:
             returned has a seq strictly greater than it — pass it as
             GET /event's `from` (or `Last-Event-ID`) to resume without a
             gap or a duplicate.
+        live_from:
+          type: integer
+          description: >
+            The box-global event-journal tip as of this same call, always
+            >= stream_from (equal, for a session with no journal activity
+            predating this call). Pass it as GET /event's `from` instead of
+            `stream_from` to resume the live stream with no backlog from
+            this session's own prior journal activity. See `stream_from`'s
+            description above for the tradeoff this makes.
 
     Part:
       type: object
