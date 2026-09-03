@@ -304,16 +304,35 @@ A retry can use lineage only when the prior attempt completed cleanly. A failed
 attempt cannot update lineage. Partial model output and partial tool intent do
 not enter the next incremental baseline.
 
-The adapter classifies the Codex `previous_response_not_found` error as a chain
-miss. Recovery is intentionally narrower than an ordinary "before visible
-output" check. Only a miss in the immediate first response frame can recover.
-The adapter clears lineage and sends the complete request once on the same
-socket. This recovery does not consume the engine's user-turn retry budget.
+The adapter classifies a Codex "conversation gone" rejection as a chain miss:
+the documented `previous_response_not_found` code, or the plain HTTP-status
+vocabulary (`404`, `not_found`) the same condition has also been observed to
+carry. Recovery is intentionally narrower than an ordinary "before visible
+output" check. Only a miss in the immediate first response frame can recover,
+and only once per turn.
+
+A chain miss can also occur on a request that carried no `previous_response_id`
+of its own. A reused pooled connection can carry the server's own implicit
+session state even when the local request is already a complete, non-chained
+one — for example, the first request after a model switch, which the property
+comparison above already refuses to chain. Recovery applies whenever the
+request was chained, or the connection was reused; a brand-new connection
+serving a non-chained request has nothing stale to recover from, so a first-
+frame chain miss there is a genuine error.
+
+Recovery closes the connection that produced the miss and dials a fresh one
+before resending the complete request without `previous_response_id`. It no
+longer resends on the connection that produced the miss: that risked the
+server tying the rejection to the connection itself, not only to the one
+referenced response, which left a chain miss able to repeat after a model
+switch even though the retried request was already the complete one. This
+recovery does not consume the engine's user-turn retry budget.
 
 Any later chain miss invalidates the socket and does not use special recovery,
 even when earlier frames contained no model-visible output. A miss after visible
 output is a typed truncated-stream error. Another non-immediate or repeated miss
-follows the normal provider error classification.
+— including one on the freshly dialed recovery connection — follows the normal
+provider error classification.
 
 ## Concurrency
 
@@ -406,7 +425,12 @@ Implementation follows test-driven development.
 - A successful full request establishes a new lineage.
 - Generic OpenAI families never send `generate` or `previous_response_id`.
 - HTTP fallback receives the original complete request bytes.
-- `previous_response_not_found` causes one full-request recovery.
+- A chain-miss code (`previous_response_not_found`, `404`, or `not_found`) on
+  the first frame causes one full-request recovery on a freshly dialed
+  connection.
+- A first-frame chain miss on a request that was already complete (not
+  chained) also recovers when it arrived on a reused connection, and does not
+  recover on a freshly dialed one.
 
 ### Stream and pool tests
 
