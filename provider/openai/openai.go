@@ -187,7 +187,8 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	// trust store), and no separate code path could plausibly relay
 	// different credentials for the same client. Any failure at all —
 	// no SessionKey, a busy or previously-broken session, dial/send/
-	// first-frame failure — falls through to the HTTP POST unchanged.
+	// first-frame failure — falls through to the semantically identical HTTP
+	// POST below. Codex HTTP changes only its wire encoding to zstd.
 	if c.UseWebSocketTransport && req.SessionKey != "" {
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
 			SessionKey: req.SessionKey,

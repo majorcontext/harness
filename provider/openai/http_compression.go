@@ -12,7 +12,7 @@ import (
 
 const codexZstdEncoderCapacity = 4
 
-// zstdRequestEncoderPool bounds aggregate encoder memory and lets a canceled
+// zstdRequestEncoderPool bounds concurrent encoder use and lets a canceled
 // HTTP fallback stop while it waits for compression capacity.
 type zstdRequestEncoderPool struct {
 	capacity int
