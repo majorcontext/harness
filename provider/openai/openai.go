@@ -204,19 +204,21 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	}
 
 	httpBody := body
-	if c.family() == CodexFamily {
+	zstdEncoded := c.family() == CodexFamily
+	if zstdEncoded {
 		httpBody, err = compressCodexHTTPRequest(ctx, body)
 		if err != nil {
 			return nil, err
 		}
-		headers = headers.Clone()
-		headers.Set("Content-Encoding", "zstd")
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(httpBody))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header = headers.Clone()
+	if zstdEncoded {
+		httpReq.Header.Set("Content-Encoding", "zstd")
+	}
 
 	resp, err := hc.Do(httpReq)
 	if err != nil {
