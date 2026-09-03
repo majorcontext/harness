@@ -323,20 +323,19 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 			reasoningObj.Effort = effort
 		}
 		out.Reasoning = reasoningObj
-		// Codex rejects temperature and top_p when reasoning is active.
-		out.Temperature = nil
-		out.TopP = nil
 	} else if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
 	}
-	if reasoningEnabled {
-		// Reasoning models reject an explicit temperature or top_p, and reasoning
-		// tokens count against max_output_tokens — mirror the anthropic adapter:
-		// drop both sampling controls and raise the output cap above a floor.
+	if out.Reasoning != nil {
+		// Reasoning models reject an explicit temperature or top_p.
 		out.Temperature = nil
 		out.TopP = nil
-		if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
-			out.MaxOutputTokens = floor
+		// When an explicit effort level was requested, raise the output cap
+		// above a floor so reasoning tokens don't exhaust max_output_tokens.
+		if reasoningEnabled {
+			if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
+				out.MaxOutputTokens = floor
+			}
 		}
 	}
 
