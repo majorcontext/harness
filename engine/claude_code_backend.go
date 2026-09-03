@@ -516,12 +516,25 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		"--thinking-display", "summarized",
 		// All subagent spawning in the claude-code lane must go through
 		// harness's own cross-family "task" tool (server/mcp_history.go,
-		// #223), never the CLI's native same-family equivalent — the two
-		// tools below are the CLI's only built-in ways to spawn a
-		// same-family subagent (Agent: single subagent/teammate; Workflow:
-		// a script that fans out many subagents), so both are disallowed
-		// unconditionally rather than left for the model to choose between.
-		"--disallowedTools", "Agent,Workflow",
+		// #223), never the CLI's native same-family equivalent. Agent
+		// spawns a single subagent or teammate. Workflow runs a script that
+		// fans out many subagents.
+		//
+		// ScheduleWakeup, CronCreate, CronDelete, and CronList are the
+		// CLI's native /loop and cron tools. They bind to Claude Code's own
+		// loop runtime, an in-process timer inside the CLI process. A box
+		// has no such runtime. A box hibernates when idle, and hibernation
+		// kills any in-process timer. A call to one of these tools inside a
+		// box registers a wakeup with a runtime that does not exist there,
+		// so the CLI silently drops the request: the model believes it
+		// scheduled work, but nothing happens. The boxes orchestration
+		// MCP's own schedule_task and cron tools wake the box itself, so
+		// looping and scheduling inside a box must go through those tools
+		// instead.
+		//
+		// All six native tools are disallowed unconditionally rather than
+		// left for the model to choose between.
+		"--disallowedTools", "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
 	}
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
