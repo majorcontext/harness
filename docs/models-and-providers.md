@@ -292,8 +292,8 @@ merge):
 ## Session affinity (prompt-cache routing hint)
 
 `provider.Request.SessionKey` carries a stable, opaque session identifier on
-every request the engine builds — one field on the same per-request struct
-`Effort` rides. The engine sets it to `Session.ID` for main-turn assembly,
+every request the engine builds. The same per-request struct also carries
+`Effort`. The engine sets `SessionKey` to `Session.ID` for main-turn assembly,
 including its startup-prewarm request, and at the two internal request sites:
 `runEvaluator` (`engine/goal.go`, the goal-loop evaluator) and
 `runCompactionSummary` (`engine/compact.go`, the compaction summarizer). The

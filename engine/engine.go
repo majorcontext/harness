@@ -2672,13 +2672,13 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 		return nil, err
 	}
 	defer s.clearStartupPrewarmResolution()
-	// Refuse a model with no known context window, before anything else
-	// happens: no history append, no provider call, no instructions read.
-	// Running one anyway is running with NO context management at all,
-	// which ends in "context exhausted" rather than a compaction — see
-	// Config.RequireContextWindow. Same shape as the instructions check
-	// below: a present-but-unusable configuration fails every Prompt
-	// identically, loudly, and without recording a user message.
+	// Refuse a model with no known context window before this Prompt mutates
+	// history or sends an inference request. An eligible fresh session can
+	// already have read instructions and Skills and sent a no-generation
+	// startup prewarm before this check. Running an inference anyway is
+	// running with NO context management at all, which ends in "context
+	// exhausted" rather than a compaction — see Config.RequireContextWindow.
+	// A rejected Prompt still records no user message.
 	if err := s.ContextWindowErr(); err != nil {
 		s.emitSessionError(err)
 		return nil, err
