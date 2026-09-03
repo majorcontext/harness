@@ -187,7 +187,8 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	// trust store), and no separate code path could plausibly relay
 	// different credentials for the same client. Any failure at all —
 	// no SessionKey, a busy or previously-broken session, dial/send/
-	// first-frame failure — falls through to the HTTP POST unchanged.
+	// first-frame failure — falls through to the semantically identical HTTP
+	// POST below. Codex HTTP changes only its wire encoding to zstd.
 	if c.UseWebSocketTransport && req.SessionKey != "" {
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
 			SessionKey: req.SessionKey,
@@ -202,11 +203,22 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	httpBody := body
+	zstdEncoded := c.family() == CodexFamily
+	if zstdEncoded {
+		httpBody, err = compressCodexHTTPRequest(ctx, body)
+		if err != nil {
+			return nil, err
+		}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(httpBody))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header = headers.Clone()
+	if zstdEncoded {
+		httpReq.Header.Set("Content-Encoding", "zstd")
+	}
 
 	resp, err := hc.Do(httpReq)
 	if err != nil {
