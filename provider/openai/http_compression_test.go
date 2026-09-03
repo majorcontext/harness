@@ -50,18 +50,21 @@ func compressionRequest(family string) *provider.Request {
 	}
 }
 
-func compressionRequestGolden(t *testing.T) []byte {
+func compressionRequestGolden(t *testing.T, family string) []byte {
 	t.Helper()
 	text, err := json.Marshal(strings.Repeat("compressible input ", 128))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if family == CodexFamily {
+		return []byte(`{"model":"gpt-test","instructions":"stable system","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(text) + `}]}],"max_output_tokens":64,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"summary":"auto"},"prompt_cache_key":"session-compression"}`)
+	}
 	return []byte(`{"model":"gpt-test","instructions":"stable system","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":` + string(text) + `}]}],"max_output_tokens":64,"stream":true,"store":false,"include":["reasoning.encrypted_content"],"prompt_cache_key":"session-compression"}`)
 }
 
-func assertCompressionRequestGolden(t *testing.T, body []byte) {
+func assertCompressionRequestGolden(t *testing.T, family string, body []byte) {
 	t.Helper()
-	if want := compressionRequestGolden(t); !bytes.Equal(body, want) {
+	if want := compressionRequestGolden(t, family); !bytes.Equal(body, want) {
 		t.Fatalf("request body differs from golden\n got: %s\nwant: %s", body, want)
 	}
 }
@@ -88,7 +91,7 @@ func TestCodexHTTPCompressesRequestWithZstd(t *testing.T) {
 	defer stream.Close()
 	collect(t, stream)
 
-	assertCompressionRequestGolden(t, decoded)
+	assertCompressionRequestGolden(t, CodexFamily, decoded)
 }
 
 func TestWebSocketFailureFallsBackToZstdHTTP(t *testing.T) {
@@ -100,7 +103,7 @@ func TestWebSocketFailureFallsBackToZstdHTTP(t *testing.T) {
 		}
 		httpCalls++
 		decoded := decodeZstdRequest(t, r)
-		assertCompressionRequestGolden(t, decoded)
+		assertCompressionRequestGolden(t, CodexFamily, decoded)
 		writeCompletedResponse(w)
 	}))
 	defer server.Close()
@@ -139,7 +142,7 @@ func TestGenericOpenAIHTTPRemainsUncompressed(t *testing.T) {
 	}
 	defer stream.Close()
 	collect(t, stream)
-	assertCompressionRequestGolden(t, body)
+	assertCompressionRequestGolden(t, Family, body)
 }
 
 func TestZstdEncoderPoolWaitHonorsCancellation(t *testing.T) {

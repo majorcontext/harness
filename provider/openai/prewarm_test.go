@@ -90,7 +90,7 @@ func TestCodexPrewarmSendsGenerateFalseAndEmptyInput(t *testing.T) {
 	}
 
 	got := <-server.frames
-	want := `{"type":"response.create","model":"gpt-5","input":[],"max_output_tokens":100,"store":false,"include":["reasoning.encrypted_content"],"prompt_cache_key":"prewarm-frame","generate":false}`
+	want := `{"type":"response.create","model":"gpt-5","input":[],"max_output_tokens":100,"store":false,"include":["reasoning.encrypted_content"],"reasoning":{"summary":"auto"},"prompt_cache_key":"prewarm-frame","generate":false}`
 	if string(got) != want {
 		t.Fatalf("prewarm frame = %s, want %s", got, want)
 	}

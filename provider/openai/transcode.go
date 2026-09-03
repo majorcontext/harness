@@ -152,9 +152,10 @@ func rawJSONEqual(previous, current json.RawMessage) bool {
 }
 
 // apiReasoning is the OpenAI Responses reasoning control. Effort is one of
-// minimal, low, medium, high.
+// minimal, low, medium, high. Summary is optional (e.g. "auto" on Codex).
 type apiReasoning struct {
-	Effort string `json:"effort,omitempty"`
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // reasoningEffort maps a unified effort level to the OpenAI Responses
@@ -312,15 +313,29 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// about input reasoning items, so this stays a caller-gated, live-gated
 	// deferral, not something this transcoder guesses at from the model ref.
 	stripReasoning := req.Effort == message.EffortOff
-	if reasoningEnabled {
+	if req.Effort != message.EffortOff && family == CodexFamily {
+		// OpenAI Codex supports and defaults to emitting human-readable reasoning
+		// summaries via {"summary":"auto"}, which streaming parses into
+		// EventReasoningDelta and the canonical assistant Reasoning part for UIs.
+		// Send "auto" for both EffortUnset (default) and explicit reasoning efforts.
+		reasoningObj := &apiReasoning{Summary: "auto"}
+		if reasoningEnabled {
+			reasoningObj.Effort = effort
+		}
+		out.Reasoning = reasoningObj
+	} else if reasoningEnabled {
 		out.Reasoning = &apiReasoning{Effort: effort}
-		// Reasoning models reject an explicit temperature or top_p, and reasoning
-		// tokens count against max_output_tokens — mirror the anthropic adapter:
-		// drop both sampling controls and raise the output cap above a floor.
+	}
+	if out.Reasoning != nil {
+		// Reasoning models reject an explicit temperature or top_p.
 		out.Temperature = nil
 		out.TopP = nil
-		if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
-			out.MaxOutputTokens = floor
+		// When an explicit effort level was requested, raise the output cap
+		// above a floor so reasoning tokens don't exhaust max_output_tokens.
+		if reasoningEnabled {
+			if floor := reasoningOutputFloor(req.Effort); out.MaxOutputTokens < floor {
+				out.MaxOutputTokens = floor
+			}
 		}
 	}
 
