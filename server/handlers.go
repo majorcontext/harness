@@ -3522,53 +3522,97 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	// unrelated human prompt happened to drain it.
 	s.sessMgr.ReportTurnStart(st.sess)
 
+	// released, and the release closure below, exist because
+	// TestCompactPanicReleasesClaim's own fix (the defer s.wg.Done() above)
+	// only closed HALF the panic-safety gap it found: that test proves
+	// s.wg (Drain) recovers after a forced Compact panic, but the run-slot
+	// claim (st.running) and SessionManager's own node (ReportTurnEnd) were
+	// still released by a PLAIN, non-deferred call sequence below, reached
+	// only on a normal return. net/http recovers a panicking handler per
+	// CONNECTION (net/http.(*conn).serve's own recover), not per PROCESS —
+	// a real, live panic inside Compact (e.g. a native provider's
+	// transcoder choking on claude-code-produced history right after an
+	// operator switches a delegated session's model and then compacts, the
+	// exact incident this fixes: ses_01m1ht79e5fgfbx2cjx4cf4xm8) logs
+	// "http: panic serving ..." and closes that one connection, but the
+	// harness process stays up — while this session was left claimed
+	// forever: status "busy", state "busy", lineage.status "running", no
+	// runner process alive to ever finish it. See
+	// TestCompactPanicDoesNotStrandSessionBusy, the red-verified regression
+	// test for exactly this gap.
+	//
+	// released guards against a double release: the normal path below
+	// calls release() once, inline, at the same point the old bare calls
+	// ran; the deferred recover only fires (and only then calls release
+	// itself) if a panic is currently unwinding — which for the normal
+	// path never happens, and for a panic AFTER release() already ran
+	// (inside writeErr/writeJSON, below) release() has already set
+	// released so the recovered call is a no-op before its own re-panic.
+	released := false
+	release := func(callErr error) {
+		if released {
+			return
+		}
+		released = true
+		// Session.Compact's own emits (EventMessage for the summary, then
+		// EventHistoryCompacted — see engine/compact.go) already flowed
+		// through Publish synchronously by the time Compact returns,
+		// journaling the summary message and the durable
+		// history.compacted record in that order (see
+		// publishHistoryCompacted). syncMessages here is a harmless,
+		// idempotent extra pass — the same belt-and-suspenders every
+		// other handler's tail already relies on. On the panic path
+		// Compact may not have journaled anything at all — still
+		// harmless, since syncMessages only catches up whatever IS
+		// already durable.
+		s.syncMessages(id)
+
+		s.freeRunSlotAndEmitIdle(id, st)
+
+		// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle — see runPrompt's
+		// identical ordering and its doc comment for why (the real run slot
+		// must be free before SessionManager's view of this root can show
+		// idle/done, or a concurrent resume attempt racing in between would
+		// find the slot still held and permanently strand its notification).
+		// msg is nil: Compact never produces the kind of turn message
+		// ReportTurnEnd's root branch would read (see its own doc comment —
+		// only a CHILD's finalizeTurn branch reads msg, and a child never
+		// reaches this handler at all, rejectManagedChildTurn above already
+		// refused it).
+		resume := s.sessMgr.ReportTurnEnd(id, nil, callErr)
+
+		// Same drain-then-auto-arm-then-resume precedence as runPrompt's tail
+		// (invariant 5): a prompt queued (or a goal armed) while this compact
+		// call ran must not sit stranded just because the run slot happened to
+		// be released by compact instead of an ordinary prompt or goal turn —
+		// see maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the
+		// full race analysis, identical here. wg.Done for THIS claim is the
+		// deferred call above, which fires after these tail calls (defers fire
+		// after the function body's remaining statements), so the WaitGroup
+		// never transiently reads zero between this claim's release and a
+		// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
+		// defer-at-function-exit shape).
+		if !s.maybeDispatchQueued(id, st) {
+			if resume != nil {
+				resume()
+			} else {
+				s.maybeAutoArmGoal(id, st)
+			}
+		}
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			release(fmt.Errorf("engine: panic during compact: %v", r))
+			panic(r) // re-panic: net/http's own per-connection recover still applies
+		}
+	}()
+
 	opts := engine.CompactOptions{Model: model}
 	if body.KeepTurns != nil {
 		opts.KeepTurns = *body.KeepTurns
 	}
 	res, err := st.sess.Compact(ctx, opts)
-	// Session.Compact's own emits (EventMessage for the summary, then
-	// EventHistoryCompacted — see engine/compact.go) already flowed through
-	// Publish synchronously by the time Compact returns, journaling the
-	// summary message and the durable history.compacted record in that
-	// order (see publishHistoryCompacted). syncMessages here is a harmless,
-	// idempotent extra pass — the same belt-and-suspenders every other
-	// handler's tail already relies on.
-	s.syncMessages(id)
-
-	s.freeRunSlotAndEmitIdle(id, st)
-
-	// ReportTurnEnd runs AFTER freeRunSlotAndEmitIdle — see runPrompt's
-	// identical ordering and its doc comment for why (the real run slot
-	// must be free before SessionManager's view of this root can show
-	// idle/done, or a concurrent resume attempt racing in between would
-	// find the slot still held and permanently strand its notification).
-	// msg is nil: Compact never produces the kind of turn message
-	// ReportTurnEnd's root branch would read (see its own doc comment —
-	// only a CHILD's finalizeTurn branch reads msg, and a child never
-	// reaches this handler at all, rejectManagedChildTurn above already
-	// refused it).
-	resume := s.sessMgr.ReportTurnEnd(id, nil, err)
-
-	// Same drain-then-auto-arm-then-resume precedence as runPrompt's tail
-	// (invariant 5): a prompt queued (or a goal armed) while this compact
-	// call ran must not sit stranded just because the run slot happened to
-	// be released by compact instead of an ordinary prompt or goal turn —
-	// see maybeDispatchQueued/maybeAutoArmGoal's own doc comments for the
-	// full race analysis, identical here. wg.Done for THIS claim is the
-	// deferred call above, which fires after these tail calls (defers fire
-	// after the function body's remaining statements), so the WaitGroup
-	// never transiently reads zero between this claim's release and a
-	// dispatched/auto-armed one's own wg.Add (mirrors runPrompt's
-	// defer-at-function-exit shape) — and, unlike a bare call here, still
-	// fires even if one of these tail calls (or Compact above) panics.
-	if !s.maybeDispatchQueued(id, st) {
-		if resume != nil {
-			resume()
-		} else {
-			s.maybeAutoArmGoal(id, st)
-		}
-	}
+	release(err)
 
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, plugin.SanitizeSessionError(err.Error()))
