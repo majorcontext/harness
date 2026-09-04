@@ -1177,7 +1177,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if query.Has("stream_from") {
-		msgs, seq, liveFrom, ok := s.transcriptSyncedThrough(id)
+		msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
 		if !ok {
 			writeErr(w, http.StatusNotFound, "no such session")
 			return
@@ -1186,6 +1186,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			Messages:   marshalMessages(msgs),
 			StreamFrom: seq,
 			LiveFrom:   liveFrom,
+			Seqs:       seqs,
 		})
 		return
 	}
@@ -1217,10 +1218,21 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 // GET /event?from=<live_from> to resume the LIVE stream with no backlog —
 // at the cost of giving up StreamFrom's own narrower self-heal guarantee.
 // A caller that only ever reads StreamFrom is unaffected.
+//
+// Seqs is a FOURTH, additive field: each entry's DURABLE MESSAGE ORDINAL
+// (messageDurableOrdinals, journal.go) -- the SAME per-session numbering
+// this endpoint's own before_seq/limit page answers
+// (engine/messagepage.go), NOT the box-global event-journal seq
+// StreamFrom/LiveFrom report. Same order as Messages, 0 for one with none
+// (see messageDurableOrdinals' own doc comment for the one case that is,
+// and docs/design/transcript-tail-seqs.md for the caller this exists for
+// and why the two numbering spaces must never be confused). A caller that
+// reads only Messages/StreamFrom/LiveFrom is unaffected.
 type transcriptJSON struct {
 	Messages   []json.RawMessage `json:"messages"`
 	StreamFrom int64             `json:"stream_from"`
 	LiveFrom   int64             `json:"live_from"`
+	Seqs       []int64           `json:"seqs,omitempty"`
 }
 
 // marshalMessages renders messages for the wire, one at a time, replacing

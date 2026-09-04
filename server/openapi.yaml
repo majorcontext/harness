@@ -823,6 +823,27 @@ components:
             `stream_from` to resume the live stream with no backlog from
             this session's own prior journal activity. See `stream_from`'s
             description above for the tradeoff this makes.
+        seqs:
+          type: array
+          description: >
+            Each entry's DURABLE MESSAGE ORDINAL, same order and length as
+            `messages` — the SAME per-session numbering
+            GET /session/{id}/message's own before_seq/limit page answers
+            (a message's 1-based ordinal in the session's durable message
+            sequence, with each compaction fold applied), NOT the
+            box-global event-journal seq `stream_from`/`live_from` report.
+            0 for a synthetic orphan-repair entry a cold load derived and
+            never itself persisted — every other entry counts, including a
+            compaction summary. Additive: a client that budgets `messages`
+            down to a shorter tail after this call returns (a byte-budget
+            trim, done client-side) can look up which durable ordinal its
+            own kept window starts at and page backward from a real
+            anchor by sending it as that endpoint's `before_seq`, instead
+            of re-fetching this same response to merely discover one. A
+            client that only ever reads `messages`/`stream_from`/
+            `live_from` is unaffected.
+          items:
+            type: integer
 
     Part:
       type: object
