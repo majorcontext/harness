@@ -1219,11 +1219,15 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 // at the cost of giving up StreamFrom's own narrower self-heal guarantee.
 // A caller that only ever reads StreamFrom is unaffected.
 //
-// Seqs is a FOURTH, additive field: the durable journal seq of each entry
-// in Messages, same order, 0 for one with none (see
-// transcriptSyncedThrough's own doc comment for the one case that is, and
-// docs/design/transcript-tail-seqs.md for the caller this exists for). A
-// caller that reads only Messages/StreamFrom/LiveFrom is unaffected.
+// Seqs is a FOURTH, additive field: each entry's DURABLE MESSAGE ORDINAL
+// (messageDurableOrdinals, journal.go) -- the SAME per-session numbering
+// this endpoint's own before_seq/limit page answers
+// (engine/messagepage.go), NOT the box-global event-journal seq
+// StreamFrom/LiveFrom report. Same order as Messages, 0 for one with none
+// (see messageDurableOrdinals' own doc comment for the one case that is,
+// and docs/design/transcript-tail-seqs.md for the caller this exists for
+// and why the two numbering spaces must never be confused). A caller that
+// reads only Messages/StreamFrom/LiveFrom is unaffected.
 type transcriptJSON struct {
 	Messages   []json.RawMessage `json:"messages"`
 	StreamFrom int64             `json:"stream_from"`

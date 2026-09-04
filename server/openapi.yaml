@@ -826,16 +826,22 @@ components:
         seqs:
           type: array
           description: >
-            The durable journal seq of each entry in `messages`, same
-            order and length. 0 for one with none — a MessagePlaceholder,
-            or a synthetic orphan-repair entry a cold load derived and
-            never itself persisted. Additive: a client that budgets
-            `messages` down to a shorter tail after this call returns (a
-            byte-budget trim, done client-side) can look up which durable
-            seq its own kept window starts at and page backward from a
-            real anchor, instead of re-fetching this same response to
-            merely discover one. A client that only ever reads `messages`/
-            `stream_from`/`live_from` is unaffected.
+            Each entry's DURABLE MESSAGE ORDINAL, same order and length as
+            `messages` — the SAME per-session numbering
+            GET /session/{id}/message's own before_seq/limit page answers
+            (a message's 1-based ordinal in the session's durable message
+            sequence, with each compaction fold applied), NOT the
+            box-global event-journal seq `stream_from`/`live_from` report.
+            0 for a synthetic orphan-repair entry a cold load derived and
+            never itself persisted — every other entry counts, including a
+            compaction summary. Additive: a client that budgets `messages`
+            down to a shorter tail after this call returns (a byte-budget
+            trim, done client-side) can look up which durable ordinal its
+            own kept window starts at and page backward from a real
+            anchor by sending it as that endpoint's `before_seq`, instead
+            of re-fetching this same response to merely discover one. A
+            client that only ever reads `messages`/`stream_from`/
+            `live_from` is unaffected.
           items:
             type: integer
 

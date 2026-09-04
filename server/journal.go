@@ -974,19 +974,23 @@ func (s *Server) syncMessages(sessionID string) {
 // this process happens to be driving it right now.
 //
 // seqs is a THIRD, additive result (see docs/design/transcript-tail-seqs.md):
-// the durable journal seq of each entry in history, in the same order,
-// 0 for one with none (a message.IsSyntheticOrphanID load-time repair, or —
-// in principle, never observed in practice since the loop below journals
-// every other entry before this is sampled — one this call could not
-// journal for some other reason). It exists so a caller that BUDGETS this
-// history down to a shorter tail (meetneptune/boxes's byte-budget
-// console-bootstrap read, which trims client-side after this call returns
-// the whole thing) can still learn which durable seq its own kept window
-// starts at, and page backward from a real anchor on its FIRST "load
-// older" request instead of re-fetching this same newest page to merely
-// discover one. It is sampled from s.journal in the SAME locked section as
-// seq/liveFrom, after the journaling loop above has run, so a message this
-// very call just journaled already has an entry to find.
+// each entry's DURABLE MESSAGE ORDINAL, in the same order as history --
+// the SAME per-session numbering GET /session/{id}/message's own
+// before_seq/limit page answers (engine/messagepage.go's own doc comment:
+// "a message's 1-based ordinal in the session's durable message sequence
+// ... with each compact record's fold applied"). This is NOT the box-
+// global event-journal seq stream_from/live_from use (s.seq,
+// emitDurableLocked) -- the two numbering spaces are unrelated, and
+// sending the wrong one back as before_seq pages against a total it does
+// not describe (see messageDurableOrdinals' own doc comment for the full
+// argument, and its history in docs/design/transcript-tail-seqs.md). 0
+// for one with none (a message.IsSyntheticOrphanID load-time repair). It
+// exists so a caller that BUDGETS this history down to a shorter tail
+// (meetneptune/boxes's byte-budget console-bootstrap read, which trims
+// client-side after this call returns the whole thing) can still learn
+// which durable ordinal its own kept window starts at, and page backward
+// from a real anchor on its FIRST "load older" request instead of
+// re-fetching this same newest page to merely discover one.
 func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, ok bool) {
 	sess, ok := s.lookupSession(id)
 	if !ok {
@@ -998,6 +1002,9 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 
 	history = sess.History()
 	persistErr := sess.PersistErr()
+	// A pure function of this exact history snapshot -- no s.journal, no
+	// s.mu, so it needs neither the lock below nor a place inside it.
+	seqs = messageDurableOrdinals(history)
 
 	if s.transcriptSyncRace != nil {
 		// Test-only seam: let a test force a concurrent Publish(EventMessage)
@@ -1036,7 +1043,6 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	if seq > liveFrom {
 		liveFrom = seq
 	}
-	seqs = s.messageSeqsLocked(id, history)
 	s.mu.Unlock()
 
 	if reportErr != nil {
@@ -1045,29 +1051,57 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	return history, seq, liveFrom, seqs, true
 }
 
-// messageSeqsLocked returns, parallel to history, the durable journal seq of
-// each entry — 0 for one with none, e.g. a message.IsSyntheticOrphanID
-// load-time repair, which transcriptSyncedThrough's own journaling loop
-// (above) deliberately never assigns a seq to. Caller holds s.mu, and must
-// call this AFTER that loop has run: a message this very call journals must
-// already be in s.journal for this scan to find it.
+// messageDurableOrdinals returns, parallel to history, each entry's
+// DURABLE MESSAGE ORDINAL: a 1-based count over history's own entries,
+// skipping a message.IsSyntheticOrphanID one (which leaves its slot at the
+// zero value) and never resetting or restarting for any other reason.
 //
-// A linear scan of s.journal, exactly like transcriptWatermarkLocked's own
-// — this runs once per transcriptSyncedThrough call, alongside a scan that
-// function already pays for the same session.
-func (s *Server) messageSeqsLocked(sessionID string, history []message.Message) []int64 {
-	bySeq := make(map[string]int64, len(history))
-	for _, ev := range s.journal {
-		if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
+// This has to be the SAME numbering GET /session/{id}/message's own
+// before_seq/limit page uses (engine/messagepage.go's MessagePageWindow,
+// ReadMessagePage, tailPage/foldedPage), because a client that budgets
+// this history down to a shorter tail sends one of these values straight
+// back as that endpoint's before_seq (docs/design/transcript-tail-seqs.md)
+// -- and before_seq is defined entirely in terms of that page numbering:
+// "the K durable messages immediately before beforeSeq". A DIFFERENT
+// numbering (the box-global event-journal seq s.seq/emitDurableLocked
+// assigns, which stream_from/live_from report) is wrong here even though
+// it is also monotonic and also per-message: it is inflated by every
+// OTHER durable event this session's id has ever journaled under --
+// evtSessionCreated, evtSessionStatus (busy/idle, every turn),
+// evtModel, and so on -- so a value from that space read back as
+// before_seq typically exceeds the session's own message total and pages
+// clamp to the newest page: the exact re-fetch this field exists to
+// avoid, silently, since both numbers "look like a seq".
+//
+// The definition this counts against (engine/messagepage.go's own doc
+// comment) is "message records in log order, with each compact record's
+// fold applied (the folded range replaced by that record's summary)" --
+// and history already IS that post-fold view: Session.Compact's
+// spliceCompact (engine/compact.go) replaces a folded range with its
+// summary IN s.history itself, in place, rather than appending the
+// summary and leaving the originals behind. So a plain sequential count
+// over history's non-synthetic entries, in order, counts exactly the same
+// records messagepage.go's own tailPage/foldedPage count from the log --
+// no second, subtly different fold implementation, which this repository
+// forbids (see tailPage's own doc comment).
+//
+// A message this call's own caller has not yet journaled to the engine's
+// session log (a live turn's append landed in s.history microseconds
+// before this read) can transiently count one an on-disk page read would
+// not yet agree with -- self-healing exactly like every other value this
+// package numbers from a live snapshot, and never a wrong answer once the
+// write it raced lands.
+func messageDurableOrdinals(history []message.Message) []int64 {
+	ordinals := make([]int64, len(history))
+	var next int64
+	for i := range history {
+		if message.IsSyntheticOrphanID(history[i].ID) {
 			continue
 		}
-		bySeq[ev.Message.ID] = ev.Seq
+		next++
+		ordinals[i] = next
 	}
-	seqs := make([]int64, len(history))
-	for i := range history {
-		seqs[i] = bySeq[history[i].ID]
-	}
-	return seqs
+	return ordinals
 }
 
 // transcriptWatermarkLocked returns the durable seq up to which sessionID's

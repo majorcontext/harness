@@ -32,26 +32,45 @@ back.
 `transcriptJSON` (`server/handlers.go`) gains a fourth, additive field:
 
 ```json
-{"messages": [...], "stream_from": 123, "live_from": 130, "seqs": [118, 119, 121, 123]}
+{"messages": [...], "stream_from": 123, "live_from": 130, "seqs": [41, 42, 43, 44]}
 ```
 
-`seqs` is parallel to `messages`: one durable journal seq per entry, in the
-same order, `0` for an entry with no durable seq of its own (a
-`message.IsSyntheticOrphanID` load-time repair — see
-`transcriptSyncedThrough`'s own doc comment for why that one case is
-deliberate, not a gap). It is sampled from `s.journal` in the SAME locked
-section as `stream_from`/`live_from`, after `transcriptSyncedThrough`'s own
-journaling loop has run, by `messageSeqsLocked` — so a message this very
-call durably journals for the first time already has an entry for the scan
-to find.
+`seqs` is parallel to `messages`: each entry's DURABLE MESSAGE ORDINAL, in
+the same order — the SAME per-session numbering `before_seq`/`limit`
+itself is defined in terms of (`engine/messagepage.go`'s own doc comment:
+"a message's 1-based ordinal in the session's durable message sequence
+... with each compact record's fold applied"). `0` for an entry with no
+durable ordinal of its own (a `message.IsSyntheticOrphanID` load-time
+repair — see `messageDurableOrdinals`' own doc comment, `journal.go`).
+
+This is deliberately NOT the box-global event-journal seq
+`stream_from`/`live_from` report (`s.seq`, `emitDurableLocked`) — an
+earlier revision of this change sampled that value instead, and it is
+WRONG for this purpose even though it is also monotonic and also
+per-message: that seq space is shared by every session and every durable
+event type this session's id has ever journaled under (`evtSessionCreated`,
+`evtSessionStatus` on each turn's busy/idle transition, `evtModel`, ...),
+so it runs ahead of the per-session message ordinal by an amount that
+grows with every turn and every child session's own interleaved activity.
+A client that sent that inflated value back as `before_seq` almost always
+named a point PAST the session's own message total, which
+`MessagePageWindow` clamps back down to the newest page — silently
+re-fetching the tail, the exact bug this field exists to fix, just moved
+one seq-space over. `messageDurableOrdinals` computes the right space
+instead: a 1-based count over `history`'s own entries (skipping a
+synthetic one), which already matches `engine/messagepage.go`'s own
+fold-adjusted count because `Session.Compact`'s `spliceCompact`
+(`engine/compact.go`) already splices a compaction summary into
+`s.history` in place of the range it replaced — the identical fold, not a
+second implementation of it.
 
 A caller that budgets `messages` down to a shorter tail can now look up the
-seq of whichever message survived as the OLDEST kept one, by its `id`, and
-use that as `before_seq` on its first "load older" request — a real anchor,
-with no wasted overlapping fetch. `stream_from`, `live_from`, and `/event`
-are unchanged; a client that reads only those is unaffected, and `seqs` is
-absent (`omitempty`) for nothing here changing shape on an old client's
-own request.
+ordinal of whichever message survived as the OLDEST kept one, by its `id`,
+and use that as `before_seq` on its first "load older" request — a real
+anchor, with no wasted overlapping fetch. `stream_from`, `live_from`, and
+`/event` are unchanged; a client that reads only those is unaffected, and
+`seqs` is absent (`omitempty`) for nothing here changing shape on an old
+client's own request.
 
 ## 3. What this does NOT do
 
