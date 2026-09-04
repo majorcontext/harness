@@ -972,10 +972,25 @@ func (s *Server) syncMessages(sessionID string) {
 // already does. This is a GET, not a journaling trigger tied to a live turn,
 // so a caller must never be told "no such session" just because nothing in
 // this process happens to be driving it right now.
-func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, ok bool) {
+//
+// seqs is a THIRD, additive result (see docs/design/transcript-tail-seqs.md):
+// the durable journal seq of each entry in history, in the same order,
+// 0 for one with none (a message.IsSyntheticOrphanID load-time repair, or —
+// in principle, never observed in practice since the loop below journals
+// every other entry before this is sampled — one this call could not
+// journal for some other reason). It exists so a caller that BUDGETS this
+// history down to a shorter tail (meetneptune/boxes's byte-budget
+// console-bootstrap read, which trims client-side after this call returns
+// the whole thing) can still learn which durable seq its own kept window
+// starts at, and page backward from a real anchor on its FIRST "load
+// older" request instead of re-fetching this same newest page to merely
+// discover one. It is sampled from s.journal in the SAME locked section as
+// seq/liveFrom, after the journaling loop above has run, so a message this
+// very call just journaled already has an entry to find.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, ok bool) {
 	sess, ok := s.lookupSession(id)
 	if !ok {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil, false
 	}
 	// Sampled first, before anything else this function does — see the
 	// doc comment above for why tipAtStart must precede sess.History().
@@ -1021,12 +1036,38 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	if seq > liveFrom {
 		liveFrom = seq
 	}
+	seqs = s.messageSeqsLocked(id, history)
 	s.mu.Unlock()
 
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
-	return history, seq, liveFrom, true
+	return history, seq, liveFrom, seqs, true
+}
+
+// messageSeqsLocked returns, parallel to history, the durable journal seq of
+// each entry — 0 for one with none, e.g. a message.IsSyntheticOrphanID
+// load-time repair, which transcriptSyncedThrough's own journaling loop
+// (above) deliberately never assigns a seq to. Caller holds s.mu, and must
+// call this AFTER that loop has run: a message this very call journals must
+// already be in s.journal for this scan to find it.
+//
+// A linear scan of s.journal, exactly like transcriptWatermarkLocked's own
+// — this runs once per transcriptSyncedThrough call, alongside a scan that
+// function already pays for the same session.
+func (s *Server) messageSeqsLocked(sessionID string, history []message.Message) []int64 {
+	bySeq := make(map[string]int64, len(history))
+	for _, ev := range s.journal {
+		if ev.Type != evtMessage || ev.SessionID != sessionID || ev.Message == nil {
+			continue
+		}
+		bySeq[ev.Message.ID] = ev.Seq
+	}
+	seqs := make([]int64, len(history))
+	for i := range history {
+		seqs[i] = bySeq[history[i].ID]
+	}
+	return seqs
 }
 
 // transcriptWatermarkLocked returns the durable seq up to which sessionID's
