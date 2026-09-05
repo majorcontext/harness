@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
@@ -892,5 +893,128 @@ func TestBuildPluginSpecsTouchedBinaryFallsBackToHash(t *testing.T) {
 	}
 	if !dirty {
 		t.Errorf("buildPluginSpecs did not report dirty=true after refreshing stat fields, want the caller to persist the refreshed entry")
+	}
+}
+
+// TestPluginScriptFilesSkipsNonFileArgs pins finding (c): a fleet plugin is
+// commonly configured as an interpreter plus a script, e.g.
+// {"command":["bun","/repo/.harness/plugins/guard.ts"]}. pluginScriptFiles
+// must resolve the script argument (it is a real file on disk) but must
+// NOT treat a flag like "--verbose" — or any other argument that isn't a
+// file — as a missing file. Before this function exists, no such
+// resolution happens at all: command[1:] is never inspected, so a flag
+// argument can't yet force a spurious cache miss, but neither can a
+// changed script be noticed (see TestBuildPluginHostScriptContentChangeReprobes).
+func TestPluginScriptFilesSkipsNonFileArgs(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "guard.ts")
+	if err := os.WriteFile(script, []byte("console.log('v1')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := []string{"bun", script, "--verbose", "--config=missing.json"}
+
+	files, err := pluginScriptFiles(command, dir)
+	if err != nil {
+		t.Fatalf("pluginScriptFiles: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("pluginScriptFiles(%v) = %+v, want exactly one resolved file (the script), flags must be skipped", command, files)
+	}
+	if files[0].Path != script {
+		t.Errorf("resolved file path = %q, want %q", files[0].Path, script)
+	}
+	if files[0].Size != int64(len("console.log('v1')")) {
+		t.Errorf("resolved file size = %d, want %d", files[0].Size, len("console.log('v1')"))
+	}
+}
+
+// TestPluginScriptFilesNoArgsIsNil pins finding (d)'s building block: a
+// plain, non-interpreter plugin (command == [binary], no trailing
+// arguments) must resolve zero script files, so its cache identity is
+// unaffected by this change.
+func TestPluginScriptFilesNoArgsIsNil(t *testing.T) {
+	files, err := pluginScriptFiles([]string{"some-binary"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("pluginScriptFiles: %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("pluginScriptFiles with no trailing args = %+v, want none", files)
+	}
+}
+
+// TestBuildPluginHostScriptContentChangeReprobes pins the core defect: a
+// fleet plugin configured as an interpreter-wrapped script (e.g.
+// {"command":["bun","<repo>/.harness/plugins/guard.ts"],"dir":"<workspace>"})
+// has command[0] == a stable interpreter binary. Before this fix,
+// pluginBinaryIdentity/pluginBinaryHash resolve and stat ONLY command[0],
+// and pluginSpecDigest excludes Command entirely — so editing the script's
+// on-disk CONTENT (same path) is invisible to cache validity and harness
+// keeps serving the stale manifest forever. This test drives the same
+// buildPluginHost entry point production uses and counts real subprocess
+// spawns (via PLUGIN_SPAWN_LOG), the same technique
+// TestBuildPluginHostDirChangeReprobes uses for Dir.
+//
+// It also pins finding (b) in the same run: re-probing on every startup
+// regardless of content would defeat the whole point of the durable cache,
+// so an UNCHANGED script must stay a cache hit (spawn count unchanged)
+// between the first and second calls, before the content change in the
+// third call forces the one re-probe it must force.
+func TestBuildPluginHostScriptContentChangeReprobes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a real plugin subprocess")
+	}
+	tmp := t.TempDir()
+	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
+	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
+	t.Setenv("PLUGIN_NAME", "scriptplug")
+	spawnLog := filepath.Join(tmp, "spawns.log")
+	t.Setenv("PLUGIN_SPAWN_LOG", spawnLog)
+
+	script := filepath.Join(tmp, "guard.ts")
+	if err := os.WriteFile(script, []byte("console.log('v1')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plug := helperPluginCommand(t, "scriptplug")
+	plug.Command = append(plug.Command, script)
+
+	host1, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("buildPluginHost (script v1, 1st): %v", err)
+	}
+	host1.Close()
+	spawnsInitial := countLines(t, spawnLog)
+	if spawnsInitial == 0 {
+		t.Fatal("expected the plugin to be probed (spawned) at least once")
+	}
+
+	host2, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("buildPluginHost (script v1, 2nd): %v", err)
+	}
+	host2.Close()
+	spawnsUnchanged := countLines(t, spawnLog)
+	if spawnsUnchanged != spawnsInitial {
+		t.Errorf("an unchanged script re-probed on a 2nd buildPluginHost call: spawns %d -> %d, want unchanged (cache hit)", spawnsInitial, spawnsUnchanged)
+	}
+
+	// Same path, changed content, mtime pushed forward so a coarse
+	// filesystem clock can't accidentally leave (size, mtime) looking
+	// unchanged.
+	if err := os.WriteFile(script, []byte("console.log('v2 - a real behavior change')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(script, future, future); err != nil {
+		t.Fatal(err)
+	}
+
+	host3, err := buildPluginHost(context.Background(), []config.PluginSpec{plug}, "v", tmp, nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("buildPluginHost (script v2): %v", err)
+	}
+	t.Cleanup(host3.Close)
+	spawnsChanged := countLines(t, spawnLog)
+	if spawnsChanged == spawnsUnchanged {
+		t.Errorf("editing the plugin script's content (same path) did not trigger a re-probe: spawns %d -> %d, want spawnsChanged > spawnsUnchanged", spawnsUnchanged, spawnsChanged)
 	}
 }
