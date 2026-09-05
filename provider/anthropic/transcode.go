@@ -250,8 +250,9 @@ func wireCallID(id string) string {
 }
 
 // transcodeRequest maps a canonical request to the Anthropic Messages API.
-// Cache markers are injected here — on the last system block and the last
-// content block of the final message — and never stored in the session log.
+// Cache markers are injected here — on the last system block, the ambient
+// boundary (see markAmbientBoundary), and the last content block of the
+// final message — and never stored in the session log.
 // ttl is the resolved cache lifetime (see resolveCacheTTL); the caller sends
 // the extendedCacheTTLBeta header when it is CacheTTL1h.
 func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
@@ -391,8 +392,52 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	}
 	last := &out.Messages[len(out.Messages)-1]
 	last.Content[len(last.Content)-1].CacheControl = cacheControl(ttl)
+	markAmbientBoundary(out, ttl)
 
 	return out, nil
+}
+
+// markAmbientBoundary adds the CROSS-TURN breakpoint: one cache_control on
+// the last block strictly before the FIRST ambient block in the request.
+//
+// THE PROBLEM it closes. withAmbientStatus (engine/process.go) appends an
+// *EngineContext part to the newest user message on the throwaway request
+// copy only — durable history never sees it — so the message that carried
+// the block on turn N is re-rendered WITHOUT it on turn N+1. A cache entry
+// is readable only when the bytes it was written from are a prefix of the
+// new request, so the tail breakpoint above, which sits AFTER the ambient
+// block, wrote an entry turn N+1 can never read: every user turn re-read
+// the whole conversation at the cache-WRITE price. identityStatusSegment is
+// present on every request once version and start time are configured
+// (engine/identity_status.go), so in `serve` this was the normal path, not
+// an edge case.
+//
+// The boundary block is the last one whose bytes are stable across the turn
+// boundary, which makes the entry written here exactly the prefix turn N+1
+// re-sends unchanged. The tail breakpoint stays: it is what lets the steps
+// WITHIN one turn read each other, and a second entry costs nothing, since
+// a write bills only the delta past the highest hit.
+//
+// An ambient block is identified by the engine-context sentinel, which
+// message.NeutralizeEngineContextSentinel guarantees only a genuine
+// *EngineContext part can emit (see message/engine_context.go). A request
+// with no ambient block needs no boundary — the tail entry is already
+// reusable — and one whose FIRST block is ambient has nothing before it to
+// mark.
+func markAmbientBoundary(out *apiRequest, ttl string) {
+	var prev *apiBlock
+	for i := range out.Messages {
+		for j := range out.Messages[i].Content {
+			b := &out.Messages[i].Content[j]
+			if b.Type == "text" && strings.HasPrefix(b.Text, message.EngineContextOpenTag) {
+				if prev != nil {
+					prev.CacheControl = cacheControl(ttl)
+				}
+				return
+			}
+			prev = b
+		}
+	}
 }
 
 // transcodeParts renders parts to wire blocks. thinkingEnabled reports whether

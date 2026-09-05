@@ -444,11 +444,21 @@ sent. The adapter never labels uncompressed bytes with the zstd
 
 ## Anthropic cache TTL (default 1 hour)
 
-`provider/anthropic` marks two prompt-cache breakpoints on every request —
-the last system block and the last content block of the final message — and
-never stores a marker in the session log (`transcodeRequest`,
-`provider/anthropic/transcode.go`). The marker's TTL defaults to the
-EXTENDED 1-hour cache, not the API's own 5-minute default.
+`provider/anthropic` marks up to three prompt-cache breakpoints on every
+request — the last system block, the ambient boundary, and the last content
+block of the final message — and never stores a marker in the session log
+(`transcodeRequest`, `provider/anthropic/transcode.go`). The marker's TTL
+defaults to the EXTENDED 1-hour cache, not the API's own 5-minute default.
+
+The ambient boundary is the last block before the request's first ambient
+`EngineContext` block (`markAmbientBoundary`). It exists because ambient
+status rides the newest user message on the per-request copy only, so the
+message that carried it on one turn is re-rendered without it on the next.
+An entry written after that point can never be read again. The boundary
+entry ends where the bytes stop changing, so the next turn reads the whole
+conversation through the previous turn and writes only that turn's delta.
+A request with no ambient block gets no boundary marker: its tail entry is
+already reusable. Three markers stay under the API's limit of four.
 
 This is an opt-OUT default, and it changes the wire for an operator who
 configures nothing: every anthropic request carries the beta header and
@@ -473,8 +483,8 @@ cache economics.
 
 Wire shapes, by TTL:
 
-- `"1h"` sends `cache_control: {"type":"ephemeral","ttl":"1h"}` on both
-  breakpoints, plus the request header `anthropic-beta:
+- `"1h"` sends `cache_control: {"type":"ephemeral","ttl":"1h"}` on every
+  breakpoint, plus the request header `anthropic-beta:
   extended-cache-ttl-2025-04-11`. That header is the documented gate for the
   extended TTL. Some endpoints no longer enforce the gate and accept the TTL
   without it. Harness sends it regardless, because an endpoint that DOES
