@@ -1,44 +1,4 @@
-// MCP (Model Context Protocol) client integration: connecting to configured
-// MCP servers, registering their tools on a session's tool list, and
-// routing both engine-driven tool calls and plugin-initiated
-// client/mcp.call requests through the same connected clients.
-//
-// MCPServerConfig/MCPManager mirror the plugin Host's shape deliberately:
-// exactly like plugin.Host, an *MCPManager is built once per process (see
-// cmd/harness) and shared across every session via Config.MCP, not
-// reconnected per session. "When a session starts, connect to each
-// configured MCP server" (see the config package doc) is therefore true in
-// the same lazy sense NewSession's own doc comment promises for provider
-// auth and plugin spawns: nothing touches the network until first use —
-// here, a session's first Prompt calling Tools() or CallTool() — and each
-// server's FIRST connect attempt happens then, bounded by its own
-// ConnectTimeout.
-//
-// A server that fails its first connect (dial error, non-2xx, malformed
-// handshake) or fails tools/list is logged and skipped for THAT call: this
-// is fail-open, the same philosophy as a crashed plugin (see
-// plugin/PROTOCOL.md) — one bad server must never prevent a session from
-// starting or take down an otherwise-healthy set of tools. It is not
-// dropped immediately, though: a failed server gets a detached, BOUNDED
-// background retry on a capped exponential backoff (see mcpRetryDelay,
-// mcpRetryMaxAttempts), because a same-second cluster of cold-start
-// timeouts across many remote servers is exactly the kind of transient
-// condition that clears on its own — see
-// docs/plans/2026-07-20-mcp-init-resilience.md for the incident this
-// generalizes from. Once mcpRetryMaxAttempts consecutive background
-// retries have all failed, the server is marked Parked (see retryServer)
-// and no further attempt ever fires spontaneously — an explicit
-// re-trigger (the mcp session tool's connect action, see
-// docs/plans/2026-07-20-mcp-bounded-retry.md) is required past that
-// point, matching Claude Code's bounded-effort-then-explicit-retrigger
-// shape. A HEALTHY server, by contrast, is never re-probed: once connected
-// it is done for the process's life, exactly like the old exactly-once
-// behavior this replaces (see
-// TestMCPManagerHealthyServerNeverReprobedWhileSiblingRetries). Tools()/CallTool()/
-// CallServerTool always read live, mu-guarded state, so a server that
-// recovers mid-session starts contributing tools on the very next call —
-// no new session, no explicit trigger (engine/engine.go's per-request
-// toolDefs assembly already re-reads Tools() every turn).
+// MCP connections start on first use. Failed servers retry in the background, then park until an explicit connection request.
 package engine
 
 import (
@@ -210,7 +170,7 @@ type MCPManager struct {
 
 // NewMCPManager builds an MCPManager for the given servers. Nothing touches
 // the network here — connecting happens lazily on the first call to Tools
-// or CallTool/CallServerTool (see the package doc). Building the
+// or CallTool/CallServerTool. Building the
 // cancellable retry context is pure in-memory bookkeeping, not a startup
 // budget violation.
 func NewMCPManager(servers map[string]MCPServerConfig) *MCPManager {
@@ -417,8 +377,8 @@ func (m *MCPManager) rebuildToolsLocked() {
 // define the capped exponential schedule a failed server's background
 // retry waits between attempts: ~1s after the first failure, doubling each
 // subsequent failure, capped at 5 minutes — for up to mcpRetryMaxAttempts
-// background retries (see the package doc's incident reference for why
-// backoff-and-retry at all; see mcpRetryMaxAttempts for why it stops).
+// background retries. Backoff lets a transient failure recover before the
+// server parks; see mcpRetryMaxAttempts for the stopping rule.
 // Mirrors goal.go's goalRetryableDelay shape one-for-one, just with MCP's
 // own base/cap.
 const (
@@ -460,8 +420,7 @@ func mcpRetryDelay(attempt int) time.Duration {
 // half of mcpRetryBackoff's "equal jitter" (half the base delay fixed,
 // half randomized). Jitter matters here for the same reason goal.go's
 // goalJitterFunc documents: a cold-start burst hits every affected server
-// at once (see the incident in the package doc), so unjittered retries
-// would re-hit a still-recovering remote at the exact same instants.
+// at once, so unjittered retries would re-hit a recovering remote together.
 // Real math/rand in production; overridable by tests so the schedule
 // stays exactly assertable instead of merely bounded.
 var mcpJitterFunc = func(max time.Duration) time.Duration {

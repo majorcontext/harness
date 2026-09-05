@@ -1,20 +1,7 @@
 package message
 
-// SubscriptionUsage is a normalized snapshot of a subscription-backed
-// session's provider-reported rate-limit/quota signal, captured — not
-// polled: nothing that produces one makes an extra outbound request for it.
-// It exists for the two lanes that run a turn against a user's own model
-// subscription rather than metered API access:
-//
-//   - "claude": engine/claude_code_backend.go decodes it from the `claude`
-//     CLI's own rate_limit_event stream-json message.
-//   - "codex": provider/openai decodes it from the ChatGPT Codex backend's
-//     x-codex-* response headers (HTTP and websocket transports alike).
-//
-// A session that has never delegated a turn through either lane, or has
-// but whose first turn has not yet completed in this process, has no
-// SubscriptionUsage — see engine.Session.SubscriptionUsage's own doc
-// comment for why this is a process-local snapshot, not a durable record.
+// SubscriptionUsage is a provider-reported subscription limit snapshot. The engine captures it without an extra request.
+
 type SubscriptionUsage struct {
 	// Provider names which lane captured this snapshot: "claude" or
 	// "codex" — see this type's own doc comment.

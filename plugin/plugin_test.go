@@ -324,7 +324,7 @@ func TestPluginsReportsManifestAndState(t *testing.T) {
 	}
 }
 
-// TestProbeSpecPassesConfig proves finding (2): probing must send the
+// TestProbeSpecPassesConfig verifies that probing sends the
 // spec's Config in the initialize handshake, exactly as a real spawn does
 // (instance.startLocked), rather than the empty InitializeParams Probe(ctx,
 // command) sends. A fake in-process plugin captures the InitializeParams it

@@ -72,8 +72,7 @@ type pluginCacheEntry struct {
 	// interpreter-wrapped plugin's script argument (see pluginScriptFiles):
 	// a plain plugin (command == [binary]) has none, so both are omitted
 	// and an old on-disk cache entry from before this field existed decodes
-	// as the same "no script files" case — unchanged behavior for finding
-	// (d).
+	// as the same "no script files" case.
 	ScriptFiles []pluginFileStat `json:"script_files,omitempty"`
 	ScriptHash  string           `json:"script_hash,omitempty"`
 	Manifest    plugin.Manifest  `json:"manifest"`
@@ -286,10 +285,10 @@ func pluginBinaryIdentity(command []string, dir string) (path string, size int64
 // value, or a path that doesn't exist — is silently skipped rather than
 // treated as an error or a missing file: only arguments that ARE files
 // contribute to a plugin's identity, so a flag can never force a permanent
-// cache miss (finding (c)). A plain, non-interpreter plugin (command ==
+// cache miss. A plain, non-interpreter plugin (command ==
 // [binary], no trailing arguments) resolves no script files at all, so its
 // cache identity is exactly what pluginBinaryIdentity alone already gives
-// it (finding (d)).
+// it.
 //
 // Resolution mirrors ResolveExecutable's own rule for a path-like
 // command[0]: an absolute argument is used as-is; anything else is joined

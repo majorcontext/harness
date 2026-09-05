@@ -2,47 +2,10 @@ package message
 
 import "strings"
 
-// EngineContext is an ambient status block the harness engine appends to the
-// newest user message every request: engine identity ([engine: ...]),
-// managed-process status ([processes: ...]), degraded-MCP status ([mcp: ...]),
-// and the parked-goal notice ([goal: ...]). See engine/process.go's
-// withAmbientStatus for the single producer.
+// EngineContext holds trusted runtime status. Only the engine creates it.
 //
-// # Why a distinct part-kind, not a Text part
-//
-// These blocks were once appended as bare *Text parts (see NEP: the ambient
-// trust-spoofing finding). A bare *Text block is BYTE-INDISTINGUISHABLE from
-// user-typed or pasted text, so a payload a user pastes that happens to
-// contain "[engine: ...]" inherited the same trust the engine's own block
-// carries. A model told to trust bracketed status lines could then be spoofed
-// by attacker-controlled text.
-//
-// EngineContext closes that at the canonical layer: it is a SEPARATE Go type
-// with its own PartEngineContext discriminator, and only the engine's own
-// withAmbientStatus produces one. A user- or paste-authored part is always a
-// *Text, however its bytes are shaped — it can never BE an *EngineContext.
-// Every canonical-layer consumer (a chat.message plugin hook, the server
-// journal, this package's own tests) can therefore tell an engine block from
-// user content by TYPE, not by re-parsing text.
-//
-// # The wire layer
-//
-// A provider only ever sees wire bytes, so the canonical distinction alone
-// does not protect the model. Every transcoder renders an *EngineContext
-// through RenderEngineContext, which wraps the block in the
-// EngineContextOpenTag/EngineContextCloseTag sentinel, and renders every
-// *Text through NeutralizeEngineContextSentinel, which defangs any literal
-// sentinel a *Text carries. Only a genuine *EngineContext can therefore emit
-// the sentinel on the wire, so the base system prompt can safely tell the
-// model to trust the sentinel-wrapped block and to distrust bracketed text
-// outside it. The rendering stays an ordinary text block on every provider —
-// no new wire feature — so provider compatibility is unchanged.
-//
-// EngineContext is runtime-only: withAmbientStatus appends it to a throwaway
-// per-request copy of history, never to the durable session log. It still
-// round-trips through the canonical JSON union (marshalPart/unmarshalPart)
-// like every other part, so a plugin or test that does build one, or a log
-// that somehow carries one, survives persist/replay unchanged.
+// Transcoders render its sentinels and neutralize those sentinels in Text parts. Engine context is request-only, though canonical JSON retains the part.
+
 type EngineContext struct {
 	// Text is the rendered block body, e.g. "[engine: harness 0.1.0-dev ...]".
 	// The producer already renders the "[name: ...]" shape; this part only

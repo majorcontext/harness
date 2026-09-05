@@ -13,8 +13,7 @@ import (
 // startStorePhase and never completed, check is called with a synthetic
 // "now" past inFlightWatchdogThreshold, and a warn record must name the
 // stuck op/phase. Completing it (doneStorePhase) must silence subsequent
-// checks — this is the regression the watchdog exists to prevent: a
-// permanently hung phase produces zero completion log lines, so the
+// checks. A permanently hung phase produces zero completion log lines, so the
 // in-flight table (not the completion callback) is the only thing that can
 // ever warn about it.
 func TestWatchdogWarnsWhileStorePhaseStuck(t *testing.T) {
@@ -69,11 +68,8 @@ func TestWatchdogWarnsWhileStorePhaseStuck(t *testing.T) {
 // watchdog's done call is unconditional, made BEFORE delegating to the
 // existing completion logger, regardless of whether the underlying
 // operation succeeded or errored. This is the piece that only works end to
-// end because of the PR #89 review fix one layer down (engine's
-// timedStorePhase / server's timedCreatePhase now guarantee OnStorePhase/
-// OnCreatePhase fire on error too, not just success) — a start with no
-// matching completion call at all is exactly what leaves a permanent, false
-// "still stuck" warning. Here that is modeled directly: start, then a
+// end because engine callbacks fire on errors too. A start with no matching
+// completion call leaves a false "still stuck" warning. This test models a
 // done call carrying error-path characteristics (a short elapsed, as a
 // fast-failing EIO/ENOSPC would produce) — the entry must be gone
 // afterward, with no warn on a later check.

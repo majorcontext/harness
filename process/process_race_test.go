@@ -12,7 +12,7 @@ import (
 	"github.com/majorcontext/harness/internal/testpoll"
 )
 
-// TestStartConcurrentSpawnsExactlyOnce encodes the PR#71 review finding:
+// TestStartConcurrentSpawnsExactlyOnce verifies that
 // Start's active-check and spawn were separated by an unlock window, so two
 // concurrent Start calls for the same name (session tool racing HTTP POST)
 // could both spawn, with the second overwriting the first in m.procs —

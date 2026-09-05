@@ -127,14 +127,8 @@ func (c *createPhaseLogger) OnCreatePhase(sessionID, phase string, elapsed time.
 	c.logger.Info("session create phases", args...)
 }
 
-// taskEventLogger wires server.Options.OnTaskEvent to the serve logger —
-// a follow-up finding ("metrics"), mirroring createPhaseLogger's own
-// counters-plus-slog shape (a plain field, no new dependency like a
-// Prometheus client — this repo has no metrics library, and adding one
-// just for this is out of scope). Counts are cumulative for the process's
-// life; Counts() (test/diagnostic use — there is no HTTP surface
-// for these today, matching the "slog-only, not a new wire endpoint"
-// scope this fix chose) returns a snapshot.
+// taskEventLogger wires server.Options.OnTaskEvent to the serve logger.
+// Counts are cumulative for the process lifetime. Counts returns a snapshot.
 type taskEventLogger struct {
 	logger *slog.Logger
 
@@ -536,18 +530,8 @@ func sessionsCmd(args []string) error {
 type textStreamPrinter struct {
 	out  io.Writer
 	errW io.Writer
-	// mu guards printedText/streamedThis AND every write to out/errW below —
-	// a live review finding on newRunOnEventHandler's own fix: that mutex
-	// only served the DURATION of one onEvent call, so runCmd's own later,
-	// unsynchronized read of printedText (the trailing-newline check after
-	// the top-level Prompt call returns) still raced a `task` child's
-	// still-running background Prompt goroutine, which can keep calling
-	// handle after the parent's own call has already returned — `task` is
-	// explicitly non-blocking; nothing waits for a child to finish before
-	// the parent's Prompt call returns. Locking here, on the printer
-	// itself, protects every access regardless of which caller (the
-	// shared onEvent callback, or runCmd's own tail) is doing the reading —
-	// see PrintedText's own doc comment for the accessor this enables.
+	// mu guards printer state and writes. A child may continue to emit events
+	// after the parent prompt returns.
 	mu           sync.Mutex
 	printedText  bool // any text printed this run; drives the trailing newline
 	streamedThis bool // text printed since the last reset; drives the break
@@ -589,8 +573,8 @@ func (p *textStreamPrinter) PrintedText() bool {
 	return p.printedText
 }
 
-// newRunOnEventHandler builds run mode's engine.Config.OnEvent callback,
-// serializing every call behind a mutex — a live review finding. Enabling
+// newRunOnEventHandler builds run mode's engine.Config.OnEvent callback and
+// serializes every call. Enabling
 // sessMgr in runCmd turns on the `task` tool for run mode, and a `task`
 // child's own background Prompt goroutine (SessionManager.Spawn) runs
 // CONCURRENTLY with this command's own top-level Prompt/PursueGoal call —
@@ -722,10 +706,7 @@ func runCmd(args []string) error {
 	// against, so AdoptReloaded below (right after resolveSession) is the
 	// only registration point this mode needs.
 	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
-	// A follow-up finding ("per-tree budgets"): opt-in only, via
-	// SetMaxTreeTokens rather than a NewSessionManager constructor arg —
-	// see that method's own doc comment for why. 0/unset (envInt's own
-	// zero-value default) disables the check entirely.
+	// SetMaxTreeTokens is opt-in. A zero value disables the check.
 	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 
 	s, err := resolveSession(engine.Config{
@@ -860,8 +841,7 @@ var errGoalNotAchieved = errors.New("goal not achieved")
 // triggerResumeLocked's no-ExternalRunner fallback (a direct s.Prompt
 // call) while THIS PursueGoal call is still driving s — two goroutines
 // calling Session.Prompt/PursueGoal on the same session at once, the
-// exact contract violation ExternalRunner exists to prevent for the
-// server. A live review caught this exact gap in run mode.
+// exact contract violation ExternalRunner prevents for the server.
 func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, sessMgr *engine.SessionManager, opts runOptions) (*engine.GoalResult, error) {
 	if cfg.GoalEvaluatorModel == "" {
 		return nil, fmt.Errorf("goal_evaluator_model must be set in config to use -goal")
@@ -1539,28 +1519,16 @@ func serveCmd(args []string) error {
 	// after the process believes it has drained, unlike the run-slot
 	// goroutines s.wg does wait on. watchdogCtx already cancels on the
 	// same shutdown path the reap ticker below ties itself to, so this
-	// makes a graceful shutdown cascade cancellation into the whole task
-	// tree the same way. A live review caught this gap.
+	// makes a graceful shutdown cascade cancellation into the whole task tree.
 	sessMgr := engine.NewSessionManager(watchdogCtx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
-	// A follow-up finding ("per-tree budgets") — see runCmd's identical
-	// wiring and its own comment for why this is a setter, not a
-	// constructor arg.
+	// A zero value disables the tree-token check.
 	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 	// Periodic reaping (engine.SessionManager.Reap) frees a terminal, leaf
 	// (childless) task-spawned session's *Session — message history
 	// included — once it has settled done/failed/canceled; a whole
 	// terminal subtree collapses bottom-up over repeated calls (see
-	// Reap's doc comment). Without this, a long-lived `harness serve`
-	// process fanning out many `task` children pins every one of them in
-	// memory forever, a live review flagged. A root session is NEVER
-	// reaped (it is the tree's own address, addressable indefinitely by
-	// design) — that half of the finding (a root also stays pinned once
-	// adopted, defeating MaxResident eviction for it specifically) is a
-	// deliberate, documented v1 scope cut: fully closing it needs
-	// SessionManager to support a detached/rehydratable node (no live
-	// *Session reference between an eviction and the next reload), which
-	// is a larger design change than this stage's reap-on-a-timer fix —
-	// see the implementation PR description.
+	// Reap's doc comment). Roots are never reaped because they remain the
+	// tree address for their lifetime.
 	const sessionReapInterval = 5 * time.Minute
 	reapTicker := time.NewTicker(sessionReapInterval)
 	go func() {
@@ -1907,8 +1875,7 @@ func skillsDirs(cfg *config.Config, flagDirs []string, workDir string) []string 
 }
 
 // agentDefsDirs resolves the effective custom-agent-definition directories
-// for the engine — a follow-up finding ("def search path"), mirroring
-// skillsDirs above field-for-field: repeatable -agent-def-dir flags override
+// for the engine. Repeatable -agent-def-dir flags override
 // config agent_defs_dirs entirely; otherwise config agent_defs_dirs is used.
 // Relative entries resolve against workDir. When neither is set it returns
 // nil, leaving the engine default in place (use <workDir>/.agents).

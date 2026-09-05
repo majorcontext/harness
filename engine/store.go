@@ -1,12 +1,4 @@
-// Session persistence: an append-only JSONL log, one file per session at
-// <SessionDir>/<session-id>.jsonl. Each line is one record: a "session"
-// header (always followed by a "model" record naming the session's model at
-// creation), a "message" for every appended message (canonical message
-// JSON), or a "model" written when SetModel changes the model.
-//
-// Nothing touches disk until the first message append (startup budget rule);
-// the directory and file are created lazily on first write.
-
+// Session logs use append-only JSONL. The engine creates them on the first write.
 package engine
 
 import (
@@ -39,8 +31,8 @@ const (
 	recGoalStalled  = "goal.stalled"
 	recGoalAchieved = "goal.achieved"
 	recGoalCleared  = "goal.cleared"
-	// recGoalEvalFailed is one failed evaluator boundary (see goal.go's
-	// "Round 6" doc section): a provider error the in-boundary retryable
+	// recGoalEvalFailed is one failed evaluator boundary: a provider error the
+	// in-boundary retryable
 	// retry couldn't ride out, or two consecutive unparseable replies. Like
 	// recGoalStalled it is a pure trace record — it never by itself changes
 	// goalActive (see LoadSession's fold below); only a later goal.cleared
@@ -49,8 +41,7 @@ const (
 	recGoalEvalFailed = "goal.eval_failed"
 	// recGoalParked is the terminal PursueGoal reaches when a worker turn
 	// exhausts either exhaustion tier (deterministic goalWorkerRetries or
-	// retryable-class goalRetryableMaxAttempts — see goal.go's "Round 7"
-	// doc section and PursueGoal's exit-park branches) WITHOUT clearing the
+	// retryable-class goalRetryableMaxAttempts) WITHOUT clearing the
 	// goal: the goal stays active, and PursueGoal returns instead of
 	// looping or waiting further. Like recGoalStalled/recGoalEvalFailed it
 	// is a pure trace record on resume — LoadSession folds it as trace,
@@ -445,7 +436,7 @@ type goalRecord struct {
 	RetryableClass string `json:"retryable_class,omitempty"`
 	Waiting        bool   `json:"waiting,omitempty"`
 	// EvalFailures carries a goal.eval_failed record's consecutive-failure
-	// count (see goal.go's recordGoalEvalFailed and "Round 6" doc section):
+	// count (see goal.go's recordGoalEvalFailed):
 	// the number of CONSECUTIVE failed evaluator boundaries as of this one,
 	// inclusive, reset to zero the moment a later boundary parses a verdict
 	// or the generation changes (an UpdateGoal). The terminal goal.cleared

@@ -31,7 +31,7 @@ const (
 type HTTPTransport struct {
 	// Endpoint is the MCP endpoint URL (supports both POST and, in a full
 	// implementation, GET — this client does not open an independent GET
-	// listening stream; see the package doc's deferred-features list).
+	// listening stream).
 	Endpoint string
 	// Headers are static headers sent on every request, e.g.
 	// {"Authorization": "Bearer <token>"} for a pre-obtained OAuth/PAT

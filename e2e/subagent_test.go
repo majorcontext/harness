@@ -82,21 +82,8 @@ func (p *serveProc) waitForLineageStatus(id, want string, timeout time.Duration)
 	return s
 }
 
-// TestSubagentSpawnDeliversViaQueueOrResume is this repo's first COMMITTED,
-// CI-run E2E coverage of the subagent-sessions feature (PR #145) — a
-// follow-up finding ("e2e test"): before this, task/spawn/lineage/
-// cancel_tree scenarios existed only as engine/server package unit tests
-// and one-off manual verification, never as a real process-boundary,
-// real-HTTP scenario a CI run actually exercises. Drives the wire-level
-// equivalent of the `task` tool (session.create's parent_id form,
-// handleSpawnChild) directly rather than getting a real model to emit a
-// tool_use block — the highest-value minimal scenario, and the one the
-// architecture review's own follow-up list named specifically: proves
-// non-blocking spawn (the 201 response arrives before the child's own
-// turn ever runs) and the design doc's "queue-or-resume delivery" (an
-// idle parent gets an engine-initiated resume turn once its child
-// completes) actually work end to end, through a real `harness serve`
-// subprocess and real HTTP, not just in-process Go calls.
+// TestSubagentSpawnDeliversViaQueueOrResume verifies non-blocking child
+// creation and queue-or-resume delivery through a real server and HTTP.
 func TestSubagentSpawnDeliversViaQueueOrResume(t *testing.T) {
 	skipShort(t)
 

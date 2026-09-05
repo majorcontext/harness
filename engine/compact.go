@@ -1,6 +1,3 @@
-// Context compaction: summarize-and-truncate. See docs/design/
-// context-compaction.md for the full design; this file follows it exactly —
-// where a comment here and that doc ever disagree, the doc wins.
 package engine
 
 import (

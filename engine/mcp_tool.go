@@ -1,7 +1,7 @@
 // The `mcp` session tool: status introspection and on-demand connect for
 // MCP servers, the explicit re-trigger past retryServer's bounded
-// background schedule (see mcp.go's package doc and
-// docs/plans/2026-07-20-mcp-bounded-retry.md). Template: goal_tool.go — the
+// background schedule. See docs/plans/2026-07-20-mcp-bounded-retry.md.
+// Template: goal_tool.go — the
 // same Tool{Def,Run} shape, action schema, and JSON-result convention.
 //
 // Two actions only: status (read-only, every configured server's live
@@ -88,8 +88,7 @@ type mcpToolConnectResult struct {
 	Message   string `json:"message"`
 }
 
-// mcpTool builds the `mcp` session tool. See the package doc for the action
-// contract.
+// mcpTool builds the `mcp` session tool.
 func mcpTool(canDefer bool) Tool {
 	def := provider.ToolDef{
 		Name: mcpSessionToolName,
@@ -207,8 +206,8 @@ func unknownMCPActionErr(action string, canDefer bool) error {
 // runMCPStatus implements the status action: every configured server's
 // live state, sorted by name (matching MCPManager.Status's own order). A
 // registry that doesn't implement mcpStatusReader (or is nil, though
-// newSession's gate makes that unreachable in practice — see mcp_tool.go's
-// package doc) reports an empty list rather than erroring: status is
+// newSession's gate makes that unreachable in practice) reports an empty
+// list rather than erroring: status is
 // read-only introspection, so "nothing to report" is a safe, honest answer.
 func runMCPStatus(reg MCPRegistry) (message.Parts, error) {
 	sr, ok := reg.(mcpStatusReader)

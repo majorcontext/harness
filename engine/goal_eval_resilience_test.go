@@ -1,9 +1,8 @@
 // Tests for the goal-evaluator resilience work (Round 6, Task 1): a failed
 // evaluator boundary is advisory (goal.eval_failed, keep-armed, backoff) below
 // goalEvalFailureLimit consecutive failures, and only a durable, sustained
-// outage clears the goal with a distinct sentinel error. See goal.go's
-// package doc "Round 6" section and docs/plans/2026-07-20-goal-eval-
-// resilience.md's "Invariants" list — each test below is named for the
+// outage clears the goal with a distinct sentinel error. See
+// docs/plans/2026-07-20-goal-eval-resilience.md's "Invariants" list. Each test is named for the
 // invariant it covers.
 package engine
 

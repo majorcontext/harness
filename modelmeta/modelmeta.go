@@ -1,41 +1,8 @@
-// Package modelmeta is harness's built-in table of model context windows —
-// the "per-model table" config.Config.ContextWindowTokens's doc comment used
-// to say the engine lacked (see the jumpy-pizza incident:
-// majorcontext/harness — a box died with "context exhausted: prompt 1136916
-// tokens > limit 1000000" because ContextWindowTokens is opt-in and nothing
-// on the boxes platform ever set it, so automatic compaction never armed).
+// Package modelmeta provides static model context-window metadata.
 //
-// Two model catalogs were investigated as the metadata source:
-//
-//   - Bifrost's GET /v1/models (github.com/maximhq/bifrost, the gateway
-//     harness's anthropic/openai-compat adapters talk to on the boxes
-//     platform — see provider/anthropic, provider/openaicompat). Confirmed
-//     live against Bifrost's own docs (docs.getbifrost.ai) and the PR that
-//     added the endpoint (maximhq/bifrost#645): the response is the bare
-//     OpenAI listing shape, {"data": [{"id", "object", "created",
-//     "owned_by"}]} — NO context-length field at all. Bifrost aggregates
-//     whatever its configured upstreams report, and none of the upstreams
-//     this repo talks to natively (Anthropic, OpenAI) advertise context
-//     length on their own /v1/models either. Ruled out as a metadata
-//     source.
-//   - models.dev's catalog (https://models.dev/api.json — also mirrored as
-//     the `models.dev` npm package). Each entry carries a `limit` object
-//     with `context` (input context window, in tokens) and `output` (max
-//     output tokens); see e.g. the "anthropic" and "amazon-bedrock" top-level
-//     keys, each a map of model ID -> entry. Verified live on 2026-08-20:
-//     anthropic/claude-fable-5 (this repo's config.DefaultModel) reports
-//     limit.context == 1000000 — the EXACT limit jumpy-pizza's incident
-//     error named, confirming this is the right source and field.
-//
-// This table is a curated snapshot of that `limit.context` field for the
-// model families harness's native providers (provider/anthropic,
-// provider/openai) and the amazon-bedrock family the boxes platform routes
-// through actually serve — not the full models.dev catalog. It is
-// deliberately static (no network call): NewSession's doc comment already
-// promises "nothing touches the network... on this path", and a box's
-// automatic-compaction arming must not depend on models.dev being reachable
-// at session-create time. Refresh by re-running the snapshot against
-// models.dev/api.json; each map below cites the date it was last verified.
+// The tables are curated snapshots of models.dev's limit.context field for
+// the model families that Harness serves. They remain static so session
+// creation does not depend on a network request.
 package modelmeta
 
 import (
@@ -149,13 +116,8 @@ var bedrockAnthropicContextWindows = map[string]int{
 	"claude-sonnet-5":            1_000_000,
 }
 
-// ContextWindow reports ref's advertised context window in tokens, sourced
-// from the tables above. ok is false when ref names a model this table has
-// no entry for (an unrecognized provider, or a model newer than the last
-// snapshot) — the caller's job to decide what "unknown" means (see
-// engine.resolveContextWindow: unknown behaves exactly like "no metadata",
-// i.e. automatic compaction stays disabled, matching today's behavior for
-// every model this table doesn't yet know about).
+// ContextWindow reports ref's advertised context window in tokens. It returns
+// false for an unrecognized provider or model.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
@@ -166,8 +128,7 @@ var bedrockAnthropicContextWindows = map[string]int{
 // still carries a Bifrost routing-namespace segment ("anthropic",
 // "bedrock_mantle", "bedrock", ...) ahead of the actual model ID. Without
 // stripping that segment first, EVERY box ref misses this table and
-// automatic compaction never arms on the platform this package exists to
-// serve (see the jumpy-pizza incident cited in this file's package doc).
+// automatic compaction does not arm for those refs.
 func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 	model := lastPathSegment(ref.Model)
 	switch ref.Provider {

@@ -45,8 +45,7 @@ type goalToolResult struct {
 	Condition string `json:"condition"`
 }
 
-// goalTool builds the `goal` session tool. See the package doc for the
-// action contract.
+// goalTool builds the `goal` session tool.
 func goalTool() Tool {
 	return Tool{
 		Def: provider.ToolDef{

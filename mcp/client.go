@@ -9,10 +9,7 @@ import (
 	"time"
 )
 
-// Transport selects and configures how a Client connects to an MCP server.
-// The two implementations this package provides are StdioTransport and
-// HTTPTransport; the interface is otherwise unexported (sealed) since the
-// protocol defines exactly these two standard transports.
+// Transport configures how a Client connects to an MCP server.
 type Transport interface {
 	open(onNotify notificationHandler) (transport, error)
 }
@@ -22,26 +19,17 @@ type Options struct {
 	// ClientInfo identifies this client to the server during initialize.
 	// Defaults to {Name: "harness-mcp-client"} if Name is empty.
 	ClientInfo Implementation
-	// RequestTimeout bounds every request (initialize, tools/list,
-	// tools/call). Defaults to 30s. Callers can additionally scope a
-	// shorter deadline via the ctx passed to each call; whichever is
-	// tighter wins.
+	// RequestTimeout bounds every request. It defaults to 30 seconds.
 	RequestTimeout time.Duration
-	// OnNotification observes any notification (or, over the stdio
-	// transport's duplex stream, request) from the server this client
-	// does not implement — e.g. notifications/message (logging),
-	// notifications/tools/list_changed, or roots/sampling requests. The
-	// default logs via Logger and continues; it never causes a request to
-	// fail.
+	// OnNotification observes unsupported server notifications and requests.
+	// The default logs them and continues.
 	OnNotification func(method string, params json.RawMessage)
 	// Logger is used by the default OnNotification. Defaults to
 	// log.Default().
 	Logger *log.Logger
 }
 
-// Client is an MCP client. It is safe for concurrent use after Initialize
-// completes, matching the Streamable HTTP transport's expectation that a
-// single session may see interleaved requests.
+// Client is an MCP client. It is safe for concurrent use after Initialize.
 type Client struct {
 	tr   transport
 	opts Options
@@ -53,11 +41,7 @@ type Client struct {
 	serverCaps      ServerCapabilities
 }
 
-// NewClient opens the given transport (spawning a child process for
-// StdioTransport, or preparing an HTTP client for HTTPTransport) and
-// returns a Client ready for Initialize. It does not perform the
-// initialize handshake itself — callers must call Initialize before using
-// any other method, per the spec's lifecycle rules.
+// NewClient opens t and returns a client ready for Initialize.
 func NewClient(t Transport, opts Options) (*Client, error) {
 	if opts.RequestTimeout <= 0 {
 		opts.RequestTimeout = 30 * time.Second
@@ -82,10 +66,8 @@ func NewClient(t Transport, opts Options) (*Client, error) {
 	return &Client{tr: tr, opts: opts}, nil
 }
 
-// Initialize performs the initialize/initialized lifecycle handshake:
-// protocol version negotiation, capability exchange, and client info,
-// followed by the initialized notification once the server has responded.
-// It MUST be called exactly once before any other Client method.
+// Initialize completes the MCP initialization handshake.
+// Call Initialize once before other Client methods.
 func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	params := initializeParams{
 		ProtocolVersion: LatestProtocolVersion,
@@ -99,9 +81,7 @@ func (c *Client) Initialize(ctx context.Context) (*InitializeResult, error) {
 	if !isSupportedProtocolVersion(result.ProtocolVersion) {
 		return nil, fmt.Errorf("mcp: server negotiated unsupported protocol version %q", result.ProtocolVersion)
 	}
-	// The negotiated version, once known, rides on every subsequent HTTP
-	// request as MCP-Protocol-Version; the stdio transport has no
-	// equivalent header requirement.
+	// HTTP sends the negotiated version on later requests.
 	if ht, ok := c.tr.(*httpTransport); ok {
 		ht.setProtocolVersion(result.ProtocolVersion)
 	}
@@ -159,15 +139,8 @@ func (c *Client) ListTools(ctx context.Context, cursor string) (*ListToolsResult
 // pagination (e.g. always minting a fresh cursor).
 const maxListAllToolsPages = 1000
 
-// ListAllTools drains every page of tools/list into a single slice. It
-// exists for convenience; callers that want to react to a large tool list
-// incrementally should call ListTools directly.
-//
-// A server is expected to eventually return an empty NextCursor, but a
-// buggy or hostile one might not. ListAllTools guards against that two
-// ways: it errors immediately if a page's NextCursor repeats a cursor
-// already seen (the common "stuck" case), and it errors if pagination
-// still hasn't terminated after maxListAllToolsPages pages.
+// ListAllTools returns every tools/list page in one slice.
+// It rejects repeated cursors and caps the number of pages.
 func (c *Client) ListAllTools(ctx context.Context) ([]Tool, error) {
 	var all []Tool
 	cursor := ""
@@ -205,20 +178,12 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments any) (*Cal
 	return &result, nil
 }
 
-// Close shuts down the connection: for stdio, this closes the child
-// process's stdin and waits for it to exit (escalating to SIGTERM/SIGKILL
-// if it doesn't); for Streamable HTTP, this best-effort DELETEs the
-// session if one was established. Per the spec, shutdown has no dedicated
-// protocol message on either transport.
+// Close shuts down the connection and removes an HTTP session when present.
 func (c *Client) Close() error {
 	return c.tr.close()
 }
 
-// request wraps a call with the client's configured RequestTimeout: a
-// child context is created so a hung server can't wedge the caller past
-// that bound, without weakening any tighter deadline/cancellation the
-// caller's ctx already carries. Context cancellation and timeout both
-// unblock the call immediately.
+// request applies the configured timeout without extending ctx's deadline.
 func (c *Client) request(ctx context.Context, method string, params, result any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.opts.RequestTimeout)
 	defer cancel()

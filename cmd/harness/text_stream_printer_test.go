@@ -10,14 +10,11 @@ import (
 	"github.com/majorcontext/harness/engine"
 )
 
-// TestTextStreamPrinterTurnRestartBreaks is the red-first guard for the CLI
-// plain-text renderer consuming EventTurnRestart. A base-loop retry
+// TestTextStreamPrinterTurnRestartBreaks verifies that the CLI plain-text
+// renderer handles EventTurnRestart. A base-loop retry
 // re-streams a turn's partial text; without a restart case the two runs print
 // concatenated inline as "Hello worHello world". textStreamPrinter must break
 // to a fresh line so the retry text is never joined to the stale partial.
-//
-// Red-verify the NAMED mechanism: delete the EventTurnRestart case in
-// textStreamPrinter.handle and stdout reads "Hello worHello world".
 func TestTextStreamPrinterTurnRestartBreaks(t *testing.T) {
 	var out, errW strings.Builder
 	p := &textStreamPrinter{out: &out, errW: &errW}
@@ -53,8 +50,7 @@ func TestTextStreamPrinterRestartWithoutPartialAddsNoBreak(t *testing.T) {
 	}
 }
 
-// TestRunOnEventHandlerSerializesConcurrentCallers is the regression test
-// for a live review finding: a `task` child spawned from `harness run`
+// TestRunOnEventHandlerSerializesConcurrentCallers verifies that a `task` child spawned from `harness run`
 // runs its own Prompt goroutine concurrently with the parent's own
 // top-level Prompt/PursueGoal call, and both invoke the SAME OnEvent
 // callback (configSnapshot copies Config.OnEvent by value into every
@@ -99,8 +95,7 @@ func TestRunOnEventHandlerSerializesConcurrentCallers(t *testing.T) {
 	})
 }
 
-// TestTextStreamPrinterPrintedTextSafeDuringConcurrentHandle is the
-// regression test for a second live review finding on the same fix:
+// TestTextStreamPrinterPrintedTextSafeDuringConcurrentHandle verifies that
 // newRunOnEventHandler's mutex only serializes calls made THROUGH it, but
 // runCmd's own tail (the trailing-newline check after its top-level Prompt
 // call returns) used to read printer.printedText directly — and a `task`

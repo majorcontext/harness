@@ -1,58 +1,7 @@
-// Session metadata index: a per-session summary a reader can answer
-// GET /session and GET /session/{id} from, without replaying the journal.
-//
-// The problem it solves. A session's durable state lives in one append-only
-// JSONL journal (store.go). Before this file, the only way to read a
-// non-resident session's model, usage, or message count was LoadSession —
-// a full replay that decodes every message body, builds the whole history
-// slice, and runs message.ResolveOrphanToolCalls over it. A read endpoint
-// then used four fields of the result and dropped the rest. On a long
-// production session (1.4 MB, ~500 messages) that replay cost about 7 s
-// per read, and the list endpoint paid it once per non-resident session.
-//
-// The shape. SessionIndex is a memoized FOLD of the journal, keyed by the
-// journal's byte length. Two rules make it safe:
-//
-//  1. The index is derived from RECORDS, never from live Session memory.
-//     Every record reaches disk through Session.writeRecord (store.go), so
-//     applyIndexRecord folds exactly what the log holds. This matters for
-//     EnqueuePromptDurable (queue.go), which deliberately writes its
-//     record BEFORE it mutates memory: a fold of live memory taken at that
-//     instant would disagree with the log it claims to summarize.
-//
-//  2. The index is a CACHE, never an authority. ReadSessionIndex trusts a
-//     stored index only when it still describes the journal on disk: same
-//     byte length, same modification time, and a checksum that covers the
-//     stored bytes. Anything else — a missing index, a torn one, an older
-//     format, a shorter journal, a journal a second writer grew — is
-//     refolded from byte 0. No repair path exists, so no repair path can be
-//     wrong.
-//
-//     Byte length plus modification time is a staleness key, not a proof.
-//     It rests on the journal's own contract: one writer, append only.
-//     Nothing in this package rewrites a journal in place. The one repair
-//     that touches existing bytes, ensureLog's torn-tail repair, always
-//     changes the length. An external rewrite that preserved both length
-//     and modification time would defeat the key, and is outside that
-//     contract.
-//
-// The fold is deliberately SLIM: it decodes message ids, roles, and
-// timestamps, never message bodies (indexRecord below). A full refold of
-// the 1.4 MB session above costs milliseconds, not seconds, so even the
-// cold path — a journal written by an older binary, or the first read after
-// a crash — is cheap. See engine/index_test.go's oracle test, which pins
-// every field against the value a full LoadSession produces.
-//
-// The fold counts messages twice, on purpose. Messages is what a full
-// LoadSession reports: the durable messages PLUS the synthetic tool results
-// message.ResolveOrphanToolCalls adds for a tool call whose result never
-// reached the log. The fold gets that count by running that exact function
-// over a skeleton of the history — ids, roles, and tool-call ids, no
-// bodies — so the index can never disagree with the repair about how many
-// messages a reader sees. DurableMessages counts only the records
-// themselves. A reader that must map a message to a byte offset needs the
-// second number, because a repair message has no record to map to; that is
-// what paginated message reads are numbered against.
+// Session indexes cache folds of durable records only. Enqueue records precede
+// in-memory queue changes, so folds use the journal as their source.
+// Readers validate the journal size, modification time, and checksum before use.
+// A single writer appends records. Synthetic orphan repairs affect Messages, not DurableMessages.
 package engine
 
 import (

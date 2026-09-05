@@ -1,234 +1,4 @@
-// Parallel tool-call execution: one assistant message's batch of tool
-// calls runs concurrently, bounded by a cap, instead of one at a time.
-// Claude Code's own contract is the model: the model already treats every
-// call inside one message as independent (that is the entire reason it
-// batched them), so harness executes the batch that way too. Measured
-// impact is 2-3x wall clock on a batched-read turn.
-//
-// # Audit: session-state assumptions runToolCall's callees make
-//
-// This section is Part A of the design: every piece of session state a
-// built-in tool's Run touches, and whether it survives concurrent calls
-// from one batch unchanged. Each finding is verified against source, not
-// assumed.
-//
-//   - s.emit (-> Config.OnEvent): now called from several goroutines at
-//     once for one batch (EventToolStart/EventToolEnd interleave across
-//     calls). s.emit itself does nothing but stamp SessionID and invoke
-//     the callback — no shared mutable state, so concurrent invocation is
-//     safe AT THIS LAYER. The obligation moves to the callback: see
-//     Config.OnEvent's doc comment (engine.go), which this feature updates
-//     to say the engine MAY call it from several goroutines at once. Both
-//     in-repo consumers already tolerate this: server.Publish/publishLive
-//     (server/journal.go) route every event through s.mu-guarded
-//     bookkeeping, and cmd/harness's newRunOnEventHandler already wraps
-//     its callback in a mutex — TestRunOnEventHandlerSerializesConcurrentCallers
-//     covers exactly this, pre-dating this feature (a `task` child's
-//     background goroutine could already call the same OnEvent concurrently
-//     with its parent's own turn). Neither needed a change for this PR.
-//
-//   - emitToolExecuteStart/emitToolExecuteEnd (-> Config.Hooks.Emit) and
-//     the ToolExecuteBefore/ToolExecuteAfter/ExecuteTool hook dispatches:
-//     plugin.Host.Emit enqueues onto a per-plugin-instance channel (safe
-//     for concurrent senders) and a dedicated per-instance goroutine drains
-//     it in RECEIPT order — see Host.Emit's own doc comment. Receipt order
-//     across DIFFERENT call ids is whatever order concurrent callers
-//     enqueued in (i.e., completion order for that hook type), same
-//     acceptance as the mcp.tools_selected note below. Host.ExecuteTool and
-//     the dispatchChain-based hooks each open their own request over the
-//     shared conn, keyed by a fresh atomic request id (conn.call, protocol.go)
-//     and serialized only at the write (conn.wmu) — safe for concurrent
-//     calls, ordinary RPC client behavior.
-//
-//   - s.toolExecCount++ (engine.go): already under s.mu — verified at the
-//     call site. No change needed.
-//
-//   - maybeRetainToolResult (toolresult.go): MUST run at the JOIN, in call
-//     order, over the whole batch — not per-call. It is internally
-//     s.mu-guarded, but two of its effects are only correct when called in
-//     call order for one batch:
-//     1. writeRetainedToolResult mints the next handle from
-//     s.toolResultNextID and journals one durable record per
-//     retention (toolresult.go). Concurrent retention would make
-//     handle numbers (trh_N) and their journal order depend on
-//     completion order instead of call order, an observable,
-//     nondeterministic transcript.
-//     2. The per-session retained-bytes ceiling check
-//     (maybeRetainToolResult's `used+len(masked) > cap` branch) reads
-//     s.toolResultBytes and compares it OUTSIDE the lock that later
-//     writes it back (writeRetainedToolResult's own separate
-//     acquisition) — a check-then-act split across two s.mu sections.
-//     Two concurrent retentions can each observe the ceiling as not
-//     yet crossed and both proceed, when only one should have.
-//     Running retention at the join, sequentially in call order, closes
-//     both: handle numbering and journal order become call-order again,
-//     and the ceiling check-then-act is never concurrent with itself.
-//     This changes nothing observable about EventToolEnd: that event
-//     already carries the PRE-retention output today (retention happens
-//     in the old runToolCalls, one level above runToolCall — see git
-//     history), so moving retention's OWN call site later, to the join,
-//     is not a new event-ordering change. An intra-batch handle
-//     dependency (one call's arguments naming a handle another call in
-//     the SAME batch is about to mint) is structurally impossible: the
-//     model can only ever learn a handle from a PREVIOUS turn's tool
-//     result, which by definition is not part of the batch currently
-//     executing.
-//
-//   - markMCPToolsSelected (mcp_lazy.go): already mutates and journals
-//     under s.mu — verified at the call site. Under a parallel batch, the
-//     only new nondeterminism is the ORDER of mcp.tools_selected records
-//     across sibling calls in one batch, which becomes completion-order
-//     instead of call-order. Accepted: each record names its own tool by
-//     value (there is no ordering-sensitive accumulation — see
-//     markMCPToolsSelected's `if s.mcpSelected[name] { continue }` check),
-//     so two records landing in either relative order describe the exact
-//     same eventual selected set. This is NOT the same class of bug as
-//     the retention ceiling above, where relative order changes the
-//     OUTCOME (which call wins the ceiling), not just the record order.
-//
-//   - task (task_tool.go): NOT Serial, and correctly so — a spawn hands
-//     the child to the SessionManager and returns. But its verbs
-//     (cancel/send/status/log) name a TARGET descendant, and two calls
-//     naming one descendant reordered by completion order change the
-//     outcome: a cancel(X) then send(X) executed as send-then-cancel
-//     delivers a message to a still-running child and then kills both.
-//     Fixed by keying, not by a barrier: taskToolKey keys on session_id,
-//     so same-target calls run in call order while different targets and
-//     all spawns stay parallel. SessionManager's own state is
-//     independently mutex-guarded; this is about ORDER, not about a race.
-//
-//   - read_tool_result (toolresult_tool.go): reads s.toolResults through
-//     lookupToolResult/openRetainedToolResult, both s.mu-guarded, and
-//     writes nothing. maybeRetainToolResult exempts its output from
-//     re-retention by tool name, which is a pure read of the name. Safe
-//     for concurrent calls, no key needed: a handle's sidecar file is
-//     immutable once written.
-//
-//   - session_info (session_info.go): reads s.mu-guarded counters plus
-//     toolDefs and Plugins, and writes nothing. Concurrent with a batch
-//     it reports a mid-batch snapshot (a toolExecCount that a sibling
-//     call is still incrementing), which is inherent to asking a session
-//     about itself while it works and was already true of a `task`
-//     child's concurrent turn. Safe.
-//
-//   - s.tools (the built-in tool registry map): written only by
-//     newSession, LoadSession, and SessionManager's adopt/spawn paths
-//     (store.go, session_manager.go) — every one of those runs BEFORE a
-//     session is exposed to any concurrent turn, never during one.
-//     Verified: no write site is reachable from runToolCall or anything
-//     it calls. Concurrent READS during a batch (executeTool's
-//     `s.tools[tc.Name]` lookup) are therefore safe with no lock — an
-//     unsynchronized read of a map nobody is writing.
-//
-//   - s.cfg.WorkDir / s.resolvePath: WorkDir is set once at construction
-//     and never mutated; resolvePath (filetools.go) is a pure function of
-//     it plus the call's own argument. Safe to call concurrently.
-//
-//   - s.cfg.MCP.CallTool (mcp.go): CallTool takes MCPManager's RWMutex only
-//     for the binding lookup (RLock) and delegates the actual call to
-//     callTool, which opens its own request over the connected client —
-//     ordinary concurrent-safe client usage. Safe for concurrent calls.
-//     Note that a namespaced mcp__server__tool call is NOT a Serial
-//     barrier: only the built-in `mcp` tool is, because only it mutates
-//     the session's own schema selection. Two calls to one MCP SERVER
-//     therefore overlap. That is safe on our side for the same two
-//     reasons the plugin transport is: mcp/conn.go is id-multiplexed
-//     (nextID plus a pending map, responses routed by id), and the
-//     MCPManager is a per-process singleton shared by every session
-//     (cmd/harness builds one), so concurrent calls to one server already
-//     happen today across sessions. A third-party server that cannot
-//     answer two requests at once is non-conformant with JSON-RPC's own
-//     id correlation; HARNESS_SEQUENTIAL_TOOLS=1 is the operator's answer
-//     if one turns up.
-//
-// # Design
-//
-// A batch is one assistant message's ToolCall parts, in order. splitBatch
-// walks them and cuts a new segment at each Serial call (its own
-// single-element segment) and at each run of non-Serial calls (a parallel
-// segment). Segments run in order; a segment completes fully — every call
-// in it has a result — before the next segment starts. This is the
-// "barrier" semantic: everything before a Serial call has already
-// finished, and nothing after it starts until it returns.
-//
-// Within one parallel segment, up to s.toolConcurrency calls run at once,
-// via a bounded worker pool. Results land in a slice indexed by the call's
-// position in the whole batch (not just its segment), so the join can
-// walk the batch once, in order, regardless of which segment or worker
-// produced which result.
-//
-// # Per-key mutual exclusion invariant
-//
-// Two calls in one batch that share a non-empty Key must never run
-// concurrently, and must run in CALL order (the first one queued must be
-// the first one to acquire the key) — a plain sync.Mutex does not
-// guarantee the second property, since Go's Mutex is not FIFO under
-// contention. keyChain implements an explicit hand-off baton instead: the
-// Nth call for a key waits on a channel the (N-1)th call closes when it
-// finishes, and creates the channel the (N+1)th call will wait on before
-// releasing its own turn. This is built and wired up FRONT-TO-BACK, before
-// any worker goroutine starts, precisely so waiting for a predecessor's
-// baton can never itself block on the worker pool (see below).
-//
-// Invariant, written down before implementation per AGENTS.md: a same-key
-// call's wait for its predecessor must NEVER depend on that predecessor
-// having already acquired a worker-pool slot. If the wait were expressed
-// as "block until the predecessor's goroutine starts running", and the
-// predecessor is itself still queued behind the concurrency cap, a
-// same-key successor that already holds a slot would block forever inside
-// it — starving the pool of the one slot the predecessor needs to make
-// progress, a classic self-deadlock. The fix: keyChain hands out every
-// call's baton channel synchronously, on the submitting goroutine, for the
-// WHOLE segment before any worker begins running calls. A worker that
-// dequeues a call only waits on a channel that already exists and will be
-// closed by whichever call — running now, or still queued — owns it; it
-// never waits on a goroutine that has not been scheduled yet to CREATE
-// that channel. Waiting for a predecessor's completion therefore never
-// competes with that predecessor for a pool slot: the predecessor, once it
-// does get a slot, runs and closes the channel independent of who else is
-// waiting on it.
-//
-// # Residuals of the per-file key
-//
-// filePathKey covers read_file, write_file and edit_file. Two tool
-// shapes sit OUTSIDE that namespace, and an operator relying on the
-// same-file guarantee should know both.
-//
-//  1. bash. bashTool (bash.go) sets neither Key nor Serial, and it runs
-//     arbitrary shell: "echo x > f.txt" and "cat f.txt" touch files the
-//     engine cannot see. A batch that pairs a bash write with an
-//     edit_file on the same path, or two bash calls on one file, races on
-//     disk. A bash call's file targets are not statically knowable, so
-//     keying it generally is not possible, and keying it pessimistically
-//     (one global bash key) would serialize the most common parallel
-//     workload there is. bash stays parallel by design: the model owns
-//     batching judgment, which is the same contract Claude Code ships.
-//     The strictly-sequential default never exposed this, so it IS a
-//     behavior change for the default configuration, and
-//     HARNESS_SEQUENTIAL_TOOLS=1 is the operator's answer for a workload
-//     that cannot tolerate it.
-//  2. A HARD link. filePathKey resolves symlinks (see
-//     canonicalFileKeyPath), so a symlinked alias keys correctly, but two
-//     hard links to one inode have no link to follow. An O(1) device+inode
-//     key would cover files that already exist, but a write_file target may
-//     not exist yet (and therefore has no inode), so a create racing a write
-//     through another hard link would remain. Device/inode identity is also
-//     platform-specific; see canonicalFileKeyPath for the full residual.
-//
-// # Cancellation and the orphan-result invariant
-//
-// ctx cancellation (an aborted turn) cancels every in-flight call's own
-// context, but every call still yields exactly one ToolResult — the
-// NEP-5272 invariant (docs/engine-request-cycle.md's empty-tool-result rule,
-// and the orphan tool_use rule generally) holds regardless of how the batch
-// ends.
-// A call whose ctx is already cancelled before it starts still runs
-// (executeTool/runToolCall are unchanged; a cancelled context is not a
-// license to skip a call, only a signal the call's own logic may check —
-// bash, for instance, already turns ctx.Err() into a captured-output
-// result, not a skip). This mirrors runToolCall's pre-existing contract:
-// this package does not add a new cancellation check that could produce
-// zero results for a call.
+// Tool calls run concurrently with serial and key barriers. Results join in call order. File keys do not cover Bash side effects or hard links.
 package engine
 
 import (
@@ -308,11 +78,7 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 		s.runToolBatchParallel(ctx, calls, outputs, errs, done)
 	}
 
-	// Backfill: no call may leave this function without a result. See
-	// "Cancellation and the orphan-result invariant" in the package doc
-	// comment. Nothing reaches this loop today — every path above marks
-	// its slot — and that is the point: it is the structural guarantee,
-	// not a live code path.
+	// Backfill preserves one result per call after cancellation or a panic.
 	for i := range calls {
 		if !done[i] {
 			outputs[i] = message.Parts{&message.Text{Text: toolCallNoResultText}}
@@ -342,8 +108,7 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 	// observe the ceiling as uncrossed and all proceed, overshooting the
 	// configured cap by up to the concurrency factor. The join removes the
 	// concurrency instead of re-locking the ceiling: with one caller there
-	// is no window to race. Do NOT move retention back inside the worker
-	// without first making that reserve-and-mint one atomic section.
+	// is no window to race. Keep retention at this join unless reservation and minting become atomic.
 	results := make(message.Parts, len(calls))
 	for i, tc := range calls {
 		results[i] = &message.ToolResult{
@@ -456,7 +221,7 @@ type batchSegment struct {
 
 // splitBatch walks calls in order and cuts a new segment at each Serial
 // call — its own one-element segment — and at each run of non-Serial
-// calls. See the package doc comment's "Design" section.
+// calls. See the batching contract.
 func (s *Session) splitBatch(calls []*message.ToolCall) []batchSegment {
 	var segs []batchSegment
 	var cur batchSegment
@@ -572,7 +337,7 @@ func (c *keyChain) wait(key string) (predecessor <-chan struct{}, release func()
 func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outputs []message.Parts, errs []bool, done []bool) {
 	// Baton hand-off is wired up front, on THIS goroutine, for every call
 	// in the segment before any worker starts — see the invariant in the
-	// package doc comment.
+	// batching contract.
 	var chain keyChain
 	type job struct {
 		idx         int

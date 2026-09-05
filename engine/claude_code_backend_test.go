@@ -1674,8 +1674,7 @@ func TestClaudeCodeTurnMetricsEmittedForDelegatedTurn(t *testing.T) {
 
 // TestClaudeCodeRateLimitEventCapturesSubscriptionUsage drives a turn
 // through fakeclaude's "rate_limit_event" mode (a rate_limit_event ahead of
-// the turn's final assistant text — the CLI's own documented ordering, see
-// this file's package doc) and asserts Session.SubscriptionUsage() —
+// the turn's final assistant text — and asserts Session.SubscriptionUsage() —
 // exactly what buildSession (server/handlers.go) reads for GET /session's
 // subscription_usage field — carries the mapped provider, windows, and
 // overage.

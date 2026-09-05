@@ -7,10 +7,8 @@ import (
 	"testing"
 )
 
-// TestTaskEventLoggerCountsAndLogs is the regression test for a follow-up
-// finding ("metrics"): taskEventLogger.OnTaskEvent accumulates per-event
-// counts and logs each occurrence, mirroring createPhaseLogger's own
-// counters-plus-slog shape (see TestCreatePhaseLoggerEmptiesMapOnTotal).
+// TestTaskEventLoggerCountsAndLogs verifies that taskEventLogger.OnTaskEvent
+// counts and logs each event.
 func TestTaskEventLoggerCountsAndLogs(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))

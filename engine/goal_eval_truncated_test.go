@@ -58,8 +58,7 @@ func TestPursueGoalEvaluatorTruncatedShortBackoffNotWeather(t *testing.T) {
 			// journaled — after runEvaluatorWithRetry's own truncated-tier
 			// waits, but BEFORE PursueGoal's separate post-failure
 			// goalRetryDelay(evalFailures) wait that lets the worker
-			// continue to the next turn (see the "Round 6" doc section) —
-			// so this isolates exactly the schedule under test.
+			// continue to the next turn. This isolates the schedule under test.
 			if ev.Type == EventGoalEvalFailed && evalFailedAt == 0 {
 				evalFailedAt = time.Since(start)
 			}

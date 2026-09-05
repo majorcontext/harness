@@ -1,371 +1,4 @@
-// Goal loop: pursue a completion condition with an independent evaluator.
-//
-// PursueGoal drives the ordinary Prompt loop toward a natural-language
-// condition. After every turn it asks a second, TOOL-LESS model — the
-// evaluator, resolved through the same provider registry — whether the
-// condition is met, feeding the evaluator's reason back as guidance for the
-// next turn until the condition is met or the turn budget runs out.
-//
-// This is a plan-artifact-free, gate-free loop: it introduces no plan mode and
-// no permission gate (see docs/goal-loop.md). It is a control
-// loop over Prompt plus a read-only evaluator call, nothing more.
-//
-// Durable goal.* records land in the session log so a resumed session can tell
-// whether a goal is still active (see store.go, ActiveGoal). The loop also
-// emits goal.* engine events so a server can journal them.
-//
-// # State machine
-//
-// A goal is a single boolean, goalActive, plus its condition string, both
-// guarded by Session.mu (see the Session struct). There are exactly two
-// terminal transitions out of "active" — achieved and cleared — and one
-// transient sub-state, "stalled", that a worker-turn failure passes through
-// on its way to either a retry (back to "active", same turn) or a permanent
-// clear:
-//
-//	          RegisterGoal
-//	               |
-//	               v
-//	+-------- ACTIVE (goal.set) ----------+
-//	|              |                       |
-//	|   worker turn errors                 | evaluator: MET
-//	|              |                       v
-//	|              v                  ACHIEVED (goal.achieved)
-//	|         STALLED (goal.stalled, carries the error)
-//	|              |
-//	|    retries < goalWorkerRetries AND
-//	|    no tool executed this attempt?
-//	|         /              \
-//	|       yes               no
-//	|        |                 |
-//	|   (wait goalRetryDelay)  |
-//	+--------+                 v
-//	                      CLEARED (goal.cleared, carries the error reason)
-//	ClearGoal (caller/DELETE) ----------> CLEARED (goal.cleared, no reason)
-//
-// The retry branch waits a capped exponential backoff (goalRetryDelay; see
-// goalWorkerRetries) before the next attempt, and is gated off the moment a
-// tool call has executed during the failing attempt — see
-// promptTurnWithRetry's doc comment for why a retry (which re-issues the
-// whole directive, not a resume) is unsafe to do blindly once a tool has
-// already run.
-//
-// The critical invariant this enforces — the one a real incident violated
-// (see the forensic note below) — is that ACTIVE has no third way out. Every
-// path from ACTIVE terminates in ACHIEVED or CLEARED, both of which are
-// durable, journaled records; there is no path that leaves goalActive true
-// with nothing further ever happening. Before this fix, a worker-turn error
-// (s.Prompt returning non-nil) took a third, undocumented way out: PursueGoal
-// returned the bare error immediately, goalActive stayed true, and nothing
-// was ever recorded to explain why the loop had stopped — a zombie goal,
-// active in the log forever, that only a human noticing the silence could
-// clear. Two production sessions hit exactly this
-// (ses_41813d5a411c2ba5.jsonl, ses_55e4ae35d8344540.jsonl): each died right
-// after a "goal not met" guidance message was appended, mid-turn, with no
-// goal.eval and no error record — the log simply stopped, for hours, until a
-// human forced a goal.cleared. See docs/history/goal-loop-resilience.md for
-// the write-up.
-//
-// # Round 3: the same escape path, the other half of the loop
-//
-// The diagram above has two error edges into ACTIVE's exits — "worker turn
-// errors" and "evaluator: MET" (the NOT MET edge loops back to ACTIVE) — but
-// a third case sat on neither edge: an evaluator call that fails outright
-// (a provider error, or two unparseable replies in a row, see
-// errEvaluatorUnparseable). The worker-turn edge got its clear-on-exhaustion
-// fix in round 2 (above); this one did not — PursueGoal's evaluateGoal error
-// branch returned the bare error and left goalActive true, the exact same
-// shape of zombie, just reached from the other model call. One production
-// session (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) hit exactly this: the
-// worker turn succeeded, the evaluator returned unparseable output twice in
-// a row, session.error was emitted, and the goal stayed active in the log
-// forever — turns=0, no goal.eval ever, nothing to explain the silence
-// beyond that one error record. (Its log tail also carries a single
-// anomalously large Anthropic thinking signature on the worker's last
-// message — see message.ProviderData and provider/anthropic/transcode.go's
-// replay-size cap — but that turn itself succeeded; it is a correlated
-// hazard, not this incident's cause.) Fixed the same way as round 2: a
-// failing evaluator call now clears the goal (unless the error is a
-// cancelled context) before returning, closing the last "third way out" of
-// ACTIVE. See TestPursueGoalUnparseableTwiceClearsGoal.
-//
-// # Round 4: retryable provider weather must not exhaust the same budget as
-// a dead provider (GitHub issue #61)
-//
-// The STALLED->CLEARED edge above (goalWorkerRetries, ~5s of total backoff)
-// treats every worker-turn error identically, but that conflates two very
-// different failure shapes: a deterministic failure (bad request, auth)
-// that will fail the same way forever, and provider-side overload/rate-limit
-// weather that is self-healing but "routinely lasts several minutes" (see
-// the issue). Field data: four goal loops died to ONE shared Anthropic
-// overload wave across two days — every one resumed cleanly the instant a
-// human manually re-armed it once the wave passed, the strongest possible
-// evidence those stalls were premature, not genuine.
-//
-// The fix classifies each worker-turn error via provider.AsRetryable (a
-// typed wrapper the provider adapter attaches — see provider/retryable.go —
-// never string-matched) and gives the retryable class its OWN budget
-// (goalRetryableMaxAttempts, a much longer jittered backoff — see
-// promptTurnWithRetry) that never touches goalWorkerRetries. The updated
-// diagram:
-//
-//	          RegisterGoal
-//	               |
-//	               v
-//	+-------- ACTIVE (goal.set) ------------------------------+
-//	|              |                                           |
-//	|   worker turn errors                                     | evaluator: MET
-//	|              |                                           v
-//	|              v                                     ACHIEVED (goal.achieved)
-//	|         STALLED (goal.stalled, carries the error + retryable class)
-//	|              |
-//	|      classified retryable?
-//	|         /            \
-//	|       no              yes
-//	|        |               |
-//	|  deterministic    retryable budget (goalRetryableMaxAttempts)
-//	|  budget           exhausted (a truly long outage)?
-//	|  (goalWorkerRetries)   /          \
-//	|  exhausted AND       no            yes
-//	|  no tool executed?    |             |
-//	|   /        \     (wait, then    PARK: same turn's directive
-//	|  no        yes    retry, back    retried on the NEXT ordinary
-//	|  |          |     to ACTIVE)     turn (see below) — back to
-//	|  (wait,     |                    ACTIVE, no clear
-//	|   retry,    |
-//	|   back to   |
-//	|   ACTIVE)   v
-//	+-----------CLEARED (goal.cleared, carries the error reason)
-//	ClearGoal (caller/DELETE) --------------------------------> CLEARED (goal.cleared, no reason)
-//
-// Self-re-arm (deliverable 4 of issue #61): a retryable-class exhaustion
-// does NOT clear the goal — it "parks" by retrying the exact same directive
-// on the next ordinary turn (PursueGoal's for-loop `continue`s, so turn++
-// runs exactly as it would after any other turn). This is a deliberate
-// design choice over the alternative (a server-side cooldown timer that
-// automatically re-POSTs /goal): parking reuses the state machine's
-// EXISTING, already-durable, already-resumable "max turns exhausted"
-// terminal state (goal left ACTIVE, turn.end outcome
-// outcomeMaxTurnsExceeded — see server/journal.go) as the natural backstop
-// once MaxTurns is set, and reuses the existing "MaxTurns==0 means no
-// limit" contract as the backstop when it is not — both invariants the
-// state machine already had to honor for an ordinary long-running goal, so
-// this adds no new terminal state, no new server-side timer, and no new way
-// for a goal to go silent: every parked cycle is bounded by real wall-clock
-// time (goalRetryableBackoff's schedule can't hot-spin) and durably
-// explained by a goal.stalled record naming the retryable class (see
-// recordGoalStalled) the moment it happens, not after the fact.
-//
-// See TestPursueGoalRetryableErrorLongBackoffThenRecovers and
-// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing, and
-// docs/goal-loop.md for the operator-facing write-up.
-//
-// NOTE (Round 7, below): the "self-re-arm" in-loop `continue` this section
-// describes — and the diagram's "PARK: same turn's directive retried on the
-// NEXT ordinary turn ... back to ACTIVE, no clear" leaf — was itself later
-// superseded: it stayed correct that the goal must not clear, but staying
-// inside PursueGoal to retry turned out to have its own cost (a pinned run
-// slot for the whole outage). This section is kept verbatim as the
-// historical record of the classification this round introduced
-// (provider.AsRetryable giving retryable weather its own budget), which
-// Round 7 keeps completely unchanged — only what happens once that budget
-// is exhausted changed. See goalRetryableExhaustedError's doc comment and
-// the package doc's "Round 7" section for the current behavior.
-//
-// # Round 6: an evaluator failure must be advisory, not instantly fatal
-//
-// Round 3 (above) closed the "evaluator failure leaves a zombie goal" hole by
-// clearing the goal on ANY evaluateGoal error — a provider error, or two
-// unparseable replies in a row. That fix traded one incident for another:
-// production data showed two fleet boxes die mid-HEALTHY-work because the
-// tool-less evaluator call hit a transient provider hiccup (or, once, a
-// stretch of oddly-worded replies neither attempt could parse) while the
-// worker model itself was making fine progress. Unlike a worker-turn error —
-// which is expensive to retry blindly (see promptTurnWithRetry's
-// non-idempotency doc) — a failing evaluator call risks nothing by being
-// retried or, failing that, simply skipped for one turn: the worker keeps
-// working either way, and the ONLY thing a bad verdict can do wrong is delay
-// noticing completion, not corrupt anything.
-//
-// So evaluateGoal itself first tries to ride out the failure in-boundary,
-// mirroring promptTurnWithRetry's error classification exactly (see
-// runEvaluatorWithRetry): a provider error classified provider.AsRetryable
-// gets the SAME retryable schedule and budget the worker turn uses
-// (goalRetryableBackoff, goalRetryableMaxAttempts) — the two paths share
-// provider weather, so they share a budget's shape, just each keeping its
-// own counter. provider.RetryableStreamTruncated is the one exception:
-// mirroring promptTurnWithRetry's own truncated tier, it never rides that
-// weather budget — a stream ceiling is not weather, so it gets its own
-// short-schedule budget instead (goalStreamTruncatedMaxAttempts,
-// goalRetryDelay — see runEvaluatorWithRetry). A non-retryable provider
-// error is not retried at all (the call is cheap; a permanently broken
-// provider needs the boundary-failure path below, not a wasted second
-// attempt). Separately, an unparseable reply
-// still gets its original one extra attempt, but that attempt now uses a
-// STRICTER system prompt (goalEvaluatorStrictSystem) instead of repeating the
-// same instructions verbatim — repeating unchanged instructions to a model
-// that already failed to follow them once is exactly why the doubled attempt
-// used to buy so little.
-//
-// If evaluateGoal still returns an error after all that — the retryable
-// budget exhausted, a non-retryable error, or two unparseable replies even
-// with the stricter re-ask — the boundary "fails", but failing a boundary no
-// longer clears the goal. PursueGoal journals a durable goal.eval_failed
-// record (carrying the error and the CONSECUTIVE failure count — see
-// recordGoalEvalFailed), substitutes a fixed evaluation-unavailable notice
-// for the next turn's guidance (never the raw error text, and never a stale
-// NOT-MET reason from turns ago — see goalEvalUnavailableNotice), waits a
-// short backoff (goalRetryDelay, keyed on the consecutive count, the same
-// short schedule the deterministic worker-retry path uses), and `continue`s
-// — the worker gets another ordinary turn. A later boundary that DOES parse a
-// verdict (MET or NOT MET) resets the consecutive count to zero: the horizon
-// below is about a STREAK, not a lifetime total, so one good evaluation
-// undoes any number of prior bad ones.
-//
-// The streak is also paired with the generation it accumulated against
-// (evalFailuresGen alongside evalFailures — the same pairing pattern
-// reason/reasonGen uses, see the "Round 5" section below), so an UpdateGoal
-// mid-streak resets it too: a self-adjust changes what the evaluator is
-// even checking, so failures counted against the OLD condition must not
-// carry over and let the terminal fire after fewer than
-// goalEvalFailureLimit failures against the NEW one. This mirrors the
-// server's own fold (server/journal.go's EventGoalUpdated case resets
-// GoalSummary.evalFailures to 0) — the engine's loop-local counter now
-// agrees with what the server surface already reports. See
-// TestEvalFailureStreakResetsOnConditionUpdate.
-//
-// The horizon has to exist somewhere, though — infinite advisory failures
-// would just be Round 3's zombie-goal risk wearing a disguise (a goal that
-// LOOKS active but whose evaluator has been dead for hours, silently). After
-// goalEvalFailureLimit consecutive failed boundaries, PursueGoal clears the
-// goal with a dedicated reason ("goal evaluator failed at N consecutive turn
-// boundaries") and returns a distinct sentinel error type
-// (*goalEvaluatorExhaustedError) instead of a bare error — a server or other
-// caller can tell this terminal apart from an ordinary worker-turn
-// exhaustion via errors.As, never by string-matching GoalReason — and,
-// unlike every advisory boundary below the horizon, this terminal DOES emit
-// session.error: it must be LOUD, since past this point nothing else will
-// ever explain the goal's silence.
-//
-// See TestPursueGoalEvaluatorUnparseableTwiceIsAdvisory,
-// TestPursueGoalEvaluatorRetryableErrorRecoversWithinBoundary, and
-// TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit.
-//
-// # Round 7: worker-turn exhaustion must never clear an armed goal either
-//
-// Round 6 made the EVALUATOR half of the loop advisory-by-default; the
-// WORKER half — Round 2's original fix — still cleared the goal outright on
-// exhaustion, for both the deterministic budget (goalWorkerRetries) and,
-// after Round 4, the retryable-class budget's self-re-arming in-loop
-// `continue` was itself only a partial fix. Production data showed both
-// were wrong, in opposite directions:
-//
-//   - The deterministic clear was too eager: OpenRouter returned HTTP 404s
-//     for a worker turn — a genuinely non-retryable, non-overload failure,
-//     so provider.AsRetryable correctly classified it as the fast,
-//     3-attempt/~5s deterministic budget, not the long retryable one — and
-//     goalWorkerRetries exhausted in seconds. The goal cleared, emitted
-//     session.error, and the box sat idle for HOURS with nothing further
-//     ever explaining or resuming it: a human had to notice the silence and
-//     manually re-POST /goal, the exact zombie-adjacent failure mode Round
-//     2 was originally meant to close, just reached from the "successfully
-//     explained, then abandoned" side rather than the "silently zombied"
-//     side.
-//   - Round 4's retryable in-loop `continue` (see goalRetryableExhaustedError's
-//     doc comment) was too passive: it never actually left PursueGoal, so
-//     the run slot stayed pinned to the parked loop for the ENTIRE outage —
-//     a queued prompt (see the prompt-queue docs) could only ever be
-//     injected mid-turn into a doomed worker attempt, never dispatched as
-//     its own ordinary turn the way it would be against any other idle
-//     session. And every parked cycle re-spent a FRESH goalWorkerRetries-shaped
-//     schedule internally (via promptTurnWithRetry re-running from
-//     attempt 1 each iteration) with no cross-cycle memory of how long the
-//     outage had already run.
-//
-// The fix unifies both shapes into one exit: EVERY way a worker turn can
-// exhaust its retry budget — the deterministic tier, the retryable tier, or
-// the non-idempotency gate stopping retries early once a tool has already
-// executed this attempt — now returns out of PursueGoal entirely
-// ("exit-parks") instead of either clearing or looping in place. The loop
-// journals a durable, GENERATION-GATED goal.parked record (recordGoalParked
-// — gated exactly like goal.stalled/goal.eval_failed, so a park racing a
-// concurrent UpdateGoal is silently discarded, not journaled, and the loop
-// simply continues against the new condition instead of parking against a
-// condition that is no longer current) and returns a distinct sentinel,
-// *goalWorkerParkedError (see IsGoalWorkerParked), WITHOUT ever calling
-// clearGoal — s.goalActive stays true, ActiveGoal() keeps reporting the
-// same condition, and LoadSession folds goal.parked as a pure trace record,
-// exactly like goal.stalled. Freeing the run slot this way is exactly what
-// closes the second bullet above: a queued prompt dispatches as a normal
-// turn the instant the slot is free, and the server's PRE-EXISTING
-// activity-driven auto-arm (maybeAutoArmGoal, upstream of this package —
-// see docs/session-storage-and-queue.md) re-enters the loop with a fresh
-// PursueGoal call the next time any ordinary prompt turn completes — no new
-// timer, no new resume machinery, the same mechanism an ordinary idle goal
-// already relies on.
-//
-// This deliberately supersedes GitHub issue #61's "self-re-arm" design
-// (Round 4's in-loop `continue`) for the retryable tier — see
-// goalRetryableExhaustedError's doc comment for the supersession detail —
-// while leaving that round's core classification (provider.AsRetryable
-// giving retryable weather its own, much longer budget, so a rate limit or
-// an overload wave never burns the fast deterministic budget) completely
-// unchanged; only what happens once a budget is truly exhausted changed.
-//
-// Context overflow (issue #62) is the one deliberate exception: it keeps
-// clearing exactly as before this round. Every other worker-turn exhaustion
-// this round covers is a failure that MIGHT resolve if the loop simply
-// waits and tries again later (a dead provider that gets fixed, an outage
-// that ends, an operator intervening) — parking is a bet that time helps.
-// Context overflow can never resolve by waiting: the same, now-too-long
-// request will fail identically on every future attempt no matter how long
-// the goal sits parked, so parking it would just be a slower-burning
-// zombie, not a fix — clearing immediately, with a reason a human or
-// automation can act on right away (compact, shorten the goal, start over),
-// is strictly more honest than a park that can never self-resolve.
-//
-// The goal.parked record's Reason is deliberately CLASSIFIED (see
-// classifyGoalWorkerError), unlike goal.stalled/goal.eval_failed's raw
-// err.Error() text — a design choice distinct from those two records'
-// convention, made because a park is a durable, potentially long-lived
-// terminal (an operator-facing pause presentation can surface it long after
-// the triggering request and its raw provider detail are gone), where the
-// two per-attempt trace records are read close to the moment they were
-// written, by someone already looking at that turn's context.
-//
-// See TestPursueGoalWorkerFailsPermanentlyParksGoal,
-// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing, and
-// TestPursueGoalStaleWorkerFailureDiscarded (engine/goal_update_test.go),
-// which now also proves a park never lands for a stale generation.
-//
-// # Task 3: an ambient in-session signal, runtime-only
-//
-// The durable goal.parked record above and the server's boot-only
-// goal.paused presentation (upstream of this package) both explain a park
-// to an OPERATOR looking at the session from outside. Neither says anything
-// to the MODEL itself: an agent that gets prompted mid-outage — a queued
-// prompt dispatching once the exit-park frees the run slot, or any other
-// ordinary turn — would otherwise see nothing at all indicating a
-// supervising goal exists, is still armed, and will resume on its own.
-// goal_parked_status.go closes that gap the same way mcp_status.go and
-// process.go already do for their own degraded/live state: a small ambient
-// text block, computed fresh from live Session state (goalParked/
-// goalParkedReason/goalParkedAttempts, set by recordGoalParked above),
-// appended only to the newest user message of a request that is NOT itself
-// one of this loop's own worker turns — see PursueGoal's
-// clearGoalParkedAtEntry call, which makes that structural: the flag is
-// always false again before this loop's very first worker turn of a resumed
-// run.
-//
-// This signal is deliberately NOT persisted and does NOT survive a process
-// restart — LoadSession never restores it (see the goalParked field's doc
-// comment on *Session). That is a real, accepted asymmetry: after a restart
-// mid-park, a fresh Prompt call sees no ambient block, only whatever the
-// session's ordinary system prompt/history already says. Visibility in that
-// case comes from a different surface entirely — the server's boot-only
-// goal.paused presentation (pause_reason "worker_failure", Task 2 upstream
-// of this package) — which is operator-facing, not model-facing, and reads
-// the durable goal.parked record directly rather than this runtime field.
+// Package engine runs headless agent sessions.
 package engine
 
 import (
@@ -433,7 +66,7 @@ const goalPartCap = 4096
 
 // errEvaluatorUnparseable is returned when two consecutive evaluator replies
 // (the second using goalEvaluatorStrictSystem) cannot be parsed. Unlike
-// before Round 6, this no longer terminates the loop by itself — see
+// before advisory evaluator handling, this no longer terminates the loop by itself — see
 // evaluateGoal's callers — it just counts as one failed evaluator boundary.
 var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unparseable output twice in a row")
 
@@ -452,7 +85,7 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 const goalStreamTruncatedMaxAttempts = 3
 
 // goalEvalFailureLimit is the number of CONSECUTIVE failed evaluator
-// boundaries (see goal.go's "Round 6" doc section) PursueGoal tolerates
+// boundaries (see evaluator failure handling) PursueGoal tolerates
 // before treating the evaluator as durably broken and clearing the goal. It
 // is deliberately much smaller than goalRetryableMaxAttempts: that budget
 // already rides out one boundary's worth of provider weather in-boundary,
@@ -623,7 +256,7 @@ const (
 // hours or days still exhausts it and parks, honestly classified (see
 // goalClassProviderExhausted/classifyGoalWorkerError) rather than either
 // pinning the run slot for the outage's full, unknown duration (the exact
-// GitHub issue #61 shape this package's Round 7 rework rejected — see
+// GitHub issue #61 shape current worker-failure handling rejected — see
 // goalRetryableExhaustedError's doc comment) or silently dying on attempt
 // one as it did before this fix.
 const goalProviderExhaustedMaxAttempts = goalRetryableMaxAttempts
@@ -732,32 +365,8 @@ func waitGoalRetryableBackoff(ctx context.Context, attempt int) error {
 // is exhausted while every failure was classified provider-retryable — a
 // truly long outage, not the "several minutes" the schedule is tuned for.
 //
-// # Round 7 supersession
-//
-// Before the Round 7 exit-park work, PursueGoal recognized this type via errors.As and
-// treated it completely differently from an ordinary exhausted-retries
-// error: a self-re-arming in-loop `continue` (GitHub issue #61's "park,
-// don't die" design — see the package doc's "Round 4" section, whose
-// diagram and prose still describe that original shape verbatim for the
-// historical record) that retried the same directive on the next loop
-// iteration, silently, forever, while a run slot stayed pinned to it. That
-// traded a zombie-goal risk for a NEW one production surfaced (see the
-// package doc's "Round 7" section): a genuinely dead provider (a 404, not
-// weather) still burned through a fresh goalWorkerRetries budget every
-// single parked cycle, forever, while the run slot it held meant a queued
-// prompt could only ever be injected mid-turn, never run as its own normal
-// turn.
-//
-// PursueGoal no longer branches on this type at all (see its worker-turn
-// error handling): it derives retryable/class uniformly via
-// provider.AsRetryable(err) instead, which sees straight through this
-// type's Unwrap() to the same *provider.RetryableError classification
-// either shape of failure carries, and exit-parks BOTH exhaustion tiers
-// identically (see goalWorkerParkedError, recordGoalParked). This type
-// still exists purely so promptTurnWithRetry can signal "the retryable
-// budget in particular, not just an ordinary attempt, is what gave out"
-// internally to itself and its own tests; it is never returned for a
-// deterministic failure — those still return the bare underlying error.
+// PursueGoal classifies this error through Unwrap and parks the active goal.
+// The type identifies retryable-budget exhaustion for internal callers and tests.
 type goalRetryableExhaustedError struct {
 	err   error
 	class provider.RetryableClass
@@ -767,8 +376,7 @@ func (e *goalRetryableExhaustedError) Error() string { return e.err.Error() }
 func (e *goalRetryableExhaustedError) Unwrap() error { return e.err }
 
 // goalEvaluatorExhaustedError is returned by PursueGoal when the evaluator has
-// failed at goalEvalFailureLimit consecutive turn boundaries (see goal.go's
-// "Round 6" doc section) — a durable, probably-permanent evaluator outage,
+// failed at goalEvalFailureLimit consecutive turn boundaries — a durable evaluator outage,
 // distinct from every failed boundary below that horizon (which is advisory
 // only: no error returned, no clear, the loop just continues). A caller (the
 // server, in particular) recognizes this type via errors.As and maps it to a
@@ -802,7 +410,7 @@ func IsGoalEvaluatorExhausted(err error) bool {
 // (goalStreamTruncatedMaxAttempts), or provider-exhausted
 // (goalProviderExhaustedMaxAttempts) — and the loop exit-parks
 // instead of clearing the goal. See PursueGoal's doc comment and the
-// package doc's "Round 7" section: unlike goalEvaluatorExhaustedError
+// worker failure handling: unlike goalEvaluatorExhaustedError
 // above, reaching this sentinel is NOT a durable "give up" terminal — the
 // goal stays fully active, ready to resume the instant a caller starts a
 // new PursueGoal call for it (the server's activity-driven auto-arm,
@@ -971,130 +579,11 @@ func (s *Session) clearGoalParkedAtEntry() {
 	s.mu.Unlock()
 }
 
-// PursueGoal runs the goal loop: prompt the condition, then after every turn
-// ask the evaluator whether it is met, feeding the evaluator's reason back as
-// guidance until the condition is met or MaxTurns is exhausted.
+// PursueGoal prompts a worker and evaluates each completed turn.
 //
-// Turn 1 prompts the raw condition as the directive. A NOT MET verdict makes
-// the next directive a fixed-template guidance message carrying the evaluator's
-// reason. Returns Achieved=true on the first MET verdict; Achieved=false with
-// reason "max turns" when the budget runs out.
+// It records worker failures and parks the goal when retries end. Failure handling clears the goal only for context overflow or repeated evaluator failures. A canceled context leaves the goal active.
 //
-// A worker-turn error (s.Prompt failing) is retried up to goalWorkerRetries
-// times — see promptTurnWithRetry — recording a goal.stalled record for every
-// failed attempt so the session log always explains a pause instead of going
-// silent. A provider error classified provider.AsRetryable rides one of two
-// further, separately-budgeted backoffs that never touch goalWorkerRetries:
-// provider.RetryableStreamTruncated gets its own short-schedule budget
-// (goalStreamTruncatedMaxAttempts — see that constant's doc comment), and
-// every other retryable class rides a much longer one (goalRetryableMaxAttempts,
-// see GitHub issue #61 and the package doc's "Round 4" section for that
-// classification's rationale).
-//
-// Exhausting ANY of these budgets — or the non-idempotency gate stopping
-// retries early once a tool has already executed this attempt — EXIT-PARKS
-// instead of clearing (see the package doc's "Round 7" section): PursueGoal
-// journals a durable, classified goal.parked record (recordGoalParked) and
-// returns a *goalWorkerParkedError (see IsGoalWorkerParked) wrapping the
-// underlying error, WITHOUT calling clearGoal — the goal stays fully active,
-// exactly as ActiveGoal reports it before this failure, ready for an
-// external caller (the server's activity-driven auto-arm, upstream of this
-// package) to resume with a fresh PursueGoal call. This supersedes both the
-// clear this package used before the Round 7 exit-park work for the deterministic tier AND
-// GitHub issue #61's in-loop `continue` self-re-arm for the retryable tier
-// (see goalRetryableExhaustedError's doc comment for why that in-loop shape
-// was itself later found unsafe). The one exception is context overflow
-// (issue #62): a deterministic failure no amount of waiting or resuming can
-// fix, so it keeps clearing exactly as before — see the package doc's
-// "Round 7" section for this deliberate, documented asymmetry. A cancelled
-// context is never retried or treated as a worker failure — it is a
-// deliberate abort (DELETE /goal, shutdown drain) and is returned
-// immediately with the goal left exactly as it was, since a drain must be
-// resumable.
-//
-// A failing evaluator call (a provider error, or two unparseable replies in a
-// row even after the stricter re-ask) is advisory, not fatal — see the
-// package doc's "Round 6" section. evaluateGoal already rides out a
-// retryable-class provider error on its own in-boundary backoff
-// (runEvaluatorWithRetry); if it still returns an error, PursueGoal journals
-// a goal.eval_failed record carrying the CONSECUTIVE failure count, replaces
-// the next turn's guidance reason with a fixed evaluation-unavailable notice
-// (goalEvalUnavailableNotice — never the raw error text, never a stale
-// NOT-MET reason), waits a short backoff, and continues: the goal stays
-// active and the worker gets another ordinary turn. Only once
-// goalEvalFailureLimit consecutive boundaries have failed does PursueGoal
-// clear the goal (a dedicated reason distinct from a worker-turn failure's)
-// and return a *goalEvaluatorExhaustedError instead of a bare error — that
-// terminal, and only that terminal, also emits session.error. A cancelled
-// context is never retried or counted as a failed boundary, same rule as the
-// worker-turn path above. A concurrent ClearGoal or UpdateGoal racing an
-// in-flight evaluator call is handled exactly like the same race on the
-// worker-turn and ordinary-verdict paths (see goalStatus): a clean stop or a
-// silently discarded stale outcome, respectively — never a failed-boundary
-// record for a generation that is no longer current.
-//
-// # Self-adjust: the condition is re-read every turn boundary
-//
-// PursueGoal does not trust its own condition parameter once the loop is
-// running — it is only the value used to (maybe) register the goal at the
-// very start. Every turn boundary instead takes a fresh goalSnapshot
-// (condition, goalGen, active) under s.mu, and that snapshot's condition —
-// not the parameter — drives that turn's directive, the guidance template,
-// and the evaluator call. A concurrent UpdateGoal (self-adjust: the goal
-// tool's "adjust" action, or an operator's POST /goal on a running loop)
-// therefore redirects the very next turn instead of being invisible to it
-// or, worse, being conflated with a clear.
-//
-// This also closes a narrow race the old condition-equality check could not:
-// an evaluator call or worker turn started against generation N can finish
-// AFTER an UpdateGoal has already moved the goal to generation N+1. Its
-// verdict is stale — computed against a condition that is no longer current
-// — and must never be journaled or acted on, but the goal is still very much
-// active, so treating this as "goal cleared" would be wrong too. goalStatus
-// reports this third case explicitly (active-but-stale), and every point
-// that used to check "was this cleared while I was working" now also checks
-// "is this stale": a stale outcome is silently discarded (no goal.eval, no
-// goal.stalled, no achieve, no clear) and the loop simply continues to the
-// next turn, which re-snapshots and picks up the new condition. See
-// goalSnapshot and goalStatus's doc comments, and
-// TestPursueGoalPicksUpUpdatedConditionNextTurn /
-// TestStaleMetVerdictDiscarded / TestClearGoalStillStopsUpdatedLoop.
-//
-// # Round 5: a discarded turn must not leak its stale reason into the next directive
-//
-// Silently discarding a stale outcome (the section above) closes the
-// journaling half of the problem, but a live end-to-end run surfaced a
-// second half it didn't: `reason` — the last NOT MET evaluator feedback,
-// carried into goalGuidance for the next turn's directive — was declared
-// once outside the loop and only ever reassigned on the ordinary, non-stale
-// NOT MET path. Every stale-discard `continue` (worker-turn failure,
-// evaluator failure, or a discarded evaluator verdict) skipped that
-// reassignment, so the turn AFTER a discard built its directive from
-// whatever `reason` happened to hold from the last turn that completed
-// normally — which can be describing state that is no longer true. The
-// repro: turn 1's evaluator said "the file PROOF_A.txt does not exist";
-// turn 2 created the file and self-adjusted the goal (via the goal tool),
-// making turn 2's own evaluator verdict stale and discarded; turn 3's
-// directive nonetheless repeated turn 1's now-false "does not exist"
-// feedback verbatim, costing an extra turn re-litigating something already
-// done.
-//
-// The fix: `reason` is only ever valid paired with the generation it was
-// produced for. A second variable, reasonGen, is set alongside `reason`
-// every time (only) the ordinary NOT MET path assigns it, to that turn's
-// snap.gen. Building the next turn's directive compares reasonGen against
-// that turn's OWN fresh snapshot: a match reuses `reason` as before: a
-// mismatch — which covers every stale-discard site by construction (each
-// leaves reasonGen unchanged while the discard that caused it bumped
-// goalGen) AND the narrower case of a generation change that happens
-// between two turns with no discard at all (e.g. an UpdateGoal landing in
-// the gap after turn N ends and before turn N+1 snapshots) — substitutes
-// goalAdjustedNotice, an explicit "the goal changed, prior feedback no
-// longer applies" directive, instead of ever reusing a reason paired with a
-// different generation. See goalAdjustedNotice and
-// TestStaleDiscardReplacesReasonWithAdjustmentNotice.
-//
-// Must not be called concurrently with itself or Prompt (it drives Prompt).
+// The loop reads the current goal at each turn boundary. It discards results from an earlier goal generation.
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
 	if opts.Evaluator.IsZero() {
 		err := errors.New("engine: PursueGoal requires GoalOptions.Evaluator")
@@ -1130,7 +619,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		reason    string // last NOT MET reason, carried into the next turn's guidance
 		reasonGen uint64 // generation `reason` was produced at; see the pairing rule below
 		// evalFailures counts CONSECUTIVE failed evaluator boundaries (see
-		// the package doc's "Round 6" section and recordGoalEvalFailed):
+		// evaluator failure handling and recordGoalEvalFailed):
 		// reset to zero the moment a later boundary parses a verdict (MET or
 		// NOT MET), and left untouched across a stale-discard (the failure
 		// was against a generation that is no longer current, so it never
@@ -1246,7 +735,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// snapshot pick up the new condition.
 				continue
 			}
-			// Round 7: every remaining shape of worker-turn
+			// Worker failures: every remaining shape of worker-turn
 			// exhaustion — the deterministic budget (goalWorkerRetries)
 			// running out, the retryable-class budget
 			// (goalRetryableMaxAttempts) running out, or the non-idempotency
@@ -1254,7 +743,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// now EXIT-PARKS instead of clearing the goal, superseding both
 			// the clear this package used before this commit AND GitHub
 			// issue #61's in-loop `continue` self-re-arm (see the removed
-			// comment this replaces, and the package doc's "Round 7"
+			// comment this replaces, and the worker failure handling
 			// section for the full incident and rationale). The only
 			// worker-turn failure that still clears is context overflow,
 			// immediately below — a deterministic failure no amount of
@@ -1290,7 +779,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// Issue #62, layer 1: a deterministic context/prompt
 				// overflow gets its own distinct clear reason instead of a
 				// park — waiting cannot fix it, unlike every case above (see
-				// the package doc's "Round 7" section on this deliberate,
+				// worker failure handling on this deliberate,
 				// documented asymmetry) — and the error is returned AS-IS
 				// (not wrapped) so last_turn.error (server/journal.go's
 				// recordTurnEnd) surfaces exactly err.Error()'s clear,
@@ -1341,8 +830,8 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				// drain must be resumable.
 				return nil, err
 			}
-			// Round 6: a failing evaluator call is advisory, not
-			// fatal — see the package doc. evaluateGoal already spent its own
+			// Evaluator failures: a failing evaluator call is advisory, not
+			// fatal —  evaluateGoal already spent its own
 			// in-boundary retry budget before returning here (a
 			// retryable-class provider error rode out
 			// runEvaluatorWithRetry's backoff; an unparseable reply got its
@@ -2289,7 +1778,7 @@ func (s *Session) recordGoalEval(met bool, reason string, turn int, gen uint64) 
 }
 
 // recordGoalEvalFailed records one failed evaluator boundary (see goal.go's
-// "Round 6" doc section and evaluateGoal/runEvaluatorWithRetry): a provider
+// evaluator failure handling and evaluateGoal/runEvaluatorWithRetry): a provider
 // error the in-boundary retryable retry couldn't ride out, or two
 // consecutive unparseable replies even with the stricter re-ask.
 // consecutiveFailures is the CANDIDATE count for this boundary (the caller's
@@ -2349,7 +1838,7 @@ func (s *Session) achieveGoal(reason string, turns int, gen uint64) bool {
 // evaluateGoal runs a single boundary's evaluator check and parses its
 // verdict, retrying once on an unparseable reply — the second attempt uses
 // goalEvaluatorStrictSystem instead of repeating goalEvaluatorSystem verbatim
-// (see the package doc's "Round 6" section: a model that already failed to
+// (see evaluator failure handling: a model that already failed to
 // follow the instructions once is unlikely to follow them again unchanged).
 // Two unparseable replies in a row return errEvaluatorUnparseable. Each
 // attempt is itself run through runEvaluatorWithRetry, which rides out a
@@ -2378,7 +1867,7 @@ func (s *Session) evaluateGoal(ctx context.Context, condition string, evaluator 
 // error classified provider.AsRetryable on the exact same budget and backoff
 // schedule promptTurnWithRetry uses for the worker turn's WEATHER tier
 // (goalRetryableMaxAttempts, goalRetryableBackoff/waitGoalRetryableBackoff —
-// see GitHub issue #61 and the package doc's "Round 4" section) — the two
+// see GitHub issue #61 and retry handling) — the two
 // paths ride out the same shared provider weather, so they share a budget's
 // shape, each keeping its own counter.
 //

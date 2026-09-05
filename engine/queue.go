@@ -1,20 +1,4 @@
-// Prompt queue: a durable per-session FIFO for prompts submitted while the
-// session is busy (see docs/plans/2026-07-19-prompt-queue.md).
-//
-// A queued prompt is NOT a message. It lives entirely in Session.promptQueue
-// and the prompt.queued/prompt.dequeued records (see store.go's
-// promptRecord) until it is delivered — either as a normal Prompt call at
-// idle drain, or prepended as a labeled operator interjection at a goal
-// loop's turn boundary (both later tasks; see the plan). Until then it is
-// absent from s.history and from every provider request: the plan's locked
-// design decision is that a queued prompt must never leak into a running
-// turn's context ahead of its actual delivery.
-//
-// EnqueuePrompt/DequeuePrompt follow goal.go's RegisterGoal/UpdateGoal shape
-// exactly: persist the durable record and emit the engine event in the same
-// critical section, under s.mu, so the event stream (and anything derived
-// from it, e.g. a server's SSE journal) can never observe an event without
-// the record that explains it already durable, or vice versa.
+// Queued prompts stay outside history and requests until delivery. Queue records and events share the session lock.
 package engine
 
 import (

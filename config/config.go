@@ -128,10 +128,7 @@ type Config struct {
 	// engine.resolveContextWindow. Automatic compaction is disabled only
 	// when BOTH this is zero AND the model has no usable entry in that
 	// table (an unrecognized provider/model, or one below the engine's
-	// sanity floor). See docs/design/context-compaction.md and issue #62
-	// layer 3, and the jumpy-pizza incident (majorcontext/harness) this
-	// derivation was added to close: ContextWindowTokens was opt-in and set
-	// nowhere on the boxes platform, so compaction never armed on any box.
+	// sanity floor). See docs/design/context-compaction.md.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// ContextWindowRequired sets engine.Config.RequireContextWindow: a model
 	// the context-window registry does not recognize is a hard refusal at
@@ -161,9 +158,8 @@ type Config struct {
 	// MaxTokensContinuations sets engine.Config.MaxTokensContinuations: how
 	// many CONSECUTIVE times the base interactive Prompt loop auto-continues
 	// a turn that stopped with provider reason "max_tokens" (the provider
-	// cut the model off mid-emission) instead of settling the turn — see the
-	// engine field's own doc comment for the box harness-parallel-tools
-	// incident this closes. A nil value (the field omitted) leaves the
+	// cut the model off mid-emission) instead of settling the turn. A nil
+	// value (the field omitted) leaves the
 	// product default of 3 in place; an explicit 0 disables auto-continue
 	// entirely, reverting to the pre-fix behavior. A *int distinguishes
 	// "unset" (3) from "0" (off) across the project-config merge, exactly

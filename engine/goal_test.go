@@ -487,11 +487,9 @@ func TestPursueGoalMaxTurns(t *testing.T) {
 	}
 }
 
-// TestPursueGoalUnparseableTwice pins the NEW (Round 6) contract for
-// two consecutive unparseable evaluator replies: REWRITTEN from its original
-// assertion (a bare error plus exactly one session.error) now that a single
-// failed evaluator boundary is advisory, not fatal — see the package doc's
-// "Round 6" section and TestPursueGoalUnparseableTwiceDoesNotClearGoal below.
+// TestPursueGoalUnparseableTwice pins the contract for two consecutive
+// unparseable evaluator replies. A single failed evaluator boundary is
+// advisory, not fatal; see TestPursueGoalUnparseableTwiceDoesNotClearGoal.
 // MaxTurns:1 bounds the loop at exactly the failed boundary so the test can
 // observe its outcome without a second worker turn ever running.
 //
@@ -1661,9 +1659,8 @@ func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
 // FIRST retryable-budget exhaustion now exit-parks immediately — the same
 // terminal a deterministic-tier exhaustion reaches (see
 // TestPursueGoalWorkerFailsPermanentlyParksGoal) — freeing the run slot
-// instead of holding it for the rest of the outage (see the package doc's
-// "Round 7" section for why: a queued prompt can now dispatch as a normal
-// turn instead of only ever being injected into a doomed retry). So this
+// instead of holding it for the rest of the outage. A queued prompt can then
+// dispatch as a normal turn. So this
 // test now asserts exactly ONE turn's worth of retryable attempts before
 // PursueGoal returns the *goalWorkerParkedError sentinel — MaxTurns is no
 // longer even reachable via repeated parking.

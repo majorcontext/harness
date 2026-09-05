@@ -21,8 +21,8 @@ func testInstance(h *Host, name string) *instance {
 	return nil
 }
 
-// TestPluginsDoesNotBlockOnWedgedSpawn proves finding 1 (NEP-5293-review,
-// PR #114): a Host.Plugins read must never block behind another plugin's
+// TestPluginsDoesNotBlockOnWedgedSpawn verifies that a Host.Plugins read does
+// not block behind another plugin's
 // in-progress spawn. start holds inst.mu for the whole, possibly
 // uncancellable dial-plus-handshake (see instance.start's doc comment), and
 // Host is a box-scoped singleton shared by every session on the box, so a
@@ -78,7 +78,7 @@ func TestPluginsDoesNotBlockOnWedgedSpawn(t *testing.T) {
 	})
 }
 
-// TestPluginsReportsErroredAfterPostSpawnDeath proves finding 2: a plugin
+// TestPluginsReportsErroredAfterPostSpawnDeath verifies that a plugin
 // that dies after a successful spawn must not report "running" forever.
 // liveState folds conn.closed — already closed both by an explicit stop and
 // by the read loop's own error path (conn.fail, called from conn.run when
@@ -129,7 +129,7 @@ func TestPluginsReportsErroredAfterPostSpawnDeath(t *testing.T) {
 	}
 }
 
-// TestNeverSpawnedStaysNotSpawnedAfterClose proves finding 3: a configured
+// TestNeverSpawnedStaysNotSpawnedAfterClose verifies that a configured
 // plugin that no turn ever dispatched to must still report "not-spawned"
 // after Host.Close, not "stopped". Close sets stopped=true on every
 // instance unconditionally (it has to, to prevent any later respawn), but a
@@ -159,7 +159,7 @@ func TestNeverSpawnedStaysNotSpawnedAfterClose(t *testing.T) {
 	}
 }
 
-// TestErroredStaysErroredAfterClose proves a second-round review finding: a
+// TestErroredStaysErroredAfterClose verifies that a
 // plugin whose spawn itself failed must keep reporting "errored" after
 // Host.Close, not be relabeled "stopped". stop's stopped=true guard has to
 // apply unconditionally (so a later start attempt is refused — see
@@ -167,8 +167,7 @@ func TestNeverSpawnedStaysNotSpawnedAfterClose(t *testing.T) {
 // plugin Close only ever shut down cleanly is "stopped"; a plugin that
 // never came up in the first place stays "errored" — Close didn't stop
 // anything, there was nothing running to stop. Overwriting errored with
-// stopped would erase exactly the failure distinction this PR's state
-// tracking exists to preserve.
+// stopped would erase the failure state.
 //
 // Red-verify: before the fix, stop's guard only special-cased
 // stateNotSpawned (`!= stateNotSpawned` stores stateStopped for every other
@@ -195,8 +194,8 @@ func TestErroredStaysErroredAfterClose(t *testing.T) {
 	}
 }
 
-// TestErroredAfterPostSpawnDeathStaysErroredAfterClose proves a third-round
-// review finding: a plugin that spawned successfully and then CRASHED must
+// TestErroredAfterPostSpawnDeathStaysErroredAfterClose verifies that a plugin
+// that spawned successfully and then fails must
 // keep reporting "errored" after a later Host.Close, not "stopped".
 //
 // liveState's running-case computes a post-spawn death LAZILY, by folding
