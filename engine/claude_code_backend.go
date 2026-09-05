@@ -1,173 +1,3 @@
-// The Claude Code CLI delegated-turn backend.
-//
-// # Why this exists
-//
-// A box running on a user's Claude SUBSCRIPTION (rather than metered API
-// access) must run through Anthropic's own client — Anthropic blocks
-// third-party harnesses from authenticating against a subscription
-// directly. harness cannot BE that client for a subscription-backed turn.
-// It can, however, stay the session/journal/HTTP-API front door and
-// DELEGATE the turn to the real `claude` CLI, driven headlessly over its
-// documented `--input-format stream-json --output-format stream-json`
-// protocol, bridging that event stream into this package's own
-// Session.append/emit/journal pipeline — so the console and every other
-// read-path consumer see an ordinary transcript, unaware that a particular
-// turn's tool loop ran inside `claude` rather than inside this package's
-// own runToolCalls.
-//
-// # The seam
-//
-// A session is "delegated" purely by its model ref: message.ModelRef{
-// Provider: ClaudeCodeProviderFamily, Model: "sonnet"} (or "opus", "haiku",
-// any name the `claude` binary's own --model flag accepts). Two entry
-// points check claudeCodeDelegated() and dispatch here, BEFORE any
-// native-loop-only step runs (see each call site's own doc comment for why
-// both exist rather than one):
-//
-//   - PromptWithOrigin (engine.go), for every ordinary Prompt/
-//     PromptEngineResume call — dispatches before ContextWindowErr,
-//     ensureInstructions, ensureSkills, and maybeAutoCompact, none of
-//     which apply to a turn Claude Code drives with its own context
-//     management.
-//   - runAgenticLoop (engine.go), for goal.go's promptTurnWithRetry
-//     directive-reuse retry, which calls runAgenticLoop DIRECTLY,
-//     bypassing PromptWithOrigin entirely.
-//
-// Both roads converge on runClaudeCodeTurn below, which reads the tail of
-// s.History() — always exactly one appended, not-yet-answered RoleUser
-// message, whichever caller appended it — and drives ONE `claude` turn
-// against it.
-//
-// # Event mapping
-//
-// Each line of the CLI's stream-json stdout is one JSON object with a
-// discriminating "type" field (claudeCodeEnvelope below). This mapping is
-// the best-faithful reading of the CLI's own documented stream-json
-// protocol; any shape this file has not verified live against a real
-// `claude` binary is called out in the relevant type/function's own
-// comment, and decoding is deliberately permissive (unknown fields
-// ignored, an unrecognized top-level "type" or "subtype" treated as
-// inert activity rather than a hard failure) so a future CLI version
-// that adds a field or event this file doesn't yet know about degrades to
-// "nothing observable happened" instead of crashing a turn.
-//
-//   - "system"/"init": captures Claude Code's OWN session id
-//     (claudeCodeCLISessionID) for --resume on this harness session's next
-//     delegated turn. Any other subtype (e.g. "api_retry") is activity
-//     only — observed, never fatal.
-//   - "assistant": one COMPLETE content block (text, thinking, or a single
-//     tool_use), NOT a token-by-token delta; this driver does not pass
-//     --include-partial-messages, so there is nothing more granular to
-//     forward. A real `claude` binary streams each content block of one
-//     logical model turn as its OWN "assistant" envelope — most visibly, a
-//     "thinking" block arrives as a complete envelope on its own,
-//     immediately followed by a SEPARATE envelope for whatever the model
-//     emits next. consumeClaudeCodeStream's pendingReasoning buffers a
-//     reasoning-only envelope and reattaches it to the front of the very
-//     next envelope's own parts, so a reasoning turn still persists (and
-//     replays) as ONE message.Message with a Reasoning part followed by
-//     whatever completed that turn segment (Text and/or ToolCall parts),
-//     matching message.Message.Parts's own documented shape — rather than
-//     two adjacent assistant messages a one-bubble-per-message console
-//     would render as two separate turns. Appended via plain
-//     Session.append (no usage — see the usage-mapping note below) and
-//     emitted as its own parts' deltas FOLLOWED BY EventMessage — the
-//     native lane's order, which a consumer's fold depends on (see the
-//     emission site's own comment), with one EventReasoningDelta per non-empty
-//     thinking part (runClaudeCodeTurn asks for a summary with
-//     --thinking-display summarized, which is what makes a non-empty one
-//     the ordinary case rather than the impossible one — the emission stays
-//     conditional, since the API can still answer with an empty summary),
-//     one EventTextDelta per non-empty text part (folding
-//     the whole block's text into the message in a single "delta", the
-//     closest honest match to the native EventTextDelta/EventReasoningDelta
-//     contract given the CLI hands over complete blocks), and one
-//     EventToolStart per tool_use part. The envelope's own
-//     parent_tool_use_id (null at top level, the spawning
-//     tool_use id inside a subagent's own turn) rides onto the appended
-//     message as Message.ParentToolUseID, unmodified.
-//   - "user": Claude Code's own tool execution results, arriving in the
-//     Anthropic API's own convention of a "user"-role message carrying
-//     tool_result content blocks (Claude Code executes its OWN tools here
-//     — this package never calls runToolCalls for a delegated turn).
-//     Decoded into one RoleTool message.Message (one ToolResult part per
-//     block, Message.ParentToolUseID set the same way as the "assistant"
-//     case above), appended and emitted as EventMessage, with one
-//     EventToolEnd per part.
-//   - "result": the turn's terminal event. consumeClaudeCodeStream RETURNS
-//     as soon as this event is handled — it does not keep scanning for
-//     stdout EOF (see that function's own doc comment for why this
-//     matters). Never itself appended as a message (the assistant text it
-//     summarizes was already appended by the last "assistant" event
-//     above) — it instead carries the turn's AGGREGATE usage, applied once
-//     via applyClaudeCodeUsage (a durable, message-independent record —
-//     see recClaudeCodeUsage in store.go), and this turn's timing, emitted
-//     once via emitTurnMetrics (ttft_ms/duration_ms, permissively zero-
-//     valued if the CLI's own build does not send them). An IsError result
-//     becomes this call's returned error — wrapped provider.RetryableError
-//     for a known-transient shape (see claudeCodeRetryableClass), a plain
-//     error otherwise. TotalCostUSD has no home in provider.Usage (no
-//     adapter carries a cost field — every consumer derives cost from
-//     token counts); applyClaudeCodeUsage instead sums it directly into
-//     the session's own message.SubscriptionUsage.SessionCostUSD, durable
-//     via the same recClaudeCodeUsage record as the token usage above —
-//     see that field's own doc comment for why this is reported every
-//     turn, not only during pay-as-you-go overage.
-//   - "rate_limit_event": the CLI's own subscription rate-limit/quota
-//     signal, typically the SECOND event of a turn (right after
-//     "system"/"init"). Never appended as a message — it carries no
-//     conversational content — but mapped via mapClaudeCodeRateLimit and
-//     applied to the session via applySubscriptionUsage (engine.go),
-//     process-local only, surfaced on GET /session as
-//     subscription_usage. See mapClaudeCodeRateLimit's own doc comment
-//     for the field-by-field mapping.
-//
-// # Formerly deferred, now closed
-//
-// The v1 doc above (see git history for its original wording) flagged five
-// gaps this package now closes:
-//
-//   - MCP passthrough (`--mcp-config`): runClaudeCodeTurn now translates
-//     the session's configured MCP servers (via the mcpServerLister seam
-//     below) into the CLI's own --mcp-config JSON and passes
-//     --strict-mcp-config alongside it — see buildClaudeCodeMCPConfig.
-//   - `--effort`: runClaudeCodeTurn reads s.Effort() and forwards it as
-//     --effort, mapped through claudeCodeEffortArg.
-//   - "thinking" content blocks: claudeCodeAssistantMessage now decodes
-//     them into message.Reasoning parts instead of dropping them.
-//   - parent_tool_use_id: captured on the envelope and carried onto the
-//     appended message.Message (Message.ParentToolUseID) so a subagent
-//     turn's nesting survives into the journal. The CLI only sets this
-//     field on subagent assistant/user frames when told to with
-//     --forward-subagent-text (default off); runClaudeCodeTurn now
-//     always passes that flag alongside --verbose, so this mapping has
-//     real subagent frames to read.
-//   - turn_metrics: consumeClaudeCodeStream now emits an OnTurnMetrics
-//     record from the "result" event's own timing/usage fields.
-//
-// `--append-system-prompt` remains NOT auto-populated from s.cfg.System —
-// see the original reasoning, unchanged: harness's system-prompt assembly
-// is deliberately native-loop-only (PromptWithOrigin's dispatch comment),
-// Claude Code already discovers its own CLAUDE.md/AGENTS.md in the box
-// workspace, and re-injecting harness's own native-tool-shaped instructions
-// into a CLI with different tools would be actively misleading.
-//
-// AppendSystemPrompt is forwarded because it contains environment facts, not
-// native tool instructions. The engine sends one joined option and rejects
-// conflicting append-prompt options in ExtraArgs.
-//
-// Full goal-loop support is now PARTIAL rather than absent: a delegated
-// turn's error is wrapped provider.RetryableError (see
-// claudeCodeRetryableClass and the process-exit branch in
-// runClaudeCodeTurn) for the known-transient shapes a "result" event or a
-// child crash can report — a rate-limit/overload signal, the CLI's own
-// "error_during_execution" catch-all, or the child process exiting without
-// ever emitting a clean result at all — so goal.go's promptTurnWithRetry
-// gives those the same backoff-and-retry treatment a native provider's
-// weather gets. A deterministic failure (max turns reached, a genuine
-// refusal) still surfaces as a plain error, exactly as before, so the goal
-// loop still fails fast on those rather than burning a retry budget on a
-// request that will fail identically every time.
 package engine
 
 import (
@@ -343,8 +173,8 @@ func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
 //
 // This is deliberately NOT routed through appendWithUsage: by the time a
 // "result" event arrives, every message this turn produced has already
-// been appended (plain Session.append, no usage attached — see this
-// file's package doc, "final result" bullet) in receipt order, matching
+// been appended (plain Session.append, no usage attached) in receipt order,
+// matching
 // each one to the EventMessage/EventToolStart/EventToolEnd emit it needs
 // at the moment it actually happened; retroactively re-appending a
 // duplicate "terminal" message purely to give appendWithUsage somewhere to
@@ -378,7 +208,7 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage, costUSD float64) {
 // runClaudeCodeTurn drives ONE turn through the `claude` CLI against s's
 // CURRENT history tail — the single, most-recently-appended, not-yet-
 // answered RoleUser message, appended by whichever of PromptWithOrigin or
-// goal.go's directive-reuse retry called in (see this file's package doc).
+// goal.go's directive-reuse retry called in.
 // It returns the final assistant message.Message on success.
 //
 // Every message this turn produces is appended to s.History() as it is
@@ -411,9 +241,8 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// <harness-engine-context> sentinel: that sentinel's meaning is taught
 	// by the NATIVE base system prompt's ambientContextGuidance
 	// (cmd/harness/main.go), which a delegated turn never sends — Claude
-	// Code drives this turn under its own, unrelated system prompt (see
-	// this file's package doc, "`--append-system-prompt` remains NOT
-	// auto-populated from s.cfg.System"), so the tag would reach the model
+	// Code drives this turn under its own, unrelated system prompt, so the tag
+	// would reach the model
 	// as meaningless literal text rather than a recognized trust marker.
 	// The rendered segment is still self-delimited (renderTaskNotifications'
 	// own "[tasks:\n- ...\n]" shape) and still defended the same way a
@@ -477,7 +306,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// like the boxes console can't nest it under its spawning Task and
 		// renders it inline instead. --forward-subagent-text makes the CLI
 		// set parent_tool_use_id on those frames, which this driver already
-		// reads onto Message.ParentToolUseID (see the package doc above).
+		// reads onto Message.ParentToolUseID.
 		// It is gated only on --print/--output-format=stream-json, both of
 		// which this driver always sets, so it is safe to pass
 		// unconditionally.
@@ -576,7 +405,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// child inherits harness's own ambient environment verbatim — on the
 	// boxes platform, that is whatever placeholder credential material and
 	// gatekeeper routing the BOX already set up before harness ever ran
-	// (see this file's package doc). cmd.Env left nil means exactly that:
+	//. cmd.Env left nil means exactly that:
 	// os/exec's own documented behavior is to inherit os.Environ().
 
 	stdin, err := cmd.StdinPipe()
@@ -623,7 +452,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// blocked Read ends on its own, promptly, the moment cmd.Wait() closes
 	// stderrPipe's read end below — whether that close finds EOF already
 	// pending (the ordinary case) or a leaked descendant still holding the
-	// write end open (the `--bg` case this file's package doc describes).
+	// write end open after the direct child exits.
 	go func() {
 		_, _ = io.Copy(&stderr, stderrPipe)
 	}()
@@ -1045,8 +874,7 @@ func lastUserMessageContent(history []message.Message) (string, []*message.Blob)
 // claude-code turn) does not start blind to everything that already
 // happened: stream-json INPUT cannot seed prior history (a "user" line
 // gets live re-executed; an "assistant" line is dropped or crashes the
-// CLI — see this file's package doc for why this pull-based tool exists
-// instead), so this is the one nudge that gets the CLI to pull it itself.
+// CLI), so this directive tells the CLI to pull prior history itself.
 const claudeCodeHistoryDirective = "You are continuing a conversation that happened on another model. Before responding, call the get_conversation_history tool to read what happened so far."
 
 // claudeCodeHistoryDirectiveArgs returns the --append-system-prompt argv
@@ -1067,8 +895,7 @@ const claudeCodeHistoryDirective = "You are continuing a conversation that happe
 //     everything currently in history, including that turn's own answer.
 //     The CLI's --resume'd session already carries forward whichever
 //     earlier turn's own get_conversation_history tool_result — re-pulling
-//     here would waste a call the CLI has no reason to repeat (see this
-//     file's package doc, "one call suffices").
+//     here would waste a call because the resumed CLI session already has it.
 //
 // This is deliberately NOT gated on Session.claudeCodeSessionID() (whether a
 // CLI session id is recorded at all): a model switch away from claude-code
@@ -1100,7 +927,7 @@ func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []
 //
 // It returns as soon as it handles the "result" event rather than reading
 // on to stdout's EOF, because "result" IS the turn's documented terminal
-// event (see this file's package doc) and EOF is not a safe thing to wait
+// event and EOF is not a safe thing to wait
 // for: EOF on a pipe only arrives once EVERY process holding the write end
 // open has exited, and the direct `claude` child is not the only process
 // that can hold it. `claude --bg` — the CLI's own sanctioned pattern for a
@@ -1265,7 +1092,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		if err := json.Unmarshal(line, &env); err != nil {
 			// A line this decoder cannot even parse as JSON: never crash a
 			// turn over one malformed/unexpected line from the child —
-			// see this file's package doc on permissive decoding.
+			// unknown stream data must not crash a turn.
 			continue
 		}
 		if (env.Type == "user" || env.Type == "result") && len(pendingReasoning) > 0 {
@@ -1299,8 +1126,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				s.recordClaudeCodeSessionID(env.SessionID)
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
-			// requires no action — see the package doc's event-mapping
-			// section.
+			// requires no action.
 		case "assistant":
 			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
@@ -1466,7 +1292,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
 				Model:            model,
-				Attempt:          1, // see this file's package doc: Claude Code retries internally, invisible to harness
+				Attempt:          1, // Claude Code retries internally; harness observes one delegated turn.
 				TTFTMillis:       env.TTFTMillis,
 				StreamMillis:     streamMillis,
 				InputTokens:      usage.InputTokens,
@@ -1487,7 +1313,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			//
 			// Return NOW rather than falling through to another
 			// scanner.Scan(): "result" is the documented terminal event
-			// (package doc above), and continuing to scan would instead
+			// and continuing to scan would instead
 			// wait for stdout's EOF — which a `claude --bg` turn's leaked
 			// descendant fd can withhold forever. See this function's own
 			// doc comment for the full reasoning. Any bytes a lingering
@@ -1500,8 +1326,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// tool call) that "result" is the LAST line the direct child
 			// ever emits — rate_limit_event, when present, arrived before
 			// it both times, never after. Nothing observed contradicts the
-			// package doc's "result" bullet calling it the turn's terminal
-			// event.
+			// result as the terminal event.
 			return finalMsg, started, turnErr
 		case "rate_limit_event":
 			// The CLI's own subscription rate-limit/quota signal — see
@@ -1515,7 +1340,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			}
 		}
 		// Any other top-level "type" (this driver has none documented
-		// beyond the four above) is inert activity, per the package doc.
+		// beyond the four above) is inert activity.
 	}
 	// The scanner loop ended without ever reaching "result" (a crashed or
 	// truncated stream) — flush what is buffered now rather than silently
@@ -1547,7 +1372,7 @@ func reasoningOnlyParts(parts message.Parts) bool {
 // --output-format stream-json` decodes into. Fields are read permissively
 // (encoding/json ignores JSON fields with no matching Go field, and every
 // field here is optional so a line missing one just zero-values it) —
-// see this file's package doc for the decoding philosophy.
+// Unknown fields and missing optional fields are tolerated.
 type claudeCodeEnvelope struct {
 	Type      string           `json:"type"`
 	Subtype   string           `json:"subtype,omitempty"`
@@ -1559,8 +1384,7 @@ type claudeCodeEnvelope struct {
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
 	// whole delegated turn — folded into the session's cumulative
 	// message.SubscriptionUsage.SessionCostUSD by applyClaudeCodeUsage
-	// (see this file's package doc, "result" bullet, and that field's own
-	// doc comment). Reported on every "result" event a real `claude`
+	// (see that field's own doc comment). Reported on every "result" event a real `claude`
 	// 2.1.252 binary sends, not only during pay-as-you-go overage; zero,
 	// not an error, for an older build that omits the field — this file's
 	// usual permissive-decoding philosophy, same as TTFTMillis/
@@ -1570,15 +1394,13 @@ type claudeCodeEnvelope struct {
 	// decodes to "" for a plain string field, encoding/json's documented
 	// no-op-on-null behavior for a non-pointer target) at the top level of
 	// a delegated turn's own events, and set to the spawning tool_use id
-	// inside a subagent's own turn — see the package doc's event-mapping
-	// section. Carried verbatim onto the appended message.Message
+	// inside a subagent's own turn. Carried verbatim onto the appended message.Message
 	// (Message.ParentToolUseID) by claudeCodeAssistantMessage/
 	// claudeCodeToolResultMessage.
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 	// TTFTMillis and DurationMillis are a "result" event's own timing
 	// fields (time to first token, and this turn's total wall time),
-	// forwarded into emitTurnMetrics's TTFTMillis/StreamMillis — see the
-	// package doc's "result" bullet. Zero, never an error, if a particular
+	// forwarded into emitTurnMetrics's TTFTMillis/StreamMillis. Zero, never an error, if a particular
 	// `claude` build does not send them (this file's usual permissive-
 	// decoding philosophy).
 	TTFTMillis     int64 `json:"ttft_ms,omitempty"`
@@ -1642,7 +1464,7 @@ func claudeCodeRateLimitWindowLabel(key string) string {
 // every consumer of Session.SubscriptionUsage sees. ok is false for a nil
 // info (a rate_limit_event with no rate_limit_info at all — not expected
 // from a real `claude` binary, but this file decodes permissively
-// throughout, per its own package doc).
+// throughout).
 func mapClaudeCodeRateLimit(info *claudeCodeRateLimitInfo) (message.SubscriptionUsage, bool) {
 	if info == nil {
 		return message.SubscriptionUsage{}, false
@@ -1766,8 +1588,7 @@ type claudeCodeContentBlock struct {
 // claudeCodeContentBlock or, if that fails, a bare JSON string (treated as
 // a single text block) — see claudeCodeMessage.Content's own doc comment.
 // Any other or empty shape yields nil, never an error: this file never
-// fails a turn over one unrecognized content shape (see the package doc's
-// permissive-decoding philosophy).
+// fails a turn over one unrecognized content shape.
 func decodeClaudeCodeContentBlocks(raw json.RawMessage) []claudeCodeContentBlock {
 	if len(raw) == 0 {
 		return nil
@@ -2020,7 +1841,7 @@ func claudeCodeRetryableClass(subtype, result string) (provider.RetryableClass, 
 // that chooses to implement it need to; an s.cfg.MCP that does not (nil, or
 // a fake with no reason to care) simply contributes no MCP passthrough,
 // the same fail-open philosophy as an MCP server that never connects (see
-// engine/mcp.go's package doc).
+// engine/mcp.go connection contract).
 type claudeCodeMCPServerLister interface {
 	Servers() map[string]MCPServerConfig
 }

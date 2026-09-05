@@ -1,7 +1,5 @@
-// Package engine is the headless core: the session loop that streams model
-// turns, executes tool calls, and appends everything to the session's
-// message history. Every frontend (CLI, TUI, server) is a client of this
-// package; none of them are imported by it.
+// Package engine runs headless agent sessions.
+
 package engine
 
 import (
@@ -167,7 +165,7 @@ type Event struct {
 	// deterministic-path stall, unchanged from before they existed.
 	//
 	// GoalEvalFailures is carried by goal.eval_failed only (see goal.go's
-	// "Round 6" doc section and evaluateGoal/recordGoalEvalFailed): the
+	// evaluateGoal and recordGoalEvalFailed): the
 	// number of CONSECUTIVE failed evaluator boundaries as of this one,
 	// inclusive — reset to zero the moment a later boundary parses a
 	// verdict (MET or NOT MET) or the generation changes (an UpdateGoal),
@@ -188,7 +186,7 @@ type Event struct {
 	GoalWaiting        bool   `json:"goal_waiting,omitempty"`
 	GoalEvalFailures   int    `json:"goal_eval_failures,omitempty"`
 	// GoalAttempts is carried by goal.parked only (see goal.go's
-	// recordGoalParked and "Round 7" doc section): the TOTAL attempt count
+	// recordGoalParked): the TOTAL attempt count
 	// for the exhausted turn, distinct from GoalAttempt (singular), which
 	// is goal.stalled's 1-based per-attempt counter. GoalReason on a
 	// goal.parked event is classified, never raw provider error text (see
@@ -281,14 +279,14 @@ const (
 	EventGoalCleared  = "goal.cleared"
 	// EventGoalEvalFailed fires once per failed evaluator boundary — a
 	// provider error the retryable-class in-boundary retry couldn't ride out,
-	// or two consecutive unparseable replies — see goal.go's "Round 6" doc
-	// section. Below goalEvalFailureLimit consecutive failures this is
+	// or two consecutive unparseable replies. Below goalEvalFailureLimit
+	// consecutive failures this is
 	// advisory only: the goal stays active and the loop keeps working; at
 	// the limit a goal.cleared with a dedicated reason follows instead.
 	EventGoalEvalFailed = "goal.eval_failed"
 	// EventGoalParked fires once per exit-parked worker turn — either
-	// exhaustion tier (deterministic or retryable-class, see goal.go's
-	// "Round 7" doc section) — WITHOUT a following goal.cleared: the goal
+	// exhaustion tier (deterministic or retryable-class) — WITHOUT a following
+	// goal.cleared: the goal
 	// stays active. A server (Task 2) maps this onto a distinct paused
 	// presentation and resumes the loop on the next ordinary activity,
 	// exactly like it already does for the boot-only restart pause.
@@ -335,8 +333,8 @@ type Config struct {
 	//
 	// Unlike System, these segments DO travel to the delegated Claude Code
 	// CLI, as one blank-line-joined --append-system-prompt value — see
-	// runClaudeCodeTurn and claude_code_backend.go's package doc for why the
-	// two are treated differently.
+	// runClaudeCodeTurn: Claude Code receives no native system prompt, so it
+	// needs environment facts without native-tool instructions.
 	AppendSystemPrompt []string
 
 	// ClaudeCode configures the delegated-turn backend a session whose

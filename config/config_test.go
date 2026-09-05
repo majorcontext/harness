@@ -138,9 +138,8 @@ func TestLoadProviderEmptyTypeOnUnknownKeyFails(t *testing.T) {
 	}
 }
 
-// TestLoadProviderEmptyTypeOnNativeKeysOK proves the fix above does not
-// regress the legacy zero-Type override path for the two built-in native
-// adapters cmd/harness's registry wires directly by name.
+// TestLoadProviderEmptyTypeOnNativeKeysOK verifies that empty types retain
+// the built-in native provider defaults.
 func TestLoadProviderEmptyTypeOnNativeKeysOK(t *testing.T) {
 	c := &Config{Providers: map[string]Provider{
 		"anthropic": {APIKeyEnv: "MY_ANTHROPIC_KEY"},
@@ -171,8 +170,8 @@ func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
 	}
 }
 
-// TestProviderNativeDefaultKeyOnlyOverride is the key finding of this
-// group: an "openrouter" entry may set only the field it cares about
+// TestProviderNativeDefaultKeyOnlyOverride verifies that an "openrouter"
+// entry may set only the field it needs
 // (api_key_env here) and inherit type/base_url from the built-in default
 // (nativeDefaultProviders) — it is a complete, valid entry without ever
 // naming type or base_url itself.
@@ -242,8 +241,8 @@ func TestProviderPartialEntryUnknownKeyFails(t *testing.T) {
 	}
 }
 
-// TestProviderLayeredPartialOverrideMergesThenValidates is the general
-// form of the design fix: a project layer may override just one field of a
+// TestProviderLayeredPartialOverrideMergesThenValidates verifies that a
+// project layer may override one field of a
 // provider entry that the user layer defines fully — this is only valid
 // because validation now runs on the merged config, not per file (a
 // project-only Load of this fragment would fail: no type, no base_url).
@@ -544,8 +543,7 @@ func TestMergeAgentDefsDirs(t *testing.T) {
 	})
 }
 
-// TestMergeCompactionFields is the red-first test for docs/design/context-
-// compaction.md's config fields: project non-zero values override the user
+// TestMergeCompactionFields verifies that project non-zero values override user
 // layer, same scalar-override rule as GoalEvaluatorModel.
 func TestMergeCompactionFields(t *testing.T) {
 	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3}
@@ -891,7 +889,7 @@ func TestMaxTokensContinuations(t *testing.T) {
 	})
 }
 
-// TestStreamIdleTimeoutS is the red-first test for the stream_idle_timeout_s
+// TestStreamIdleTimeoutS verifies the stream_idle_timeout_s
 // config field: 0/omitted means "engine default", negative means "disable
 // the watchdog", and project non-zero values override the user layer, same
 // scalar-override rule as GoalEvaluatorModel.
@@ -1030,7 +1028,7 @@ func TestLoadProject(t *testing.T) {
 			t.Errorf("anthropic base_url = %q, want project override", got.BaseURL)
 		}
 	})
-	// The design fix in full, end to end: neither file's providers.openrouter
+	// Neither file's providers.openrouter
 	// entry is complete on its own (the user file has no type/base_url at
 	// all — it relies on the native default — and the project file
 	// overrides only api_key_env), but LoadProject merges the two layers

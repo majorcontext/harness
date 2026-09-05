@@ -3,19 +3,15 @@
 // processStatusSegment (see either's doc comment): computed fresh from live
 // Session state on every streamTurn call, appended only to the newest user
 // message via the shared withAmbientStatus, and never persisted to the
-// session log. See docs/plans/2026-07-21-goal-worker-park.md Task 3 and
-// goal.go's package doc, "Task 3: an ambient in-session signal, runtime-only"
-// section, for the full design and the deliberate post-restart asymmetry
-// this segment does NOT cover.
+// session log. It does not survive a process restart.
 package engine
 
 import "fmt"
 
 // goalParkedSegment renders the ambient status block request assembly
 // appends to the newest user message (see streamTurn) while a worker-turn
-// exhaustion has left the session's goal parked (see PursueGoal's "Round 7"
-// exit-park branches, and the goalParked field's doc comment on
-// *Session).
+// exhaustion has left the session's goal parked. The goal stays active after
+// worker retry exhaustion.
 //
 // Renders "" — absent, the zero happy-path cost the other two ambient
 // segments already commit to — in every one of these cases:

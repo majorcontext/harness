@@ -375,7 +375,7 @@ func captureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
-// TestProbeSpecEnvAndDirReachProbedProcess proves finding (2): probing must
+// TestProbeSpecEnvAndDirReachProbedProcess verifies that probing
 // use the full plugin.Spec (Env, Dir, Config), not just the bare command, so
 // the cached manifest matches what the live, fully-configured plugin
 // actually advertises. PLUGIN_PROBE_MARKER is set only via spec.Env (never
@@ -418,7 +418,7 @@ func TestProbeSpecEnvAndDirReachProbedProcess(t *testing.T) {
 	}
 }
 
-// TestLoadPluginManifestCacheCorruptFileIsMiss proves finding (3): a corrupt
+// TestLoadPluginManifestCacheCorruptFileIsMiss verifies that a corrupt
 // on-disk cache file (e.g. left behind by a concurrent reader observing a
 // half-written file under the old non-atomic save, or any other corruption)
 // must be treated as a cache miss — every plugin simply re-probes — never a
@@ -590,7 +590,7 @@ func TestPluginBinaryHashDetectsChange(t *testing.T) {
 	}
 }
 
-// TestPluginBinaryHashMatchesResolvedExecutable proves finding (1): the
+// TestPluginBinaryHashMatchesResolvedExecutable verifies that the
 // manifest-cache hash and the actual spawn must resolve a bare command name
 // identically. The old implementation hashed whatever os.Stat found relative
 // to the *harness process's current directory* before falling back to
@@ -628,7 +628,7 @@ func TestPluginBinaryHashMatchesResolvedExecutable(t *testing.T) {
 	}
 }
 
-// TestPluginBinaryHashRelativeToDir proves the other half of finding (1): a
+// TestPluginBinaryHashRelativeToDir verifies that a
 // command given as a Dir-relative path (containing a path separator) must
 // hash the file that a real spawn resolves relative to spec.Dir — not
 // relative to the harness process's own cwd, which is what a real spawn
@@ -671,7 +671,7 @@ func TestPluginBinaryHashRelativeToDir(t *testing.T) {
 	}
 }
 
-// TestBuildPluginHostConfigChangeReprobes proves finding (1): changing a
+// TestBuildPluginHostConfigChangeReprobes verifies that changing a
 // plugin's Config in config.json — with no rebuild of the plugin binary —
 // is a manifest-cache miss and triggers a re-probe, rather than silently
 // serving the manifest cached for the old config. Before the fix,
@@ -790,7 +790,7 @@ func TestBuildPluginHostDirChangeReprobes(t *testing.T) {
 	}
 }
 
-// TestBuildPluginSpecsUnchangedDoesNotRehash proves finding (2): given an
+// TestBuildPluginSpecsUnchangedDoesNotRehash verifies that, given an
 // unchanged binary and an unchanged spec, a second buildPluginSpecs call
 // reading the same on-disk cache must not re-hash the plugin's executable
 // at all — the stat (size, mtime) fast path alone must be enough to trust
@@ -842,7 +842,7 @@ func TestBuildPluginSpecsUnchangedDoesNotRehash(t *testing.T) {
 }
 
 // TestBuildPluginSpecsTouchedBinaryFallsBackToHash proves the other half of
-// finding (2): when the executable's mtime changes (e.g. `touch`, or a
+// behavior: when the executable's mtime changes (e.g. `touch`, or a
 // rebuild that reproduces byte-identical output), the stat fast path can't
 // rule out a change by itself, so buildPluginSpecs must fall back to
 // hashing the content — and, since the content here is unchanged, trust the
@@ -1040,7 +1040,7 @@ func TestBuildPluginHostScriptSameSizeContentChangeReprobes(t *testing.T) {
 	}
 }
 
-// TestPluginScriptFilesSkipsNonFileArgs pins finding (c): a fleet plugin is
+// TestPluginScriptFilesSkipsNonFileArgs verifies that a fleet plugin
 // commonly configured as an interpreter plus a script, e.g.
 // {"command":["bun","/repo/.harness/plugins/guard.ts"]}. pluginScriptFiles
 // must resolve the script argument (it is a real file on disk) but must
@@ -1072,7 +1072,7 @@ func TestPluginScriptFilesSkipsNonFileArgs(t *testing.T) {
 	}
 }
 
-// TestPluginScriptFilesNoArgsIsNil pins finding (d)'s building block: a
+// TestPluginScriptFilesNoArgsIsNil verifies that a
 // plain, non-interpreter plugin (command == [binary], no trailing
 // arguments) must resolve zero script files, so its cache identity is
 // unaffected by this change.
@@ -1098,7 +1098,7 @@ func TestPluginScriptFilesNoArgsIsNil(t *testing.T) {
 // spawns (via PLUGIN_SPAWN_LOG), the same technique
 // TestBuildPluginHostDirChangeReprobes uses for Dir.
 //
-// It also pins finding (b) in the same run: re-probing on every startup
+// It also verifies that re-probing on every startup
 // regardless of content would defeat the whole point of the durable cache,
 // so an UNCHANGED script must stay a cache hit (spawn count unchanged)
 // between the first and second calls, before the content change in the

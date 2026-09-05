@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// TestNoteReadyTimeoutPreservesReady encodes the PR#71 review finding:
+// TestNoteReadyTimeoutPreservesReady verifies that
 // select picks randomly among simultaneously-ready cases, so the timer
 // branch can fire even though markReady just ran. A process that already
 // reached ready (or exited, or was stopped) must be left alone; only

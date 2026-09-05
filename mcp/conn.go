@@ -12,39 +12,23 @@ import (
 	"time"
 )
 
-// cancelledNotifyTimeout bounds the best-effort notifications/cancelled
-// write sent when a call's context is done. It is deliberately short and
-// detached from the caller's ctx (which is already done) so a peer that
-// stopped reading can't hang this cleanup goroutine indefinitely.
+// cancelledNotifyTimeout bounds the best-effort cancellation notification.
 const cancelledNotifyTimeout = 1 * time.Second
 
-// transport is the abstraction both the stdio and Streamable HTTP
-// transports implement. call sends a request and decodes the peer's
-// result; notify sends a fire-and-forget notification.
+// transport is implemented by the stdio and Streamable HTTP transports.
 type transport interface {
 	call(ctx context.Context, method string, params, result any) error
 	notify(ctx context.Context, method string, params any) error
 	close() error
 }
 
-// notificationHandler observes a notification (or, for the stdio
-// transport's duplex stream, an unsupported server-initiated request) that
-// this client does not model. The default behavior is log-and-continue.
+// notificationHandler observes unsupported server messages.
 type notificationHandler func(method string, params json.RawMessage)
 
-// handlerFunc serves one incoming request or notification arriving on a
-// conn. The returned value is marshaled as the JSON-RPC result for
-// requests (those with an ID) and ignored for notifications.
+// handlerFunc serves one incoming JSON-RPC message.
 type handlerFunc func(ctx context.Context, method string, params json.RawMessage) (any, error)
 
-// conn is a bidirectional, newline-delimited JSON-RPC 2.0 connection over a
-// byte stream, used by the stdio transport (and, in tests, by the
-// in-package fake stdio server on the other end of the same pipe) — the
-// same conn/handlerFunc split plugin/protocol.go uses for its own hand-
-// rolled JSON-RPC. Incoming requests are served on their own goroutine so a
-// handler blocked on writing never stalls the read loop, and every
-// outgoing call races its response against ctx.Done() and the connection
-// closing.
+// conn is a bidirectional newline-delimited JSON-RPC 2.0 connection.
 type conn struct {
 	// wmu is a 1-buffered channel semaphore serializing writes, in place
 	// of a sync.Mutex: acquiring it selects on ctx.Done() (see
@@ -90,9 +74,7 @@ func newConn(rwc io.ReadWriteCloser, handler handlerFunc) *conn {
 	}
 }
 
-// run reads and dispatches messages until the stream ends. Every message is
-// exactly one line (newline-delimited JSON-RPC per the stdio transport
-// spec); messages MUST NOT contain embedded newlines.
+// run reads and dispatches newline-delimited JSON-RPC messages until EOF.
 func (c *conn) run() error {
 	for {
 		line, err := c.r.ReadBytes('\n')
@@ -101,8 +83,7 @@ func (c *conn) run() error {
 			if uerr := json.Unmarshal(line, &msg); uerr == nil {
 				c.dispatch(msg)
 			}
-			// A malformed line from a peer that isn't speaking JSON-RPC is
-			// dropped; there is no request ID to reply to.
+			// A malformed line has no request ID for a reply.
 		}
 		if err != nil {
 			c.fail(err)
@@ -147,10 +128,7 @@ func (c *conn) serveRequest(msg message) {
 			resp.Result = raw
 		}
 	}
-	// A write failure means the stream is going down; the read loop will
-	// surface it. Responses to served requests carry no deadline of their
-	// own (context.Background()): unlike the cancelled-notify cleanup
-	// below, there is no caller-side timeout to protect here.
+	// The read loop reports write failures.
 	_ = c.write(context.Background(), resp)
 }
 

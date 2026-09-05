@@ -14,8 +14,7 @@ import (
 // a provider package — but until now nothing but a comment kept them in step.
 // config.validateCacheTTL accepts against one copy and anthropic.
 // resolveCacheTTL accepts against the other, so a value added to one list
-// alone would be accepted at load and then rejected at the first Stream call,
-// or vice versa: the silent-drift class this PR set out to remove.
+// alone would be accepted at load and then rejected at the first Stream call.
 //
 // cmd/harness is the right home for the check because it is the one package
 // that already imports both, and it is the seam that carries a configured

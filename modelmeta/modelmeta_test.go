@@ -7,9 +7,7 @@ import (
 )
 
 func TestContextWindowAnthropic(t *testing.T) {
-	// config.DefaultModel — also the model jumpy-pizza's incident named
-	// ("prompt 1136916 tokens > limit 1000000"), so this case is pinned to
-	// the exact incident value on purpose.
+	// config.DefaultModel must have context-window metadata.
 	tokens, ok := ContextWindow(message.ModelRef{Provider: "anthropic", Model: "claude-fable-5"})
 	if !ok || tokens != 1_000_000 {
 		t.Fatalf("ContextWindow(anthropic/claude-fable-5) = %d, %v; want 1000000, true", tokens, ok)
@@ -76,8 +74,7 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 	}
 }
 
-// TestContextWindowBoxesThreeSegmentRefs is the red-first regression test
-// for the disqualifying finding on PR #135: the boxes platform
+// TestContextWindowBoxesThreeSegmentRefs verifies that the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
 // model refs exclusively, e.g. "anthropic/anthropic/claude-fable-5" and
 // "anthropic/bedrock_mantle/anthropic.claude-opus-5". message.ParseModelRef
@@ -86,9 +83,7 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 // namespace segment ("anthropic/claude-fable-5",
 // "bedrock_mantle/anthropic.claude-opus-5") ahead of the actual model ID —
 // a map lookup keyed on the bare ID (e.g. "claude-fable-5") misses every
-// one of them, so automatic compaction never arms for any box. Empirically
-// verified pre-fix: ContextWindow on "anthropic/anthropic/claude-fable-5"
-// returned tokens=0, ok=false.
+// one of them without namespace removal.
 func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 	cases := []struct {
 		refString string
@@ -104,8 +99,7 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 		// bedrock_mantle" share the native anthropic adapter).
 		{"anthropic/bedrock_mantle/anthropic.claude-fable-5", 1_000_000},
 		{"anthropic/bedrock_mantle/anthropic.claude-opus-5", 1_000_000},
-		// A version-suffixed mantle ID (Finding 3's normalization applied on
-		// top of Finding 1's namespace strip) must land on the same key.
+		// A version-suffixed mantle ID must use the same key.
 		{"anthropic/bedrock_mantle/anthropic.claude-opus-5-v1:0", 1_000_000},
 		// The one family where the two tables DIVERGE (see
 		// bedrockAnthropicContextWindows's doc comment): a mantle-routed
@@ -142,15 +136,14 @@ func TestContextWindowBoxesThreeSegmentRefs(t *testing.T) {
 	}
 }
 
-// TestContextWindowBedrockVersionSuffixNormalized is the red-first
-// regression test for Finding 3: the bedrock table's keys are internally
+// TestContextWindowBedrockVersionSuffixNormalized verifies that Bedrock keys
 // inconsistent about carrying a trailing "-vN"/"-vN:M" suffix (some
 // entries have it, some don't — see bedrockAnthropicContextWindows), and
 // stripBedrockAnthropicPrefix normalizes region/family but not version.
 // "amazon-bedrock/us.anthropic.claude-opus-4-8-v1:0" must hit the same
 // entry as the bare "claude-opus-4-8" form, and a query for a model whose
 // table entry legitimately carries a version suffix must hit regardless
-// of whether the QUERY itself is suffixed.
+// of whether the query itself is suffixed.
 func TestContextWindowBedrockVersionSuffixNormalized(t *testing.T) {
 	cases := []struct {
 		model string

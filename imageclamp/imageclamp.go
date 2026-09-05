@@ -1,92 +1,8 @@
-// Package imageclamp is a shared, provider-agnostic normalization pass over a
-// canonical message history that keeps an oversized image from permanently
-// wedging a session.
+// Package imageclamp normalizes images during provider transcoding.
 //
-// # The poison it heals
-//
-// A provider caps the images it will accept and rejects a violation with an
-// HTTP 400 that is unrecoverable at the agent layer: because the oversized
-// image is persisted into the durable session transcript before it is ever
-// sent, EVERY later turn retranscodes it, re-sends it, and 400s again — and on
-// a fleet box the transcript lives on a durable volume re-adopted on respawn,
-// so the wedge survives a restart (incident 2026-07-30, three Neptune boxes:
-// full-page screenshots >8000px, Bedrock "At least one of the image dimensions
-// exceed max allowed size: 8000 pixels"). provider/anthropic's apiError marks
-// that 400 provider.MarkPermanent (fail fast, see provider.PermanentError),
-// but nothing removed or repaired the poison.
-//
-// Two distinct caps can wedge a session, and Clamp enforces both:
-//
-//   - Pixel DIMENSION. Anthropic/Bedrock hard-reject any side over 8000px.
-//     (OpenAI and Gemini instead auto-resize/tile and never reject on
-//     dimension, so the cap there is defensive only.) When >20 image or
-//     document blocks are in one request, Anthropic applies a stricter 2000px
-//     per-side cap — see Limits.ManyImageThreshold.
-//   - Encoded BYTE size. Bedrock/Vertex reject a single image over 5MB
-//     base64, the direct Anthropic API over 10MB — independent of dimension, so
-//     a detail-dense image well under 8000px can wedge a session too. Clamp
-//     re-encodes (JPEG) and, if needed, further downscales until the emitted
-//     image fits Limits.MaxImageBytes.
-//
-// # Why it lives at the transcode layer, shared
-//
-// Transcoding is stateless: every request rebuilds the provider wire format
-// from the canonical history from scratch (see each provider's
-// transcodeRequest). Running the clamp there means a transcript that already
-// contains an oversized image now produces a VALID request on the very next
-// build — no migration, no rewrite of the stored log, healing on respawn for
-// free. It is deliberately the same shape as message.ResolveOrphanToolCalls,
-// the other canonical-layer defense-in-depth pass every transcoder calls at
-// the top of transcodeRequest against a different poisoned-history class.
-//
-// Clamp is read-only with respect to its input (copy-on-write): it never
-// mutates a caller's stored messages, and it returns the input slice
-// unchanged when nothing needed clamping, so the common path allocates
-// nothing and an unchanged history still retranscodes byte-identically.
-//
-// # The downscale target
-//
-// No provider processes an image above ~2576px on its long edge — Anthropic
-// resizes to 2576px (Claude 4.7+; 1568 on older models), OpenAI's default tile
-// path to ~2048px, Gemini into 768px tiles — and all three cap token cost at
-// that internal resolution regardless of input size. So Limits.TargetDim is
-// set to 2576px by every adapter: it is the largest resolution any model
-// actually consumes, it costs the same tokens as a larger image would, and it
-// keeps the emitted bytes small enough that Limits.MaxImageBytes rarely has to
-// intervene. Sending more pixels than that is pure payload with no fidelity
-// gain, since the model discards them.
-//
-// # Cost and bounds
-//
-// Healing is not a one-time repair. Because the durable log is never
-// rewritten, Clamp runs on every request build, so an oversized image is
-// re-decoded, resampled, and re-encoded on EVERY subsequent turn until it
-// falls out of the context window — not once. The re-encode is deterministic
-// (same source bytes -> same clamped bytes), so a clamped image stays
-// prompt-cache-stable turn to turn despite being recomputed — with one
-// intra-session exception: the many-image cap (Limits.ManyImageThreshold)
-// makes an image's clamped size depend on the request's total image/document
-// block count, so a request growing past the threshold downscales every image
-// to ManyImageDim and invalidates that cache prefix once at the boundary. This
-// is unavoidable and mirrors the provider's own server-side behavior (it too
-// applies the stricter cap by request block count). The realistic
-// incident image (100x8500, sub-megapixel) is cheap, but the cost recurs per
-// turn and is NOT serialized across sessions: a single build's peak holds the
-// decoded source (up to maxDecodePixels of RGBA, ~384 MB) plus the resample
-// destination at once, so many concurrent such builds could pressure a fleet
-// box's memory. A bounded-concurrency decode (a package-level semaphore) is the
-// natural follow-up if that pressure ever materializes; v1 keeps it simple
-// because the incident-class image is small, and the 2576px target keeps the
-// destination tiny.
-//
-// The memory guards below (absurdDimension, maxDecodePixels) deliberately DROP
-// an image past the bound to a text placeholder rather than downscaling it: a
-// very tall capture (over 30000px on a side, e.g. 2560x40000) or a moderately
-// square one over ~96M px total (roughly 9800x9800, e.g. a 10000x10000 retina
-// screenshot) heals the wedge but loses its pixels to the model, since the
-// obstacle is decoding the source at full resolution into memory. A
-// tiled/streaming downscale that resamples such images instead of dropping
-// them is the natural follow-up.
+// Clamp preserves canonical history. It applies provider dimension and byte
+// limits to each request, using copy-on-write and deterministic output.
+// Images that are unsafe to decode become text placeholders.
 package imageclamp
 
 import (
@@ -108,17 +24,15 @@ import (
 const (
 	// absurdDimension: any image declaring a single side larger than this in
 	// its header is replaced by a placeholder WITHOUT ever decoding its
-	// pixels. Guards against a pathological or hostile header. See the package
-	// doc "Cost and bounds": this drops (does not downscale) very tall
-	// captures, a deliberate v1 memory bound.
+	// pixels. This guard drops very tall images rather than downscaling them.
 	absurdDimension = 30000
 
 	// maxDecodePixels bounds the total pixel area we will decode into memory.
 	// An 8000x8000 RGBA image is ~256MB; this ceiling (~384MB of RGBA) lets
 	// realistically-oversized screenshots through to downscaling while
 	// refusing a decode bomb (a 20000x20000 image would be 1.6GB). An image
-	// past this ceiling but under absurdDimension per side still becomes a
-	// placeholder, never a decode — see the package doc "Cost and bounds".
+	// past this ceiling but under absurdDimension per side becomes a
+	// placeholder without decoding.
 	maxDecodePixels = 96_000_000
 
 	// byteFloor is the smallest long edge the byte-budget reducer will scale an
@@ -143,7 +57,7 @@ type Limits struct {
 	MaxDim int
 	// TargetDim is the long edge an oversized image is downscaled to. 2576px
 	// (Claude's high-res processing edge) is the practical maximum any model
-	// consumes; see the package doc "The downscale target".
+	// consumes.
 	TargetDim int
 	// ManyImageThreshold: when a request carries MORE than this many image
 	// (and, on Bedrock/Vertex, document) blocks, a stricter per-side cap of
@@ -390,9 +304,8 @@ func normalizeBlob(b *message.Blob, eff effective) message.Part {
 	}
 
 	// Decode is now required (to downscale, to re-encode smaller, or both). The
-	// area guard in classify bounds this allocation. This decode + resample +
-	// re-encode recurs on every request build for the life of the session (the
-	// durable log is never rewritten) — see the package doc "Cost and bounds".
+	// area guard in classify bounds this allocation. This work recurs on every
+	// request build because the durable log is never rewritten.
 	img, _, err := image.Decode(bytes.NewReader(b.Data))
 	if err != nil {
 		return placeholder(fmt.Sprintf("[image dropped: %dx%d undecodable image (%d bytes)]", cfg.Width, cfg.Height, len(b.Data)))

@@ -8,8 +8,7 @@
 // defs sit at the FRONT of the cached prefix on every provider, and a box
 // that wires several large servers therefore pays for hundreds of schemas
 // on every turn before the model reads one word of the request. The MCP
-// CONNECTION was already lazy (see mcp.go's package doc); the schema cost
-// was not.
+// Connection was already lazy; the schema cost was not.
 //
 // The shape follows the Agent Skills progressive-disclosure model already
 // in skills.go: stage 1 is one line per tool (name plus a one-line

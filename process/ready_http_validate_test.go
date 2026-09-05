@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestValidateDefReadyHTTPRejectsNonHTTP encodes the PR#73 review finding:
+// TestValidateDefReadyHTTPRejectsNonHTTP verifies that
 // url.ParseRequestURI accepts inputs http.Get can never satisfy — a
 // forgotten scheme ("localhost:3000/health" parses with scheme
 // "localhost"), a non-HTTP scheme (ftp://), an empty host (http:///p) —

@@ -6,7 +6,7 @@ import (
 	"testing/iotest"
 )
 
-// TestLastLinesShortReads encodes the PR#71 review finding: the tail path
+// TestLastLinesShortReads verifies that the tail path
 // used a single f.Read, but io.Reader may legally short-read — the
 // unfilled remainder of the buffer stayed NUL and was emitted as part of
 // the "last N lines". lastLines must fill deterministically (io.ReadFull

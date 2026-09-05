@@ -495,7 +495,7 @@ func TestInstructionsConfig(t *testing.T) {
 func TestSkillsDirsExplicitEmptyDisables(t *testing.T) {
 	// A config file with "skills_dirs": [] is an explicit opt-out and must
 	// reach the engine as a non-nil empty slice (disable), not nil
-	// (default-on). Review finding on #21.
+	// (default-on).
 	got := skillsDirs(&config.Config{SkillsDirs: []string{}}, nil, "/w")
 	if got == nil {
 		t.Fatal("explicit empty skills_dirs collapsed to nil (re-enables default)")
@@ -535,9 +535,8 @@ func TestSkillsDirs(t *testing.T) {
 	})
 }
 
-// TestAgentDefsDirsExplicitEmptyDisables and TestAgentDefsDirs are the
-// regression tests for a follow-up finding ("def search path"):
-// agentDefsDirs mirrors skillsDirs field-for-field (see
+// TestAgentDefsDirsExplicitEmptyDisables and TestAgentDefsDirs verify that
+// agentDefsDirs mirrors skillsDirs (see
 // TestSkillsDirsExplicitEmptyDisables/TestSkillsDirs above).
 func TestAgentDefsDirsExplicitEmptyDisables(t *testing.T) {
 	got := agentDefsDirs(&config.Config{AgentDefsDirs: []string{}}, nil, "/w")
@@ -886,7 +885,7 @@ func (s *scriptedStream) Next() (provider.Event, error) {
 
 func (s *scriptedStream) Close() error { return nil }
 
-// TestNewSessionFnSystemUsesSessionWorkDir verifies the review finding: a
+// TestNewSessionFnSystemUsesSessionWorkDir verifies that a
 // served session created with an explicit workdir must get a system prompt
 // naming THAT workdir, not the process cwd baked into mkCfg's base cfg.
 func TestNewSessionFnSystemUsesSessionWorkDir(t *testing.T) {
@@ -946,8 +945,8 @@ func writeMainTestSkill(t *testing.T, root, name, description string) {
 	}
 }
 
-// TestNewSessionFnSkillsUsesSessionWorkDir is the RED test for the review
-// finding: mkCfg computes cfg.SkillsDirs via skillsDirs(cfg, flagDirs,
+// TestNewSessionFnSkillsUsesSessionWorkDir verifies that mkCfg computes
+// cfg.SkillsDirs via skillsDirs(cfg, flagDirs,
 // processCwd) — exactly as serveCmd's real mkCfg does — so a relative
 // skills_dirs entry is baked against the process cwd. A served session
 // created with an explicit sessionWorkDir must still discover a skill placed
@@ -1003,8 +1002,8 @@ func TestNewSessionFnSkillsUsesSessionWorkDir(t *testing.T) {
 	}
 }
 
-// TestLoadSessionFnSkillsUsesRestoredWorkDir is the RED test for the same
-// finding on the resume path: the durable WorkDir restored from the session
+// TestLoadSessionFnSkillsUsesRestoredWorkDir verifies that the durable WorkDir
+// restored on the resume path
 // log header must drive skills_dirs resolution, not the process cwd baked
 // into mkCfg's base cfg.SkillsDirs.
 func TestLoadSessionFnSkillsUsesRestoredWorkDir(t *testing.T) {
@@ -1073,8 +1072,8 @@ func TestLoadSessionFnSkillsUsesRestoredWorkDir(t *testing.T) {
 	}
 }
 
-// TestLoadSessionFnSystemUsesRestoredWorkDir verifies the same finding for a
-// resumed session: the durable WorkDir restored from the session log header
+// TestLoadSessionFnSystemUsesRestoredWorkDir verifies that a resumed session's
+// durable WorkDir from the log header
 // must drive the system prompt, not the process cwd baked into mkCfg's base
 // cfg (used because the workdir isn't known until after the log is read).
 func TestLoadSessionFnSystemUsesRestoredWorkDir(t *testing.T) {

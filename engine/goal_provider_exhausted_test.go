@@ -119,8 +119,8 @@ func TestPursueGoalProviderExhaustedRetriesThenRecovers(t *testing.T) {
 // TestPursueGoalProviderExhaustedBudgetExhaustedParksHonestly proves the
 // other half of the fix: an account wall that outlasts the entire
 // goalProviderExhaustedMaxAttempts budget (a quota that resets in days, not
-// minutes) still must not pin the run slot forever — it parks, exactly like
-// every other exhaustion tier (see the package doc's "Round 7" section) —
+// minutes) still must not pin the run slot forever — it parks, like every
+// other exhausted worker retry tier —
 // but the classification must be HONEST: "provider account usage limit
 // exhausted the retry budget", never "permanent provider error and cannot
 // succeed on retry" (which the pre-fix single-attempt fail-fast produced,

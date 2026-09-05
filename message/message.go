@@ -1,16 +1,7 @@
-// Package message defines the canonical message format stored in session
-// logs.
+// Package message defines canonical session messages.
 //
-// The session log stores this format and never a provider's wire format.
-// Provider adapters transcode canonical history to and from each API's wire
-// format from scratch on every request (stateless transcoding), which is what
-// makes mid-session model swaps a no-op: the next request simply uses a
-// different transcoder.
-//
-// Provider-specific state that cannot cross providers (signed thinking
-// blocks, encrypted reasoning items) is carried as opaque, provider-tagged
-// attachments (ProviderData): replayed verbatim to the same provider family,
-// dropped when the history is transcoded for a different one.
+// Provider adapters transcode them for each request. Provider data replays only with its tagged provider family.
+
 package message
 
 import (
@@ -89,8 +80,7 @@ type Message struct {
 	// ParentToolUseID identifies the tool_use call that spawned the Claude
 	// Code CLI subagent turn which produced this message — set only on a
 	// message OriginClaudeCode appended from a stream-json event whose own
-	// parent_tool_use_id was non-null (see engine/claude_code_backend.go's
-	// package doc, "parent_tool_use_id"). Empty for a top-level delegated
+	// parent_tool_use_id was non-null. Empty for a top-level delegated
 	// turn's own messages, and for every message no delegated turn
 	// produced. Like Origin, this is presentation/lineage metadata only —
 	// read by a client (boxes' console) to reconstruct subagent nesting in
@@ -167,8 +157,7 @@ type Message struct {
 // invalid value by clearing it here AND, as defense in depth, by having
 // safeArguments itself refuse to marshal one. ProviderData.MarshalJSON
 // already had the defense-in-depth half for its own zero-length footgun
-// (see ProviderData's package doc, "The map-shaped twin of the
-// ToolCall.Arguments footgun") but, discovered by this package's own
+// but, discovered by this package's own
 // round-trip property test (message/properties_test.go,
 // TestNormalizeIdempotent), never got the "non-empty but invalid" half
 // either guard applies to: a Reasoning.ProviderData entry holding
@@ -462,8 +451,8 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // maxProviderDataEntry bounds this the same way a zero-length entry is
 // already bounded (both are "Get, below, treats this as absent"): reasoning
 // replay is a context-quality optimization, not a correctness requirement
-// (see the package doc — a Reasoning part crossing to a different provider
-// family is already dropped the same way), so refusing to replay an
+// (a Reasoning part crossing to a different provider family is already
+// dropped), so refusing to replay an
 // oversized entry costs a turn's worth of thinking continuity/cache
 // affinity and nothing else. The cap is generous — 256KiB, several hundred
 // times the ordinary entry size seen in production — specifically so it
@@ -505,8 +494,7 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 type ProviderData map[string]json.RawMessage
 
 // maxProviderDataEntry bounds a single ProviderData entry's replayed size —
-// see the package doc above ("Unbounded replay is a request-size/time
-// bomb"). 256KiB is chosen to sit far above any signature or
+// 256KiB is chosen to sit far above any signature or
 // redacted_thinking payload observed in production while still being a
 // hard, structural bound: bytes, not tokens or entries, because the whole
 // point is bounding the wire size actually replayed.
@@ -518,7 +506,7 @@ const maxProviderDataEntry = 256 * 1024
 // since a raw value extracted here commonly gets reused downstream (appended
 // into a provider request's own RawMessage list, e.g.) outside of any
 // marshaling this map itself might guard. Every transcoder must call this
-// instead of indexing the map directly; see the package doc on ProviderData.
+// instead of indexing the map directly.
 //
 // An entry larger than maxProviderDataEntry is also treated as absent: see
 // "Unbounded replay is a request-size/time bomb" above. This is the single

@@ -5,59 +5,9 @@ import (
 	"strings"
 )
 
-// wireNormalizePrefix marks the synthetic message IDs NormalizeForWire mints
-// for a newly inserted RoleTool message. It is deliberately distinct from
-// SyntheticOrphanIDPrefix: a message built here can carry a RELOCATED REAL
-// ToolResult, not only a synthesized one, and NormalizeForWire's output is
-// never persisted or replayed (see its doc comment), so it needs no relation
-// to IsSyntheticOrphanID's compact-record guard.
+// wireNormalizePrefix marks request-only synthetic tool-result messages.
 const wireNormalizePrefix = "wire-normalized-"
 
-// transcodeSpan is a maximal span of consecutive ORIGINAL messages sharing
-// one side (assistant or not). This is NOT borrowed from the oracle's own
-// wireRun/foldRuns (message/wire_oracle_test.go): it models
-// provider/anthropic/transcode.go's own merge step ("The API requires
-// strict user/assistant alternation; merge adjacent same-role messages",
-// transcodeRequest's same-role merge) — the actual, already-shipped code
-// that decides which canonical messages land in one wire turn. The oracle
-// and this file both model that same external, independently-checkable
-// fact because any correct model of it must; neither derives it from the
-// other, and this file never imports or calls anything in a _test.go file.
-// Where the two genuinely diverge is what they DO with a span: the oracle
-// only tallies per-id counts and reports a mismatch (foldRuns/checkWire);
-// this file additionally decides WHICH real ToolResult answers WHICH
-// tool_use, in what order, and where in the OUTPUT slice to place a
-// relocated or synthesized one — decisions the oracle never has to make at
-// all, since it only ever inspects a candidate output, never builds one.
-// See NormalizeForWire's own doc comment ("Relocation safety") for that
-// machinery, and this package's golden test against the REAL anthropic
-// transcoder (provider/anthropic/transcode_test.go,
-// TestTranscodeSplitAssistantMessageRelocatesRealResult) for independent
-// proof this span model matches the shipped merge code on the shapes that
-// test covers.
-//
-// # This model is not exact — NEP-5304
-//
-// "Models the merge step" above is not "is read directly off it": on one
-// input shape the two diverge, and computeTranscodeSpans's own doc comment
-// states the divergence precisely. The verified impact, confirmed by
-// running both the pre-stack and current anthropic transcoders against the
-// same input: for `[user(ToolCall X), assistant(foreign reasoning only),
-// tool(ToolResult X)]`, the pre-stack (main) anthropic transcoder paired
-// `tool_use(X)` and `tool_result(X)` as adjacent blocks in one valid wire
-// message — the dropped assistant message left them touching. This
-// package's span model instead sees TWO separate non-assistant runs, so
-// demoteWireInvalidToolResults treats both the real ToolCall and the real
-// ToolResult as unanswered and rewrites BOTH to plain text. That is worse
-// fidelity than main on this one shape.
-//
-// No byte is lost — every real value survives, readable, as text — and no
-// session wedges. This is fidelity loss, never a wedge, never data loss.
-// The common shape this whole file exists for — a ToolCall properly inside
-// an assistant message — is unaffected and strictly better than main:
-// NormalizeForWire relocates and repairs shapes main never touched at all.
-// NEP-5304 tracks the fix: fold a zero-block message into its neighbor's
-// span instead of starting a new one.
 type transcodeSpan struct {
 	assistant        bool
 	msgStart, msgEnd int
@@ -118,17 +68,16 @@ func computeRelocationBarrier(msgRun []int, allResults []wireResultOcc) []int {
 }
 
 // computeTranscodeSpans partitions messages into maximal spans sharing one
-// side (assistant or not), keyed purely on Message.Role — see transcodeSpan
-// above for what a span models and why.
+// side (assistant or not), keyed purely on Message.Role. This matches the
+// provider merge step for messages that produce wire blocks.
 //
 // Known divergence — NEP-5304: transcodeRequest drops a message that
 // transcodes to zero blocks (an assistant turn whose only content is
 // another provider's reasoning) and opens no wire message for it, merging
 // the runs on either side. computeTranscodeSpans does not know this: a
-// zero-block assistant message still starts its own span here, so it is a
-// span boundary to this function though it is invisible on the wire. See
-// transcodeSpan's own doc comment for the verified, worse-than-main impact
-// this causes on one input shape.
+// zero-block assistant message still starts a span here although it is
+// invisible on the wire. That can demote valid tool data to text on this
+// rare shape. It preserves data but loses tool-call fidelity.
 func computeTranscodeSpans(messages []Message) []transcodeSpan {
 	var spans []transcodeSpan
 	for i, m := range messages {
@@ -300,8 +249,8 @@ type partKey struct{ msgIdx, partIdx int }
 // over: on provider/openaicompat a "user"-role wire message interposed
 // between an assistant's tool_calls and their "tool"-role answers breaks
 // the required contiguity — a total request failure, not merely
-// asynchronous, since the request that ships is simply wrong-shaped (PR
-// #108 round 6). anthropic (adjacent same-role merge) and the OpenAI
+// asynchronous, since the request that ships is simply wrong-shaped.
+// Anthropic (adjacent same-role merge) and the OpenAI
 // Responses adapter (flat, ungrouped item list) both tolerate it; only
 // openaicompat breaks — see
 // provider/openaicompat/transcode_test.go's
@@ -668,10 +617,9 @@ func demoteToolCall(tc *ToolCall) *Text {
 
 // NormalizeForWire returns messages repaired so every transcoder in this
 // module emits a wire-valid provider request: every tool_use is answered,
-// id for id, by a tool_result in the immediately following wire RUN (the
-// same run-merging model the anthropic transcoder's own adjacent-message
-// merge performs — see transcodeSpan above), with no tool_result stranded
-// inside an assistant-role block.
+// id for id, by a tool_result in the following wire run. The run model
+// approximates provider message merging; zero-block messages can reduce fidelity.
+// No tool_result remains in an assistant-role block.
 //
 // # Additive vs transcode-only: the line this function sits on
 //

@@ -8,8 +8,7 @@ import (
 	"time"
 )
 
-// TestCreatePhaseLoggerEmptiesMapOnTotal is a regression test for the
-// phase-accumulator leak (PR #87 review): a create that reports every
+// TestCreatePhaseLoggerEmptiesMapOnTotal verifies that a create that reports every
 // intermediate phase before "total" must leave byID empty afterward, not
 // just render a sensible summary line.
 func TestCreatePhaseLoggerEmptiesMapOnTotal(t *testing.T) {
@@ -42,13 +41,9 @@ func TestCreatePhaseLoggerEmptiesMapOnTotal(t *testing.T) {
 	}
 }
 
-// TestCreatePhaseLoggerHandlesTotalWithoutIntermediatePhases is the
-// regression case the leak actually manifested as: a saturated storage
-// volume makes Persist fail on every create, so handleCreate's defer (see
-// server/handlers.go) reports "new_session" then jumps straight to "total"
-// with no persist/register/emit_created in between. The summary line must
-// still render — with the missing phases simply absent — and the map entry
-// must still be reclaimed, not orphaned.
+// TestCreatePhaseLoggerHandlesTotalWithoutIntermediatePhases verifies that a
+// failed create can report "total" directly. The summary omits missing phases
+// and removes the map entry.
 func TestCreatePhaseLoggerHandlesTotalWithoutIntermediatePhases(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
