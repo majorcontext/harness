@@ -453,10 +453,10 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 				// Same content on any side that was hashed, just
 				// touched: refresh the stat fields so the next startup
 				// hits the no-hash fast path again, but keep the cached
-				// manifest — no re-probe needed.
-				if !hashedBinary {
-					hash = entry.BinaryHash
-				}
+				// manifest — no re-probe needed. entry.BinaryHash is left
+				// as-is (nothing above this point reassigns it, so it's
+				// already correct); only ScriptHash needs restoring when
+				// this branch didn't hash it itself.
 				if !hashedScript {
 					scriptHash = entry.ScriptHash
 				}
