@@ -400,13 +400,9 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary/args are operator config, not request input
 	cmd.Dir = s.cfg.WorkDir
-	// Auth is deliberately NOT this package's job: no ANTHROPIC_API_KEY is
-	// set, no ~/.claude/.credentials.json is read or written here. The
-	// child inherits harness's own ambient environment verbatim — on the
-	// boxes platform, that is whatever placeholder credential material and
-	// gatekeeper routing the BOX already set up before harness ever ran
-	//. cmd.Env left nil means exactly that:
-	// os/exec's own documented behavior is to inherit os.Environ().
+	// This code does not manage authentication. It does not set
+	// ANTHROPIC_API_KEY or read or write ~/.claude/.credentials.json.
+	// A nil cmd.Env makes the child inherit the Harness environment.
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
