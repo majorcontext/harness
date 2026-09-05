@@ -65,10 +65,28 @@ type pluginManifestCache struct {
 // pluginBinaryIdentity's comment for the mtime-granularity tradeoff that
 // buys.
 type pluginCacheEntry struct {
-	BinaryHash string          `json:"binary_hash"`
-	Size       int64           `json:"size"`
-	ModTimeNS  int64           `json:"mtime_unix_nano"`
-	Manifest   plugin.Manifest `json:"manifest"`
+	BinaryHash string `json:"binary_hash"`
+	Size       int64  `json:"size"`
+	ModTimeNS  int64  `json:"mtime_unix_nano"`
+	// ScriptFiles and ScriptHash extend the same staleness check to an
+	// interpreter-wrapped plugin's script argument (see pluginScriptFiles):
+	// a plain plugin (command == [binary]) has none, so both are omitted
+	// and an old on-disk cache entry from before this field existed decodes
+	// as the same "no script files" case — unchanged behavior for finding
+	// (d).
+	ScriptFiles []pluginFileStat `json:"script_files,omitempty"`
+	ScriptHash  string           `json:"script_hash,omitempty"`
+	Manifest    plugin.Manifest  `json:"manifest"`
+}
+
+// pluginFileStat is the (path, size, mtime) identity of one script argument
+// resolved by pluginScriptFiles — the same (size, mtime)-then-hash shape
+// pluginBinaryIdentity/pluginBinaryHashAt already use for command[0], not a
+// second scheme.
+type pluginFileStat struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	ModTimeNS int64  `json:"mtime_unix_nano"`
 }
 
 // loadPluginManifestCache reads the on-disk manifest cache. A missing file
@@ -257,6 +275,105 @@ func pluginBinaryIdentity(command []string, dir string) (path string, size int64
 	return path, fi.Size(), fi.ModTime().UnixNano(), nil
 }
 
+// pluginScriptFiles resolves the command arguments AFTER command[0] that
+// point at a real, regular file on disk — the case an interpreter-wrapped
+// plugin hits, e.g. {"command":["bun","<repo>/.harness/plugins/guard.ts"]}:
+// command[0] is a stable interpreter binary that pluginBinaryIdentity
+// already tracks, but the script it runs is repo-owned and can change on
+// every checkout, invisibly to that check alone.
+//
+// An argument that is not a file — a flag such as "--verbose", an option
+// value, or a path that doesn't exist — is silently skipped rather than
+// treated as an error or a missing file: only arguments that ARE files
+// contribute to a plugin's identity, so a flag can never force a permanent
+// cache miss (finding (c)). A plain, non-interpreter plugin (command ==
+// [binary], no trailing arguments) resolves no script files at all, so its
+// cache identity is exactly what pluginBinaryIdentity alone already gives
+// it (finding (d)).
+//
+// Resolution mirrors ResolveExecutable's own rule for a path-like
+// command[0]: an absolute argument is used as-is; anything else is joined
+// against dir (falling back to the calling process's own working directory
+// when dir is empty). A bare name is never looked up on PATH here — only
+// command[0] is ever a PATH-resolved interpreter; a script argument is
+// always a path relative to dir or the caller's cwd, exactly like a
+// path-like command[0] would be.
+func pluginScriptFiles(command []string, dir string) ([]pluginFileStat, error) {
+	if len(command) < 2 {
+		return nil, nil
+	}
+	var files []pluginFileStat
+	for _, arg := range command[1:] {
+		p := arg
+		if !filepath.IsAbs(p) {
+			base := dir
+			if base == "" {
+				wd, err := os.Getwd()
+				if err != nil {
+					return nil, err
+				}
+				base = wd
+			} else {
+				abs, err := filepath.Abs(base)
+				if err != nil {
+					return nil, err
+				}
+				base = abs
+			}
+			p = filepath.Join(base, p)
+		}
+		fi, err := os.Stat(p)
+		if err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		files = append(files, pluginFileStat{Path: p, Size: fi.Size(), ModTimeNS: fi.ModTime().UnixNano()})
+	}
+	return files, nil
+}
+
+// pluginFileStatsEqual reports whether two pluginScriptFiles results
+// describe the same files at the same (size, mtime) in the same order.
+// Order matters — command argument order is part of what actually
+// executes — and a changed count (a script argument added or removed from
+// config, or a file that started/stopped existing) is itself a mismatch.
+func pluginFileStatsEqual(a, b []pluginFileStat) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// pluginScriptFilesHash hashes the content of every file pluginScriptFiles
+// resolved, in order, the same way pluginBinaryHashAt hashes the
+// executable: content is the ground truth for "did the script actually
+// change," used only when the (size, mtime) fast path can't rule out a
+// change (see buildPluginSpecs). Each file's path is folded in ahead of its
+// content so two different paths that happen to hold identical bytes can
+// never collide into the same combined hash. It reuses
+// pluginBinaryHashCalls (rather than a second counter) since it is the same
+// question tests care about: did this call actually read a file's content.
+func pluginScriptFilesHash(files []pluginFileStat) (string, error) {
+	if len(files) == 0 {
+		return "", nil
+	}
+	h := sha256.New()
+	for _, f := range files {
+		pluginBinaryHashCalls.Add(1)
+		content, err := os.ReadFile(f.Path)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(h, "%d:%s\x00", len(f.Path), f.Path)
+		h.Write(content)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // buildPluginSpecs resolves a plugin.Spec (with its Manifest filled in) for
 // every configured plugin, in config order (chain order is significant —
 // see plugin/PROTOCOL.md). dirty reports whether the cache changed, so the
@@ -267,17 +384,27 @@ func pluginBinaryIdentity(command []string, dir string) (path string, size int64
 //     change there is an automatic miss, since it can change what the live
 //     plugin actually does regardless of its binary.
 //  2. Within a key hit, stat (not hash) the resolved executable
-//     (pluginBinaryIdentity) and compare (size, mtime) to the entry: a
-//     match trusts the cached manifest without reading the file at all.
-//     Only a stat mismatch — or no entry — falls back to hashing the full
-//     binary content (pluginBinaryHashAt), and only a hash mismatch
-//     actually re-probes; a same-content, touched (mtime-bumped) binary
-//     just refreshes the stat fields and keeps the cached manifest.
+//     (pluginBinaryIdentity) AND any script argument (pluginScriptFiles —
+//     e.g. the ".ts" a fleet plugin like {"command":["bun","guard.ts"]}
+//     runs) and compare (size, mtime) to the entry: a match on both trusts
+//     the cached manifest without reading either file. A stat mismatch on
+//     either side — or no entry — falls back to hashing that side's
+//     content (pluginBinaryHashAt / pluginScriptFilesHash), and only a
+//     hash mismatch actually re-probes; same content, just touched, just
+//     refreshes the stat fields and keeps the cached manifest. This is the
+//     fix for the defect where a repo-owned script's content could change
+//     invisibly to cache validity: command[0] alone (a stable interpreter
+//     binary) never reflects it, and Command was deliberately excluded
+//     from pluginSpecDigest.
 func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *pluginManifestCache) (specs []plugin.Spec, dirty bool, err error) {
 	for _, p := range plugins {
 		path, size, modTimeNS, ierr := pluginBinaryIdentity(p.Command, p.Dir)
 		if ierr != nil {
 			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, ierr)
+		}
+		scriptFiles, serr := pluginScriptFiles(p.Command, p.Dir)
+		if serr != nil {
+			return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, serr)
 		}
 		specDigest, derr := pluginSpecDigest(p.Config, p.Env, p.Dir)
 		if derr != nil {
@@ -288,12 +415,13 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 		entry, ok := cache.Entries[key]
 		needProbe := true
 		var hash string
-		var hashed bool
+		var scriptHash string
+		var hashedBinary, hashedScript bool
 		if ok {
-			if entry.Size == size && entry.ModTimeNS == modTimeNS {
-				// Stat matches: trust the cached manifest without hashing.
-				needProbe = false
-			} else {
+			binaryStatOK := entry.Size == size && entry.ModTimeNS == modTimeNS
+			scriptStatOK := pluginFileStatsEqual(entry.ScriptFiles, scriptFiles)
+			sameContent := true
+			if !binaryStatOK {
 				// Stat mismatch (touched or truly changed) — fall back to
 				// content hash to tell those apart.
 				var herr error
@@ -301,17 +429,44 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 				if herr != nil {
 					return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
 				}
-				hashed = true
-				if hash == entry.BinaryHash {
-					// Same content, just touched: refresh the stat fields
-					// so the next startup hits the no-hash fast path again,
-					// but keep the cached manifest — no re-probe needed.
-					entry.Size = size
-					entry.ModTimeNS = modTimeNS
-					cache.Entries[key] = entry
-					dirty = true
-					needProbe = false
+				hashedBinary = true
+				if hash != entry.BinaryHash {
+					sameContent = false
 				}
+			}
+			if sameContent && !scriptStatOK {
+				var herr error
+				scriptHash, herr = pluginScriptFilesHash(scriptFiles)
+				if herr != nil {
+					return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
+				}
+				hashedScript = true
+				if scriptHash != entry.ScriptHash {
+					sameContent = false
+				}
+			}
+			if binaryStatOK && scriptStatOK {
+				// Both sides' stats match: trust the cached manifest
+				// without reading either file.
+				needProbe = false
+			} else if sameContent {
+				// Same content on any side that was hashed, just
+				// touched: refresh the stat fields so the next startup
+				// hits the no-hash fast path again, but keep the cached
+				// manifest — no re-probe needed. entry.BinaryHash is left
+				// as-is (nothing above this point reassigns it, so it's
+				// already correct); only ScriptHash needs restoring when
+				// this branch didn't hash it itself.
+				if !hashedScript {
+					scriptHash = entry.ScriptHash
+				}
+				entry.Size = size
+				entry.ModTimeNS = modTimeNS
+				entry.ScriptFiles = scriptFiles
+				entry.ScriptHash = scriptHash
+				cache.Entries[key] = entry
+				dirty = true
+				needProbe = false
 			}
 		}
 
@@ -319,9 +474,16 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 		if !needProbe {
 			manifest = entry.Manifest
 		} else {
-			if !hashed {
+			if !hashedBinary {
 				var herr error
 				hash, herr = pluginBinaryHashAt(path)
+				if herr != nil {
+					return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
+				}
+			}
+			if !hashedScript {
+				var herr error
+				scriptHash, herr = pluginScriptFilesHash(scriptFiles)
 				if herr != nil {
 					return nil, dirty, fmt.Errorf("plugin %s: %w", p.Name, herr)
 				}
@@ -341,10 +503,12 @@ func buildPluginSpecs(ctx context.Context, plugins []config.PluginSpec, cache *p
 				return nil, dirty, fmt.Errorf("plugin %s: manifest name %q does not match config", p.Name, manifest.Name)
 			}
 			cache.Entries[key] = pluginCacheEntry{
-				BinaryHash: hash,
-				Size:       size,
-				ModTimeNS:  modTimeNS,
-				Manifest:   manifest,
+				BinaryHash:  hash,
+				Size:        size,
+				ModTimeNS:   modTimeNS,
+				ScriptFiles: scriptFiles,
+				ScriptHash:  scriptHash,
+				Manifest:    manifest,
 			}
 			dirty = true
 		}
@@ -479,6 +643,14 @@ func pluginProbeCmd(args []string) error {
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", p.Name, err)
 		}
+		scriptFiles, err := pluginScriptFiles(p.Command, p.Dir)
+		if err != nil {
+			return fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
+		scriptHash, err := pluginScriptFilesHash(scriptFiles)
+		if err != nil {
+			return fmt.Errorf("plugin %s: %w", p.Name, err)
+		}
 		specDigest, err := pluginSpecDigest(p.Config, p.Env, p.Dir)
 		if err != nil {
 			return fmt.Errorf("plugin %s: %w", p.Name, err)
@@ -498,10 +670,12 @@ func pluginProbeCmd(args []string) error {
 			return fmt.Errorf("plugin %s: manifest name %q does not match config", p.Name, m.Name)
 		}
 		cache.Entries[pluginCacheKey(p.Name, specDigest)] = pluginCacheEntry{
-			BinaryHash: hash,
-			Size:       size,
-			ModTimeNS:  modTimeNS,
-			Manifest:   m,
+			BinaryHash:  hash,
+			Size:        size,
+			ModTimeNS:   modTimeNS,
+			ScriptFiles: scriptFiles,
+			ScriptHash:  scriptHash,
+			Manifest:    m,
 		}
 		hooks := make([]string, len(m.Hooks))
 		for i, h := range m.Hooks {
