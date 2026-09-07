@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,7 +36,14 @@ func LockSessionDir(dir string) (*DirLock, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("%w: %s", ErrSessionDirLocked, dir)
+		// Only contention means "someone else owns it". Every other errno
+		// (EBADF, ENOLCK, EINTR) is a real failure, and reporting it as
+		// contention would send an operator hunting for a second process
+		// that does not exist.
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("%w: %s", ErrSessionDirLocked, dir)
+		}
+		return nil, fmt.Errorf("lock session dir %s: %w", dir, err)
 	}
 	return &DirLock{f: f}, nil
 }

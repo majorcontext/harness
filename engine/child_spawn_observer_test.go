@@ -30,7 +30,17 @@ func TestSpawnNotifiesChildSpawnObserver(t *testing.T) {
 		t.Fatalf("Spawn: %v", err)
 	}
 
-	got := <-seen
+	// A non-blocking receive, deliberately: Spawn runs
+	// unlockAndFlushPersist before it returns, and that drains the deferred
+	// observers synchronously, so the send has already happened by here. A
+	// blocking receive would turn "the observer never fired" into a hung
+	// test instead of a named failure.
+	var got spawnCall
+	select {
+	case got = <-seen:
+	default:
+		t.Fatal("Spawn returned without firing the child-spawn observer")
+	}
 	if got.parent != root.ID || got.child != childID || got.agent != "explore" {
 		t.Fatalf("observer got %+v, want parent %q child %q agent %q",
 			got, root.ID, childID, "explore")
