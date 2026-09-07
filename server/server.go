@@ -974,6 +974,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /session/{id}/send", s.auth(s.handleSessionSend))
 	mux.HandleFunc("DELETE /session/{id}/cancel_tree", s.auth(s.handleCancelTree))
 	mux.HandleFunc("GET /event", s.auth(s.handleEvent))
+	mux.HandleFunc("GET /event/tip", s.auth(s.handleEventTip))
 	mux.HandleFunc("GET /process", s.auth(s.handleProcessList))
 	mux.HandleFunc("POST /process/{name}/start", s.auth(s.handleProcessStart))
 	mux.HandleFunc("POST /process/{name}/stop", s.auth(s.handleProcessStop))

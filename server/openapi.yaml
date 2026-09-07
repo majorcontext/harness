@@ -3036,6 +3036,32 @@ paths:
               schema: { $ref: "#/components/schemas/Event" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /event/tip:
+    get:
+      operationId: eventTip
+      summary: The box-global journal tip.
+      description: >
+        The highest sequence number assigned to a durable journal record in
+        this instance. One integer, read under the server mutex. A consumer
+        compares it against its own cursor to learn whether it is current,
+        without opening /event and replaying the journal to find out.
+      responses:
+        "200":
+          description: The current tip.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seq]
+                properties:
+                  seq:
+                    type: integer
+                    format: int64
+                    description: >
+                      Highest assigned durable record sequence. 0 before any
+                      record is journaled.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /process:
     get:
       operationId: listProcesses
