@@ -96,7 +96,7 @@ func (s *Server) flushEventSink() {
 			}
 			continue
 		}
-		if !s.advanceSinkCursor(batch, applied) {
+		if !s.advanceSinkCursor(applied) {
 			// The receiver did not move past this batch's start, so sending
 			// it again immediately would spin. Wait for the next wake.
 			return
@@ -161,7 +161,7 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 // batch), so there is no spin risk and the pump must keep going. The only
 // case that DOES spin is the cursor staying exactly where it was: the next
 // nextEventBatch call would then hand back this identical batch forever.
-func (s *Server) advanceSinkCursor(batch EventBatch, applied int64) bool {
+func (s *Server) advanceSinkCursor(applied int64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if applied < 0 {
