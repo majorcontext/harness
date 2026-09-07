@@ -24,14 +24,17 @@ func TestEventTipReportsJournalTip(t *testing.T) {
 		return got.Seq
 	}
 
-	before := readTip()
+	// The openapi entry promises 0 before any record is journaled.
+	if before := readTip(); before != 0 {
+		t.Fatalf("tip before any record = %d, want 0", before)
+	}
 
 	seq := h.srv.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_tip", Status: "busy"})
 
 	if got := readTip(); got != seq {
 		t.Fatalf("tip after emit = %d, want the emitted seq %d", got, seq)
 	}
-	if seq <= before {
-		t.Fatalf("emitted seq %d did not advance past the tip before it (%d)", seq, before)
+	if seq <= 0 {
+		t.Fatalf("emitted seq = %d, want a positive sequence number", seq)
 	}
 }

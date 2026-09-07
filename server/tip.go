@@ -10,8 +10,5 @@ type tipJSON struct {
 // consumer can ask "have I seen everything" without opening the stream and
 // replaying it.
 func (s *Server) handleEventTip(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	seq := s.seq
-	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, tipJSON{Seq: seq})
+	writeJSON(w, http.StatusOK, tipJSON{Seq: s.currentSeq()})
 }
