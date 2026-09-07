@@ -1120,10 +1120,9 @@ func isEmptySessionIDPath(path string) bool {
 // session.aborted/idle transitions — are written; otherwise those records are
 // lost on shutdown.
 func (s *Server) Drain(ctx context.Context) {
-	// The pump flushes once when s.closing closes, which happens just
-	// below. Waiting here keeps Close from taking the journal file before
-	// the tail ships. An expired ctx ends the wait: the drain budget is the
-	// drain budget, and a receiver that is down must not hold shutdown open.
+	// Waiting here keeps Close from taking the journal file before the tail
+	// ships. An expired ctx ends the wait: the drain budget is the drain
+	// budget, and a receiver that is down must not hold shutdown open.
 	defer func() {
 		// Retire the pump only now: the body above has already waited for
 		// in-flight prompts, so their trailing records are journaled and the

@@ -70,8 +70,9 @@ working unmodified if eviction is added later.
 retries the SAME batch after `eventSinkRetryDelay` (2 seconds) — it does
 not advance past the failure, drop the batch, or wait for a new record to
 arrive before trying again. It keeps retrying, at that fixed interval,
-until `Deliver` succeeds or the server begins closing (`s.closing`), at
-which point the pump goroutine exits without another attempt.
+until `Deliver` succeeds or the pump is retired (`sinkStop`, closed after
+the prompt drain — see §7), at which point the goroutine exits without
+another attempt.
 
 The consequence: a receiver that is down, or answering errors, does not
 lose any records. It delays them. A permanently unreachable receiver
