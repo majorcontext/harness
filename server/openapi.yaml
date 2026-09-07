@@ -1173,6 +1173,7 @@ components:
           type: string
           enum:
             - session.created
+            - session.spawned
             - session.status
             - session.error
             - session.aborted
@@ -1203,6 +1204,14 @@ components:
             - tool.start
             - tool.end
           description: >
+            session.spawned is durable and journaled once per child session
+            actually created by SessionManager.Spawn — from the `task` tool
+            or the HTTP spawn route alike, so a consumer reading only
+            events.jsonl can place a child under its parent instead of
+            seeing turn.end for a session id it has never heard of. It
+            carries `session_id` (the child), `parent_session_id`, and
+            `agent_type`, and never fires for a refused spawn (no session
+            exists to report).
             session.error and session.aborted are durable (journaled with a
             seq) because prompt_async's 202 acknowledges receipt only, so
             disconnected orchestrators must see terminal outcomes on replay.
@@ -1365,6 +1374,17 @@ components:
         seq:
           type: integer
           description: Present on durable records only.
+        parent_session_id:
+          type: string
+          description: >
+            The parent of `session_id` on a session.spawned event. Absent
+            on every other event type.
+        agent_type:
+          type: string
+          description: >
+            The agent name the child was spawned as, on a session.spawned
+            event. Descriptive, never interpreted. Absent on every other
+            event type.
         status:
           $ref: "#/components/schemas/SessionStatus"
         message:

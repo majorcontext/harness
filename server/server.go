@@ -872,6 +872,11 @@ func New(opts Options) (*Server, error) {
 	// for a root at the identical moment, instead of a child streaming
 	// no start signal at all before this.
 	sessMgr.SetChildTurnStartObserver(s.onChildTurnStart)
+	// SetChildSpawnObserver journals the durable record linking a child
+	// session to its parent — see onChildSpawn's own doc comment. Fires
+	// for both spawn paths (the `task` tool and the HTTP spawn route),
+	// unlike a hook installed only on the HTTP handler.
+	sessMgr.SetChildSpawnObserver(s.onChildSpawn)
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
