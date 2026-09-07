@@ -171,12 +171,21 @@ type Event struct {
 	// see docs/plans/2026-07-21-durable-enqueue.md. 0/omitted on a plain
 	// enqueue (prompt_async) and on every prompt.dequeued.
 	QueueSeq int64 `json:"queue_seq,omitempty"`
+
+	// ParentSessionID is set only on a session.spawned record: the parent
+	// of Event.SessionID. It is what makes events.jsonl self-contained —
+	// without it a reader cannot place a child session in the tree.
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// AgentType is set only on a session.spawned record: the agent name the
+	// child was spawned as. Descriptive, never interpreted.
+	AgentType string `json:"agent_type,omitempty"`
 }
 
 // Durable and live event types (a superset of engine.Event types plus the
 // server-owned lifecycle records).
 const (
 	evtSessionCreated = "session.created"
+	evtSessionSpawned = "session.spawned"
 	evtSessionStatus  = "session.status"
 	evtSessionError   = "session.error"
 	evtSessionAborted = "session.aborted"
@@ -771,6 +780,17 @@ func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
 // had even started.
 func (s *Server) onChildTurnStart(id string) {
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+}
+
+// onChildSpawn is engine.ChildSpawnObserver: it journals the durable record
+// that links a child session to its parent.
+func (s *Server) onChildSpawn(parentID, childID, agentType string) {
+	s.emitDurable(Event{
+		Type:            evtSessionSpawned,
+		SessionID:       childID,
+		ParentSessionID: parentID,
+		AgentType:       agentType,
+	})
 }
 
 func (s *Server) onChildTurnEnd(id string, msg *message.Message, err error, canceled bool) {

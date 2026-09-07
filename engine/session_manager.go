@@ -278,6 +278,14 @@ type ChildTurnObserver func(id string, msg *message.Message, err error, canceled
 // ChildTurnObserver's identical discipline.
 type ChildTurnStartObserver func(id string)
 
+// ChildSpawnObserver is notified once per child session actually created by
+// Spawn, with the parent id, the new child id, and SpawnOptions.AgentType.
+//
+// It sits here rather than on the server because there are two spawn paths
+// — the `task` tool and the HTTP spawn route — and only Spawn is common to
+// both. It never fires for a refused spawn: no session exists to report.
+type ChildSpawnObserver func(parentID, childID, agentType string)
+
 // SessionManager owns every session — one root plus its descendant
 // children — spawned as a tree in one harness process. It is the
 // engine-level home for the subagent-sessions primitive (see the design
@@ -331,6 +339,11 @@ type SessionManager struct {
 	// (the default) means nothing is notified, mirroring
 	// childTurnObserver's identical default.
 	childTurnStartObserver ChildTurnStartObserver
+
+	// childSpawnObserver, when set, is notified once per child session
+	// actually created by Spawn — see ChildSpawnObserver's own doc
+	// comment. Nil (the default) means nothing is notified.
+	childSpawnObserver ChildSpawnObserver
 
 	// maxTreeTokens is the opt-in per-tree token budget (see
 	// ErrBudgetExceeded's own doc comment) — 0 (the default; SetMaxTreeTokens
@@ -657,6 +670,15 @@ func (m *SessionManager) SetChildTurnStartObserver(observer ChildTurnStartObserv
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.childTurnStartObserver = observer
+}
+
+// SetChildSpawnObserver installs observer as described on the
+// ChildSpawnObserver type — nil (the default) disables it. Safe to call at
+// any time; takes effect on the next Spawn.
+func (m *SessionManager) SetChildSpawnObserver(observer ChildSpawnObserver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.childSpawnObserver = observer
 }
 
 // SetMaxTreeTokens installs n as the opt-in per-tree token budget — see
@@ -2904,6 +2926,19 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	n.status = StatusRunning
 	m.markChangedLocked()
 	m.runningByRoot[parent.rootID]++
+	// ChildSpawnObserver fires once per child actually created here — see
+	// its own doc comment. It is queued BEFORE childTurnStartObserver
+	// below because deferPersist is FIFO (see unlockAndFlushPersist): a
+	// consumer reading the durable journal in seq order must be able to
+	// place this child before it meets any other record for that id, and
+	// session.status:busy is otherwise the first one it would see. Same
+	// deferred-call discipline as the observer below: nothing runs under
+	// m.mu, and every value the closure touches is captured into a local
+	// first.
+	if m.childSpawnObserver != nil {
+		observer, pid, cid, agent := m.childSpawnObserver, parent.id, child.ID, opts.AgentType
+		m.deferPersist(func() { observer(pid, cid, agent) })
+	}
 	// ChildTurnStartObserver fires for a spawned child's own initial
 	// turn too — Spawn never calls reserveSendLocked (it is creating a
 	// brand-new node, not reserving an existing one), so it needs this

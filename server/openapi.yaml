@@ -1173,6 +1173,7 @@ components:
           type: string
           enum:
             - session.created
+            - session.spawned
             - session.status
             - session.error
             - session.aborted
@@ -1203,6 +1204,18 @@ components:
             - tool.start
             - tool.end
           description: >
+            session.spawned is durable and journaled once per child session
+            actually created by SessionManager.Spawn — from the `task` tool
+            or the HTTP spawn route alike, so a consumer reading only
+            events.jsonl can place a child under its parent instead of
+            seeing turn.end for a session id it has never heard of. It
+            is guaranteed to be the FIRST durable record carrying that
+            child's `session_id` — it is journaled ahead of that child's own
+            session.status:busy, so a consumer reading in `seq` order can
+            always place a child before it meets any other record for it. It
+            carries `session_id` (the child), `parent_session_id`, and
+            `agent_type`, and never fires for a refused spawn (no session
+            exists to report).
             session.error and session.aborted are durable (journaled with a
             seq) because prompt_async's 202 acknowledges receipt only, so
             disconnected orchestrators must see terminal outcomes on replay.
@@ -1365,6 +1378,17 @@ components:
         seq:
           type: integer
           description: Present on durable records only.
+        parent_session_id:
+          type: string
+          description: >
+            The parent of `session_id` on a session.spawned event. Absent
+            on every other event type.
+        agent_type:
+          type: string
+          description: >
+            The agent name the child was spawned as, on a session.spawned
+            event. Descriptive, never interpreted. Absent on every other
+            event type.
         status:
           $ref: "#/components/schemas/SessionStatus"
         message:
@@ -3034,6 +3058,36 @@ paths:
           content:
             text/event-stream:
               schema: { $ref: "#/components/schemas/Event" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /event/tip:
+    get:
+      operationId: eventTip
+      summary: The box-global journal tip.
+      description: >
+        The highest sequence number assigned to a durable journal record in
+        this instance. One integer, read under the server mutex. A consumer
+        compares it against its own cursor to learn whether it is current,
+        without opening /event and replaying the journal to find out.
+      responses:
+        "200":
+          description: The current tip.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [seq]
+                properties:
+                  seq:
+                    type: integer
+                    format: int64
+                    description: >
+                      Highest assigned durable record sequence. 0 before any
+                      record is journaled. It reflects records already
+                      journaled, NOT requests already acknowledged: a spawn
+                      is journaled from a deferred flush that can complete
+                      after its own 201 returns, so a read immediately after
+                      an acknowledged write can legitimately exclude it.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /process:

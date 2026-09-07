@@ -1627,6 +1627,14 @@ func serveCmd(args []string) error {
 			}(),
 		}
 	}
+	// One journal, one writer. A second serve on this directory would
+	// interleave its own seq stream into the same events.jsonl.
+	sesLock, err := server.LockSessionDir(sesDir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sesLock.Close() }()
+
 	srv, err = server.New(server.Options{
 		SessionDir:    sesDir,
 		RunToken:      token,
