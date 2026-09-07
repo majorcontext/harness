@@ -2926,6 +2926,19 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	n.status = StatusRunning
 	m.markChangedLocked()
 	m.runningByRoot[parent.rootID]++
+	// ChildSpawnObserver fires once per child actually created here — see
+	// its own doc comment. It is queued BEFORE childTurnStartObserver
+	// below because deferPersist is FIFO (see unlockAndFlushPersist): a
+	// consumer reading the durable journal in seq order must be able to
+	// place this child before it meets any other record for that id, and
+	// session.status:busy is otherwise the first one it would see. Same
+	// deferred-call discipline as the observer below: nothing runs under
+	// m.mu, and every value the closure touches is captured into a local
+	// first.
+	if m.childSpawnObserver != nil {
+		observer, pid, cid, agent := m.childSpawnObserver, parent.id, child.ID, opts.AgentType
+		m.deferPersist(func() { observer(pid, cid, agent) })
+	}
 	// ChildTurnStartObserver fires for a spawned child's own initial
 	// turn too — Spawn never calls reserveSendLocked (it is creating a
 	// brand-new node, not reserving an existing one), so it needs this
@@ -2934,14 +2947,6 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	if m.childTurnStartObserver != nil {
 		observer, cid := m.childTurnStartObserver, child.ID
 		m.deferPersist(func() { observer(cid) })
-	}
-	// ChildSpawnObserver fires once per child actually created here —
-	// see its own doc comment. Same deferred-call discipline as
-	// childTurnStartObserver just above: nothing runs under m.mu, and
-	// every value the closure touches is captured into a local first.
-	if m.childSpawnObserver != nil {
-		observer, pid, cid, agent := m.childSpawnObserver, parent.id, child.ID, opts.AgentType
-		m.deferPersist(func() { observer(pid, cid, agent) })
 	}
 	m.unlockAndFlushPersist()
 

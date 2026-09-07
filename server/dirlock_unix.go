@@ -21,6 +21,10 @@ type DirLock struct{ f *os.File }
 
 // LockSessionDir takes the exclusive lock on dir, creating dir if needed.
 // It returns ErrSessionDirLocked when another holder exists.
+//
+// It creates dir 0o700 where engine's ensureLog would create it 0o755
+// (engine/store.go). Deliberate, not an oversight: this runs first, and one
+// process owning its own journal has no reason to let another uid read it.
 func LockSessionDir(dir string) (*DirLock, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("session dir: %w", err)

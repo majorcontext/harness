@@ -105,4 +105,29 @@ func TestSpawnThroughServerJournalsTheRecord(t *testing.T) {
 	if found.AgentType != engine.AgentExplore {
 		t.Errorf("AgentType = %q, want %q", found.AgentType, engine.AgentExplore)
 	}
+
+	// session.spawned must be the FIRST durable record for a child id. A
+	// consumer reading events.jsonl in seq order that meets session.status
+	// for a session it cannot yet place sees exactly the unplaceable id this
+	// record exists to prevent — and the consuming design answers an
+	// apparent gap with a full re-bootstrap, so getting this backwards costs
+	// a re-bootstrap per subagent spawn.
+	var firstStatusSeq int64
+	h.srv.mu.Lock()
+	for i := range h.srv.journal {
+		ev := &h.srv.journal[i]
+		if ev.SessionID == child.ID && ev.Type == evtSessionStatus {
+			firstStatusSeq = ev.Seq
+			break
+		}
+	}
+	h.srv.mu.Unlock()
+
+	if firstStatusSeq == 0 {
+		t.Fatal("child journaled no session.status record to order against")
+	}
+	if found.Seq >= firstStatusSeq {
+		t.Errorf("session.spawned seq = %d, first session.status seq = %d; spawned must come first",
+			found.Seq, firstStatusSeq)
+	}
 }

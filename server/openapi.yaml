@@ -1209,6 +1209,10 @@ components:
             or the HTTP spawn route alike, so a consumer reading only
             events.jsonl can place a child under its parent instead of
             seeing turn.end for a session id it has never heard of. It
+            is guaranteed to be the FIRST durable record carrying that
+            child's `session_id` — it is journaled ahead of that child's own
+            session.status:busy, so a consumer reading in `seq` order can
+            always place a child before it meets any other record for it. It
             carries `session_id` (the child), `parent_session_id`, and
             `agent_type`, and never fires for a refused spawn (no session
             exists to report).
@@ -3079,7 +3083,11 @@ paths:
                     format: int64
                     description: >
                       Highest assigned durable record sequence. 0 before any
-                      record is journaled.
+                      record is journaled. It reflects records already
+                      journaled, NOT requests already acknowledged: a spawn
+                      is journaled from a deferred flush that can complete
+                      after its own 201 returns, so a read immediately after
+                      an acknowledged write can legitimately exclude it.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /process:
