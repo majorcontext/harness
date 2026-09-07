@@ -1307,6 +1307,7 @@ func (s *Server) emitDurableLocked(ev *Event) {
 	s.journal = append(s.journal, *ev)
 	s.fanoutLocked(*ev)
 	s.notifyWaitersLocked(ev.SessionID)
+	s.notifySinkLocked()
 }
 
 // notifyWaitersLocked wakes every GET /session/{id}/wait long-poll registered

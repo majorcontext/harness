@@ -256,6 +256,19 @@ type Options struct {
 	// with no server-layer hook point) — only the wire-level
 	// session.create parent_id form this field's doc comment names.
 	OnTaskEvent func(event, parentID, childID string)
+	// EventSink, when non-nil, receives every durable journal record in seq
+	// order. It is an in-process callback like every other Options hook:
+	// cmd/harness supplies the HTTP transport, so this package holds no
+	// outbound HTTP client.
+	EventSink EventSink
+	// EventSinkFlush is the coalescing window after a record arrives.
+	// Zero takes defaultEventSinkFlush.
+	EventSinkFlush time.Duration
+	// EventSinkMaxRecords and EventSinkMaxBytes bound one batch. Zero takes
+	// the defaults. They chunk a backlog and never drop: one record larger
+	// than EventSinkMaxBytes is still delivered, alone.
+	EventSinkMaxRecords int
+	EventSinkMaxBytes   int
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
@@ -369,6 +382,8 @@ type Server struct {
 	// orchestrators recover the records they miss via replay-from-seq.
 	closing   chan struct{}
 	closeOnce sync.Once
+	sinkWake  chan struct{} // buffered 1; a coalescing "there is work" signal
+	sinkDone  chan struct{} // closed when the pump has exited
 
 	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
 	// respect to a session's own mutex — code holding mu must never call a
@@ -381,13 +396,14 @@ type Server struct {
 	// (see journal.go's syncMessages and TestGoalEmitVsSyncMessagesNoDeadlock
 	// in lockorder_test.go). Read session state in an unlocked window, then
 	// re-acquire mu only for this server's own bookkeeping.
-	mu       sync.Mutex
-	draining bool                     // set once by Drain; gates prompt admission
-	seq      int64                    // global monotonic durable sequence
-	journal  []Event                  // in-memory durable records, for replay
-	jf       *os.File                 // events.jsonl handle (nil when disabled)
-	lastErr  error                    // most recent journal write failure
-	subs     map[*subscriber]struct{} // connected SSE clients
+	mu         sync.Mutex
+	draining   bool                     // set once by Drain; gates prompt admission
+	seq        int64                    // global monotonic durable sequence
+	journal    []Event                  // in-memory durable records, for replay
+	jf         *os.File                 // events.jsonl handle (nil when disabled)
+	lastErr    error                    // most recent journal write failure
+	subs       map[*subscriber]struct{} // connected SSE clients
+	sinkCursor int64                    // highest seq the receiver has confirmed applied
 	// seen maps session ID -> journaled message IDs; it is authoritative for
 	// journal idempotency (syncMessages skips already-journaled IDs), so it is
 	// never evicted when resident sessions are unloaded for MaxResident. It is
@@ -842,6 +858,8 @@ func New(opts Options) (*Server, error) {
 		queueDrainPending: make(map[string]bool),
 		waiters:           make(map[*waiter]struct{}),
 		closing:           make(chan struct{}),
+		sinkWake:          make(chan struct{}, 1),
+		sinkDone:          make(chan struct{}),
 		sessMgr:           sessMgr,
 		now:               time.Now,
 	}
@@ -877,6 +895,14 @@ func New(opts Options) (*Server, error) {
 	// for both spawn paths (the `task` tool and the HTTP spawn route),
 	// unlike a hook installed only on the HTTP handler.
 	sessMgr.SetChildSpawnObserver(s.onChildSpawn)
+	// SessionDir empty means persistence is disabled entirely, so there is
+	// no durable journal to replicate and forwarding it would offer a
+	// receiver a "replica" of records that never reach disk.
+	if opts.EventSink != nil && opts.SessionDir != "" {
+		go s.runEventSink()
+	} else {
+		close(s.sinkDone)
+	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
@@ -1082,6 +1108,16 @@ func isEmptySessionIDPath(path string) bool {
 // session.aborted/idle transitions — are written; otherwise those records are
 // lost on shutdown.
 func (s *Server) Drain(ctx context.Context) {
+	// The pump flushes once when s.closing closes, which happens just
+	// below. Waiting here keeps Close from taking the journal file before
+	// the tail ships. An expired ctx ends the wait: the drain budget is the
+	// drain budget, and a receiver that is down must not hold shutdown open.
+	defer func() {
+		select {
+		case <-s.sinkDone:
+		case <-ctx.Done():
+		}
+	}()
 	s.mu.Lock()
 	s.draining = true
 	s.closeOnce.Do(func() { close(s.closing) })
