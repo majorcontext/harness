@@ -384,6 +384,10 @@ type Server struct {
 	closeOnce sync.Once
 	sinkWake  chan struct{} // buffered 1; a coalescing "there is work" signal
 	sinkDone  chan struct{} // closed when the pump has exited
+	// sinkStop retires the pump. Closed AFTER the prompt drain, never at its
+	// start — see runEventSink for the records that would otherwise be lost.
+	sinkStop     chan struct{}
+	sinkStopOnce sync.Once
 
 	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
 	// respect to a session's own mutex — code holding mu must never call a
@@ -860,6 +864,7 @@ func New(opts Options) (*Server, error) {
 		closing:           make(chan struct{}),
 		sinkWake:          make(chan struct{}, 1),
 		sinkDone:          make(chan struct{}),
+		sinkStop:          make(chan struct{}),
 		sessMgr:           sessMgr,
 		now:               time.Now,
 	}
@@ -895,14 +900,6 @@ func New(opts Options) (*Server, error) {
 	// for both spawn paths (the `task` tool and the HTTP spawn route),
 	// unlike a hook installed only on the HTTP handler.
 	sessMgr.SetChildSpawnObserver(s.onChildSpawn)
-	// SessionDir empty means persistence is disabled entirely, so there is
-	// no durable journal to replicate and forwarding it would offer a
-	// receiver a "replica" of records that never reach disk.
-	if opts.EventSink != nil && opts.SessionDir != "" {
-		go s.runEventSink()
-	} else {
-		close(s.sinkDone)
-	}
 	if err := s.reconcile(); err != nil {
 		return nil, err
 	}
@@ -920,6 +917,21 @@ func New(opts Options) (*Server, error) {
 		sweepWorktrees(s.worktreeBase, opts.SessionDir, func(sessionID, path string) {
 			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
 		})
+	}
+	// The pump starts LAST, after reconcile, pauseArmedGoalsAtBoot, and
+	// sweepWorktrees. Those run unlocked at construction on the strength of
+	// "no client can reach the server yet" (loadJournal's own comment), and
+	// loadJournal appends to s.journal without holding mu — so a pump
+	// started earlier is a second reader racing that append. Starting here
+	// also means its first flush sees the fully restored journal.
+	//
+	// SessionDir empty means persistence is disabled entirely, so there is
+	// no durable journal to replicate and forwarding it would offer a
+	// receiver a "replica" of records that never reach disk.
+	if opts.EventSink != nil && opts.SessionDir != "" {
+		go s.runEventSink()
+	} else {
+		close(s.sinkDone)
 	}
 	s.routes()
 	return s, nil
@@ -1113,6 +1125,10 @@ func (s *Server) Drain(ctx context.Context) {
 	// the tail ships. An expired ctx ends the wait: the drain budget is the
 	// drain budget, and a receiver that is down must not hold shutdown open.
 	defer func() {
+		// Retire the pump only now: the body above has already waited for
+		// in-flight prompts, so their trailing records are journaled and the
+		// pump's final flush can carry them.
+		s.stopEventSink()
 		select {
 		case <-s.sinkDone:
 		case <-ctx.Done():
@@ -1179,6 +1195,9 @@ func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
 
 // Close releases the journal file, if any.
 func (s *Server) Close() error {
+	// A Close without a Drain still has to retire the pump, or its goroutine
+	// outlives the server.
+	s.stopEventSink()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.jf != nil {

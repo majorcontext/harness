@@ -111,10 +111,28 @@ deployment might hit:
   something it did not. Harness has no way to detect this; it trusts the
   receiver's own `appliedThrough`.
 - A process deleted before its tail ships — journal and all — loses that
-  tail. The pump's final-flush-on-close (`runEventSink` flushes once more
-  when `s.closing` fires, before `Close` takes the journal file away) only
-  covers an orderly shutdown, not a deletion that never lets the process
-  run that path.
+  tail. The pump's final flush covers an orderly shutdown, not a deletion
+  that never lets the process run that path.
+
+An orderly shutdown IS covered, but only because of where the pump is
+retired. `Drain` closes `s.closing` first and only then waits for in-flight
+prompts, and those prompts journal their trailing records during that wait —
+a final assistant message, a `session.aborted` per cancelled prompt, the
+`session.status(idle)` transitions. So the pump watches its own `sinkStop`
+channel, which `Drain` closes in a deferred call AFTER that wait, rather
+than watching `s.closing`. A pump retired at the start of the drain would
+exit before those records existed and lose every one of them, while Drain's
+own `sinkDone` wait returned instantly having guarded nothing.
+`TestEventSinkShipsRecordsJournaledDuringDrain` pins this.
+
+A restarted process ships its restored journal without waiting for a new
+record. `loadJournal` appends the journal straight to `s.journal`, never
+through `emitDurableLocked`, so nothing wakes the pump for records this
+process did not itself emit; `runEventSink` therefore flushes once before
+entering its wait loop. Without that, a box that restarts and goes idle
+replicates nothing at all — which would defeat the whole point of reading a
+transcript without waking the box.
+`TestEventSinkShipsARestoredJournalWithNoNewRecord` pins this.
 
 ## 8. Layering
 

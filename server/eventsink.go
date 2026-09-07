@@ -30,6 +30,12 @@ const (
 	eventSinkRetryDelay        = 2 * time.Second
 )
 
+// stopEventSink retires the pump after a final flush. Idempotent, and safe
+// when no pump was ever started.
+func (s *Server) stopEventSink() {
+	s.sinkStopOnce.Do(func() { close(s.sinkStop) })
+}
+
 // notifySinkLocked wakes the pump. It sends a SIGNAL, never a record: a
 // dropped or coalesced wake cannot lose anything, because the pump re-reads
 // the journal from its own cursor and finds whatever it missed. Sending the
@@ -47,17 +53,30 @@ func (s *Server) notifySinkLocked() {
 }
 
 // runEventSink is the pump goroutine. It exits after one final flush when
-// the server begins draining, so the tail ships before Close takes the
-// journal file away.
+// stopEventSink is called, so the tail ships before Close takes the journal
+// file away.
+//
+// It watches sinkStop rather than s.closing deliberately. Drain closes
+// s.closing FIRST and only then waits for in-flight prompts, which journal
+// their trailing records — a final assistant message, a session.aborted per
+// cancelled prompt, the session.status(idle) transitions — during that wait.
+// Exiting on s.closing would retire the pump before those records exist and
+// lose every one of them.
 func (s *Server) runEventSink() {
 	defer close(s.sinkDone)
 	flush := s.opts.EventSinkFlush
 	if flush <= 0 {
 		flush = defaultEventSinkFlush
 	}
+	// A restored journal is already in s.journal — loadJournal appends it
+	// directly, never through emitDurableLocked — so nothing has woken this
+	// pump for records this process did not itself emit. Without this first
+	// flush, a process that restarts and then goes idle replicates nothing
+	// until some unrelated record happens to arrive.
+	s.flushEventSink()
 	for {
 		select {
-		case <-s.closing:
+		case <-s.sinkStop:
 			s.flushEventSink()
 			return
 		case <-s.sinkWake:
@@ -65,7 +84,7 @@ func (s *Server) runEventSink() {
 		// Coalesce a burst into one request.
 		t := time.NewTimer(flush)
 		select {
-		case <-s.closing:
+		case <-s.sinkStop:
 			t.Stop()
 			s.flushEventSink()
 			return
@@ -89,7 +108,7 @@ func (s *Server) flushEventSink() {
 			s.logWarn("event sink delivery failed", "from_seq", batch.FromSeq, "to_seq", batch.ToSeq, "error", err.Error())
 			t := time.NewTimer(eventSinkRetryDelay)
 			select {
-			case <-s.closing:
+			case <-s.sinkStop:
 				t.Stop()
 				return
 			case <-t.C:
@@ -141,6 +160,11 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 		}
 		if b, err := json.Marshal(rec); err == nil {
 			bytes += len(b)
+		} else {
+			// The record still ships; the transport will reject the batch and
+			// the pump will retry it forever, so say so rather than letting a
+			// poison record wedge delivery silently.
+			s.logWarn("event sink: record does not marshal", "seq", rec.Seq, "type", rec.Type, "error", err.Error())
 		}
 		batch.Records = append(batch.Records, rec)
 		batch.ToSeq = rec.Seq

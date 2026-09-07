@@ -233,3 +233,68 @@ func TestEventSinkDoesNotRunWithoutASessionDir(t *testing.T) {
 		t.Fatalf("delivered %d records with persistence disabled, want 0", len(got))
 	}
 }
+
+// Drain closes s.closing FIRST and only then waits for in-flight prompts,
+// which journal their trailing records during that wait. A pump that exited
+// on s.closing retired before those records existed and lost every one of
+// them, while Drain's own sinkDone wait returned instantly having guarded
+// nothing.
+func TestEventSinkShipsRecordsJournaledDuringDrain(t *testing.T) {
+	f := newFakeSink()
+	s := sinkServer(t, f)
+
+	s.mu.Lock()
+	s.closeOnce.Do(func() { close(s.closing) })
+	s.mu.Unlock()
+
+	// The pump must still be alive. Drain has not yet waited for in-flight
+	// prompts, so their trailing records are not journaled yet; a pump that
+	// retired on s.closing would never see them. This is a negative
+	// assertion — that something does NOT happen — so it needs a bounded
+	// window rather than a channel to block on. Under the old design the
+	// pump exits promptly here and this fires.
+	select {
+	case <-s.sinkDone:
+		t.Fatal("pump retired when s.closing closed; every record journaled during the drain window would be lost")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Stands in for the trailing records a cancelled prompt journals while
+	// Drain is still waiting on it.
+	late := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_drain", Status: "idle"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	s.Drain(ctx)
+
+	for _, e := range f.delivered() {
+		if e.Seq == late {
+			return
+		}
+	}
+	t.Fatalf("record seq %d was journaled during the drain window and never shipped", late)
+}
+
+// loadJournal appends a restored journal straight to s.journal, never through
+// emitDurableLocked, so nothing wakes the pump for records this process did
+// not itself emit. Without a flush before the wait loop, a process that
+// restarts and then goes idle replicates nothing at all.
+func TestEventSinkShipsARestoredJournalWithNoNewRecord(t *testing.T) {
+	dir := t.TempDir()
+
+	// First server writes a journal, then goes away.
+	first := newServer(t, dir, &scriptedProvider{name: "test"}, 4)
+	want := first.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_restart", Status: "busy"})
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first server: %v", err)
+	}
+
+	// Second server over the same dir, with a sink and NO new record.
+	f := newFakeSink()
+	newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+		o.EventSink = f
+		o.EventSinkFlush = time.Millisecond
+	})
+
+	f.waitForRecord(t, want)
+}
