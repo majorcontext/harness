@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,6 +135,41 @@ func TestEventSinkForwardsEveryDurableRecord(t *testing.T) {
 		if got[i].Seq != got[i-1].Seq+1 {
 			t.Fatalf("record %d seq %d, want %d with no gap", i, got[i].Seq, got[i-1].Seq+1)
 		}
+	}
+}
+
+func TestNextEventBatchHonorsMaxBytes(t *testing.T) {
+	first := Event{Type: evtSessionStatus, SessionID: "ses_batch", Seq: 1, Text: strings.Repeat("a", 128)}
+	second := Event{Type: evtSessionStatus, SessionID: "ses_batch", Seq: 2, Text: strings.Repeat("b", 128)}
+	firstJSON, err := json.Marshal(first)
+	if err != nil {
+		t.Fatalf("marshal first record: %v", err)
+	}
+	secondJSON, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("marshal second record: %v", err)
+	}
+
+	s := &Server{
+		opts: Options{
+			EventSinkMaxRecords: 10,
+			EventSinkMaxBytes:   len(firstJSON) + len(secondJSON) - 1,
+		},
+		journal: []Event{first, second},
+		seq:     2,
+	}
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no records")
+	}
+	if len(batch.Records) != 1 || batch.FromSeq != 1 || batch.ToSeq != 1 {
+		t.Fatalf("batch = %+v, want only seq 1 within the byte limit", batch)
+	}
+
+	s.opts.EventSinkMaxBytes = 1
+	batch, ok = s.nextEventBatch()
+	if !ok || len(batch.Records) != 1 || batch.Records[0].Seq != 1 {
+		t.Fatalf("oversized first-record batch = %+v, ok=%t; want seq 1 alone", batch, ok)
 	}
 }
 

@@ -156,18 +156,21 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 	batch := EventBatch{FromSeq: candidates[0].Seq}
 	var bytes int
 	for _, rec := range candidates {
-		// The size check runs only after the first record is in, so one
-		// oversized record is delivered alone rather than dropped.
-		if len(batch.Records) > 0 && bytes >= maxBytes {
-			break
-		}
-		if b, err := json.Marshal(rec); err == nil {
-			bytes += len(b)
-		} else {
-			// The record still ships; the transport will reject the batch and
-			// the pump will retry it forever, so say so rather than letting a
-			// poison record wedge delivery silently.
+		encoded, err := json.Marshal(rec)
+		if err != nil {
+			// Isolate a poison record. Records before it can advance; when it is
+			// first, it still ships alone and the transport reports the failure.
 			s.logWarn("event sink: record does not marshal", "seq", rec.Seq, "type", rec.Type, "error", err.Error())
+			if len(batch.Records) > 0 {
+				break
+			}
+		} else {
+			// Check the candidate's size before adding it. The first record is
+			// exempt so one oversized record ships alone rather than disappearing.
+			if len(batch.Records) > 0 && bytes+len(encoded) > maxBytes {
+				break
+			}
+			bytes += len(encoded)
 		}
 		batch.Records = append(batch.Records, rec)
 		batch.ToSeq = rec.Seq
