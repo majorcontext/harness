@@ -53,7 +53,11 @@
 // "queue_injection_blocked_write" (never reads stdin again after its own
 // first marker, so a large mid-turn injection fills the pipe and blocks
 // the driver's own Write — proves a stop landing mid-write still retires
-// the pump promptly instead of wedging, see its own comment below).
+// the pump promptly instead of wedging, see its own comment below), and
+// "compact_boundary" (a "system"/"compact_boundary" envelope with a
+// compact_metadata payload, mid-turn, ahead of the turn's own text and
+// result — proves the driver forwards the CLI's own internal-compaction
+// marker as harness's EventClaudeCodeCompacted instead of dropping it).
 package main
 
 import (
@@ -182,6 +186,46 @@ func main() {
 	})
 
 	switch mode {
+	case "compact_boundary":
+		// A "system"/"compact_boundary" envelope — the CLI's own documented
+		// marker that it just compacted ITS OWN internal context (verified
+		// against the published @anthropic-ai/claude-agent-sdk TypeScript
+		// types, SDKCompactBoundaryMessage: {type:"system",
+		// subtype:"compact_boundary", compact_metadata:{trigger,pre_tokens,
+		// post_tokens?, ...}, uuid, session_id}) — arriving mid-turn, ahead
+		// of the turn's own assistant text and result. Proves
+		// consumeClaudeCodeStream forwards it as harness's own
+		// EventClaudeCodeCompacted instead of silently dropping it as inert
+		// "system" activity.
+		emit(map[string]any{
+			"type":    "system",
+			"subtype": "compact_boundary",
+			"compact_metadata": map[string]any{
+				"trigger":    "auto",
+				"pre_tokens": 123456,
+			},
+			"session_id": sessionID,
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Continuing after compaction."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Continuing after compaction.",
+			"usage": map[string]any{
+				"input_tokens":  12,
+				"output_tokens": 6,
+			},
+		})
+		return
 	case "fast_no_drain":
 		emit(map[string]any{
 			"type": "assistant",

@@ -210,6 +210,22 @@ type Event struct {
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 
+	// ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
+	// ClaudeCodeCompactPostTokens are carried by EventClaudeCodeCompacted
+	// only — see that constant's own doc comment. They are the CLI's own
+	// compact_metadata report (claudeCodeCompactMetadata,
+	// claude_code_backend.go), typed rather than left for a consumer to
+	// string-parse out of Text: Trigger is "auto" or "manual" (empty when
+	// the envelope omitted compact_metadata entirely), PreTokens the
+	// context size the CLI reported before its own fold. PostTokens is 0
+	// both when the CLI genuinely reports 0 and when it omits the field —
+	// the wire and journal formats cannot tell those two apart (the SDK's
+	// own type marks post_tokens optional) — a known, documented
+	// limitation, not a bug.
+	ClaudeCodeCompactTrigger    string `json:"trigger,omitempty"`
+	ClaudeCodeCompactPreTokens  int    `json:"pre_tokens,omitempty"`
+	ClaudeCodeCompactPostTokens int    `json:"post_tokens,omitempty"`
+
 	// Prompt-queue fields (set on EventPromptQueued/EventPromptDequeued; see
 	// queue.go). QueueID is the queue-assigned, session-monotonic prompt ID.
 	// QueueText is the queued prompt text, carried on BOTH events (not just
@@ -1373,6 +1389,50 @@ type Session struct {
 	// Guarded by mu.
 	compactHysteresis bool
 
+	// forceCompactionCheck is true exactly when the session's CURRENT
+	// model is native and the most recently recorded usage-defining event
+	// was a claude-code-delegated turn — i.e. no native turn has completed
+	// since the last switch off ClaudeCodeProviderFamily. maybeAutoCompact's
+	// ordinary signal for "how big is the next request" is s.lastUsage —
+	// but applyClaudeCodeUsage sets lastUsage from the CLI's OWN internal,
+	// self-managed context accounting (claude_code_backend.go), a number
+	// with no relationship to harness's own journal size, since the CLI
+	// runs its own compaction over its own history. Trusting that stale,
+	// wrong-scale figure right after a switch to a native model — which
+	// transcodes and sends harness's ACTUAL journal, not the CLI's — is
+	// exactly how a session like ses_01m1kyhka3ewf8vcth0qbqm222 (3,667-
+	// message delegated journal, switched to a native model, immediately
+	// rejected as "prompt too long") went uncompacted.
+	//
+	// Set by SetModel on a claude-code-to-native switch and by store.go's
+	// recModel replay fold of the identical transition — the durable
+	// record already names the prior provider, so replay reconstructs this
+	// exactly rather than trusting an in-memory flag that a process
+	// restart or a residency eviction between the switch and the next
+	// Prompt would otherwise lose (the flag alone survived exactly one
+	// process lifetime; the stale lastUsage it exists to distrust is
+	// durable, so the guard has to be too). Also captured/restored by
+	// snapshot.go for the anchored-load fast path. Cleared by SetModel/
+	// recModel on a switch BACK to ClaudeCodeProviderFamily (nothing to
+	// force-check while delegated), by appendWithUsage/recMessage replay
+	// the moment a native turn actually completes with real usage (a
+	// trustworthy lastUsage exists again), and by maybeAutoCompact itself
+	// on EVERY outcome that settles the "does the next request fit"
+	// question this flag exists to ask — under threshold, a fold that
+	// clears the estimate, or a Compact call that concludes (loudly, via
+	// failForcedCompactionLoudly) that this pass cannot answer it at all,
+	// whether because folding made no progress, a fold still left the
+	// journal over the window, or the Compact call itself errored. There is
+	// deliberately no growth-triggered retry left after that: a session
+	// that stays over the window gets another forced check only from a
+	// later SetModel, never on its own (see failForcedCompactionLoudly's
+	// own doc comment for why an earlier one-shot retry on journal growth
+	// was removed rather than fixed — it could not tell "the journal grew
+	// because a retry is due" from "the journal grew because the caller
+	// sent another prompt").
+	// Guarded by mu.
+	forceCompactionCheck bool
+
 	// contextWindowExplicit is true when the ORIGINAL Config.ContextWindowTokens
 	// passed to NewSession/LoadSession was already positive — an operator
 	// override. It is set once, at construction, and never changes again for
@@ -1682,14 +1742,33 @@ func newSession(cfg Config) *Session {
 // churn-guard, which means "folding again won't relieve pressure at the
 // window it latched under" (see compactHysteresis's doc comment) — a claim
 // that no longer holds once the window itself has moved.
+//
+// A switch AWAY from ClaudeCodeProviderFamily to a native model also arms
+// forceCompactionCheck (see that field's own doc comment): a delegated
+// session's s.lastUsage reflects the CLI's own internal context, not
+// harness's journal, so the ordinary automatic trigger's signal is stale
+// the moment a native model starts actually sending that journal. A switch
+// BACK to ClaudeCodeProviderFamily clears it — the CLI owns its own
+// context again and there is nothing left to force-check until the next
+// native switch. A switch between two native models never touches it —
+// native lastUsage always reflects harness's own last real request,
+// whatever model produced it, so the ordinary trigger's signal stays valid
+// across that kind of switch.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ref == s.model {
 		return
 	}
+	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
 	s.persistModel(ref)
+	switch {
+	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
+		s.forceCompactionCheck = true
+	case ref.Provider == ClaudeCodeProviderFamily:
+		s.forceCompactionCheck = false
+	}
 	if !s.contextWindowExplicit {
 		nextTokens, nextSource, miss := resolveContextWindow(0, ref)
 		// Re-derived, so it REPLACES whatever the previous model left:
@@ -2337,6 +2416,13 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.usage.CacheWriteTokens += usage.CacheWriteTokens
 		s.lastUsage = *usage
 		s.haveLastUsage = true
+		// This path is exclusively a native turn's real usage — a
+		// delegated turn's usage folds through applyClaudeCodeUsage
+		// instead (see that method's own doc comment), never here — so
+		// lastUsage really does reflect harness's own journal again. See
+		// forceCompactionCheck's own doc comment: the ordinary trigger is
+		// trustworthy again from here on.
+		s.forceCompactionCheck = false
 	}
 	s.persistMessage(&m, usage)
 	// The append boundary (snapshot.go, rule 2): history, usage, and the
@@ -2701,9 +2787,20 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	// user message is appended below: a turn boundary always falls on a
 	// completed-turn edge, the summary never has to account for a prompt
 	// that hasn't been answered yet, and the just-arrived message can never
-	// be folded into its own summary. Best-effort: a failed or skipped
-	// compaction never blocks the real turn (see maybeAutoCompact).
-	s.maybeAutoCompact(ctx)
+	// be folded into its own summary. Ordinarily best-effort: a failed or
+	// skipped compaction never blocks the real turn. The one exception is a
+	// pending forceCompactionCheck (armed by SetModel on a claude-code-to-
+	// native switch — see that field's own doc comment): maybeAutoCompact
+	// returns a non-nil error ONLY for that forced-and-failed case, and this
+	// rejects the prompt here, the same "no user message recorded, provider
+	// never reached" shape ensureInstructions/ensureSkills above already
+	// use — failing loud with a compaction error instead of silently
+	// forwarding an over-threshold journal that the provider would
+	// otherwise reject as "prompt too long".
+	if err := s.maybeAutoCompact(ctx); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	s.append(message.Message{
 		ID:        ResolveMessageID(id),
 		Role:      message.RoleUser,

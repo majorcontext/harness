@@ -2547,3 +2547,85 @@ func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
 			"appended message must hold it as a Blob part, exactly once)", blobs)
 	}
 }
+
+// TestClaudeCodeForwardsCompactBoundaryAsEvent is the red-first test for
+// forwarding the CLI's own internal-compaction marker: a real `claude`
+// binary's `--output-format stream-json` protocol emits a "system" envelope
+// with subtype "compact_boundary" (and a compact_metadata payload) the
+// moment it compacts its own context — verified against the published
+// @anthropic-ai/claude-agent-sdk TypeScript types
+// (SDKCompactBoundaryMessage: {type:"system", subtype:"compact_boundary",
+// compact_metadata:{trigger, pre_tokens, post_tokens?, ...}, uuid,
+// session_id}), the same wire shape the docs for streaming output describe
+// as SystemMessage subtype "compact_boundary". Before this fix,
+// consumeClaudeCodeStream's "system" case only special-cases subtype
+// "init" and drops every other subtype as "observed but requires no
+// action" — this test's fakeclaude "compact_boundary" mode emits exactly
+// that envelope mid-turn, ahead of the turn's own assistant text and
+// result, and fails pre-fix because no EventClaudeCodeCompacted (or any
+// compaction-named event at all) is ever emitted — the CLI's own
+// compaction stays exactly as invisible to harness and the console as
+// docs/design/context-compaction.md's delegated-session gap describes.
+func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+
+	// events is appended from OnEvent, which fires on more than one
+	// goroutine for a delegated turn — the consuming goroutine that reads
+	// the turn's own stream AND the stdin-pump goroutine
+	// (DequeueAllPrompts, claude_code_backend.go:524), which can also
+	// reach s.emit. A mutex here removes the question rather than relying
+	// on this particular fixture happening not to race.
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+	)
+	s := NewSession(Config{
+		SessionDir: t.TempDir(),
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+		OnEvent: func(ev Event) {
+			eventsMu.Lock()
+			events = append(events, ev)
+			eventsMu.Unlock()
+		},
+	})
+
+	// The turn itself must still complete normally — a compact_boundary
+	// envelope is content-free activity, not a turn-ending signal.
+	final, err := s.Prompt(context.Background(), "keep going")
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if final.Parts.Text() != "Continuing after compaction." {
+		t.Errorf("final message = %q, want fakeclaude's own canned reply", final.Parts.Text())
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	var found *Event
+	for i := range events {
+		if events[i].Type == EventClaudeCodeCompacted {
+			found = &events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("no %q event emitted; events = %+v", EventClaudeCodeCompacted, events)
+	}
+	if !strings.Contains(found.Text, "auto") {
+		t.Errorf("event Text = %q, want it to name the compact_metadata trigger (\"auto\")", found.Text)
+	}
+	if !strings.Contains(found.Text, "123456") {
+		t.Errorf("event Text = %q, want it to carry the compact_metadata pre_tokens figure (123456)", found.Text)
+	}
+	// Typed fields (SHOULD 7 of the fix round): a consumer must be able to
+	// read exact numbers without string-parsing Text.
+	if found.ClaudeCodeCompactTrigger != "auto" {
+		t.Errorf("ClaudeCodeCompactTrigger = %q, want %q", found.ClaudeCodeCompactTrigger, "auto")
+	}
+	if found.ClaudeCodeCompactPreTokens != 123456 {
+		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", found.ClaudeCodeCompactPreTokens)
+	}
+}

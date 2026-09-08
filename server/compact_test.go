@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -578,6 +579,61 @@ func TestCompactEndpointUnknownSessionIs404(t *testing.T) {
 	resp, data := h.do("POST", "/session/ses_nope/compact", map[string]any{})
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", resp.StatusCode, data)
+	}
+}
+
+// TestCompactEndpointRejectsClaudeCodeDelegatedSession is the red-first test
+// for guarding POST /session/{id}/compact against a session CURRENTLY
+// delegated to the Claude Code CLI (engine.ClaudeCodeProviderFamily). That
+// CLI manages its own context end to end (docs/design/context-compaction.md,
+// "A session delegated to the Claude Code CLI"); harness's journal for such
+// a session is only ever a passive record, so running harness's own
+// summarizer against it would silently splice a journal nobody reads
+// instead of doing anything the CLI's real context actually needs — the
+// exact trap docs/design/context-compaction.md names. The endpoint must
+// refuse with a clear 4xx naming the reason, before ever claiming the run
+// slot or calling Session.Compact, rather than a 200 that accomplishes
+// nothing or (worse) a 500 from a native-provider transcoder choking on
+// claude-code-produced history.
+func TestCompactEndpointRejectsClaudeCodeDelegatedSession(t *testing.T) {
+	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+	nativeProv := &scriptedProvider{name: "test"}
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{}, nativeProv)
+	id := h.createSession("")
+
+	// Pinned to exactly 409 with a reason naming the Claude Code CLI (NIT 4
+	// of the fix round): the docs and the PR body both specify 409, and a
+	// test that accepts any 4xx cannot fail if the status regresses to,
+	// say, a 400 or a 422 that happens to also carry a nonempty body.
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want 409: %s", resp.StatusCode, data)
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, data)
+	}
+	if !strings.Contains(out.Error, "Claude Code CLI") {
+		t.Fatalf("error body = %q, want it to name the Claude Code CLI as the reason", out.Error)
+	}
+
+	// Never claimed the run slot: a session that was never running before
+	// this call is still idle/idle/not-queued afterward, not stranded busy
+	// by a rejection that skipped the claim/release bracket.
+	sessResp, sessData := h.do("GET", "/session/"+id, nil)
+	if sessResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", sessResp.StatusCode, sessData)
+	}
+	var got struct {
+		Status string `json:"status"`
+		State  string `json:"state"`
+		Queued int    `json:"queued"`
+	}
+	mustUnmarshal(t, sessData, &got)
+	if got.Status != "idle" || got.State != "idle" || got.Queued != 0 {
+		t.Errorf("after a rejected compact, status=%q state=%q queued=%d, want idle/idle/0", got.Status, got.State, got.Queued)
 	}
 }
 

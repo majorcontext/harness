@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,10 +10,75 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
+
+// TestEstimatePromptTokensFromHistoryCountsImageAtFixedTokenEstimate is the
+// red-first regression test for NEW-BLOCKING 9's estimator half: an image
+// message.Blob's contribution must be a fixed imageBlockTokenEstimate
+// tokens, independent of its encoded byte size — not
+// len(Blob.Data)/bytesPerTokenEstimate, which over-counts a real image by
+// close to an order of magnitude. Anthropic resizes and tiles an image
+// before tokenizing it, so a 40 KB blob costs the same ~1600 tokens any
+// full-size image costs, not 40000/4 = 10000.
+func TestEstimatePromptTokensFromHistoryCountsImageAtFixedTokenEstimate(t *testing.T) {
+	bigImage := bytes.Repeat([]byte{0xFF}, 40000)
+	history := []message.Message{
+		{Role: message.RoleUser, Parts: message.Parts{
+			&message.Text{Text: "look at this"},
+			&message.Blob{MediaType: "image/png", Data: bigImage},
+		}},
+	}
+	got := estimatePromptTokensFromHistory(history)
+	want := len("look at this")/bytesPerTokenEstimate + imageBlockTokenEstimate
+	if got != want {
+		t.Fatalf("estimatePromptTokensFromHistory = %d, want %d (text bytes/4 plus a flat %d for the image, not %d for its raw byte length)",
+			got, want, imageBlockTokenEstimate, len(bigImage)/bytesPerTokenEstimate)
+	}
+	if oldStyleEstimate := len(bigImage) / bytesPerTokenEstimate; got >= oldStyleEstimate {
+		t.Fatalf("estimate %d did not improve on the byte-based estimate %d the fix replaces", got, oldStyleEstimate)
+	}
+}
+
+// TestEstimatePromptTokensFromHistoryNonImageBlobStillUsesByteEstimate pins
+// that the fix is scoped to image/* media types only: a non-image Blob
+// (e.g. a PDF attachment) has no comparably documented flat per-unit cost,
+// so it still falls back to the byte heuristic.
+func TestEstimatePromptTokensFromHistoryNonImageBlobStillUsesByteEstimate(t *testing.T) {
+	data := bytes.Repeat([]byte{'%'}, 4000)
+	history := []message.Message{
+		{Role: message.RoleUser, Parts: message.Parts{
+			&message.Blob{MediaType: "application/pdf", Data: data},
+		}},
+	}
+	got := estimatePromptTokensFromHistory(history)
+	if want := len(data) / bytesPerTokenEstimate; got != want {
+		t.Fatalf("estimatePromptTokensFromHistory for a non-image blob = %d, want %d (byte/4, unchanged)", got, want)
+	}
+}
+
+// TestEstimatePromptTokensFromHistoryCountsImageInsideToolResult pins that
+// the image-token fix also applies through the recursive ToolResult.Content
+// path (e.g. a read_file tool result returning a screenshot), not only a
+// top-level message part.
+func TestEstimatePromptTokensFromHistoryCountsImageInsideToolResult(t *testing.T) {
+	bigImage := bytes.Repeat([]byte{0xFF}, 40000)
+	history := []message.Message{
+		{Role: message.RoleAssistant, Parts: message.Parts{
+			&message.ToolResult{CallID: "call_1", Content: message.Parts{
+				&message.Blob{MediaType: "image/jpeg", Data: bigImage},
+			}},
+		}},
+	}
+	got := estimatePromptTokensFromHistory(history)
+	want := len("call_1")/bytesPerTokenEstimate + imageBlockTokenEstimate
+	if got != want {
+		t.Fatalf("estimatePromptTokensFromHistory for an image inside ToolResult.Content = %d, want %d", got, want)
+	}
+}
 
 // compactTurnSeq gives each compactTurn call in a test a distinct assistant
 // message ID: asstTurn's shared "msg_a" constant is fine for tests that
@@ -1633,5 +1699,706 @@ func TestPursueGoalAutoCompactsMidLoop(t *testing.T) {
 	}
 	if got := s.CompactionCount(); got != 1 {
 		t.Fatalf("CompactionCount = %d, want exactly 1 (mid-loop automatic compaction)", got)
+	}
+}
+
+// seedDelegatedTurn appends one RoleUser/RoleAssistant pair directly to s's
+// history, bypassing Prompt entirely — the shape a real claude-code
+// delegated turn leaves behind (runClaudeCodeTurn appends plain messages as
+// they stream in; only the terminal "result" event's usage, via
+// applyClaudeCodeUsage, ever touches s.lastUsage). text is repeated to
+// build up byte size cheaply.
+func seedDelegatedTurn(s *Session, text string) {
+	now := time.Now().UTC()
+	s.append(message.Message{ID: ResolveMessageID(""), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "continue"}}, CreatedAt: now})
+	s.append(message.Message{ID: ResolveMessageID(""), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}, CreatedAt: now})
+}
+
+// TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch is the red-first
+// regression test for the live incident (session
+// ses_01m1kyhka3ewf8vcth0qbqm222): a session delegated to the Claude Code
+// CLI for its entire life accumulates a huge harness journal purely as a
+// passive record (harness's own automatic compaction is unconditionally
+// skipped for a delegated turn — see PromptWithOrigin's early dispatch).
+// applyClaudeCodeUsage DOES set s.lastUsage/haveLastUsage on every delegated
+// turn, but from the CLI's OWN internal, self-managed context accounting —
+// a number with no relationship to harness's own journal size, since the
+// CLI runs its own compaction over its own history. When the session is
+// switched to a harness-native model, maybeAutoCompact must not trust that
+// stale, wrong-scale lastUsage figure: it must estimate straight from
+// harness's actual journal (the thing a native request actually transcodes
+// and sends) and compact BEFORE the next native provider call, regardless
+// of the prior model's delegated flag.
+//
+// Named failure this pins: pre-fix, maybeAutoCompact reads
+// lastUsage.InputTokens (here, a small CLI-reported figure standing in for
+// the CLI's own compacted context) as "how big is the next request," sees
+// it comfortably under threshold, and never compacts — so the native
+// provider receives the full, uncompacted, over-threshold journal as its
+// first request. This test fails today because CompactionCount() is 0 and
+// the request the (test) native provider actually receives still carries
+// every seeded turn.
+func TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist of the delegated run", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000, // explicit: survives the switch unchanged (SetModel never re-derives it)
+		CompactionKeepTurns: 1,
+	})
+
+	// Five delegated turns, each long enough that the whole journal's crude
+	// byte/4 estimate clears threshold*windowTokens (0.8*1000 = 800).
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preSwitchHistoryLen := len(s.History())
+
+	// applyClaudeCodeUsage's real shape: it DOES set lastUsage/haveLastUsage
+	// on a delegated turn, but from the CLI's own small internal context —
+	// nothing like harness's actual journal size seeded above.
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt after claude-code-to-native switch: %v (must compact and succeed, not fail)", err)
+	}
+
+	if got := s.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after the post-switch turn = %d, want 1 (forced compaction must have run before the native provider call)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider calls = %d, want 2 (1 compaction summary + 1 native worker turn)", len(prov.requests))
+	}
+	finalReq := prov.requests[len(prov.requests)-1]
+	if len(finalReq.Messages) >= preSwitchHistoryLen {
+		t.Errorf("final native request carried %d messages (pre-switch history was %d) — forced compaction must have trimmed it before the provider call",
+			len(finalReq.Messages), preSwitchHistoryLen)
+	}
+}
+
+// TestForcedCompactionErrorProceedsToNativeProviderAfterClaudeCodeSwitch is
+// the red-first regression test for round-3 review BLOCKING A, using an
+// UNCLASSIFIED provider error (a plain out-of-scripted-turns failure, not a
+// classified provider.Error — see
+// TestMaybeAutoCompactForcedCompactErrorTerminatesAndProceeds for that
+// shape) to prove the fix does not depend on error classification: a
+// forced compaction pass exists precisely because sending the pre-switch
+// journal to a native provider would otherwise overflow it, but its own
+// summarization call can fail for any reason. This test used to pin the
+// OPPOSITE requirement — that such a failure blocks Prompt with a loud
+// compaction error and the real turn's own provider call is NEVER
+// attempted — which is exactly the permanent-brick shape BLOCKING A closed
+// (see docs/design/context-compaction.md and
+// TestForceCompactionCheckClearsAndStaysOffAfterFailedAttempt for the
+// retry half). Post-fix, EventCompactionFailed still reports the failure,
+// but the real turn's own native provider call IS attempted — it happens
+// to fail too here, for its own separate reason (test setup has nothing
+// scripted for it either), proving the forced check no longer swallows the
+// real turn behind a permanent compaction block.
+func TestForcedCompactionErrorProceedsToNativeProviderAfterClaudeCodeSwitch(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	// No scripted turns at all: the forced compaction's own summarization
+	// call is the very first Stream call, and it exhausts p.turns
+	// immediately (see scriptedProvider.Stream), so Compact fails for a
+	// real, unclassified reason (not the benign empty-summary skip).
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	var evs []Event
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err == nil {
+		t.Fatal("Prompt succeeded, want the native provider's own out-of-scripted-turns error (test setup, proves the real turn was reached)")
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarization call itself errored, nothing folded)", got)
+	}
+	// BOTH calls must have been attempted: the failed compaction summary,
+	// then the real turn's own native provider call — pre-fix, only the
+	// first ever ran.
+	if len(prov.requests) != 2 {
+		t.Errorf("provider calls = %d, want 2 (the failed compaction summary, then the native turn actually reaching the provider)", len(prov.requests))
+	}
+	var failedReason string
+	for _, ev := range evs {
+		if ev.Type == EventCompactionFailed && strings.Contains(ev.Text, "forced compaction failed") {
+			failedReason = ev.Text
+		}
+	}
+	if failedReason == "" {
+		t.Errorf("no EventCompactionFailed naming \"forced compaction failed\" among %d events, want the loud report preserved even though Prompt proceeds to the provider", len(evs))
+	}
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armed {
+		t.Error("forceCompactionCheck still true after the terminating Compact-error pass, want it cleared")
+	}
+}
+
+// TestForceCompactionCheckSurvivesReload is the red-first regression test
+// for BLOCKING 1 of the andybons/claude-code-compaction-forced-switch fix
+// round: forceCompactionCheck used to be a memory-only Session field,
+// deliberately excluded from the journal fold AND the snapshot. The stale
+// signal it exists to distrust — a delegated turn's lastUsage, folded in by
+// recClaudeCodeUsage — is durable, so any process restart or residency
+// eviction between the SetModel switch and the next Prompt lost the arming
+// flag while the stale figure survived intact: a reload took the ORDINARY
+// branch, trusted the small CLI-reported lastUsage, and forwarded the full,
+// never-compacted journal to the native provider — the original incident,
+// on a cold session. This seeds a delegated session, switches to a native
+// model, then RELOADS from the durable journal instead of continuing to
+// use the live *Session (simulating exactly that gap), and prompts on the
+// reloaded session.
+//
+// Named failure this pins: pre-fix, the reloaded session's
+// forceCompactionCheck is false (never folded from recModel/recMessage,
+// never restored from a snapshot), so CompactionCount stays 0 and the final
+// native request still carries every seeded pre-switch message.
+func TestForceCompactionCheckSurvivesReload(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist of the delegated run", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		SessionDir:          dir,
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preSwitchHistoryLen := len(s.History())
+
+	// applyClaudeCodeUsage's real shape (see
+	// TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch's identical
+	// setup): a small CLI-internal figure, nothing like harness's actual
+	// journal size seeded above.
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	// Simulate a residency eviction or a process restart between the
+	// switch and the next Prompt: reload from the durable journal instead
+	// of continuing to use s.
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loaded.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt on the reloaded session after a claude-code-to-native switch: %v (must compact and succeed, not fail)", err)
+	}
+
+	if got := loaded.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after the post-reload turn = %d, want 1 (the reload must have re-derived forceCompactionCheck from the durable recModel/recMessage fold and forced compaction before the native provider call)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider calls = %d, want 2 (1 compaction summary + 1 native worker turn)", len(prov.requests))
+	}
+	finalReq := prov.requests[len(prov.requests)-1]
+	if len(finalReq.Messages) >= preSwitchHistoryLen {
+		t.Errorf("final native request carried %d messages (pre-switch history was %d) — forced compaction must have trimmed it before the provider call",
+			len(finalReq.Messages), preSwitchHistoryLen)
+	}
+}
+
+// TestForceCompactionCheckClearsAndStaysOffAfterFailedAttempt is the
+// red-first regression test for the retry half of round-3 review BLOCKING
+// A: a forced pass whose own Compact call fails for a real, unclassified
+// reason (see TestForcedCompactionErrorProceedsToNativeProviderAfterClaudeCodeSwitch
+// for that first attempt's own assertions) clears forceCompactionCheck via
+// failForcedCompactionLoudly — it does NOT stay armed. This used to pin the
+// OPPOSITE requirement (BLOCKING 2 of the original fix round): that the
+// flag survive the failed attempt so a retry re-checks and re-forces
+// compaction. Round 3 removed the growth-triggered re-arm entirely (see
+// docs/design/context-compaction.md) precisely because that mechanism
+// could not distinguish "the journal grew because a retry is due" from
+// "the journal grew because the caller sent another prompt" — so the
+// correct behavior for a retry after a terminated forced pass is now the
+// ORDINARY (non-forced) path, which does not reissue the summarizer at
+// all.
+func TestForceCompactionCheckClearsAndStaysOffAfterFailedAttempt(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	// No scripted turns: the forced compaction's own summarization call is
+	// the very first Stream call and exhausts prov.turns immediately, so
+	// Compact fails for a real, unclassified reason.
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err == nil {
+		t.Fatal("first Prompt after the switch succeeded, want the native provider's own out-of-scripted-turns error (test setup)")
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Fatalf("CompactionCount after the failed first attempt = %d, want 0", got)
+	}
+	s.mu.Lock()
+	armedAfterFirst := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armedAfterFirst {
+		t.Fatal("forceCompactionCheck still true after the terminating first attempt, want it cleared")
+	}
+
+	// The retry: pre-round-3, a still-armed flag would take the forced
+	// branch again and re-invoke the summarizer even though it now has a
+	// turn scripted. Post-fix, the flag is already cleared, so this call
+	// takes the ORDINARY branch, reads the small stale delegated lastUsage
+	// (well under threshold), and skips compaction — only the native
+	// reply's own call reaches the provider.
+	requestsBeforeRetry := len(prov.requests)
+	prov.turns = [][]provider.Event{
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}
+	prov.call = 0
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("retry Prompt: %v", err)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Fatalf("CompactionCount after the retry = %d, want 0 (no re-arm without a new SetModel)", got)
+	}
+	if got := len(prov.requests) - requestsBeforeRetry; got != 1 {
+		t.Errorf("provider calls made during the retry = %d, want 1 (the native turn only, no additional summarizer call)", got)
+	}
+}
+
+// TestMaybeAutoCompactForcedEmptySummaryTerminatesAndProceeds is the
+// red-first regression test for NEW-BLOCKING 9's terminating requirement,
+// the empty-summary shape: a forced pass's own summarization call that
+// runs, completes, and returns nothing usable (SkipReasonSummarizerEmpty,
+// TurnsFolded == 0) is a REAL, billed provider call that made no progress
+// toward the one thing a forced pass exists to achieve. Pre-fix, this left
+// forceCompactionCheck armed and failed Prompt loudly FOREVER — no retry of
+// the identical journal shape could ever change the summarizer's answer, so
+// every future Prompt call on this session failed without ever reaching a
+// provider that might have accepted the request. This pins the fix instead:
+// EventCompactionFailed still reports it (never silent), but Prompt
+// SUCCEEDS — the request proceeds to the native provider for its own real
+// verdict — and forceCompactionCheck is cleared, with no retry left armed
+// (see TestMaybeAutoCompactStaysOffAfterExhaustionUntilModelSwitch for that
+// half).
+func TestMaybeAutoCompactForcedEmptySummaryTerminatesAndProceeds(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // the model returns nothing usable
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	var evs []Event
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt after a forced compaction with an empty summary: %v, want it to proceed to the provider instead of blocking forever", err)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarizer never produced a usable fold)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Errorf("provider calls = %d, want 2 (the empty-summary compaction attempt, then the native turn proceeding uncompacted)", len(prov.requests))
+	}
+	var failedReason string
+	for _, ev := range evs {
+		if ev.Type == EventCompactionFailed && strings.Contains(ev.Text, "made no progress") {
+			failedReason = ev.Text
+		}
+	}
+	if failedReason == "" {
+		t.Errorf("no EventCompactionFailed naming \"made no progress\" among %d events, want the loud report preserved even though Prompt proceeds", len(evs))
+	}
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armed {
+		t.Error("forceCompactionCheck still true after the terminating empty-summary pass, want it cleared")
+	}
+}
+
+// TestMaybeAutoCompactForcedStillOverAfterFoldTerminatesAndProceeds is the
+// red-first regression test for NEW-BLOCKING 9's terminating requirement,
+// the still-over-after-fold shape: a forced pass never re-checked its own
+// work after a real fold, so a kept-turns tail holding one giant message
+// left the journal over the window regardless. Pre-fix this failed Prompt
+// loudly FOREVER on every subsequent call (folding the same kept turn again
+// can never shrink it). keep_turns=1 keeps only the final (huge) delegated
+// turn; folding away everything before it cannot relieve that turn's own
+// size, so the post-fold re-estimate is still over the window —
+// EventCompactionFailed reports it, but Prompt must SUCCEED, reaching the
+// native provider for its own verdict instead of bricking the session.
+func TestMaybeAutoCompactForcedStillOverAfterFoldTerminatesAndProceeds(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	var evs []Event
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	seedDelegatedTurn(s, strings.Repeat("x", 100))
+	seedDelegatedTurn(s, strings.Repeat("x", 100))
+	seedDelegatedTurn(s, strings.Repeat("x", 6000)) // kept verbatim (keep_turns=1); alone well over threshold*window (800 tokens)
+
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt after a forced compaction that folded but left the journal still over the window: %v, want it to proceed to the provider instead of blocking forever", err)
+	}
+	if got := s.CompactionCount(); got != 1 {
+		t.Errorf("CompactionCount = %d, want 1 (the fold itself succeeded)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Errorf("provider calls = %d, want 2 (the summarization call, then the native turn proceeding uncompacted)", len(prov.requests))
+	}
+	var failedReason string
+	for _, ev := range evs {
+		if ev.Type == EventCompactionFailed && strings.Contains(ev.Text, "still over the window") {
+			failedReason = ev.Text
+		}
+	}
+	if failedReason == "" {
+		t.Errorf("no EventCompactionFailed naming \"still over the window\" among %d events, want the loud report preserved even though Prompt proceeds", len(evs))
+	}
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armed {
+		t.Error("forceCompactionCheck still true after the terminating still-over-after-fold pass, want it cleared")
+	}
+}
+
+// contextOverflowOnceProvider fails exactly its first Stream call with a
+// classified provider.ErrKindContextOverflow error — the shape Session.
+// Compact's own doc comment names explicitly ("a range too large to
+// summarize in one call"), and the most likely error a forced pass's own
+// summarization call hits when the fold range is the whole journal minus
+// the kept turns — then serves scriptedProvider's scripted turns for every
+// call after that.
+type contextOverflowOnceProvider struct {
+	scriptedProvider
+	failedOnce bool
+}
+
+func (p *contextOverflowOnceProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	if !p.failedOnce {
+		p.failedOnce = true
+		p.requests = append(p.requests, req)
+		return nil, &provider.Error{Kind: provider.ErrKindContextOverflow, PromptTokens: 400000, TokenLimit: 200000}
+	}
+	return p.scriptedProvider.Stream(ctx, req)
+}
+
+// TestMaybeAutoCompactForcedCompactErrorTerminatesAndProceeds is the
+// red-first regression test for round-3 review BLOCKING A: pre-fix, ANY
+// error from a forced pass's own Compact call — not a skip, a real failure
+// — left forceCompactionCheck armed and failed the Prompt call outright
+// ("engine: forced compaction failed: %w"), forever: the next Prompt call
+// reissued the identical oversized fold range against the identical
+// summarizer, which is deterministic for a classified context-overflow
+// error (retrying changes nothing about the request shape — the same
+// precedent engine/goal.go:1173 already applies to a live native turn). A
+// session whose delegated journal outgrew the summarizer model's OWN
+// window at the moment of a claude-code-to-native switch was therefore
+// permanently un-promptable on any native model, with no in-band escape —
+// exactly the incident class NEW-9 exists to close, reached through the
+// one branch that fix did not touch. This pins the fix instead:
+// EventCompactionFailed still reports the error (never silent), but Prompt
+// SUCCEEDS on the very call that hit it — the request proceeds to the
+// native provider for its own real verdict — forceCompactionCheck is
+// cleared, and (see the growth re-arm's removal, docs/design/
+// context-compaction.md) a later Prompt call does not re-invoke the
+// summarizer at all: the mechanism stays off until a native turn lands
+// usage or SetModel switches again.
+func TestMaybeAutoCompactForcedCompactErrorTerminatesAndProceeds(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &contextOverflowOnceProvider{scriptedProvider: scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+		compactTurn("native reply 2", provider.Usage{InputTokens: 50}),
+	}}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+	var evs []Event
+	s.cfg.OnEvent = func(ev Event) { evs = append(evs, ev) }
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt after a forced compaction whose Compact call errored: %v, want it to proceed to the provider instead of blocking forever", err)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarizer call itself errored; nothing folded)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Errorf("provider calls = %d, want 2 (the errored compaction attempt, then the native turn proceeding uncompacted)", len(prov.requests))
+	}
+	var failedReason string
+	for _, ev := range evs {
+		if ev.Type == EventCompactionFailed && strings.Contains(ev.Text, "forced compaction failed") {
+			failedReason = ev.Text
+		}
+	}
+	if failedReason == "" {
+		t.Errorf("no EventCompactionFailed naming \"forced compaction failed\" among %d events, want the loud report preserved even though Prompt proceeds", len(evs))
+	}
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armed {
+		t.Error("forceCompactionCheck still true after the terminating Compact-error pass, want it cleared")
+	}
+
+	// A second Prompt call, with no further model switch and no re-arm
+	// mechanism left (the growth retry is gone), must NOT re-invoke the
+	// summarizer: the first Prompt's own native reply already landed real
+	// usage well under threshold, so the ordinary trigger correctly skips.
+	if _, err := s.Prompt(context.Background(), "continue again"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount after the second Prompt = %d, want 0 (no re-arm without a new SetModel)", got)
+	}
+	if got := len(prov.requests); got != 3 {
+		t.Errorf("provider calls after the second Prompt = %d, want 3 (one more native turn, no additional summarizer call)", got)
+	}
+}
+
+// TestMaybeAutoCompactStaysOffAfterExhaustionUntilModelSwitch is the
+// red-first regression test replacing NEW-BLOCKING 9's re-arm requirement:
+// an earlier design's `forceCompactionExhaustedAt` gave a session another
+// forced attempt once the journal had genuinely grown past the point a
+// prior pass gave up at — the round-3 review measured that this could not
+// actually tell "the journal grew because a retry is due" from "the journal
+// grew because the caller sent another Prompt": maybeAutoCompact runs
+// before the incoming user message is appended, so a terminated forced pass
+// that lets the turn through grows the journal by construction on every
+// single later Prompt call, which reissued the summarizer once per Prompt
+// indefinitely while pressure persisted — the exact per-turn billed-call
+// shape the design doc's own "never ... regardless of whether anything
+// changed" claim said the mechanism prevented. This pins its removal
+// instead: once a forced pass has terminated (see
+// failForcedCompactionLoudly), the mechanism stays OFF — no summarizer call
+// on a later Prompt call — until either a native turn lands real usage or
+// the model is switched again via SetModel. The scripted provider has
+// exactly ONE turn for the first Prompt call: the compaction summary itself
+// (empty, so Compact reports SkipReasonSummarizerEmpty and maybeAutoCompact
+// terminates and proceeds), then the native turn's OWN Stream call runs out
+// of scripted turns and fails — so, unlike
+// TestMaybeAutoCompactForcedEmptySummaryTerminatesAndProceeds, no usage
+// lands, leaving forceCompactionCheck's clear (not a re-arm) as the only
+// thing standing between the second Prompt call and another summarizer
+// call.
+func TestMaybeAutoCompactStaysOffAfterExhaustionUntilModelSwitch(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // first attempt: no progress; the native turn after it has no scripted reply and fails
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preFirstPromptHistoryLen := len(s.History())
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	// First Prompt call: the empty summary makes no progress and
+	// terminates (see TestMaybeAutoCompactForcedEmptySummaryTerminatesAndProceeds
+	// for that step's full assertion set), so maybeAutoCompact lets the
+	// turn proceed — but the native provider itself has nothing scripted
+	// and fails, so Prompt returns that error and no usage ever lands.
+	if _, err := s.Prompt(context.Background(), "continue"); err == nil {
+		t.Fatal("first Prompt succeeded, want the native provider's own out-of-scripted-turns error (test setup)")
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Fatalf("CompactionCount after the first (no-progress) attempt = %d, want 0", got)
+	}
+	s.mu.Lock()
+	armedAfterFirst := s.forceCompactionCheck
+	s.mu.Unlock()
+	if armedAfterFirst {
+		t.Fatal("forceCompactionCheck still true after the terminating first attempt (test setup)")
+	}
+	if got := len(s.History()); got <= preFirstPromptHistoryLen {
+		t.Fatalf("history length after the first Prompt call = %d, want more than %d (the user message must persist even though the native call failed, test setup)", got, preFirstPromptHistoryLen)
+	}
+
+	// Second Prompt call: no SetModel, no new switch — the journal grew
+	// only because the first call's own user message was appended before
+	// its native provider call failed. There is no growth-triggered retry
+	// left to notice that growth, so this call takes the ordinary
+	// (non-forced) path, which reads the small stale lastUsage the
+	// claude-code switch left behind and correctly finds nothing over
+	// threshold — no additional summarizer call.
+	prov.turns = [][]provider.Event{
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}
+	prov.call = 0
+	requestsBeforeSecond := len(prov.requests)
+	if _, err := s.Prompt(context.Background(), "continue again"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount after the second Prompt = %d, want 0 (no re-arm without a new SetModel)", got)
+	}
+	if got := len(prov.requests) - requestsBeforeSecond; got != 1 {
+		t.Errorf("provider calls made during the second Prompt = %d, want 1 (the native turn only, no additional summarizer call)", got)
+	}
+}
+
+// TestCompactRefusesCurrentlyDelegatedSession is the red-first regression
+// test for the second half of SHOULD 5: server/handlers.go's
+// rejectClaudeCodeDelegatedCompact and its post-claim re-check are both
+// server-side conveniences — SetModel takes no run slot, so a native-to-
+// claude-code switch can land in the window between either check and the
+// actual Session.Compact call, and any OTHER future caller of Compact has
+// neither check at all. Session.Compact itself must refuse outright for a
+// session CURRENTLY delegated to the Claude Code CLI, independent of any
+// caller's own guard.
+func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+	})
+	seedDelegatedTurn(s, "hello")
+	seedDelegatedTurn(s, "hello again")
+
+	_, err := s.Compact(context.Background(), CompactOptions{})
+	if err == nil {
+		t.Fatal("Compact on a currently-delegated session succeeded, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "Claude Code CLI") {
+		t.Errorf("Compact error = %q, want it to name the Claude Code CLI as the reason", err.Error())
+	}
+	if len(prov.requests) != 0 {
+		t.Errorf("provider calls = %d, want 0 (Compact must refuse before ever calling the provider)", len(prov.requests))
+	}
+}
+
+// TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated is the
+// red-first regression test for NIT 1: forceCompactionCheck used to survive
+// a switch BACK to claude-code delegation — SetModel's switch table cleared
+// it on no branch. Harmless only because PromptWithOrigin's delegated
+// dispatch returns before maybeAutoCompact ever runs for a delegated
+// session, an invariant nothing pinned with a test before this one. Checks
+// the field directly (white-box, same package).
+func TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated(t *testing.T) {
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+	})
+
+	s.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if !armed {
+		t.Fatal("forceCompactionCheck not armed after a claude-code-to-native switch (test setup)")
+	}
+
+	s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"})
+	s.mu.Lock()
+	stillArmed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if stillArmed {
+		t.Error("forceCompactionCheck still true after switching BACK to claude-code delegation, want it cleared — nothing to force-check while delegated")
 	}
 }

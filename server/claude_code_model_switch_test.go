@@ -62,6 +62,17 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 	t.Helper()
 	dir := t.TempDir()
 	reg := provider.Registry{nativeProv.Name(): nativeProv}
+	// srv is declared here (zero value) so the two closures below can
+	// close over it BY REFERENCE — mirrors newServer's own mkCfg/OnEvent
+	// forward-declaration (server_test.go): OnEvent is set only when a
+	// session actually needs to emit, by which point New(opts) below has
+	// already assigned srv, so the field is never read as nil. Without
+	// this, engine.Config.OnEvent is never wired to Server.Publish at all
+	// (server.go's own doc comment: "wrapper is expected to wire
+	// engine.Config.OnEvent to Server.Publish"), so every session built by
+	// this harness journals and fans out NOTHING — a caller relying on SSE
+	// replay (?from=N) or a live event ever arriving blocks forever.
+	var srv *Server
 	opts := Options{
 		SessionDir: dir,
 		RunToken:   "secret-run-token",
@@ -77,6 +88,7 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 				ParentSession: parentSession,
 				SessionDir:    dir,
 				ClaudeCode:    claudeCode,
+				OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
 			}), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
@@ -85,10 +97,12 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 				Model:      claudeModel,
 				SessionDir: dir,
 				ClaudeCode: claudeCode,
+				OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
 			}, id)
 		},
 	}
-	srv, err := New(opts)
+	var err error
+	srv, err = New(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +215,64 @@ func TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle(t *testing.T) {
 	}
 	if got.LastTurn == nil || got.LastTurn.Outcome != "completed" {
 		t.Errorf("final last_turn = %+v, want outcome completed", got.LastTurn)
+	}
+}
+
+// TestClaudeCodeCompactedEventIsDurableAndTyped is the red-first regression
+// test for SHOULD 6+7 of the andybons/claude-code-compaction-forced-switch
+// fix round: evtClaudeCodeCompacted used to be publishLive-only, so a tab
+// not connected at the exact instant the CLI's own compact_boundary
+// envelope arrived could never learn it happened, including a fresh
+// bootstrap replay after the fact — precisely the observability gap
+// docs/design/context-compaction.md's delegated-session discussion claims
+// this event closes. It also used to carry only a free-form Text string a
+// consumer had to parse.
+//
+// This drives a real fakeclaude "compact_boundary" turn to completion with
+// NO SSE connection open at all — the late-tab shape — then opens
+// ?from=0 afterward and requires the durable record to still be there,
+// with its Seq assigned (proving it went through emitDurable, not
+// publishLive) and its Trigger/PreTokens fields exactly pinned rather than
+// left for a consumer to string-parse out of Text.
+func TestClaudeCodeCompactedEventIsDurableAndTyped(t *testing.T) {
+	bin := buildFakeClaudeForServer(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+
+	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+	nativeProv := &scriptedProvider{name: "test"}
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	id := h.createSession("")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "keep going"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	waitIdleClaudeCode(t, h, id)
+
+	// No SSE connection was open during the prompt above — this is the
+	// late-tab case. ?from=0 is a fresh connection's own bootstrap replay.
+	sse := h.openSSE("?from=0", "")
+	var found *Event
+	for i := 0; i < 50 && found == nil; i++ {
+		ev := sse.nextEvent(t)
+		if ev.Type == "compaction.claude_code" {
+			e := ev
+			found = &e
+		}
+	}
+	if found == nil {
+		t.Fatal("no compaction.claude_code event found in the replayed backlog")
+	}
+	if found.Seq == 0 {
+		t.Error("Seq = 0, want a nonzero durable sequence number — a live-only (publishLive) event never gets one")
+	}
+	if found.Trigger != "auto" {
+		t.Errorf("Trigger = %q, want %q", found.Trigger, "auto")
+	}
+	if found.PreTokens != 123456 {
+		t.Errorf("PreTokens = %d, want 123456", found.PreTokens)
 	}
 }

@@ -134,6 +134,16 @@ type Event struct {
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 
+	// Trigger/PreTokens/PostTokens are carried by the durable
+	// evtClaudeCodeCompacted record only — mirrors
+	// engine.Event.ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
+	// ClaudeCodeCompactPostTokens (see that field's own doc comment for
+	// what each means and the PostTokens/omitted-vs-zero caveat). Typed so
+	// a consumer reads exact numbers instead of parsing Text.
+	Trigger    string `json:"trigger,omitempty"`
+	PreTokens  int    `json:"pre_tokens,omitempty"`
+	PostTokens int    `json:"post_tokens,omitempty"`
+
 	// Prompt-queue fields, carried by the prompt.queued/prompt.dequeued
 	// durable records (see engine/queue.go and docs/plans/2026-07-19-prompt-
 	// queue.md). QueueID is the queue-assigned, session-monotonic prompt ID.
@@ -272,6 +282,17 @@ const (
 	// evtCompactionFailed above — never journaled, since a "started" that
 	// never resolves has nothing durable to reconcile on replay.
 	evtCompactionStarted = "compaction.started"
+	// evtClaudeCodeCompacted mirrors engine.EventClaudeCodeCompacted: the
+	// Claude Code CLI's own "compact_boundary" stream-json marker, forwarded
+	// for observability — see that constant's own doc comment for why it
+	// carries none of evtHistoryCompacted's journal-splice fields. UNLIKE
+	// evtCompactionFailed/evtCompactionStarted above, this IS journaled
+	// (Publish routes it through emitDurable): harness's own journal never
+	// changes shape when the CLI compacts its own context, so there is
+	// nothing to SPLICE-reconcile on replay, but it is still a fact about
+	// the session that a tab connecting later must be able to learn — see
+	// engine.EventClaudeCodeCompacted's own doc comment.
+	evtClaudeCodeCompacted = "compaction.claude_code"
 )
 
 const journalName = "events.jsonl"
@@ -428,6 +449,18 @@ func (s *Server) Publish(ev engine.Event) {
 			CompactFirstID:     ev.CompactFirstID,
 			CompactLastID:      ev.CompactLastID,
 			CompactTurnsFolded: ev.CompactTurnsFolded,
+		})
+	case engine.EventClaudeCodeCompacted:
+		// Durable — see evtClaudeCodeCompacted's own doc comment for why
+		// this differs from evtCompactionFailed/evtCompactionStarted just
+		// above, which stay live-only.
+		s.emitDurable(Event{
+			Type:       evtClaudeCodeCompacted,
+			SessionID:  ev.SessionID,
+			Text:       ev.Text,
+			Trigger:    ev.ClaudeCodeCompactTrigger,
+			PreTokens:  ev.ClaudeCodeCompactPreTokens,
+			PostTokens: ev.ClaudeCodeCompactPostTokens,
 		})
 	}
 }
