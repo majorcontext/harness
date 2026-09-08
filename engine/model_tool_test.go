@@ -88,6 +88,18 @@ func runModelToolListAction(t *testing.T, s *Session, args string) modelListResu
 	return res
 }
 
+// providerNames extracts the Name field of each providerInfo, in order,
+// for a test that only cares which providers are present (not their
+// billing) — see TestModelToolListLabelsProviderBilling for the billing
+// assertion.
+func providerNames(infos []providerInfo) []string {
+	names := make([]string, len(infos))
+	for i, p := range infos {
+		names[i] = p.Name
+	}
+	return names
+}
+
 // TestModelToolList proves the list action reports the same configured
 // provider families and aliases modelToolStatus reads — the data a
 // delegated caller (e.g. a claude-code-lane agent over the MCP shim) needs
@@ -98,7 +110,7 @@ func TestModelToolList(t *testing.T) {
 
 	res := runModelToolListAction(t, s, `{"action":"list"}`)
 	want := []string{"other", "test"}
-	if strings.Join(res.Providers, ",") != strings.Join(want, ",") {
+	if strings.Join(providerNames(res.Providers), ",") != strings.Join(want, ",") {
 		t.Fatalf("list providers = %v, want %v (sorted)", res.Providers, want)
 	}
 	if res.Aliases["fast"] != "test/m2" {
@@ -117,7 +129,7 @@ func TestModelToolStatus(t *testing.T) {
 		t.Fatalf("status aliases = %+v, want fast->test/m2", res.Aliases)
 	}
 	want := []string{"other", "test"}
-	if strings.Join(res.Providers, ",") != strings.Join(want, ",") {
+	if strings.Join(providerNames(res.Providers), ",") != strings.Join(want, ",") {
 		t.Fatalf("status providers = %v, want %v (sorted)", res.Providers, want)
 	}
 }

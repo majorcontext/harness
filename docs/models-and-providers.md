@@ -20,16 +20,36 @@ journals exactly once — the handlers never emit `model` themselves. `recModel`
 is the resume record `LoadSession` restores; `EventModelChanged` is the
 observability event. They are separate and both fire on one swap.
 
-The `model` session tool (gated on `Config.ModelTool`) has two actions:
+The `model` session tool (gated on `Config.ModelTool`) has three actions:
 `status` reports the current model, the configured aliases, and the configured
-provider names; `set {model}` resolves a one-level alias (from
-`Config.ModelAliases`, which mirrors `config.Aliases` — the engine never
-imports config), parses the ref, VALIDATES the provider is configured
-(`s.cfg.Providers.For`), then calls `SetModel`. A `set` to an unconfigured
-provider returns a tool error listing the valid aliases and provider names and
-changes nothing. There is deliberately NO `clear` action — a session always
+providers; `list` reports the same providers and aliases without the
+current-model field, for a delegated caller (e.g. `task`'s own `spawn`
+model override) that only needs the choices, not this session's own state;
+`set {model}` resolves a one-level alias (from `Config.ModelAliases`, which
+mirrors `config.Aliases` — the engine never imports config), parses the ref,
+VALIDATES the provider is configured (`s.cfg.Providers.For`), then calls
+`SetModel`. A `set` to an unconfigured provider returns a tool error listing
+the valid aliases and provider names and changes nothing. There is
+deliberately NO `clear` action — a session always
 has a model. Scope is the MAIN model only; the goal-evaluator and subagent
 models are untouched.
+
+Every provider the tool reports (`status` and `list` alike) carries a
+`billing` of `"subscription"` or `"api"`, so an agent told to prefer a
+subscription-backed model has a field to act on instead of needing prior
+knowledge of a deployment's provider-naming convention. The classification
+is a pure display computation over the configured provider's registry name
+(`billingForProvider`, `engine/model_tool.go`): `ClaudeCodeProviderFamily`
+(`"claude-code"`, the delegated Claude Code CLI backend — every turn runs
+through a locally subscription-authenticated `claude` process, never an
+API key) and the conventional `"codex"` key (`provider/openai.CodexFamily`,
+the ChatGPT Codex backend, billed against a ChatGPT subscription) both
+report `"subscription"`. Every other configured provider — the native
+`anthropic`/`openai` adapters, any `openai-compat` entry, and any `openai`
+entry not named `codex` — reports `"api"`: it is an HTTP adapter
+authenticated with an API key or a deployment-provided base URL. No
+provider configuration adds a third value; there is nothing for harness to
+guess at.
 
 `Config.ModelTool` is on by default. Config key `model_tool` (a `*bool`,
 default true — like `instructions`) lets a host opt OUT; `harness run`,

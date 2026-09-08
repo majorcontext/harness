@@ -51,6 +51,69 @@ type modelToolArgs struct {
 	Model  string `json:"model"`
 }
 
+// Provider billing classifications reported on every model tool
+// list/status providers[] entry — see billingForProvider. Two values only:
+// a configured provider is either paid for by a running subscription
+// (billingSubscription) or billed per API call (billingAPI). Nothing in
+// this codebase configures a provider harness cannot place in one of
+// those two buckets (see billingForProvider's doc comment), so a third
+// value is deliberately absent rather than spelled out unused.
+const (
+	billingSubscription = "subscription"
+	billingAPI          = "api"
+)
+
+// codexProviderFamily mirrors provider/openai.CodexFamily's conventional
+// providers-map key: an entry named "codex" speaks the ChatGPT Codex
+// backend and is billed against the operator's ChatGPT subscription
+// (provider/openai captures its x-codex-* subscription-usage response
+// headers only for a client whose resolved family equals this string).
+// Duplicated here, like ClaudeCodeProviderFamily is duplicated in
+// provider/claudecode, rather than imported: this package must not import
+// a concrete provider adapter package for one string.
+// TestCodexProviderFamilyMatchesOpenAIPackage pins the two from drifting
+// apart.
+const codexProviderFamily = "codex"
+
+// billingForProvider classifies name — a configured provider's registry
+// key, i.e. a message.ModelRef.Provider value — as subscription-backed or
+// API-billed, for the model tool's list/status output (see
+// providerInfo). It is a pure display classification of the two
+// conventions harness already treats as structurally distinct elsewhere:
+// ClaudeCodeProviderFamily (every turn delegates to the locally
+// subscription-authenticated `claude` CLI, never an API key — see
+// engine/claude_code_backend.go) and codexProviderFamily (speaks the
+// ChatGPT Codex backend and reports subscription-usage headers, see
+// provider/openai.CodexFamily). Every other configured provider —
+// the native anthropic/openai adapters, any openai-compat entry, and any
+// openai entry not named "codex" by convention (e.g. a deployment's own
+// "bifrost" gateway key) — is an HTTP adapter authenticated with an API
+// key or a deployment-provided base URL, so it classifies as billingAPI.
+//
+// This adds no new naming rule: it surfaces the same "the operator's own
+// key IS the signal" convention CodexFamily's own doc comment already
+// documents, purely as a response field an agent can read instead of
+// needing prior, out-of-band knowledge of this platform's naming
+// convention.
+func billingForProvider(name string) string {
+	switch name {
+	case ClaudeCodeProviderFamily, codexProviderFamily:
+		return billingSubscription
+	default:
+		return billingAPI
+	}
+}
+
+// providerInfo is one configured provider's registry name plus its
+// billing classification (see billingForProvider) — every model tool
+// list/status providers[] entry, so an agent told to prefer a
+// subscription-backed model (see docs/models-and-providers.md) can act on
+// that instruction from this tool's own response.
+type providerInfo struct {
+	Name    string `json:"name"`
+	Billing string `json:"billing"`
+}
+
 // modelToolResult is the JSON payload every model tool action returns: the
 // current model plus the configured aliases and provider names, so the model
 // can pick a valid target from one status call. Aliases and Providers are
@@ -58,7 +121,7 @@ type modelToolArgs struct {
 type modelToolResult struct {
 	Model     string            `json:"model"`
 	Aliases   map[string]string `json:"aliases,omitempty"`
-	Providers []string          `json:"providers,omitempty"`
+	Providers []providerInfo    `json:"providers,omitempty"`
 }
 
 // modelListResult is the list action's return: the configured provider
@@ -67,11 +130,11 @@ type modelToolResult struct {
 // agent reaching this tool through the harness-hosted MCP shim,
 // server/mcp_history.go) asking "what models are available" is not asking
 // about this particular session's own state, unlike status. Backed by the
-// exact same configuredProviderNames()/ModelAliases data modelToolStatus
+// exact same configuredProviderInfos()/ModelAliases data modelToolStatus
 // reads (see modelToolList) — never a second, independent data source
 // that could drift from it.
 type modelListResult struct {
-	Providers []string          `json:"providers"`
+	Providers []providerInfo    `json:"providers"`
 	Aliases   map[string]string `json:"aliases,omitempty"`
 }
 
@@ -85,12 +148,13 @@ func modelTool() Tool {
 				"automatically for whichever model is current — there is no migration step. " +
 				"Actions: " +
 				"status() reports the current model, the configured aliases, and the configured " +
-				"provider names; " +
+				"providers, each with a \"billing\" of \"subscription\" (paid for by a running " +
+				"subscription) or \"api\" (billed per call); " +
 				"set(model) swaps the main model to a full \"provider/model\" ref or a configured " +
 				"alias — it takes effect on the NEXT request in this session. set fails, and " +
 				"changes nothing, if the target names an unconfigured provider (the error lists the " +
 				"valid aliases and provider names). " +
-				"list() reports the configured provider families and aliases only, with no " +
+				"list() reports the same configured providers (with billing) and aliases, with no " +
 				"current-model or session state — useful to pick a family/model for another tool's " +
 				"own model override (e.g. task's spawn action) without swapping this session's own model. " +
 				"There is no action to clear the model — a session always has a model.",
@@ -178,7 +242,7 @@ func (s *Session) resolveModelRef(in string) (message.ModelRef, error) {
 func (s *Session) modelToolStatus() modelToolResult {
 	res := modelToolResult{
 		Model:     s.Model().String(),
-		Providers: s.configuredProviderNames(),
+		Providers: s.configuredProviderInfos(),
 	}
 	if len(s.cfg.ModelAliases) > 0 {
 		aliases := make(map[string]string, len(s.cfg.ModelAliases))
@@ -192,10 +256,10 @@ func (s *Session) modelToolStatus() modelToolResult {
 
 // modelToolList builds the list action's result: the configured provider
 // families and aliases only — the same underlying data modelToolStatus
-// reads (configuredProviderNames/ModelAliases), just without the current
+// reads (configuredProviderInfos/ModelAliases), just without the current
 // model field a bare "what models are available" query has no use for.
 func (s *Session) modelToolList() modelListResult {
-	res := modelListResult{Providers: s.configuredProviderNames()}
+	res := modelListResult{Providers: s.configuredProviderInfos()}
 	if len(s.cfg.ModelAliases) > 0 {
 		aliases := make(map[string]string, len(s.cfg.ModelAliases))
 		for k, v := range s.cfg.ModelAliases {
@@ -217,6 +281,23 @@ func (s *Session) configuredProviderNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// configuredProviderInfos returns the configured providers, sorted by
+// name, each paired with its billing classification (see
+// billingForProvider) — the data source both modelToolStatus and
+// modelToolList's providers[] field share, so list and status can never
+// report divergent billing for the same provider.
+func (s *Session) configuredProviderInfos() []providerInfo {
+	names := s.configuredProviderNames()
+	if len(names) == 0 {
+		return nil
+	}
+	infos := make([]providerInfo, len(names))
+	for i, name := range names {
+		infos[i] = providerInfo{Name: name, Billing: billingForProvider(name)}
+	}
+	return infos
 }
 
 // modelChoicesHint renders the valid aliases and provider names for a set
