@@ -2571,12 +2571,25 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
 	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
 
-	var events []Event
+	// events is appended from OnEvent, which fires on more than one
+	// goroutine for a delegated turn — the consuming goroutine that reads
+	// the turn's own stream AND the stdin-pump goroutine
+	// (DequeueAllPrompts, claude_code_backend.go:524), which can also
+	// reach s.emit. A mutex here removes the question rather than relying
+	// on this particular fixture happening not to race.
+	var (
+		eventsMu sync.Mutex
+		events   []Event
+	)
 	s := NewSession(Config{
 		SessionDir: t.TempDir(),
 		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
 		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
-		OnEvent:    func(ev Event) { events = append(events, ev) },
+		OnEvent: func(ev Event) {
+			eventsMu.Lock()
+			events = append(events, ev)
+			eventsMu.Unlock()
+		},
 	})
 
 	// The turn itself must still complete normally — a compact_boundary
@@ -2589,6 +2602,8 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 		t.Errorf("final message = %q, want fakeclaude's own canned reply", final.Parts.Text())
 	}
 
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
 	var found *Event
 	for i := range events {
 		if events[i].Type == EventClaudeCodeCompacted {
@@ -2604,5 +2619,13 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 	}
 	if !strings.Contains(found.Text, "123456") {
 		t.Errorf("event Text = %q, want it to carry the compact_metadata pre_tokens figure (123456)", found.Text)
+	}
+	// Typed fields (SHOULD 7 of the fix round): a consumer must be able to
+	// read exact numbers without string-parsing Text.
+	if found.ClaudeCodeCompactTrigger != "auto" {
+		t.Errorf("ClaudeCodeCompactTrigger = %q, want %q", found.ClaudeCodeCompactTrigger, "auto")
+	}
+	if found.ClaudeCodeCompactPreTokens != 123456 {
+		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", found.ClaudeCodeCompactPreTokens)
 	}
 }

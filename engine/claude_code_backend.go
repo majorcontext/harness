@@ -1143,17 +1143,28 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				// binary that sends the bare subtype without the metadata
 				// object must not crash a turn over one field.
 				text := "trigger=unknown"
+				var trigger string
+				var preTokens, postTokens int
 				if env.CompactMetadata != nil {
-					trigger := env.CompactMetadata.Trigger
-					if trigger == "" {
-						trigger = "unknown"
+					trigger = env.CompactMetadata.Trigger
+					preTokens = env.CompactMetadata.PreTokens
+					postTokens = env.CompactMetadata.PostTokens
+					displayTrigger := trigger
+					if displayTrigger == "" {
+						displayTrigger = "unknown"
 					}
-					text = fmt.Sprintf("trigger=%s pre_tokens=%d", trigger, env.CompactMetadata.PreTokens)
-					if env.CompactMetadata.PostTokens > 0 {
-						text += fmt.Sprintf(" post_tokens=%d", env.CompactMetadata.PostTokens)
+					text = fmt.Sprintf("trigger=%s pre_tokens=%d", displayTrigger, preTokens)
+					if postTokens > 0 {
+						text += fmt.Sprintf(" post_tokens=%d", postTokens)
 					}
 				}
-				s.emit(Event{Type: EventClaudeCodeCompacted, Text: text})
+				s.emit(Event{
+					Type:                        EventClaudeCodeCompacted,
+					Text:                        text,
+					ClaudeCodeCompactTrigger:    trigger,
+					ClaudeCodeCompactPreTokens:  preTokens,
+					ClaudeCodeCompactPostTokens: postTokens,
+				})
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.
