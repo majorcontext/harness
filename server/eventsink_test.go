@@ -400,20 +400,9 @@ func TestEventSinkShipsRecordsJournaledDuringDrain(t *testing.T) {
 	s.closeOnce.Do(func() { close(s.closing) })
 	s.mu.Unlock()
 
-	// The pump must still be alive. Drain has not yet waited for in-flight
-	// prompts, so their trailing records are not journaled yet; a pump that
-	// retired on s.closing would never see them. This is a negative
-	// assertion — that something does NOT happen — so it needs a bounded
-	// window rather than a channel to block on. Under the old design the
-	// pump exits promptly here and this fires.
-	select {
-	case <-s.sinkDone:
-		t.Fatal("pump retired when s.closing closed; every record journaled during the drain window would be lost")
-	case <-time.After(500 * time.Millisecond):
-	}
-
-	// Stands in for the trailing records a cancelled prompt journals while
-	// Drain is still waiting on it.
+	// Stands in for the trailing records a cancelled prompt journals after
+	// s.closing closes but before Drain retires the pump. Its delivery below
+	// is the deterministic proof that the pump stayed alive for this window.
 	late := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_drain", Status: "idle"})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
