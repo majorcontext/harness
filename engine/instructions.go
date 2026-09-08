@@ -4,10 +4,13 @@
 //
 // Format and discovery follow the agents.md convention
 // (https://agents.md/): the file is schema-less standard Markdown — the agent
-// simply parses the text, using no fixed headings — and the "closest" file to
-// the working directory wins. Our walk-up-from-WorkDir search implements that
-// closest-wins precedence: the first AGENTS.md (or AGENT.md fallback) found
-// while ascending toward the git/filesystem root is used. os.ReadFile follows
+// simply parses the text, using no fixed headings — and a nested file wins a
+// conflict against an ancestor. loadInstructionChain implements that: it finds
+// the repository root — the nearest ancestor of WorkDir with a .git entry
+// (file or directory, so a worktree or submodule checkout still resolves the
+// right root), or the top of the upward walk when WorkDir is not inside a
+// repository — and injects every AGENTS.md (or AGENT.md fallback) found from
+// that root down to WorkDir inclusive, root first. os.ReadFile follows
 // symlinks, so the spec's `ln -s AGENTS.md AGENT.md` compatibility setup works
 // transparently.
 //
@@ -50,11 +53,19 @@ type InstructionsConfig struct {
 	// Path, when non-empty, is a specific instruction file to load instead of
 	// auto-discovering AGENTS.md.
 	Path string
-	// MaxBytes caps the instruction bytes injected into the system prompt.
-	// Zero (the zero value) takes defaultMaxInstructionsBytes (64 KiB); a
-	// positive value sets the cap; a NEGATIVE value disables the cap, so the
-	// whole file is injected however large it is. Truncation is always loud —
-	// see truncateInstructions.
+	// MaxBytes caps the instruction bytes injected PER FILE. Zero (the zero
+	// value) takes defaultMaxInstructionsBytes (64 KiB); a positive value sets
+	// the per-file cap; a NEGATIVE value disables both this cap and the chain
+	// cap below, so every file is injected however large it is. Truncation is
+	// always loud — see truncateInstructions.
+	//
+	// A WorkDir several directories below the repository root can inject
+	// several files (see loadInstructionChain), so the bytes reaching the
+	// system prompt are bounded a second time: chainCeilingMultiplier *
+	// MaxBytes caps their COMBINED total. Exceeding it drops middle files —
+	// never the root, which carries the routing table, and never the deepest,
+	// which names WorkDir's own rules — until the chain fits. See
+	// capChainTotal.
 	MaxBytes int
 	// Mode selects how an OVERSIZE file is rendered: InstructionsModeAuto
 	// (the zero value) splits it into a head plus an outline of the sections
@@ -98,38 +109,16 @@ func formatTruncationMarker(path string, total, kept int) string {
 	)
 }
 
-// loadInstructions searches from workDir upward for AGENTS.md (falling back to
-// AGENT.md) and returns its (possibly truncated) content plus a display path
-// relative to workDir. The walk stops at the first directory containing a .git
-// entry — that directory is checked for an instructions file before stopping —
-// or at the filesystem root. A missing file yields empty strings and no error.
-// maxBytes is the resolved byte cap (see resolveInstructionsMaxBytes). It
-// renders in InstructionsModeAuto; loadInstructionsMode selects another mode.
-func loadInstructions(workDir string, maxBytes int) (content, path string, err error) {
-	return loadInstructionsMode(workDir, maxBytes, InstructionsModeAuto)
-}
-
-// loadInstructionsMode is loadInstructions with an explicit render mode.
-func loadInstructionsMode(workDir string, maxBytes int, mode InstructionsMode) (content, path string, err error) {
-	dir := workDir
-	for {
-		if p, data, found := readInstructionFile(dir); found {
-			body, err := validateInstructions(p, data, maxBytes, mode)
-			if err != nil {
-				return "", "", err
-			}
-			return body, displayPath(workDir, p), nil
-		}
-		// Stop once we've checked the git root itself.
-		if isDir(filepath.Join(dir, ".git")) {
-			return "", "", nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", "", nil // filesystem root
-		}
-		dir = parent
-	}
+// hasGitEntry reports whether dir holds a .git entry, marking it a repository
+// root. A normal checkout uses a directory; a git worktree or a submodule
+// checkout uses a regular FILE holding "gitdir: ...". Either one bounds the
+// upward walk — an isDir-only check treats a worktree's .git file as absent,
+// so the walk climbs past the worktree root into whatever lies above it (a
+// sibling worktree, the main checkout, or an unrelated tree outside the repo
+// entirely) and injects that ancestor's AGENTS.md as if it were the root's.
+func hasGitEntry(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 // readInstructionFile returns the first readable instruction file in dir, by
@@ -226,47 +215,115 @@ type instructionFile struct {
 }
 
 // loadInstructionChain finds the repository root — the nearest ancestor of
-// workDir with a .git entry, or the top of the upward walk when none exists
-// — and returns every AGENTS.md/AGENT.md found from that root down to
-// workDir inclusive, root first. A directory with neither file contributes
-// nothing; the chain is empty, with a nil error, when no directory on the
-// path holds one. maxBytes and mode apply per file, same as loadInstructions.
+// workDir with a .git entry (file or directory; see hasGitEntry), or, when
+// WorkDir is not inside a repository, workDir itself — and returns every
+// AGENTS.md/AGENT.md found from that root down to workDir inclusive, root
+// first. A directory with neither file contributes nothing; the chain is
+// empty, with a nil error, when no directory on the path holds one. maxBytes
+// and mode apply per file; the combined chain is then capped a second time by
+// capChainTotal.
 //
-// This walks the same directories loadInstructionsMode does, but does not
-// stop at the first file found: loadInstructionsMode remains the
-// single-closest-file primitive engine/instructions_outline_test.go and
-// engine/instructions_truncate_test.go drive directly to pin truncation and
-// outline behavior; this is the multi-file entry point buildInstructionSegment
-// uses.
+// Without a repository boundary, only workDir's own file counts: a session
+// whose WorkDir sits under an arbitrary, non-repository directory (a scratch
+// folder, $HOME) must not inject an ancestor there as if it were a repository
+// root. Every ENGINE test that sets WorkDir to a fresh t.TempDir() with no
+// .git relies on this too — without it, the walk would climb to the
+// filesystem root and could pick up a stray AGENTS.md the test never wrote
+// (a developer machine's $HOME, or a box image file above /tmp).
+//
+// A malformed file (invalid UTF-8, or empty/whitespace-only) found in the
+// directory NEAREST workDir — the file loadInstructionChain's predecessor,
+// the single-closest-file walk, would have found and failed on — still fails
+// the whole load, matching that walk's existing contract: a project that
+// meant to supply instructions must not run silently without them. A
+// malformed file found in any OTHER (more ancestral) directory is skipped
+// with a logged warning naming its path instead: an unrelated ancestor's
+// broken file must not fail every session rooted below it.
 func loadInstructionChain(workDir string, maxBytes int, mode InstructionsMode) ([]instructionFile, error) {
-	var dirs []string
+	type found struct {
+		dir  string
+		path string
+		data []byte
+	}
+	var chain []found // workDir-first: chain[0], if present, is the nearest file
+	repoRoot := false
 	for dir := workDir; ; {
-		dirs = append(dirs, dir)
-		if isDir(filepath.Join(dir, ".git")) {
+		if p, data, ok := readInstructionFile(dir); ok {
+			chain = append(chain, found{dir: dir, path: p, data: data})
+		}
+		if hasGitEntry(dir) {
+			repoRoot = true
 			break
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			break // filesystem root: the walk's top when no .git was found
+			break // filesystem root: no repository boundary found
 		}
 		dir = parent
 	}
-	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
-		dirs[i], dirs[j] = dirs[j], dirs[i] // root first
+	if !repoRoot {
+		if len(chain) > 0 && chain[0].dir == workDir {
+			chain = chain[:1]
+		} else {
+			chain = nil
+		}
+	}
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i] // root first
 	}
 	var files []instructionFile
-	for _, d := range dirs {
-		p, data, found := readInstructionFile(d)
-		if !found {
+	for i, f := range chain {
+		body, err := validateInstructions(f.path, f.data, maxBytes, mode)
+		if err != nil {
+			if i == len(chain)-1 { // the nearest file, now last after the reversal
+				return nil, err
+			}
+			slog.Warn("engine: instructions file skipped, malformed", "path", f.path, "err", err)
 			continue
 		}
-		body, err := validateInstructions(p, data, maxBytes, mode)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, instructionFile{path: displayPath(workDir, p), body: body})
+		files = append(files, instructionFile{path: displayPath(workDir, f.path), body: body})
 	}
-	return files, nil
+	return capChainTotal(files, maxBytes), nil
+}
+
+// chainCeilingMultiplier bounds the CHAIN total against runaway monorepo
+// depth: maxBytes caps one file, chainCeilingMultiplier*maxBytes caps the sum
+// of every file's rendered body in one chain. See capChainTotal.
+const chainCeilingMultiplier = 4
+
+// capChainTotal enforces that chain ceiling. A negative maxBytes disables the
+// per-file cap and, with it, the chain cap (an operator who asked for the
+// whole file gets the whole chain too). A chain of at most the root plus the
+// deepest file is never trimmed — there is no middle file to drop. Otherwise,
+// files strictly between the root (files[0]) and the deepest file
+// (files[len(files)-1]) are dropped one at a time, nearest the root first,
+// until the total fits or none remain; the root always carries the routing
+// table naming every scoped file, and the deepest always names WorkDir's own
+// rules, so neither is ever a drop candidate.
+func capChainTotal(files []instructionFile, maxBytes int) []instructionFile {
+	if maxBytes < 0 || len(files) <= 2 {
+		return files
+	}
+	ceiling := maxBytes * chainCeilingMultiplier
+	total := 0
+	for _, f := range files {
+		total += len(f.body)
+	}
+	if total <= ceiling {
+		return files
+	}
+	kept := append([]instructionFile(nil), files...)
+	var dropped []string
+	for i := 1; i < len(kept)-1 && total > ceiling; {
+		total -= len(kept[i].body)
+		dropped = append(dropped, kept[i].path)
+		kept = append(kept[:i], kept[i+1:]...)
+	}
+	slog.Warn("engine: instructions chain truncated to fit the chain byte ceiling",
+		"ceiling_bytes", ceiling,
+		"dropped_files", strings.Join(dropped, ", "),
+	)
+	return kept
 }
 
 // formatInstructions builds the system-prompt segment for the discovered

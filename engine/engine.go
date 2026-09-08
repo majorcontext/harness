@@ -1274,8 +1274,10 @@ type Session struct {
 	// loaded session, on the first Prompt (see instructions.go). instrLoaded gates
 	// the one-time disk read; instrSeg is the cached system-prompt segment (empty
 	// when none); instrErr records a present-but-unusable instructions file so
-	// every Prompt fails alike; instrPath is the display path of the source file
-	// (empty when none), used by the session_info tool to report provenance.
+	// every Prompt fails alike; instrPath is a comma-joined list of the display
+	// paths of every AGENTS.md/AGENT.md the chain injected, root to WorkDir
+	// (empty when none, a single path when only one file was found), used by
+	// the session_info tool to report provenance.
 	instrLoaded bool
 	instrSeg    string
 	instrErr    error

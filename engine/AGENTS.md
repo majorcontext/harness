@@ -42,13 +42,17 @@ it. Add ambient status only to a throwaway request copy.
 
 ## Project instructions and Agent Skills
 
-`loadInstructions` searches upward from `Config.WorkDir`. It returns the first
-`AGENTS.md` or `AGENT.md` and stops at the Git root or filesystem root. Eligible
-fresh sessions load it during startup prewarm. Loaded and ineligible sessions
-load it on the first prompt.
+`loadInstructionChain` searches upward from `Config.WorkDir` to the repository
+root — the nearest ancestor with a `.git` entry (file or directory), or
+`WorkDir` itself when no ancestor holds one — and injects every `AGENTS.md` or
+`AGENT.md` found on that path, root first. Eligible fresh sessions load it
+during startup prewarm. Loaded and ineligible sessions load it on the first
+prompt.
 
 - Treat a missing instruction file as valid.
-- Reject an empty or invalid UTF-8 instruction file.
+- Reject an empty or invalid UTF-8 instruction file found in the directory
+  NEAREST WorkDir; skip the same condition in any other directory on the
+  chain, logging a warning that names its path.
 - Make truncation visible in the prompt and logs.
 - Keep omitted sections reachable through the generated outline.
 - Do not claim that nested attach-on-read is implemented.

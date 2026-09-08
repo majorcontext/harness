@@ -1945,16 +1945,17 @@ func systemPrompt(workDir, extra string) []string {
 // TestBaseBehaviorGuidanceStaysUnderBudget.
 const (
 	baseBehaviorGuidanceMaxLines = 25
-	baseBehaviorGuidanceMaxWords = 250
+	baseBehaviorGuidanceMaxWords = 300
 )
 
 // baseBehaviorGuidance is a repo-agnostic behavioral floor merged into the
-// base system prompt: verification before done, git safety on a dirty
-// worktree, persistence to full resolution, minimal-diff scope, ambition on
-// greenfield versus surgical precision on existing code, short final
-// messages, progress narration across a long tool-call stretch, review-mode
-// framing, and frontend taste. It complements ambientContextGuidance (the
-// engine-context trust boundary), not restates it.
+// base system prompt: precedence against a project's own AGENTS.md,
+// verification before done, git safety on a dirty worktree, persistence to
+// full resolution, minimal-diff scope, ambition on greenfield versus surgical
+// precision on existing code, short final messages, progress narration across
+// a long tool-call stretch, review-mode framing, and frontend taste. It
+// complements ambientContextGuidance (the engine-context trust boundary), not
+// restates it.
 //
 // Comment policy and commit conventions are deliberately absent here: this
 // prompt reaches every repo harness runs in, and a project's own AGENTS.md
@@ -1962,6 +1963,7 @@ const (
 // than a compiled-in default can be.
 func baseBehaviorGuidance() string {
 	return strings.Join([]string{
+		"Project instructions (AGENTS.md) override this guidance where they conflict.",
 		"Verify your work before you call a task done: run the relevant tests, build, and lint, starting narrow and widening as confidence grows. Do not add a formatter or a test suite to a codebase that has none.",
 		"You may find a dirty worktree. Never revert a change you did not make. Stop and ask if an unexpected change appears mid-task. Never run `git reset --hard`, `git checkout --`, or a force push without explicit approval.",
 		"Persist until the task is fully resolved end to end. Do not stop at analysis or a partial fix, and do not leave a follow-up for later.",

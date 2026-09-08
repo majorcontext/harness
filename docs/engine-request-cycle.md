@@ -113,23 +113,31 @@ load normally happens during `Prompt`. An eligible fresh session starts the
 same load during background startup prewarm. Loaded sessions and sessions whose
 provider is not eligible remain lazy until `Prompt`. `loadInstructionChain`
 (`engine/instructions.go`) finds the repository root — the nearest ancestor of
-`Config.WorkDir` with a `.git` entry, or the top of the upward walk when none
-exists — and injects every `AGENTS.md` (falling back to `AGENT.md` per
-directory) found from that root down to `WorkDir` inclusive, root first. A
-single file keeps the plain one-file header a session with only one AGENTS.md
-has always seen; more than one file adds a header line naming each path and
-stating that the deepest file wins on conflict, adapting the
-[agents.md](https://agents.md/) convention's own nested-file precedence rule
-rather than the engine's earlier closest-file-only search. The file is
-schema-less Markdown — no headings are required or parsed. The segment is
-appended after `Config.System` and before hook (`system.transform`) segments,
-cached for the session, and never written to the session log (loaded fresh on
-resume).
+`Config.WorkDir` with a `.git` entry (a file OR a directory, so a `git
+worktree` checkout or a submodule, which use a `.git` file, resolve the same
+root a normal checkout does), or `WorkDir` itself when no ancestor holds one —
+and injects every `AGENTS.md` (falling back to `AGENT.md` per directory) found
+from that root down to `WorkDir` inclusive, root first. Without a repository
+boundary, only `WorkDir`'s own file counts: the walk never climbs to the
+filesystem root hunting for a first hit, which would inject an ancestor
+outside any repository (a `$HOME` `AGENTS.md`, or a stray file on a developer
+machine or box image) into every session rooted below it. A single file keeps
+the plain one-file header a session with only one AGENTS.md has always seen;
+more than one file adds a header line naming each path and stating that the
+deepest file wins on conflict, adapting the [agents.md](https://agents.md/)
+convention's own nested-file precedence rule rather than the engine's earlier
+closest-file-only search. The file is schema-less Markdown — no headings are
+required or parsed. The segment is appended after `Config.System` and before
+hook (`system.transform`) segments, cached for the session, and never written
+to the session log (loaded fresh on resume).
 
-A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) fails the
-first `Prompt` — a project that meant to supply instructions must not run
-silently without them. A missing file is fine. Disable with
-`-no-instructions`, config `instructions: false`, or point at a specific file
+A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) found in
+the directory NEAREST `WorkDir` fails the first `Prompt` — a project that
+meant to supply instructions must not run silently without them. The same
+condition in any OTHER (more ancestral) directory on the chain is skipped
+instead, with a logged warning naming its path: an unrelated ancestor's broken
+file must not fail every session rooted below it. A missing file is fine.
+Disable with `-no-instructions`, config `instructions: false`, or point at a specific file
 with config `instructions_path`.
 
 An oversize file is truncated, and the truncation is LOUD on both channels.
@@ -142,13 +150,24 @@ sign of the missing 344 KiB, so the model followed a half specification and
 believed it read the whole one. A truncated instruction file must always
 announce itself; never make this cut quiet again.
 
-`InstructionsConfig.MaxBytes` sets the cap: 0 (the zero value) takes
+`InstructionsConfig.MaxBytes` sets the cap PER FILE: 0 (the zero value) takes
 `defaultMaxInstructionsBytes` (64 KiB), a positive value sets it, a NEGATIVE
 value disables the cap so the whole file is injected. Config key
 `instructions_max_bytes` (bytes) and the operator seam
 `HARNESS_INSTRUCTIONS_MAX_KB` (kilobytes; negative disables) resolve it in
 `cmd/harness`, the environment variable winning — the engine never reads an
 environment variable itself.
+
+A per-file cap does not bound the CHAIN: a `WorkDir` several directories below
+the repository root can inject several files, so `capChainTotal`
+(`engine/instructions.go`) caps their combined total a second time, at
+`chainCeilingMultiplier` (4) times `MaxBytes`. Over that ceiling, files
+strictly between the root and the deepest file are dropped one at a time,
+nearest the root first, until the chain fits — the root always carries the
+routing table naming every scoped file, and the deepest always names
+`WorkDir`'s own rules, so neither is ever a drop candidate. A dropped file logs
+a WARN line naming it. A negative `MaxBytes` disables this ceiling along with
+the per-file cap.
 
 An oversize file is not merely marked, it is SPLIT.
 `renderInstructions` (`engine/instructions_outline.go`) injects a HEAD plus an
