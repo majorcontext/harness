@@ -130,8 +130,8 @@ func TestEventSinkForwardsEveryDurableRecord(t *testing.T) {
 	}
 	// Seqs must arrive in order with no gap between consecutive records.
 	for i := 1; i < len(got); i++ {
-		if got[i].Seq <= got[i-1].Seq {
-			t.Fatalf("record %d seq %d is not after %d", i, got[i].Seq, got[i-1].Seq)
+		if got[i].Seq != got[i-1].Seq+1 {
+			t.Fatalf("record %d seq %d, want %d with no gap", i, got[i].Seq, got[i-1].Seq+1)
 		}
 	}
 }

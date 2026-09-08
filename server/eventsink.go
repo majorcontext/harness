@@ -136,23 +136,26 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	cursor := s.sinkCursor
 	// The journal is append-only and seq is monotonic within it, so the
 	// first record above the cursor is a binary search rather than a scan.
 	i := sort.Search(len(s.journal), func(i int) bool { return s.journal[i].Seq > cursor })
 	if i >= len(s.journal) {
+		s.mu.Unlock()
 		return EventBatch{}, false
 	}
+	end := len(s.journal)
+	if end-i > maxRecords {
+		end = i + maxRecords
+	}
+	// Event values are immutable once appended. Copy the candidate structs
+	// while holding the journal lock, then release it before JSON sizing.
+	candidates := append([]Event(nil), s.journal[i:end]...)
+	s.mu.Unlock()
 
-	batch := EventBatch{FromSeq: s.journal[i].Seq}
+	batch := EventBatch{FromSeq: candidates[0].Seq}
 	var bytes int
-	for ; i < len(s.journal); i++ {
-		rec := s.journal[i]
-		if len(batch.Records) >= maxRecords {
-			break
-		}
+	for _, rec := range candidates {
 		// The size check runs only after the first record is in, so one
 		// oversized record is delivered alone rather than dropped.
 		if len(batch.Records) > 0 && bytes >= maxBytes {
