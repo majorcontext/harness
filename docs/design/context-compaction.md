@@ -84,6 +84,54 @@ Both paths funnel through one `Session.Compact(ctx, CompactOptions)` method;
 the automatic path just calls it with defaults before `streamTurn`, and it
 takes the same run-slot discipline described in §4.
 
+**A session delegated to the Claude Code CLI, and a switch away from it.**
+`PromptWithOrigin` skips this whole section — `ensureInstructions`,
+`ensureSkills`, and `maybeAutoCompact` alike — for any turn the session's
+CURRENT model routes to the Claude Code CLI backend
+(`engine.ClaudeCodeProviderFamily`, `engine/claude_code_backend.go`): that
+turn manages its own context end to end, and harness's own journal is only
+ever a passive record of what streamed back. `applyClaudeCodeUsage` still
+sets `Session.LastUsage()` on every delegated turn, from the CLI's own
+"result" event — but that figure describes the CLI's OWN internal, self-
+compacted context, not harness's journal. The two can differ by orders of
+magnitude on a long-running delegated session, because harness's journal
+is never itself compacted while delegated.
+
+This matters the moment `SetModel` switches such a session to a
+harness-native model: the very next `Prompt` now takes the native path,
+whose request transcodes harness's REAL journal — not whatever the CLI last
+reported. Trusting the stale, wrong-scale `LastUsage()` figure here would
+compare the wrong number against the new model's window and skip
+compaction, forwarding a potentially huge, never-once-compacted journal to
+a provider that rejects it outright ("prompt too long") — the live
+2026-09-08 incident this paragraph documents (session
+`ses_01m1kyhka3ewf8vcth0qbqm222`, a 3,667-message, 5-day delegated run).
+
+`SetModel` therefore arms a one-shot `forceCompactionCheck` flag exactly
+when the PRIOR model was claude-code-delegated and the new one is not
+(never on a native-to-native switch, where `LastUsage()` stays a valid
+harness-journal signal regardless of which native model produced it, and
+never on a switch INTO delegation, which disarms harness's own trigger
+entirely per the paragraph above). The very next `maybeAutoCompact` call
+consumes the flag: instead of reading `LastUsage()`, it estimates the
+prompt size straight from `s.History()` (the same crude byte-count fallback
+§1's nimble-pizza case already uses for "provider reports nothing usable"),
+bypasses the churn-guard cooldown (a forced check runs at most once per
+switch, so it can never itself cause the re-fire-every-turn churn that
+guard exists to prevent), and — unlike the ordinary automatic trigger,
+which is best-effort and never blocks the caller's real turn — turns a real
+`Compact` failure into a loud error that fails the `Prompt` call itself,
+before the user message is appended or the native provider is ever called.
+An operator sees a diagnosable compaction failure instead of an opaque
+provider rejection.
+
+`POST /session/{id}/compact` is guarded the other direction: it refuses a
+CURRENTLY-delegated session outright (4xx, `server/handlers.go`'s
+`handleCompact`) rather than running harness's summarizer against a journal
+the CLI's own context management has already made irrelevant — see §4's
+"Interaction with the resident session" for why this endpoint's own claim
+discipline makes an early refusal free.
+
 ## 2. Mechanism
 
 **Range selection.** Compaction always folds a **contiguous prefix of whole

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -1633,5 +1634,137 @@ func TestPursueGoalAutoCompactsMidLoop(t *testing.T) {
 	}
 	if got := s.CompactionCount(); got != 1 {
 		t.Fatalf("CompactionCount = %d, want exactly 1 (mid-loop automatic compaction)", got)
+	}
+}
+
+// seedDelegatedTurn appends one RoleUser/RoleAssistant pair directly to s's
+// history, bypassing Prompt entirely — the shape a real claude-code
+// delegated turn leaves behind (runClaudeCodeTurn appends plain messages as
+// they stream in; only the terminal "result" event's usage, via
+// applyClaudeCodeUsage, ever touches s.lastUsage). text is repeated to
+// build up byte size cheaply.
+func seedDelegatedTurn(s *Session, text string) {
+	now := time.Now().UTC()
+	s.append(message.Message{ID: ResolveMessageID(""), Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "continue"}}, CreatedAt: now})
+	s.append(message.Message{ID: ResolveMessageID(""), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}, CreatedAt: now})
+}
+
+// TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch is the red-first
+// regression test for the live incident (session
+// ses_01m1kyhka3ewf8vcth0qbqm222): a session delegated to the Claude Code
+// CLI for its entire life accumulates a huge harness journal purely as a
+// passive record (harness's own automatic compaction is unconditionally
+// skipped for a delegated turn — see PromptWithOrigin's early dispatch).
+// applyClaudeCodeUsage DOES set s.lastUsage/haveLastUsage on every delegated
+// turn, but from the CLI's OWN internal, self-managed context accounting —
+// a number with no relationship to harness's own journal size, since the
+// CLI runs its own compaction over its own history. When the session is
+// switched to a harness-native model, maybeAutoCompact must not trust that
+// stale, wrong-scale lastUsage figure: it must estimate straight from
+// harness's actual journal (the thing a native request actually transcodes
+// and sends) and compact BEFORE the next native provider call, regardless
+// of the prior model's delegated flag.
+//
+// Named failure this pins: pre-fix, maybeAutoCompact reads
+// lastUsage.InputTokens (here, a small CLI-reported figure standing in for
+// the CLI's own compacted context) as "how big is the next request," sees
+// it comfortably under threshold, and never compacts — so the native
+// provider receives the full, uncompacted, over-threshold journal as its
+// first request. This test fails today because CompactionCount() is 0 and
+// the request the (test) native provider actually receives still carries
+// every seeded turn.
+func TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist of the delegated run", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000, // explicit: survives the switch unchanged (SetModel never re-derives it)
+		CompactionKeepTurns: 1,
+	})
+
+	// Five delegated turns, each long enough that the whole journal's crude
+	// byte/4 estimate clears threshold*windowTokens (0.8*1000 = 800).
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preSwitchHistoryLen := len(s.History())
+
+	// applyClaudeCodeUsage's real shape: it DOES set lastUsage/haveLastUsage
+	// on a delegated turn, but from the CLI's own small internal context —
+	// nothing like harness's actual journal size seeded above.
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt after claude-code-to-native switch: %v (must compact and succeed, not fail)", err)
+	}
+
+	if got := s.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after the post-switch turn = %d, want 1 (forced compaction must have run before the native provider call)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider calls = %d, want 2 (1 compaction summary + 1 native worker turn)", len(prov.requests))
+	}
+	finalReq := prov.requests[len(prov.requests)-1]
+	if len(finalReq.Messages) >= preSwitchHistoryLen {
+		t.Errorf("final native request carried %d messages (pre-switch history was %d) — forced compaction must have trimmed it before the provider call",
+			len(finalReq.Messages), preSwitchHistoryLen)
+	}
+}
+
+// TestPromptFailsLoudlyWhenForcedCompactionFailsAfterClaudeCodeSwitch is the
+// red-first regression test for the second half of the fix: a forced
+// compaction pass exists precisely because sending the pre-switch journal
+// to a native provider would otherwise overflow it — so if the forced
+// compaction attempt itself fails (the summarization call errors), Prompt
+// must fail loudly with a compaction error and must NEVER fall through to
+// the native provider with the oversized, uncompacted journal (which would
+// surface as an opaque provider "prompt too long" error instead of a
+// diagnosable compaction failure).
+func TestPromptFailsLoudlyWhenForcedCompactionFailsAfterClaudeCodeSwitch(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	// No scripted turns at all: the forced compaction's own summarization
+	// call is the very first Stream call, and it exhausts p.turns
+	// immediately (see scriptedProvider.Stream), so Compact fails for a
+	// real reason (not the benign empty-summary skip).
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	_, err := s.Prompt(context.Background(), "continue")
+	if err == nil {
+		t.Fatal("Prompt after a failed forced compaction succeeded, want a loud compaction error")
+	}
+	if !strings.Contains(err.Error(), "compact") {
+		t.Errorf("Prompt error = %q, want it to name compaction (never a bare provider \"prompt too long\")", err.Error())
+	}
+	// The real turn's own provider call must never have been attempted: the
+	// only Stream call on record is the failed compaction summary.
+	if len(prov.requests) != 1 {
+		t.Errorf("provider calls = %d, want 1 (the failed compaction summary only — the real turn must never reach the provider)", len(prov.requests))
 	}
 }

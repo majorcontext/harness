@@ -1373,6 +1373,31 @@ type Session struct {
 	// Guarded by mu.
 	compactHysteresis bool
 
+	// forceCompactionCheck is set by SetModel exactly when the session
+	// switches AWAY from ClaudeCodeProviderFamily to a native model (see
+	// SetModel). maybeAutoCompact's ordinary signal for "how big is the
+	// next request" is s.lastUsage — but applyClaudeCodeUsage sets
+	// lastUsage from the CLI's OWN internal, self-managed context
+	// accounting (claude_code_backend.go), a number with no relationship
+	// to harness's own journal size, since the CLI runs its own compaction
+	// over its own history. Trusting that stale, wrong-scale figure right
+	// after a switch to a native model — which transcodes and sends
+	// harness's ACTUAL journal, not the CLI's — is exactly how a session
+	// like ses_01m1kyhka3ewf8vcth0qbqm222 (3,667-message delegated
+	// journal, switched to a native model, immediately rejected as "prompt
+	// too long") went uncompacted. Consumed (and cleared) by the very next
+	// maybeAutoCompact call: while set, that call estimates straight from
+	// s.History() instead of lastUsage, bypasses the churn-guard cooldown
+	// (irrelevant coming from a different regime), and — unlike the
+	// ordinary best-effort trigger — reports a real Compact failure to its
+	// caller instead of swallowing it, so Prompt fails loudly with a
+	// compaction error rather than silently forwarding an oversized
+	// journal to the provider. Deliberately NOT persisted: a reload
+	// re-evaluates from scratch, exactly like compactHysteresis above, and
+	// a session can only be mid-way through this exact switch while live.
+	// Guarded by mu.
+	forceCompactionCheck bool
+
 	// contextWindowExplicit is true when the ORIGINAL Config.ContextWindowTokens
 	// passed to NewSession/LoadSession was already positive — an operator
 	// override. It is set once, at construction, and never changes again for
@@ -1682,14 +1707,28 @@ func newSession(cfg Config) *Session {
 // churn-guard, which means "folding again won't relieve pressure at the
 // window it latched under" (see compactHysteresis's doc comment) — a claim
 // that no longer holds once the window itself has moved.
+//
+// A switch AWAY from ClaudeCodeProviderFamily to a native model also arms
+// forceCompactionCheck (see that field's own doc comment): a delegated
+// session's s.lastUsage reflects the CLI's own internal context, not
+// harness's journal, so the ordinary automatic trigger's signal is stale
+// the moment a native model starts actually sending that journal. A switch
+// the OTHER way (native to delegated), or between two native models, never
+// sets it — native lastUsage always reflects harness's own last real
+// request, whatever model produced it, so the ordinary trigger's signal
+// stays valid across that kind of switch.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ref == s.model {
 		return
 	}
+	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
 	s.persistModel(ref)
+	if priorDelegated && ref.Provider != ClaudeCodeProviderFamily {
+		s.forceCompactionCheck = true
+	}
 	if !s.contextWindowExplicit {
 		nextTokens, nextSource, miss := resolveContextWindow(0, ref)
 		// Re-derived, so it REPLACES whatever the previous model left:
@@ -2701,9 +2740,20 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	// user message is appended below: a turn boundary always falls on a
 	// completed-turn edge, the summary never has to account for a prompt
 	// that hasn't been answered yet, and the just-arrived message can never
-	// be folded into its own summary. Best-effort: a failed or skipped
-	// compaction never blocks the real turn (see maybeAutoCompact).
-	s.maybeAutoCompact(ctx)
+	// be folded into its own summary. Ordinarily best-effort: a failed or
+	// skipped compaction never blocks the real turn. The one exception is a
+	// pending forceCompactionCheck (armed by SetModel on a claude-code-to-
+	// native switch — see that field's own doc comment): maybeAutoCompact
+	// returns a non-nil error ONLY for that forced-and-failed case, and this
+	// rejects the prompt here, the same "no user message recorded, provider
+	// never reached" shape ensureInstructions/ensureSkills above already
+	// use — failing loud with a compaction error instead of silently
+	// forwarding an over-threshold journal that the provider would
+	// otherwise reject as "prompt too long".
+	if err := s.maybeAutoCompact(ctx); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	s.append(message.Message{
 		ID:        ResolveMessageID(id),
 		Role:      message.RoleUser,

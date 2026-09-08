@@ -117,6 +117,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"goalParkedAttempts":        "same explicit exclusion as goalParked, same doc comment",
 	"toolExecCount":             "runtime-only retry-safety counter for the current goal-loop attempt; not persisted or folded by LoadSession",
 	"compactHysteresis":         "explicitly documented \"Deliberately NOT persisted: a reload re-evaluates from scratch\"",
+	"forceCompactionCheck":      "explicitly documented \"Deliberately NOT persisted\", same reasoning as compactHysteresis: a reload re-evaluates from scratch, and a session can only be mid-way through a claude-code-to-native switch while live",
 	"contextWindowExplicit":     "derived once at construction from cfg.ContextWindowTokens/the model, re-derived identically by newSession/LoadSession on every load path; not fold state",
 	"contextWindowSource":       "same derivation as contextWindowExplicit, same reasoning",
 	"contextWindowErr":          "same derivation as contextWindowExplicit; set/cleared by construction and SetModel, recomputed the same way on any load",

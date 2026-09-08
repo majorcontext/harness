@@ -863,47 +863,72 @@ func estimatePartsBytes(parts message.Parts) int {
 
 // maybeAutoCompact is Prompt's automatic-trigger check (see docs/design/
 // context-compaction.md §1): a no-op unless Config.ContextWindowTokens is
-// positive (opt-in) and at least one turn has completed. Best-effort: a
-// failed or skipped compaction never blocks the caller's real turn — the
-// turn simply proceeds uncompacted, at the same risk layer 1's
+// positive (opt-in) and either at least one turn has completed or a
+// model-switch force-check is pending (see forceCompactionCheck). Ordinarily
+// best-effort: a failed or skipped compaction never blocks the caller's real
+// turn — the turn simply proceeds uncompacted, at the same risk layer 1's
 // context-overflow classification already handles if it actually overflows.
-func (s *Session) maybeAutoCompact(ctx context.Context) {
+// The one exception is the forced pass itself (see the forced branch below
+// and PromptWithOrigin's caller, which turns a non-nil return into a loud
+// failure instead of proceeding).
+func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	s.mu.Lock()
 	windowTokens := s.cfg.ContextWindowTokens
 	threshold := s.cfg.CompactionThreshold
 	lastUsage := s.lastUsage
 	haveLastUsage := s.haveLastUsage
 	onCooldown := s.compactHysteresis
+	forced := s.forceCompactionCheck
+	s.forceCompactionCheck = false
 	s.mu.Unlock()
 
-	if windowTokens <= 0 || !haveLastUsage {
-		return
+	if windowTokens <= 0 {
+		return nil
+	}
+	if !haveLastUsage && !forced {
+		return nil
 	}
 	if threshold <= 0 {
 		threshold = defaultCompactionThreshold
 	}
-	// The prompt occupies the context window as the SUM of all three
-	// input components. Harness injects cache_control by default, so on a
-	// warm session the Anthropic adapter reports most of the prompt in
-	// CacheReadTokens (new prefix growth in CacheWriteTokens) while
-	// InputTokens is only the uncached tail — counting InputTokens alone
-	// meant auto-compaction never fired in exactly the long-cached-session
-	// shape it exists for.
-	promptTokens := lastUsage.InputTokens + lastUsage.CacheReadTokens + lastUsage.CacheWriteTokens
-	// A provider that reports SOME input usage — even a small amount, e.g. a
-	// short warm-cache turn — is trusted as-is: promptTokens > 0 here is real
-	// accounting and must never be second-guessed. All-zero across every
-	// input component on a turn that DID complete (haveLastUsage is true) is
-	// a different case entirely: it is missing data, not evidence of a cheap
-	// prompt, and treating it as "0 tokens, never over" is exactly the
-	// nimble-pizza failure mode (see estimatePromptTokensFromHistory's doc
-	// comment). Falling back to the size-derived estimate here keeps this
-	// overflow-prevention layer alive on a route with broken input-usage
-	// accounting; it is used for this threshold comparison ONLY and is never
-	// written into s.usage/lastUsage — real accounting stays untouched (see
-	// the "cumulative-only accounting" comment in Compact above).
-	if promptTokens == 0 {
+
+	var promptTokens int
+	if forced {
+		// The prior model was claude-code-delegated (see SetModel and
+		// forceCompactionCheck's own doc comment): lastUsage, if any,
+		// reflects the CLI's OWN internal context accounting
+		// (applyClaudeCodeUsage), not harness's journal — the thing a
+		// native request actually transcodes and sends. Trusting it here
+		// would compare the wrong number against the new native window, so
+		// skip it entirely and estimate straight from the journal — the
+		// same crude signal maybeAutoCompact already falls back to below
+		// for the analogous "provider reports nothing usable" case.
 		promptTokens = estimatePromptTokensFromHistory(s.History())
+	} else {
+		// The prompt occupies the context window as the SUM of all three
+		// input components. Harness injects cache_control by default, so on
+		// a warm session the Anthropic adapter reports most of the prompt in
+		// CacheReadTokens (new prefix growth in CacheWriteTokens) while
+		// InputTokens is only the uncached tail — counting InputTokens alone
+		// meant auto-compaction never fired in exactly the long-cached-
+		// session shape it exists for.
+		promptTokens = lastUsage.InputTokens + lastUsage.CacheReadTokens + lastUsage.CacheWriteTokens
+		// A provider that reports SOME input usage — even a small amount,
+		// e.g. a short warm-cache turn — is trusted as-is: promptTokens > 0
+		// here is real accounting and must never be second-guessed.
+		// All-zero across every input component on a turn that DID complete
+		// (haveLastUsage is true) is a different case entirely: it is
+		// missing data, not evidence of a cheap prompt, and treating it as
+		// "0 tokens, never over" is exactly the nimble-pizza failure mode
+		// (see estimatePromptTokensFromHistory's doc comment). Falling back
+		// to the size-derived estimate here keeps this overflow-prevention
+		// layer alive on a route with broken input-usage accounting; it is
+		// used for this threshold comparison ONLY and is never written into
+		// s.usage/lastUsage — real accounting stays untouched (see the
+		// "cumulative-only accounting" comment in Compact above).
+		if promptTokens == 0 {
+			promptTokens = estimatePromptTokensFromHistory(s.History())
+		}
 	}
 	over := float64(promptTokens) >= threshold*float64(windowTokens)
 	if !over {
@@ -915,21 +940,37 @@ func (s *Session) maybeAutoCompact(ctx context.Context) {
 			s.compactHysteresis = false
 			s.mu.Unlock()
 		}
-		return
+		return nil
 	}
-	if onCooldown {
+	if onCooldown && !forced {
 		// Churn guard (§2): still over threshold since the last automatic
 		// compaction. The pressure must live in the kept region (a single
 		// giant tool result) — folding the prefix again cannot relieve it,
-		// so do not re-fire every turn.
-		return
+		// so do not re-fire every turn. A forced check bypasses this: it
+		// runs at most once per model switch (the flag was already cleared
+		// above), so it can never itself cause the re-fire-every-turn churn
+		// this guard exists to prevent, and the guard's own latched state
+		// says nothing about a session that was, until this turn, entirely
+		// delegated.
+		return nil
 	}
 
 	res, err := s.Compact(ctx, CompactOptions{})
 	if err != nil {
+		if forced {
+			// Unlike the ordinary best-effort trigger, a forced check exists
+			// specifically because the caller is about to send an
+			// over-threshold journal to a provider that will reject it. A
+			// swallowed failure here would let that request through and
+			// surface as an opaque provider "prompt too long" error instead
+			// of a diagnosable compaction failure — see PromptWithOrigin's
+			// caller, which turns this into a failed Prompt call before the
+			// provider is ever reached.
+			return fmt.Errorf("engine: forced compaction after a claude-code model switch failed: %w", err)
+		}
 		// Best-effort: EventCompactionFailed already emitted inside
 		// Compact. The turn proceeds uncompacted.
-		return
+		return nil
 	}
 	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
 	// both cost a full-input-price provider call, so both must arm the
@@ -947,4 +988,5 @@ func (s *Session) maybeAutoCompact(ctx context.Context) {
 		s.compactHysteresis = true
 		s.mu.Unlock()
 	}
+	return nil
 }
