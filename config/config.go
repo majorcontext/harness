@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -119,6 +120,12 @@ type Config struct {
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
+	// EventSink, when set, forwards every durable journal record to an
+	// HTTP endpoint (see server.Options.EventSink). A POINTER so an absent
+	// block ("no sink") is distinguishable from a present one with an empty
+	// URL, which is a configuration error rather than a silent no-op. A
+	// non-nil project block replaces the user block wholesale.
+	EventSink *EventSinkSpec `json:"event_sink,omitempty"`
 	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
 	// session this process creates: the model's context window size, in
 	// tokens. This is an EXPLICIT OVERRIDE, not the only way compaction gets
@@ -379,6 +386,29 @@ type MCPServerSpec struct {
 	// it selects measures whole-catalog context pressure, which is not a
 	// property of one server.
 	ToolLoading string `json:"tool_loading,omitempty"`
+}
+
+// EventSinkSpec configures the outbound journal forwarder. URL is the only
+// required field; server applies every numeric default when a value is zero.
+type EventSinkSpec struct {
+	URL string `json:"url"`
+	// Headers are sent on every request, verbatim. This is where a
+	// deployment puts its own credential; harness neither builds nor reads
+	// one, exactly as an mcp_servers entry's headers work.
+	Headers map[string]string `json:"headers,omitempty"`
+	// Generation is an opaque label naming WHICH journal these seqs belong
+	// to. Harness stamps it on every batch and never interprets it: the
+	// deployment owns its meaning and mints it (see the design doc).
+	Generation string `json:"generation,omitempty"`
+	// FlushMS is the coalescing window after a record arrives, so a burst
+	// becomes one request. 0 takes the default.
+	FlushMS int `json:"flush_ms,omitempty"`
+	// BatchMaxRecords bounds record count. BatchMaxBytes bounds the sum of
+	// encoded record bytes used to chunk a backlog; it excludes the request
+	// envelope. Neither drops a record, so one oversized record ships alone.
+	BatchMaxRecords int `json:"batch_max_records,omitempty"`
+	BatchMaxBytes   int `json:"batch_max_bytes,omitempty"`
+	TimeoutS        int `json:"timeout_s,omitempty"`
 }
 
 // PluginSpec configures one plugin process, loaded verbatim into a
@@ -786,6 +816,9 @@ func Load(path string) (*Config, error) {
 	if err := validateProcesses(c.Processes); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
+	if err := validateEventSink(c.EventSink); err != nil {
+		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
+	}
 	if err := validateSessionSync(c.SessionSync); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
@@ -1111,6 +1144,49 @@ func validateProcesses(processes map[string]ProcessSpec) error {
 	return nil
 }
 
+func validateEventSink(s *EventSinkSpec) error {
+	if s == nil {
+		return nil
+	}
+	if s.URL == "" {
+		return fmt.Errorf("event_sink: url is required")
+	}
+	u, err := url.Parse(s.URL)
+	if err != nil {
+		return fmt.Errorf("event_sink: url is not valid: %w", err)
+	}
+	// Credentials belong in headers. Reject userinfo before any later error
+	// can include a credential-bearing URL in a log message.
+	if u.User != nil {
+		return fmt.Errorf("event_sink: url must not include userinfo; use headers")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("event_sink: url must use http or https (got scheme %q)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("event_sink: url host is required")
+	}
+	for name := range s.Headers {
+		if name == "" {
+			return fmt.Errorf("event_sink.headers: header name is required (empty key)")
+		}
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{
+		{"flush_ms", s.FlushMS},
+		{"batch_max_records", s.BatchMaxRecords},
+		{"batch_max_bytes", s.BatchMaxBytes},
+		{"timeout_s", s.TimeoutS},
+	} {
+		if f.v < 0 {
+			return fmt.Errorf("event_sink: %s must not be negative (got %d)", f.name, f.v)
+		}
+	}
+	return nil
+}
+
 // Path resolves the effective user config path: $HARNESS_CONFIG if set,
 // otherwise ~/.harness/config.json.
 func Path() string {
@@ -1129,8 +1205,10 @@ func Path() string {
 // reflection):
 //
 //   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
-//     non-empty project value overrides the user value. Instructions and
-//     ModelTool (*bool): a non-nil project value overrides.
+//     non-empty project value overrides the user value. EventSink: a non-nil
+//     project block replaces the user block wholesale; an absent project block
+//     inherits it. Instructions and ModelTool (*bool): a non-nil project value
+//     overrides.
 //     InstructionsMaxBytes: a non-zero project value overrides, so a project
 //     sets its own cap (or -1 for no cap) over the user value.
 //     InstructionsMode: a non-empty project value overrides.
@@ -1289,6 +1367,7 @@ func merge(base, over *Config) *Config {
 	out := *base // copy scalar fields; maps are rebuilt below
 	out.Aliases = nil
 	out.Providers = nil
+	out.EventSink = nil
 	if over.Model != "" {
 		out.Model = over.Model
 	}
@@ -1345,6 +1424,20 @@ func merge(base, over *Config) *Config {
 	}
 	if over.SessionSync != "" {
 		out.SessionSync = over.SessionSync
+	}
+	sink := base.EventSink
+	if over.EventSink != nil {
+		sink = over.EventSink
+	}
+	if sink != nil {
+		cloned := *sink
+		if sink.Headers != nil {
+			cloned.Headers = make(map[string]string, len(sink.Headers))
+			for name, value := range sink.Headers {
+				cloned.Headers[name] = value
+			}
+		}
+		out.EventSink = &cloned
 	}
 	if over.MCPToolLoading != "" {
 		out.MCPToolLoading = over.MCPToolLoading

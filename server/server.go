@@ -256,6 +256,21 @@ type Options struct {
 	// with no server-layer hook point) — only the wire-level
 	// session.create parent_id form this field's doc comment names.
 	OnTaskEvent func(event, parentID, childID string)
+	// EventSink, when non-nil, receives every durable journal record in seq
+	// order. It is an in-process callback like every other Options hook:
+	// cmd/harness supplies the HTTP transport, so this package holds no
+	// outbound HTTP client.
+	EventSink EventSink
+	// EventSinkFlush is the coalescing window after a record arrives.
+	// A non-positive value takes defaultEventSinkFlush.
+	EventSinkFlush time.Duration
+	// EventSinkMaxRecords bounds record count. EventSinkMaxBytes bounds the
+	// sum of encoded record bytes; it excludes any transport envelope. A
+	// non-positive value takes the corresponding default. They chunk a
+	// backlog and never drop a record, so one oversized record is still
+	// delivered alone.
+	EventSinkMaxRecords int
+	EventSinkMaxBytes   int
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
@@ -369,6 +384,17 @@ type Server struct {
 	// orchestrators recover the records they miss via replay-from-seq.
 	closing   chan struct{}
 	closeOnce sync.Once
+	sinkWake  chan struct{} // buffered 1; a coalescing "there is work" signal
+	sinkDone  chan struct{} // closed when the pump has exited
+	// sinkStop retires the pump. Closed AFTER the prompt drain, never at its
+	// start — see runEventSink for the records that would otherwise be lost.
+	sinkStop     chan struct{}
+	sinkStopOnce sync.Once
+	sinkCtx      context.Context
+	sinkCancel   context.CancelFunc
+	// sinkFinalCtx is published before sinkStop closes. The pump uses it for
+	// one final catch-up pass after a blocked ordinary delivery is canceled.
+	sinkFinalCtx context.Context
 
 	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
 	// respect to a session's own mutex — code holding mu must never call a
@@ -381,13 +407,14 @@ type Server struct {
 	// (see journal.go's syncMessages and TestGoalEmitVsSyncMessagesNoDeadlock
 	// in lockorder_test.go). Read session state in an unlocked window, then
 	// re-acquire mu only for this server's own bookkeeping.
-	mu       sync.Mutex
-	draining bool                     // set once by Drain; gates prompt admission
-	seq      int64                    // global monotonic durable sequence
-	journal  []Event                  // in-memory durable records, for replay
-	jf       *os.File                 // events.jsonl handle (nil when disabled)
-	lastErr  error                    // most recent journal write failure
-	subs     map[*subscriber]struct{} // connected SSE clients
+	mu         sync.Mutex
+	draining   bool                     // set once by Drain; gates prompt admission
+	seq        int64                    // global monotonic durable sequence
+	journal    []Event                  // in-memory durable records, for replay
+	jf         *os.File                 // events.jsonl handle (nil when disabled)
+	lastErr    error                    // most recent journal write failure
+	subs       map[*subscriber]struct{} // connected SSE clients
+	sinkCursor int64                    // highest seq the receiver has confirmed applied
 	// seen maps session ID -> journaled message IDs; it is authoritative for
 	// journal idempotency (syncMessages skips already-journaled IDs), so it is
 	// never evicted when resident sessions are unloaded for MaxResident. It is
@@ -842,6 +869,8 @@ func New(opts Options) (*Server, error) {
 		queueDrainPending: make(map[string]bool),
 		waiters:           make(map[*waiter]struct{}),
 		closing:           make(chan struct{}),
+		sinkDone:          make(chan struct{}),
+		sinkStop:          make(chan struct{}),
 		sessMgr:           sessMgr,
 		now:               time.Now,
 	}
@@ -894,6 +923,23 @@ func New(opts Options) (*Server, error) {
 		sweepWorktrees(s.worktreeBase, opts.SessionDir, func(sessionID, path string) {
 			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
 		})
+	}
+	// The pump starts LAST, after reconcile, pauseArmedGoalsAtBoot, and
+	// sweepWorktrees. Those run unlocked at construction on the strength of
+	// "no client can reach the server yet" (loadJournal's own comment), and
+	// loadJournal appends to s.journal without holding mu — so a pump
+	// started earlier is a second reader racing that append. Starting here
+	// also means its first flush sees the fully restored journal.
+	//
+	// SessionDir empty means persistence is disabled entirely, so there is
+	// no durable journal to replicate and forwarding it would offer a
+	// receiver a "replica" of records that never reach disk.
+	if opts.EventSink != nil && opts.SessionDir != "" {
+		s.sinkWake = make(chan struct{}, 1)
+		s.sinkCtx, s.sinkCancel = context.WithCancel(context.Background())
+		go s.runEventSink()
+	} else {
+		close(s.sinkDone)
 	}
 	s.routes()
 	return s, nil
@@ -1082,6 +1128,19 @@ func isEmptySessionIDPath(path string) bool {
 // session.aborted/idle transitions — are written; otherwise those records are
 // lost on shutdown.
 func (s *Server) Drain(ctx context.Context) {
+	// Waiting here keeps Close from taking the journal file before the tail
+	// ships. An expired ctx ends the wait: the drain budget is the drain
+	// budget, and a receiver that is down must not hold shutdown open.
+	defer func() {
+		// Retire the pump only now: the body above has already waited for
+		// in-flight prompts, so their trailing records are journaled and the
+		// pump's final flush can carry them.
+		s.stopEventSink(ctx)
+		select {
+		case <-s.sinkDone:
+		case <-ctx.Done():
+		}
+	}()
 	s.mu.Lock()
 	s.draining = true
 	s.closeOnce.Do(func() { close(s.closing) })
@@ -1143,6 +1202,12 @@ func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
 
 // Close releases the journal file, if any.
 func (s *Server) Close() error {
+	// Close without Drain is not a graceful flush. Cancel ordinary delivery
+	// and give the pump an already-canceled final context so Close never waits
+	// on an external receiver.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.stopEventSink(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.jf != nil {

@@ -1682,6 +1682,32 @@ func serveCmd(args []string) error {
 		OnTaskEvent:        taskEvents.OnTaskEvent,
 		NewSession:         newSessionFn(mkCfg, defModel, cfg, skillDirs, agentDefDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
 		LoadSession:        loadSessionFn(mkCfg, defModel, cfg, skillDirs, agentDefDirs, func(id string, turn int, req *provider.Request) { srv.OnRequest(id, turn, req) }),
+		// EventSink is nil unless the config declares one, so a deployment
+		// with no event_sink block starts no pump at all.
+		EventSink: func() server.EventSink {
+			if cfg.EventSink == nil {
+				return nil
+			}
+			return newHTTPEventSink(cfg.EventSink)
+		}(),
+		EventSinkFlush: func() time.Duration {
+			if cfg.EventSink == nil {
+				return 0
+			}
+			return time.Duration(cfg.EventSink.FlushMS) * time.Millisecond
+		}(),
+		EventSinkMaxRecords: func() int {
+			if cfg.EventSink == nil {
+				return 0
+			}
+			return cfg.EventSink.BatchMaxRecords
+		}(),
+		EventSinkMaxBytes: func() int {
+			if cfg.EventSink == nil {
+				return 0
+			}
+			return cfg.EventSink.BatchMaxBytes
+		}(),
 	})
 	if err != nil {
 		return err
