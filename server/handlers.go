@@ -502,6 +502,34 @@ func (s *Server) rejectManagedChildTurn(w http.ResponseWriter, id string) bool {
 	return false
 }
 
+// rejectClaudeCodeDelegatedCompact refuses POST /session/{id}/compact for a
+// session CURRENTLY delegated to the Claude Code CLI
+// (engine.Session.ClaudeCodeDelegated) — see docs/design/
+// context-compaction.md, "A session delegated to the Claude Code CLI": that
+// CLI manages its own context end to end, and harness's journal for such a
+// session is only ever a passive record of what streamed back, never
+// itself compacted. Running harness's own summarizer against it would
+// splice a journal nobody reads — a silent no-op relative to the CLI's
+// real context, not a fix for anything — so this refuses BEFORE
+// claimForPrompt ever claims the run slot, the same cheap early-check
+// shape rejectManagedChildTurn above uses, rather than claim-then-release.
+//
+// Returns true (having already written a 409) if id is resident or
+// on-disk and currently claude-code-delegated and the caller must stop;
+// false — safe to proceed — otherwise, including when id cannot be
+// resolved at all (claimForPrompt's own 404 path reports that case).
+func (s *Server) rejectClaudeCodeDelegatedCompact(w http.ResponseWriter, id string) bool {
+	sess, ok := s.lookupSession(id)
+	if !ok {
+		return false
+	}
+	if sess.ClaudeCodeDelegated() {
+		writeErr(w, http.StatusConflict, "session is delegated to the Claude Code CLI; context is managed by the CLI itself, not by harness — POST /session/{id}/compact has no effect on it")
+		return true
+	}
+	return false
+}
+
 // healthJSON is the openapi Health shape. VCSRevision, VCSTime, SessionSync,
 // and StartedAt are always present (never omitted, even empty) so a client
 // never has to special-case "field absent" vs "field empty" — see buildInfo
@@ -3557,6 +3585,9 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.rejectManagedChildTurn(w, id) {
+		return
+	}
+	if s.rejectClaudeCodeDelegatedCompact(w, id) {
 		return
 	}
 	var body struct {

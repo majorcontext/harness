@@ -113,6 +113,16 @@ func (s *Session) claudeCodeDelegated() bool {
 	return s.Model().Provider == ClaudeCodeProviderFamily
 }
 
+// ClaudeCodeDelegated is claudeCodeDelegated exported for callers outside
+// this package — server/handlers.go's handleCompact guard, notably, which
+// must refuse POST /session/{id}/compact for a delegated session (see
+// docs/design/context-compaction.md, "A session delegated to the Claude
+// Code CLI") before ever claiming the run slot. Logic lives in
+// claudeCodeDelegated; this is a thin wrapper, not a second copy.
+func (s *Session) ClaudeCodeDelegated() bool {
+	return s.claudeCodeDelegated()
+}
+
 // claudeCodeSessionID returns the Claude Code CLI's own session id
 // captured on this session's most recent delegated turn (see
 // Session.claudeCodeCLISessionID's own doc comment), or "" before the

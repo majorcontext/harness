@@ -126,11 +126,11 @@ An operator sees a diagnosable compaction failure instead of an opaque
 provider rejection.
 
 `POST /session/{id}/compact` is guarded the other direction: it refuses a
-CURRENTLY-delegated session outright (4xx, `server/handlers.go`'s
-`handleCompact`) rather than running harness's summarizer against a journal
-the CLI's own context management has already made irrelevant — see §4's
-"Interaction with the resident session" for why this endpoint's own claim
-discipline makes an early refusal free.
+CURRENTLY-delegated session outright (409, `server/handlers.go`'s
+`rejectClaudeCodeDelegatedCompact`, checked before `claimForPrompt` — the
+same before-the-claim shape `rejectManagedChildTurn` already uses) rather
+than running harness's summarizer against a journal the CLI's own context
+management has already made irrelevant.
 
 ## 2. Mechanism
 

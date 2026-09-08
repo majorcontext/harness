@@ -581,6 +581,57 @@ func TestCompactEndpointUnknownSessionIs404(t *testing.T) {
 	}
 }
 
+// TestCompactEndpointRejectsClaudeCodeDelegatedSession is the red-first test
+// for guarding POST /session/{id}/compact against a session CURRENTLY
+// delegated to the Claude Code CLI (engine.ClaudeCodeProviderFamily). That
+// CLI manages its own context end to end (docs/design/context-compaction.md,
+// "A session delegated to the Claude Code CLI"); harness's journal for such
+// a session is only ever a passive record, so running harness's own
+// summarizer against it would silently splice a journal nobody reads
+// instead of doing anything the CLI's real context actually needs — the
+// exact trap docs/design/context-compaction.md names. The endpoint must
+// refuse with a clear 4xx naming the reason, before ever claiming the run
+// slot or calling Session.Compact, rather than a 200 that accomplishes
+// nothing or (worse) a 500 from a native-provider transcoder choking on
+// claude-code-produced history.
+func TestCompactEndpointRejectsClaudeCodeDelegatedSession(t *testing.T) {
+	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+	nativeProv := &scriptedProvider{name: "test"}
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{}, nativeProv)
+	id := h.createSession("")
+
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
+	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want a 4xx: %s", resp.StatusCode, data)
+	}
+	var out struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("decode error body: %v (%s)", err, data)
+	}
+	if out.Error == "" {
+		t.Fatal("error body is empty, want a message naming why compact was refused")
+	}
+
+	// Never claimed the run slot: a session that was never running before
+	// this call is still idle/idle/not-queued afterward, not stranded busy
+	// by a rejection that skipped the claim/release bracket.
+	sessResp, sessData := h.do("GET", "/session/"+id, nil)
+	if sessResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", sessResp.StatusCode, sessData)
+	}
+	var got struct {
+		Status string `json:"status"`
+		State  string `json:"state"`
+		Queued int    `json:"queued"`
+	}
+	mustUnmarshal(t, sessData, &got)
+	if got.Status != "idle" || got.State != "idle" || got.Queued != 0 {
+		t.Errorf("after a rejected compact, status=%q state=%q queued=%d, want idle/idle/0", got.Status, got.State, got.Queued)
+	}
+}
+
 // TestCompactEndpointRequiresAuth mirrors every other write endpoint's
 // run-token auth requirement.
 func TestCompactEndpointRequiresAuth(t *testing.T) {
