@@ -139,8 +139,8 @@ meant to supply instructions must not run silently without them. The same
 condition in any OTHER (more ancestral) directory on the chain is skipped
 instead, with a logged warning naming its path: an unrelated ancestor's broken
 file must not fail every session rooted below it. A missing file is fine.
-Disable with `-no-instructions`, config `instructions: false`, or point at a specific file
-with config `instructions_path`.
+Disable with `-no-instructions`, config `instructions: false`, or point at a
+specific file with config `instructions_path`.
 
 An oversize file is truncated, and the truncation is LOUD on both channels.
 `truncateInstructions` (`engine/instructions.go`) appends the in-band marker
@@ -162,14 +162,17 @@ environment variable itself.
 
 A per-file cap does not bound the CHAIN: a `WorkDir` several directories below
 the repository root can inject several files, so `capChainTotal`
-(`engine/instructions.go`) caps their combined total a second time, at
-`chainCeilingMultiplier` (4) times `MaxBytes`. Over that ceiling, files
-strictly between the root and the deepest file are dropped one at a time,
-nearest the root first, until the chain fits — the root always carries the
-routing table naming every scoped file, and the deepest always names
-`WorkDir`'s own rules, so neither is ever a drop candidate. A dropped file logs
-a WARN line naming it. A negative `MaxBytes` disables this ceiling along with
-the per-file cap.
+(`engine/instructions.go`) makes a BEST-EFFORT second pass, trimming files
+strictly between the root and the deepest file one at a time, nearest the
+root first, toward a target of `chainCeilingMultiplier` (4) times `MaxBytes`
+— the root always carries the routing table naming every scoped file, and
+the deepest always names `WorkDir`'s own rules, so neither is ever trimmed or
+dropped. That makes this a bound on the MIDDLE of the chain, not a hard
+ceiling on its total: an oversize outline rendering
+(`engine/instructions_outline.go`) on the root or the deepest file, neither
+of which this pass touches, can still push the actual total past the target.
+A dropped file logs a WARN line naming it. A negative `MaxBytes` disables
+this pass along with the per-file cap.
 
 An oversize file is not merely marked, it is SPLIT.
 `renderInstructions` (`engine/instructions_outline.go`) injects a HEAD plus an

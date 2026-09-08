@@ -416,10 +416,11 @@ func TestInstructionsChainMalformedNearestFailsFirstPrompt(t *testing.T) {
 
 // TestInstructionsChainByteCeilingDropsMiddleFiles pins SHOULD-2: a per-file
 // cap alone does not bound the CHAIN, so a deep monorepo path could put
-// N*MaxBytes bytes into every request's system prompt. capChainTotal caps the
-// combined total at chainCeilingMultiplier*maxBytes and drops middle files —
-// never the root, which carries the routing table, and never the deepest,
-// which names WorkDir's own rules — until the chain fits.
+// N*MaxBytes bytes into every request's system prompt. capChainTotal makes a
+// best-effort pass toward chainCeilingMultiplier*maxBytes by dropping middle
+// files — never the root, which carries the routing table, and never the
+// deepest, which names WorkDir's own rules. With 7 same-size files and a
+// ceiling of 4*maxBytes, exactly 3 middle files must be dropped, leaving 4.
 func TestInstructionsChainByteCeilingDropsMiddleFiles(t *testing.T) {
 	const maxBytes = 100
 	root := t.TempDir()
@@ -457,8 +458,9 @@ func TestInstructionsChainByteCeilingDropsMiddleFiles(t *testing.T) {
 	if last := files[len(files)-1]; last.body != strings.Repeat("d", maxBytes) {
 		t.Errorf("deepest file was dropped; want it always kept")
 	}
-	if len(files) >= 8 {
-		t.Errorf("files = %d, want middle files dropped to fit the ceiling", len(files))
+	const wantFiles = 4 // root + deepest + 2 of the 5 middle files (3 dropped)
+	if len(files) != wantFiles {
+		t.Errorf("files = %d, want %d (middle files dropped to fit the ceiling)", len(files), wantFiles)
 	}
 	if out := buf.String(); !strings.Contains(out, "WARN") || !strings.Contains(out, "ceiling") {
 		t.Errorf("expected a WARN log line naming the ceiling, got:\n%s", out)

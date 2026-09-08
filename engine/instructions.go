@@ -60,12 +60,15 @@ type InstructionsConfig struct {
 	// always loud — see truncateInstructions.
 	//
 	// A WorkDir several directories below the repository root can inject
-	// several files (see loadInstructionChain), so the bytes reaching the
-	// system prompt are bounded a second time: chainCeilingMultiplier *
-	// MaxBytes caps their COMBINED total. Exceeding it drops middle files —
-	// never the root, which carries the routing table, and never the deepest,
-	// which names WorkDir's own rules — until the chain fits. See
-	// capChainTotal.
+	// several files (see loadInstructionChain), so capChainTotal makes a
+	// BEST-EFFORT second pass at chainCeilingMultiplier * MaxBytes: over that
+	// total, it drops middle files — never the root, which carries the
+	// routing table, and never the deepest, which names WorkDir's own rules —
+	// until the chain fits or no middle file remains. The root and the
+	// deepest file are never capped or dropped, so an oversize outline
+	// rendering (engine/instructions_outline.go) on either one can still push
+	// the actual total past this ceiling; it bounds the MIDDLE, not a hard
+	// maximum on the whole chain. See capChainTotal.
 	MaxBytes int
 	// Mode selects how an OVERSIZE file is rendered: InstructionsModeAuto
 	// (the zero value) splits it into a head plus an outline of the sections
@@ -220,8 +223,9 @@ type instructionFile struct {
 // AGENTS.md/AGENT.md found from that root down to workDir inclusive, root
 // first. A directory with neither file contributes nothing; the chain is
 // empty, with a nil error, when no directory on the path holds one. maxBytes
-// and mode apply per file; the combined chain is then capped a second time by
-// capChainTotal.
+// and mode apply per file; capChainTotal then makes a best-effort second pass
+// to trim middle files toward chainCeilingMultiplier*maxBytes (see
+// capChainTotal's own doc for what that pass does and does not bound).
 //
 // Without a repository boundary, only workDir's own file counts: a session
 // whose WorkDir sits under an arbitrary, non-repository directory (a scratch
@@ -286,20 +290,25 @@ func loadInstructionChain(workDir string, maxBytes int, mode InstructionsMode) (
 	return capChainTotal(files, maxBytes), nil
 }
 
-// chainCeilingMultiplier bounds the CHAIN total against runaway monorepo
-// depth: maxBytes caps one file, chainCeilingMultiplier*maxBytes caps the sum
-// of every file's rendered body in one chain. See capChainTotal.
+// chainCeilingMultiplier targets the CHAIN total against runaway monorepo
+// depth: maxBytes caps one file, chainCeilingMultiplier*maxBytes is the
+// target capChainTotal trims MIDDLE files toward. See capChainTotal for what
+// this target does and does not guarantee.
 const chainCeilingMultiplier = 4
 
-// capChainTotal enforces that chain ceiling. A negative maxBytes disables the
-// per-file cap and, with it, the chain cap (an operator who asked for the
-// whole file gets the whole chain too). A chain of at most the root plus the
-// deepest file is never trimmed — there is no middle file to drop. Otherwise,
-// files strictly between the root (files[0]) and the deepest file
-// (files[len(files)-1]) are dropped one at a time, nearest the root first,
-// until the total fits or none remain; the root always carries the routing
-// table naming every scoped file, and the deepest always names WorkDir's own
-// rules, so neither is ever a drop candidate.
+// capChainTotal makes a BEST-EFFORT pass at the chain ceiling
+// (chainCeilingMultiplier*maxBytes): it trims files strictly between the
+// root (files[0]) and the deepest file (files[len(files)-1]) one at a time,
+// nearest the root first, until the total fits under that target or no
+// middle file remains. The root and the deepest file are never trimmed or
+// dropped — the root always carries the routing table naming every scoped
+// file, and the deepest always names WorkDir's own rules — so this is a
+// bound on the MIDDLE of the chain, not a hard ceiling on its total: an
+// oversize outline rendering (engine/instructions_outline.go) on the root or
+// the deepest file, which this pass never touches, can still push the
+// actual total past chainCeilingMultiplier*maxBytes. A negative maxBytes
+// disables the per-file cap and, with it, this pass (an operator who asked
+// for the whole file gets the whole chain too).
 func capChainTotal(files []instructionFile, maxBytes int) []instructionFile {
 	if maxBytes < 0 || len(files) <= 2 {
 		return files
