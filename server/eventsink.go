@@ -100,9 +100,10 @@ func (s *Server) runEventSink() {
 	}
 }
 
-// flushEventSink delivers everything above the cursor, in batches, until it
-// runs out of records or a delivery fails. It never holds s.mu across
-// Deliver.
+// flushEventSink delivers everything above the cursor in batches. A failed
+// delivery retries the same batch after eventSinkRetryDelay. It returns when
+// no records remain, ctx is canceled, or sinkStop closes. It never holds s.mu
+// across Deliver.
 func (s *Server) flushEventSink(ctx context.Context) {
 	for {
 		select {

@@ -129,6 +129,21 @@ func TestMergeEventSink(t *testing.T) {
 			t.Fatal("merged EventSink.Headers aliases the project config")
 		}
 	})
+
+	t.Run("explicit empty headers do not alias", func(t *testing.T) {
+		over := &Config{EventSink: &EventSinkSpec{
+			URL:     "https://project.test/journal",
+			Headers: map[string]string{},
+		}}
+		got := merge(&Config{}, over)
+		if got.EventSink == nil || got.EventSink.Headers == nil {
+			t.Fatalf("EventSink = %+v, want a non-nil empty Headers map", got.EventSink)
+		}
+		got.EventSink.Headers["X-Test"] = "changed"
+		if len(over.EventSink.Headers) != 0 {
+			t.Fatal("merged empty EventSink.Headers aliases the project config")
+		}
+	})
 }
 
 func TestLoadOmitsEventSinkWhenAbsent(t *testing.T) {

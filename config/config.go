@@ -403,9 +403,9 @@ type EventSinkSpec struct {
 	// FlushMS is the coalescing window after a record arrives, so a burst
 	// becomes one request. 0 takes the default.
 	FlushMS int `json:"flush_ms,omitempty"`
-	// BatchMaxRecords and BatchMaxBytes bound one request. They chunk a
-	// backlog; they never drop a record, so a single record larger than
-	// BatchMaxBytes is still sent, alone.
+	// BatchMaxRecords bounds record count. BatchMaxBytes bounds the sum of
+	// encoded record bytes used to chunk a backlog; it excludes the request
+	// envelope. Neither drops a record, so one oversized record ships alone.
 	BatchMaxRecords int `json:"batch_max_records,omitempty"`
 	BatchMaxBytes   int `json:"batch_max_bytes,omitempty"`
 	TimeoutS        int `json:"timeout_s,omitempty"`
@@ -1431,7 +1431,7 @@ func merge(base, over *Config) *Config {
 	}
 	if sink != nil {
 		cloned := *sink
-		if len(sink.Headers) > 0 {
+		if sink.Headers != nil {
 			cloned.Headers = make(map[string]string, len(sink.Headers))
 			for name, value := range sink.Headers {
 				cloned.Headers[name] = value

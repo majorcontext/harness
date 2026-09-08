@@ -264,9 +264,10 @@ type Options struct {
 	// EventSinkFlush is the coalescing window after a record arrives.
 	// Zero takes defaultEventSinkFlush.
 	EventSinkFlush time.Duration
-	// EventSinkMaxRecords and EventSinkMaxBytes bound one batch. Zero takes
-	// the defaults. They chunk a backlog and never drop: one record larger
-	// than EventSinkMaxBytes is still delivered, alone.
+	// EventSinkMaxRecords bounds record count. EventSinkMaxBytes bounds the
+	// sum of encoded record bytes; it excludes any transport envelope. Zero
+	// takes the defaults. They chunk a backlog and never drop a record, so one
+	// oversized record is still delivered alone.
 	EventSinkMaxRecords int
 	EventSinkMaxBytes   int
 	// MCP is the MCP client integration shared by every session this server
