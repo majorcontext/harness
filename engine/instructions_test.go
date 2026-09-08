@@ -225,6 +225,42 @@ func TestInstructionsInjectedIntoSystem(t *testing.T) {
 	}
 }
 
+// TestInstructionsInjectsEveryFileRootToWorkDir pins the AGENTS.md
+// multi-file precedence gap: loadInstructionsMode (the walk-up-from-WorkDir
+// search) stops at the FIRST AGENTS.md it finds, so a workDir several
+// directories below the repo root never sees the root file at all. With a
+// fixture tree root/AGENTS.md and root/sub/AGENTS.md and WorkDir=root/sub,
+// the injected segment must carry BOTH files' content, root's before sub's
+// (root to working directory; the deepest file wins on conflict) — before
+// this fix it carried only "sub rules".
+func TestInstructionsInjectsEveryFileRootToWorkDir(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, filepath.Join(root, ".git"))
+	writeInstr(t, filepath.Join(root, "AGENTS.md"), "root rules")
+	sub := filepath.Join(root, "sub")
+	mkdirAll(t, sub)
+	writeInstr(t, filepath.Join(sub, "AGENTS.md"), "sub rules")
+
+	prov := instrSession(t, Config{WorkDir: sub}, 1)
+	sys := prov.requests[0].System
+	if len(sys) != 3 {
+		t.Fatalf("system = %v, want 3 segments", sys)
+	}
+	seg := sys[2]
+	if !strings.Contains(seg, "root rules") {
+		t.Errorf("segment missing root AGENTS.md content: %q", seg)
+	}
+	if !strings.Contains(seg, "sub rules") {
+		t.Errorf("segment missing sub AGENTS.md content: %q", seg)
+	}
+	if ir, is := strings.Index(seg, "root rules"), strings.Index(seg, "sub rules"); ir < 0 || is < 0 || ir > is {
+		t.Errorf("segment must inject the root file before the sub file: %q", seg)
+	}
+	if !strings.Contains(seg, "deepest file wins") {
+		t.Errorf("segment should state precedence when it carries more than one file: %q", seg)
+	}
+}
+
 func TestInstructionsDisabled(t *testing.T) {
 	dir := t.TempDir()
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), "should be ignored")

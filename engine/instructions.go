@@ -218,10 +218,72 @@ func displayPath(workDir, p string) string {
 	return p
 }
 
-// formatInstructions builds the system-prompt segment for an instruction
-// file.
-func formatInstructions(path, content string) string {
-	return fmt.Sprintf("Project instructions from %s:\n\n%s", path, content)
+// instructionFile is one AGENTS.md/AGENT.md found on the path from the repo
+// root down to WorkDir, with its (possibly truncated) rendered body.
+type instructionFile struct {
+	path string // display path, per displayPath
+	body string
+}
+
+// loadInstructionChain finds the repository root — the nearest ancestor of
+// workDir with a .git entry, or the top of the upward walk when none exists
+// — and returns every AGENTS.md/AGENT.md found from that root down to
+// workDir inclusive, root first. A directory with neither file contributes
+// nothing; the chain is empty, with a nil error, when no directory on the
+// path holds one. maxBytes and mode apply per file, same as loadInstructions.
+//
+// This walks the same directories loadInstructionsMode does, but does not
+// stop at the first file found: loadInstructionsMode remains the
+// single-closest-file primitive engine/instructions_outline_test.go and
+// engine/instructions_truncate_test.go drive directly to pin truncation and
+// outline behavior; this is the multi-file entry point buildInstructionSegment
+// uses.
+func loadInstructionChain(workDir string, maxBytes int, mode InstructionsMode) ([]instructionFile, error) {
+	var dirs []string
+	for dir := workDir; ; {
+		dirs = append(dirs, dir)
+		if isDir(filepath.Join(dir, ".git")) {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // filesystem root: the walk's top when no .git was found
+		}
+		dir = parent
+	}
+	for i, j := 0, len(dirs)-1; i < j; i, j = i+1, j-1 {
+		dirs[i], dirs[j] = dirs[j], dirs[i] // root first
+	}
+	var files []instructionFile
+	for _, d := range dirs {
+		p, data, found := readInstructionFile(d)
+		if !found {
+			continue
+		}
+		body, err := validateInstructions(p, data, maxBytes, mode)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, instructionFile{path: displayPath(workDir, p), body: body})
+	}
+	return files, nil
+}
+
+// formatInstructions builds the system-prompt segment for the discovered
+// instruction files, root to working directory. A single file keeps the
+// plain header a session with only one AGENTS.md has always seen; more than
+// one file adds a precedence line, since a nested file can now disagree with
+// an ancestor's.
+func formatInstructions(files []instructionFile) string {
+	if len(files) == 1 {
+		return fmt.Sprintf("Project instructions from %s:\n\n%s", files[0].path, files[0].body)
+	}
+	var b strings.Builder
+	b.WriteString("Project instructions, root to working directory. The deepest file wins on conflict.\n")
+	for _, f := range files {
+		b.WriteString("\nFrom " + f.path + ":\n\n" + f.body + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // ensureInstructions loads and caches the instruction segment on first call,
@@ -274,17 +336,21 @@ func (s *Session) buildInstructionSegment() (string, error) {
 			return "", err
 		}
 		s.instrPath = ic.Path
-		return formatInstructions(ic.Path, body), nil
+		return formatInstructions([]instructionFile{{path: ic.Path, body: body}}), nil
 	}
-	content, path, err := loadInstructionsMode(s.cfg.WorkDir, maxBytes, mode)
+	files, err := loadInstructionChain(s.cfg.WorkDir, maxBytes, mode)
 	if err != nil {
 		return "", err
 	}
-	if path == "" {
+	if len(files) == 0 {
 		return "", nil
 	}
-	s.instrPath = path
-	return formatInstructions(path, content), nil
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.path
+	}
+	s.instrPath = strings.Join(paths, ", ")
+	return formatInstructions(files), nil
 }
 
 // instructionSegment returns the cached instruction segment (possibly empty).

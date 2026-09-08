@@ -111,13 +111,20 @@ other arguments share that limit.
 The engine injects a project's `AGENTS.md` into the system prompt. The first
 load normally happens during `Prompt`. An eligible fresh session starts the
 same load during background startup prewarm. Loaded sessions and sessions whose
-provider is not eligible remain lazy until `Prompt`. The engine walks up from `Config.WorkDir`
-for `AGENTS.md` (falling back to `AGENT.md`), stopping at the git root or
-filesystem root; the closest file wins, per the
-[agents.md](https://agents.md/) convention. The file is schema-less Markdown —
-no headings are required or parsed. The segment is appended after
-`Config.System` and before hook (`system.transform`) segments, cached for the
-session, and never written to the session log (loaded fresh on resume).
+provider is not eligible remain lazy until `Prompt`. `loadInstructionChain`
+(`engine/instructions.go`) finds the repository root — the nearest ancestor of
+`Config.WorkDir` with a `.git` entry, or the top of the upward walk when none
+exists — and injects every `AGENTS.md` (falling back to `AGENT.md` per
+directory) found from that root down to `WorkDir` inclusive, root first. A
+single file keeps the plain one-file header a session with only one AGENTS.md
+has always seen; more than one file adds a header line naming each path and
+stating that the deepest file wins on conflict, adapting the
+[agents.md](https://agents.md/) convention's own nested-file precedence rule
+rather than the engine's earlier closest-file-only search. The file is
+schema-less Markdown — no headings are required or parsed. The segment is
+appended after `Config.System` and before hook (`system.transform`) segments,
+cached for the session, and never written to the session log (loaded fresh on
+resume).
 
 A present-but-unusable file (invalid UTF-8, or empty/whitespace-only) fails the
 first `Prompt` — a project that meant to supply instructions must not run
