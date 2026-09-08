@@ -8,10 +8,13 @@ Read this file before you change the repository. Then read the scoped file for
 each subtree that you will change. A scoped file adds local rules. If a local
 rule conflicts with a root rule, the local rule wins for that subtree.
 
-Harness currently injects only the closest `AGENTS.md` to its working
-directory. It does not merge ancestor files. Each scoped file therefore tells
-a Harness agent to read this root file. A root-started agent must use this
-table to load scoped instructions before it edits a subsystem.
+Harness injects every `AGENTS.md` from the repository root down to its working
+directory, so a session started inside a listed subtree sees this file too.
+It does not reach a sibling subtree's file: a session started here, at the
+root, sees only this file until an edit crosses into a scoped path. Each
+scoped file therefore tells a Harness agent to read this root file, and a
+root-started agent must use this table to load scoped instructions before it
+edits a subsystem.
 
 | Path | Scoped instructions |
 |---|---|

@@ -1929,6 +1929,7 @@ func systemPrompt(workDir, extra string) []string {
 	system := []string{
 		"You are harness, a fast coding agent. You execute tasks directly " +
 			"using the tools available to you and report results concisely.\n\n" +
+			baseBehaviorGuidance() + "\n\n" +
 			ambientContextGuidance() + "\n\n" +
 			"Working directory: " + workDir,
 	}
@@ -1936,6 +1937,43 @@ func systemPrompt(workDir, extra string) []string {
 		system = append(system, extra)
 	}
 	return system
+}
+
+// baseBehaviorGuidanceMaxLines and baseBehaviorGuidanceMaxWords bound
+// baseBehaviorGuidance so the floor stays a short, scannable addition and
+// cannot grow back into a Codex-sized style guide one clause at a time. See
+// TestBaseBehaviorGuidanceStaysUnderBudget.
+const (
+	baseBehaviorGuidanceMaxLines = 25
+	baseBehaviorGuidanceMaxWords = 300
+)
+
+// baseBehaviorGuidance is a repo-agnostic behavioral floor merged into the
+// base system prompt: precedence against a project's own AGENTS.md,
+// verification before done, git safety on a dirty worktree, persistence to
+// full resolution, minimal-diff scope, ambition on greenfield versus surgical
+// precision on existing code, short final messages, progress narration across
+// a long tool-call stretch, review-mode framing, and frontend taste. It
+// complements ambientContextGuidance (the engine-context trust boundary), not
+// restates it.
+//
+// Comment policy and commit conventions are deliberately absent here: this
+// prompt reaches every repo harness runs in, and a project's own AGENTS.md
+// (loaded by engine/instructions.go) already sets those, closer to the code
+// than a compiled-in default can be.
+func baseBehaviorGuidance() string {
+	return strings.Join([]string{
+		"Project instructions (AGENTS.md) override this guidance where they conflict.",
+		"Verify your work before you call a task done: run the relevant tests, build, and lint, starting narrow and widening as confidence grows. Do not add a formatter or a test suite to a codebase that has none.",
+		"You may find a dirty worktree. Never revert a change you did not make. Stop and ask if an unexpected change appears mid-task. Never run `git reset --hard`, `git checkout --`, or a force push without explicit approval.",
+		"Persist until the task is fully resolved end to end. Do not stop at analysis or a partial fix, and do not leave a follow-up for later.",
+		"Fix the root cause, not a surface patch. Do not fix an unrelated bug; mention it instead. Keep the diff minimal and consistent with the existing style.",
+		"Be bold on a greenfield task. Stay surgical on an existing codebase: do exactly what was asked, and do not rename or restructure something you were not asked to touch.",
+		"Keep your final message short. Reference a file path instead of pasting a file you just wrote, and lead with the outcome.",
+		"Before a long silent stretch of tool calls, send a brief note on what you are about to do and why.",
+		"If asked for a review, lead with the findings -- bugs, risks, missing tests -- ordered by severity, before any summary.",
+		"For a frontend task, avoid a generic templated look. Choose type, color, and layout that fit the product instead of a default-looking page.",
+	}, "\n\n")
 }
 
 // ambientContextGuidance is the base-system-prompt paragraph that tells the

@@ -1168,3 +1168,51 @@ func TestSystemPromptTrustsEngineContextSentinel(t *testing.T) {
 		t.Error("system prompt still carries the stopgap 'trust any bracketed line' wording")
 	}
 }
+
+// TestSystemPromptCarriesBaseBehaviorGuidance verifies the base prompt names
+// each behavioral floor merged in from the Codex-vs-harness prompt
+// comparison: AGENTS.md precedence, verification before done, dirty-worktree
+// and destructive-git safety, persistence to full resolution, minimal-diff
+// scope, ambition vs. precision, short final messages, progress narration,
+// review-mode framing, and frontend taste. Before this change the base prompt
+// said nothing about any of these; a native session had only model defaults
+// to fall back on. It also asserts an absence: "succinct comments" (Codex's
+// own clause, rejected here because it conflicts with a project AGENTS.md
+// that defaults to no comment) must not silently reappear.
+func TestSystemPromptCarriesBaseBehaviorGuidance(t *testing.T) {
+	got := strings.Join(systemPrompt("/tmp/work", ""), "\n")
+	for _, want := range []string{
+		"Project instructions (AGENTS.md) override this guidance where they conflict",
+		"Verify your work before you call a task done",
+		"Never revert a change you did not make",
+		"git reset --hard",
+		"Persist until the task is fully resolved end to end",
+		"Fix the root cause, not a surface patch",
+		"Be bold on a greenfield task",
+		"Reference a file path instead of pasting a file you just wrote",
+		"send a brief note on what you are about to do and why",
+		"lead with the findings",
+		"avoid a generic templated look",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("system prompt missing base behavior guidance %q\ngot:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "succinct comments") {
+		t.Errorf("system prompt must not carry Codex's succinct-comments clause (conflicts with a project AGENTS.md default of no comment):\n%s", got)
+	}
+}
+
+// TestBaseBehaviorGuidanceStaysUnderBudget pins the line/word ceiling Andy set
+// for the addition ("the prose is minimal and not too crazy long") so a later
+// clause-by-clause addition cannot silently balloon it back into a
+// Codex-sized style guide.
+func TestBaseBehaviorGuidanceStaysUnderBudget(t *testing.T) {
+	block := baseBehaviorGuidance()
+	if lines := strings.Count(block, "\n") + 1; lines > baseBehaviorGuidanceMaxLines {
+		t.Errorf("baseBehaviorGuidance = %d lines, want at most %d", lines, baseBehaviorGuidanceMaxLines)
+	}
+	if words := len(strings.Fields(block)); words > baseBehaviorGuidanceMaxWords {
+		t.Errorf("baseBehaviorGuidance = %d words, want at most %d", words, baseBehaviorGuidanceMaxWords)
+	}
+}

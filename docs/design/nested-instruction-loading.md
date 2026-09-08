@@ -6,9 +6,13 @@ from opencode's `resolve()`, is still design only — see "Proposed split".
 
 This repository does not depend on the unimplemented half. Its root
 `AGENTS.md` lists each scoped file and tells an agent to read the matching
-scope before an edit. Each scoped file links back to the root because the
-current loader selects only one closest file. This is an instruction
-convention, not automatic nested attachment.
+scope before an edit. The loader now injects every `AGENTS.md` from the repo
+root down to `WorkDir` (`loadInstructionChain`, `engine/instructions.go`), so
+a session started inside a scoped subtree sees the root file automatically;
+each scoped file still links back to the root because a session started
+above that subtree, or in a sibling one, does not. This is an instruction
+convention for the cross-subtree case, not automatic nested attachment on
+read.
 
 ## Problem
 

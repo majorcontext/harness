@@ -101,9 +101,9 @@ func TestInstructionsOutlineHeadAndSections(t *testing.T) {
 	captureLogs(t)
 
 	// A cap of 700 bytes holds two whole sections of this document.
-	content, _, err := loadInstructionsMode(dir, 700, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 700, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	head, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 	if !ok {
@@ -156,9 +156,9 @@ func TestInstructionsOutlineRangesAreExact(t *testing.T) {
 	writeInstr(t, path, body)
 	captureLogs(t)
 
-	content, _, err := loadInstructionsMode(dir, 400, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 400, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	_, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 	if !ok {
@@ -203,9 +203,9 @@ func TestInstructionsOutlineGiantFirstSectionStaysLoud(t *testing.T) {
 	writeInstr(t, path, body)
 	buf := captureLogs(t)
 
-	content, _, err := loadInstructionsMode(dir, 512, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 512, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	head, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 	if !ok {
@@ -247,9 +247,9 @@ func TestInstructionsOutlineFenceAware(t *testing.T) {
 	}, "\n"))
 	captureLogs(t)
 
-	content, _, err := loadInstructionsMode(dir, 200, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 200, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	if strings.Contains(content, "not a heading") && strings.Contains(content, instructionsOutlineHeader) {
 		_, outline, _ := strings.Cut(content, instructionsOutlineHeader)
@@ -273,9 +273,9 @@ func TestInstructionsOutlineFallbacks(t *testing.T) {
 		dir := t.TempDir()
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), strings.Repeat("plain body line\n", 200))
 		captureLogs(t)
-		content, _, err := loadInstructionsMode(dir, 256, InstructionsModeAuto)
+		content, _, err := loadInstructionChainDeepest(dir, 256, InstructionsModeAuto)
 		if err != nil {
-			t.Fatalf("loadInstructionsMode: %v", err)
+			t.Fatalf("loadInstructionChainDeepest: %v", err)
 		}
 		if strings.Contains(content, instructionsOutlineHeader) {
 			t.Errorf("a heading-less file must not get an outline:\n%s", content)
@@ -289,9 +289,9 @@ func TestInstructionsOutlineFallbacks(t *testing.T) {
 		body, _ := sectionDoc(8, 10)
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 		captureLogs(t)
-		content, _, err := loadInstructionsMode(dir, 256, InstructionsModeFull)
+		content, _, err := loadInstructionChainDeepest(dir, 256, InstructionsModeFull)
 		if err != nil {
-			t.Fatalf("loadInstructionsMode: %v", err)
+			t.Fatalf("loadInstructionChainDeepest: %v", err)
 		}
 		if strings.Contains(content, instructionsOutlineHeader) {
 			t.Errorf("full mode must not outline:\n%s", content)
@@ -305,9 +305,9 @@ func TestInstructionsOutlineFallbacks(t *testing.T) {
 		body, _ := sectionDoc(3, 2)
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 		captureLogs(t)
-		content, _, err := loadInstructionsMode(dir, 64*1024, InstructionsModeAuto)
+		content, _, err := loadInstructionChainDeepest(dir, 64*1024, InstructionsModeAuto)
 		if err != nil {
-			t.Fatalf("loadInstructionsMode: %v", err)
+			t.Fatalf("loadInstructionChainDeepest: %v", err)
 		}
 		if content != body {
 			t.Errorf("an under-cap file must be injected verbatim:\n%q", content)
@@ -318,9 +318,9 @@ func TestInstructionsOutlineFallbacks(t *testing.T) {
 		body, _ := sectionDoc(40, 40)
 		writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 		captureLogs(t)
-		content, _, err := loadInstructionsMode(dir, -1, InstructionsModeAuto)
+		content, _, err := loadInstructionChainDeepest(dir, -1, InstructionsModeAuto)
 		if err != nil {
-			t.Fatalf("loadInstructionsMode: %v", err)
+			t.Fatalf("loadInstructionChainDeepest: %v", err)
 		}
 		if content != body {
 			t.Errorf("a disabled cap must inject the whole file, got %d of %d bytes", len(content), len(body))
@@ -337,9 +337,9 @@ func TestInstructionsOutlineListsEverySection(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 	captureLogs(t)
 
-	content, _, err := loadInstructionsMode(dir, 512, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 512, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	_, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 	if !ok {
@@ -376,9 +376,9 @@ func TestInstructionsOutlineCoversEveryLine(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			rt.Fatalf("write: %v", err)
 		}
-		content, _, lerr := loadInstructionsMode(dir, cap, InstructionsModeAuto)
+		content, _, lerr := loadInstructionChainDeepest(dir, cap, InstructionsModeAuto)
 		if lerr != nil {
-			rt.Fatalf("loadInstructionsMode: %v", lerr)
+			rt.Fatalf("loadInstructionChainDeepest: %v", lerr)
 		}
 		total := len(strings.Split(strings.TrimSuffix(body, "\n"), "\n"))
 		head, outline, ok := strings.Cut(content, instructionsOutlineHeader)
@@ -419,9 +419,9 @@ func TestInstructionsOutlineTeaserRuneSafe(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 	captureLogs(t)
 
-	content, _, err := loadInstructionsMode(dir, 320, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, 320, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	if !utf8.ValidString(content) {
 		t.Errorf("segment is not valid UTF-8")
@@ -505,9 +505,9 @@ func TestInstructionsOutlineGiantFirstSectionRangesAreExact(t *testing.T) {
 	captureLogs(t)
 
 	const cap = 512
-	content, _, err := loadInstructionsMode(dir, cap, InstructionsModeAuto)
+	content, _, err := loadInstructionChainDeepest(dir, cap, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructionsMode: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	head, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 	if !ok {
@@ -592,9 +592,9 @@ func TestInstructionsOutlineCoversEveryLineRich(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(body), 0o644); err != nil {
 			rt.Fatalf("write: %v", err)
 		}
-		content, _, lerr := loadInstructionsMode(dir, capBytes, InstructionsModeAuto)
+		content, _, lerr := loadInstructionChainDeepest(dir, capBytes, InstructionsModeAuto)
 		if lerr != nil {
-			rt.Fatalf("loadInstructionsMode: %v", lerr)
+			rt.Fatalf("loadInstructionChainDeepest: %v", lerr)
 		}
 		head, outline, ok := strings.Cut(content, instructionsOutlineHeader)
 		if !ok {

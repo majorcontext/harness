@@ -33,9 +33,9 @@ func TestInstructionsTruncationIsLoud(t *testing.T) {
 	writeInstr(t, path, body)
 
 	buf := captureLogs(t)
-	content, _, err := loadInstructions(dir, defaultMaxInstructionsBytes)
+	content, _, err := loadInstructionChainDeepest(dir, defaultMaxInstructionsBytes, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructions: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 
 	head := strings.Repeat("x", defaultMaxInstructionsBytes)
@@ -78,9 +78,9 @@ func TestInstructionsUnderCapUntouched(t *testing.T) {
 	writeInstr(t, filepath.Join(dir, "AGENTS.md"), "small and complete")
 
 	buf := captureLogs(t)
-	content, _, err := loadInstructions(dir, defaultMaxInstructionsBytes)
+	content, _, err := loadInstructionChainDeepest(dir, defaultMaxInstructionsBytes, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructions: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	if content != "small and complete" {
 		t.Errorf("content = %q, want the file verbatim", content)
@@ -112,9 +112,9 @@ func TestInstructionsMaxBytesConfigurable(t *testing.T) {
 			writeInstr(t, filepath.Join(dir, "AGENTS.md"), body)
 			captureLogs(t)
 
-			content, _, err := loadInstructions(dir, resolveInstructionsMaxBytes(&InstructionsConfig{MaxBytes: tc.maxBytes}))
+			content, _, err := loadInstructionChainDeepest(dir, resolveInstructionsMaxBytes(&InstructionsConfig{MaxBytes: tc.maxBytes}), InstructionsModeAuto)
 			if err != nil {
-				t.Fatalf("loadInstructions: %v", err)
+				t.Fatalf("loadInstructionChainDeepest: %v", err)
 			}
 			kept := len(content)
 			if i := strings.Index(content, "[..."); i >= 0 {
@@ -141,9 +141,9 @@ func TestInstructionsTruncationRuneBoundary(t *testing.T) {
 	writeInstr(t, path, body)
 	captureLogs(t)
 
-	content, _, err := loadInstructions(dir, 5)
+	content, _, err := loadInstructionChainDeepest(dir, 5, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructions: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	kept, _, ok := strings.Cut(content, "\n[...")
 	if !ok {
@@ -160,9 +160,9 @@ func TestInstructionsTruncationRuneBoundary(t *testing.T) {
 	}
 
 	// A cap below the first rune keeps nothing, and still says so.
-	degenerate, _, err := loadInstructions(dir, 1)
+	degenerate, _, err := loadInstructionChainDeepest(dir, 1, InstructionsModeAuto)
 	if err != nil {
-		t.Fatalf("loadInstructions: %v", err)
+		t.Fatalf("loadInstructionChainDeepest: %v", err)
 	}
 	if !strings.HasPrefix(degenerate, "\n[... truncated:") {
 		t.Errorf("cap below one rune must keep no content: %q", degenerate)
