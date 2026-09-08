@@ -1042,6 +1042,90 @@ components:
             it, and so a client that did not can learn it. The message also
             arrives on /event carrying this same id.
 
+    SendRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          description: >
+            The message text — the original, back-compat shape. Required
+            unless `parts` is given instead; a request with neither (or with
+            `text` empty and `parts` empty) is rejected with 400.
+        parts:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/TextPart"
+              - $ref: "#/components/schemas/PromptBlobPart"
+          description: >
+            Text parts and file attachments — the same shape and validation
+            PromptRequest's `parts` uses (see its own description for the
+            attachment type/size rules and the 400 vs. 413 split). When
+            given (non-empty), used exclusively; `text` is read only when
+            `parts` is empty, so an existing text-only caller's request body
+            is unaffected.
+        id:
+          type: string
+          description: >
+            Optional client-supplied id for the user message this send
+            creates — same contract as PromptRequest's `id`: used verbatim
+            when usable, otherwise the server mints a fresh id (reported
+            back as `message_id`).
+        source:
+          allOf:
+            - $ref: "#/components/schemas/PromptSourceRequest"
+          description: >
+            Optional provenance for this message — see PromptRequest's
+            `source` description for the full contract (default, rejected
+            `task`, unverified-claim trust model). Meaningful only if this
+            send ends up queued behind a busy turn rather than delivered at
+            once; recorded on the appended message itself either way.
+        source_id:
+          type: string
+          maxLength: 128
+          description: >
+            Free-form identifier for `source`'s own instance. Optional —
+            see PromptRequest's `source_id` description for the printable-
+            ASCII requirement and the 400 an oversize or non-printable
+            value gets.
+        source_label:
+          type: string
+          maxLength: 256
+          description: >
+            Free-form, human-readable label for the same instance.
+            Optional, display only — see PromptRequest's `source_label`
+            description for the silent truncation and control-character
+            stripping an oversize or dirty value gets.
+
+    SendResponse:
+      type: object
+      required: [session_id, status, message_id]
+      properties:
+        session_id:
+          type: string
+          description: The target session's own id, echoed back.
+        status:
+          type: string
+          enum: [sent, queued]
+          description: >
+            `sent`: a turn is now running for THIS request's own message
+            (an idle target's own claim, or the freed-slot retry dispatching
+            it). `queued`: durably waiting in the FIFO behind a busy turn —
+            see `queued` below for the depth. Never `started`: this is
+            session.send's own back-compat vocabulary, not prompt_async's —
+            a truthy status either way.
+        queued:
+          type: integer
+          description: >
+            Current queue depth, including this request's own message.
+            Present only when status is `queued`.
+        message_id:
+          type: string
+          description: >
+            The id of the user message this send created — the caller's own
+            `id` when it supplied a usable one, otherwise the server-minted
+            `msg_...` id.
+
     PromptRequest:
       type: object
       required: [parts]
@@ -1120,10 +1204,24 @@ components:
             this route.
         source_id:
           type: string
-          description: Free-form identifier for `source`'s own instance (a schedule/cron id, a calling box id). Optional.
+          maxLength: 128
+          description: >
+            Free-form identifier for `source`'s own instance (a
+            schedule/cron id, a calling box id). Optional. Must be
+            printable ASCII (0x20-0x7E); an oversize or non-printable
+            value is rejected with 400, not repaired.
         source_label:
           type: string
-          description: Free-form, human-readable label for the same instance (a schedule's own display name). Optional, display only.
+          maxLength: 256
+          description: >
+            Free-form, human-readable label for the same instance (a
+            schedule's own display name). Optional, display only. An
+            oversize value is silently truncated to 256 bytes (at a valid
+            UTF-8 rune boundary, never mid-sequence), and C0/C1 control
+            characters and Unicode bidi-override/zero-width characters are
+            stripped — the durably journaled value can therefore differ
+            from what the caller sent. Invalid UTF-8 is rejected with 400,
+            not repaired.
 
     EnqueueRequest:
       type: object
@@ -1179,10 +1277,20 @@ components:
             Journaled with the durable prompt.queued record.
         source_id:
           type: string
-          description: Free-form identifier for `source`'s own instance. Optional.
+          maxLength: 128
+          description: >
+            Free-form identifier for `source`'s own instance. Optional —
+            see PromptRequest's `source_id` description for the printable-
+            ASCII requirement and the 400 an oversize or non-printable
+            value gets.
         source_label:
           type: string
-          description: Free-form, human-readable label for the same instance. Optional, display only.
+          maxLength: 256
+          description: >
+            Free-form, human-readable label for the same instance.
+            Optional, display only — see PromptRequest's `source_label`
+            description for the silent truncation and control-character
+            stripping an oversize or dirty value gets.
 
     EnqueueResponse:
       type: object
@@ -2719,6 +2827,66 @@ paths:
             so an oversized body is stopped at the read rather than after
             the cost is paid. Distinct from the per-attachment 400s in
             `parts`: this one says nothing about any individual attachment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/send:
+    post:
+      operationId: sessionSend
+      summary: Deliver a user-role message to any session (root or child).
+      description: |
+        session.send: the canonical way to deliver a message to a session
+        this server's SessionManager tracks, root or child alike, with no
+        functional difference between the two beyond which admission path
+        each already uses for its own reasons — a root goes through the
+        SAME run-slot admission prompt_async itself uses (busy behind
+        another prompt or a running goal loop durably queues, exactly like
+        prompt_async), a child goes through SessionManager's own sole
+        scheduler. Always asynchronous: this returns 202 immediately; the
+        caller polls session.info (GET /session/{id}) or watches /event for
+        the outcome.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendRequest" }
+      responses:
+        "202":
+          description: >
+            Accepted. `status` is `sent` when a turn is now running for
+            THIS request's own message, or `queued` when it is durably
+            waiting in the FIFO for a future drain — `queued` then carries
+            the current depth (including this message).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResponse" }
+        "400":
+          description: >
+            The body is malformed, both `text` and `parts` are empty, or an
+            attachment in `parts` is unusable — see PromptRequest's `parts`
+            description for the attachment rules.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            A root target: another currently-running session holds the same
+            workdir (the error names the holder), or a benign same-session
+            race that leaves nothing retryable durably enqueued (retry the
+            request). A child target: SessionManager refused it (a
+            concurrency limit, or the child is already canceled).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          description: >
+            The request body exceeds 33554432 bytes and was refused before
+            being decoded — see PromptRequest's `parts` description for why.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

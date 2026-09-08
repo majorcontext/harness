@@ -51,7 +51,8 @@ func sanitizeSourceID(in string) (string, error) {
 // sourceLabelMaxBytes, at a valid rune boundary — never splits a
 // multi-byte UTF-8 sequence) and strips C0 (0x00-0x1F, 0x7F) and C1
 // (0x80-0x9F) control characters (a newline or an ANSI escape sequence
-// injected into a rendered console bubble) rather than rejecting the
+// injected into a rendered console bubble), plus the Unicode bidi
+// override and zero-width characters below, rather than rejecting the
 // whole request over them. Invalid UTF-8 IS rejected, not repaired: there
 // is no well-defined truncation or per-byte strip that recovers a
 // caller's intended text from malformed encoding, so this returns an
@@ -73,8 +74,31 @@ func sanitizeSourceLabel(in string) (string, error) {
 		if r <= 0x1f || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return -1
 		}
+		if isBidiOrZeroWidth(r) {
+			return -1
+		}
 		return r
 	}, in), nil
+}
+
+// isBidiOrZeroWidth reports whether r is a Unicode bidirectional-override
+// or zero-width character — U+200E/U+200F (LRM/RLM), U+202A-U+202E
+// (LRE/RLE/PDF/LRO/RLO), U+2066-U+2069 (LRI/RLI/FSI/PDI), or
+// U+200B-U+200D/U+FEFF (ZWSP/ZWNJ/ZWJ/BOM). None of these carry a C0/C1
+// byte, so the control-character strip above misses them, yet each can
+// visually reorder or hide text in a rendered console bubble — the same
+// hazard C0/C1 stripping exists to close.
+func isBidiOrZeroWidth(r rune) bool {
+	switch {
+	case r == 0x200e || r == 0x200f:
+	case r >= 0x202a && r <= 0x202e:
+	case r >= 0x2066 && r <= 0x2069:
+	case r >= 0x200b && r <= 0x200d:
+	case r == 0xfeff:
+	default:
+		return false
+	}
+	return true
 }
 
 // promptSourceInput is the wire shape a caller uses to name who/what is

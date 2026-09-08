@@ -1897,7 +1897,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runPrompt(ctx, id, st, text, "", msgID, prov, blobs...)
+	go s.runPrompt(ctx, id, st, text, "", msgID, &prov, blobs...)
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
 }
 
@@ -2374,9 +2374,8 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 	// dispatched solo still carries the SAME provenance it would have
 	// carried had it instead ended up in an operator-batch drain — see
 	// runPrompt's own doc comment on prov.
-	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID,
-		engine.PromptProvenance{Source: head.Source, SourceID: head.SourceID, SourceLabel: head.SourceLabel},
-		head.Blobs...)
+	headProv := engine.PromptProvenance{Source: head.Source, SourceID: head.SourceID, SourceLabel: head.SourceLabel}
+	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID, &headProv, head.Blobs...)
 	if s.dispatchQueueHeadRace != nil {
 		// Test-only seam — see its own doc comment (server.go).
 		s.dispatchQueueHeadRace()
@@ -2409,21 +2408,25 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // of its own — PromptWithOrigin's own mint site resolves either case
 // identically.
 //
-// prov is the caller-attributable PromptProvenance for THIS text, forwarded
-// to Session.PromptWithOriginFrom so a solo-dispatched prompt's own
+// prov is the caller-attributable PromptProvenance for THIS text, non-nil
+// only when a real caller stands behind it — forwarded to
+// Session.PromptWithOriginFrom so a solo-dispatched prompt's own
 // Source/SourceID/SourceLabel land on the message it appends, exactly like
 // a batched one's do on OperatorBatchEntry — the same value regardless of
 // whether the target session happened to be busy when it arrived. Every
-// caller supplies one: handlePrompt's own parsed body (an ordinary
-// prompt_async turn), dispatchQueueHead's dequeued QueuedPrompt's own
-// provenance (a dequeued prompt), or sendTextToRoot's own parsed body (a
-// session.send delivery) — except runOrQueueText's synthetic resume
-// trigger, which passes the zero value: that text is the engine's own,
-// not any caller's prompt, so PromptProvenance{} here is a placeholder
-// only in the sense that Origin (message.OriginEngine) already marks the
-// message as synthetic; Normalized still folds it to PromptSourceAPI, the
-// same "no ambiguous provenance" default a bare EnqueuePrompt call use.
-func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, prov engine.PromptProvenance, blobs ...*message.Blob) {
+// caller supplies a non-nil prov: handlePrompt's own parsed body (an
+// ordinary prompt_async turn), dispatchQueueHead's dequeued QueuedPrompt's
+// own provenance (a dequeued prompt), or sendTextToRoot's own parsed body
+// (a session.send delivery) — except runOrQueueText's synthetic resume
+// trigger, which passes nil: that text is the engine's own, not any
+// caller's prompt, so stamping message.PromptSourceAPI onto it would be a
+// false claim (see engine.Session.PromptWithOriginFrom's own doc comment
+// for why nil, not a zero-value PromptProvenance, is what makes that
+// distinction — a zero value still Normalizes to PromptSourceAPI and
+// stamps it). A nil prov here calls Session.PromptWithOrigin instead of
+// PromptWithOriginFrom, mirroring PromptEngineResume's own nil-prov path
+// for the identical text.
+func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, prov *engine.PromptProvenance, blobs ...*message.Blob) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2438,7 +2441,13 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	msg, err := st.sess.PromptWithOriginFrom(ctx, text, origin, msgID, prov, blobs...)
+	var msg *message.Message
+	var err error
+	if prov != nil {
+		msg, err = st.sess.PromptWithOriginFrom(ctx, text, origin, msgID, *prov, blobs...)
+	} else {
+		msg, err = st.sess.PromptWithOrigin(ctx, text, origin, msgID, blobs...)
+	}
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:

@@ -209,6 +209,25 @@ func TestSanitizeSourceLabelBoundsAndStripsControlChars(t *testing.T) {
 	}
 }
 
+// TestSanitizeSourceLabelStripsBidiAndZeroWidth is the named-failure test
+// for a review finding: sanitizeSourceLabel's C0/C1 strip left a bidi
+// override (U+202E RIGHT-TO-LEFT OVERRIDE) or a zero-width character
+// (U+200B ZERO WIDTH SPACE) untouched — both pass through unstripped
+// today, letting a caller-supplied label visually reorder or hide text in
+// a rendered console bubble despite carrying no C0/C1 byte at all.
+func TestSanitizeSourceLabelStripsBidiAndZeroWidth(t *testing.T) {
+	got, err := sanitizeSourceLabel("a‮b​c")
+	if err != nil {
+		t.Fatalf("sanitizeSourceLabel with bidi/zero-width chars error = %v, want no error (strip, don't reject)", err)
+	}
+	if strings.ContainsAny(got, "‮​") {
+		t.Errorf("sanitizeSourceLabel(%q) = %q, want bidi override and zero-width space stripped", "a‮b​c", got)
+	}
+	if want := "abc"; got != want {
+		t.Errorf("sanitizeSourceLabel(%q) = %q, want %q", "a‮b​c", got, want)
+	}
+}
+
 // TestEnqueueRejectsOversizeSourceID is the end-to-end HTTP counterpart:
 // an enqueue request whose source_id exceeds sourceIDMaxBytes must 400,
 // not be silently truncated and journaled.

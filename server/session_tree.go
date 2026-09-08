@@ -262,7 +262,12 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	// resume trigger with no client message id of its own — see the origin
 	// comment just above. PromptWithOrigin's own mint site resolves it like
 	// any other unset id.
-	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "", engine.PromptProvenance{})
+	// nil prov: this text is the engine's own resume trigger, not any
+	// caller's prompt — a real PromptProvenance value here (even the zero
+	// value) would stamp message.PromptSourceAPI onto it via runPrompt's own
+	// PromptWithOriginFrom path, a false attribution. See runPrompt's own
+	// doc comment on prov.
+	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "", nil)
 	return engine.RunnerHandled
 }
 
@@ -366,7 +371,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.Promp
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
 		// goes exclusively through runOrQueueText above.
-		go s.runPrompt(ctx, id, st, text, "", msgID, prov, blobs...)
+		go s.runPrompt(ctx, id, st, text, "", msgID, &prov, blobs...)
 		return "started", 0, 0, ""
 	}
 }
