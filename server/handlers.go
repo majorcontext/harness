@@ -1676,10 +1676,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// uniqueness and never a reason to reject the prompt.
 		ID string `json:"id"`
 		// promptSourceInput: OPTIONAL provenance (source/source_id/
-		// source_label) — see parsePromptProvenance. Meaningful only if
-		// this prompt ends up queued behind a busy turn rather than
-		// dispatched at once; a solo-dispatched prompt is never batched,
-		// so it has no ambiguous provenance to record.
+		// source_label) — see parsePromptProvenance. Recorded on the
+		// appended message itself (Message.source) whether this prompt
+		// dispatches at once or sits in the queue first — see runPrompt's
+		// own doc comment on prov.
 		promptSourceInput
 	}
 	// Bound the body BEFORE decoding it: blob data arrives as base64 and

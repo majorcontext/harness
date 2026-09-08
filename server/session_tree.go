@@ -471,9 +471,10 @@ type sessionSendBody struct {
 	// single fail-safe guard, never validated or rejected.
 	ID string `json:"id"`
 	// promptSourceInput: OPTIONAL provenance (source/source_id/
-	// source_label) — see parsePromptProvenance. Meaningful only if this
-	// send ends up queued behind a busy turn rather than delivered at
-	// once.
+	// source_label) — see parsePromptProvenance. Recorded on the appended
+	// message itself (Message.source) whether this send dispatches at
+	// once or sits in the queue first — see runPrompt's own doc comment
+	// on prov.
 	promptSourceInput
 }
 
