@@ -123,7 +123,8 @@ type Config struct {
 	// EventSink, when set, forwards every durable journal record to an
 	// HTTP endpoint (see server.Options.EventSink). A POINTER so an absent
 	// block ("no sink") is distinguishable from a present one with an empty
-	// URL, which is a configuration error rather than a silent no-op.
+	// URL, which is a configuration error rather than a silent no-op. A
+	// non-nil project block replaces the user block wholesale.
 	EventSink *EventSinkSpec `json:"event_sink,omitempty"`
 	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
 	// session this process creates: the model's context window size, in
@@ -1197,8 +1198,10 @@ func Path() string {
 // reflection):
 //
 //   - Model, SessionDir, InstructionsPath, GoalEvaluatorModel, SessionSync: a
-//     non-empty project value overrides the user value. Instructions and
-//     ModelTool (*bool): a non-nil project value overrides.
+//     non-empty project value overrides the user value. EventSink: a non-nil
+//     project block replaces the user block wholesale; an absent project block
+//     inherits it. Instructions and ModelTool (*bool): a non-nil project value
+//     overrides.
 //     InstructionsMaxBytes: a non-zero project value overrides, so a project
 //     sets its own cap (or -1 for no cap) over the user value.
 //     InstructionsMode: a non-empty project value overrides.
@@ -1357,6 +1360,7 @@ func merge(base, over *Config) *Config {
 	out := *base // copy scalar fields; maps are rebuilt below
 	out.Aliases = nil
 	out.Providers = nil
+	out.EventSink = nil
 	if over.Model != "" {
 		out.Model = over.Model
 	}
@@ -1413,6 +1417,20 @@ func merge(base, over *Config) *Config {
 	}
 	if over.SessionSync != "" {
 		out.SessionSync = over.SessionSync
+	}
+	sink := base.EventSink
+	if over.EventSink != nil {
+		sink = over.EventSink
+	}
+	if sink != nil {
+		cloned := *sink
+		if len(sink.Headers) > 0 {
+			cloned.Headers = make(map[string]string, len(sink.Headers))
+			for name, value := range sink.Headers {
+				cloned.Headers[name] = value
+			}
+		}
+		out.EventSink = &cloned
 	}
 	if over.MCPToolLoading != "" {
 		out.MCPToolLoading = over.MCPToolLoading

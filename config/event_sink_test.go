@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -50,6 +51,84 @@ func TestLoadAcceptsEventSink(t *testing.T) {
 		c.EventSink.BatchMaxBytes != 4194304 || c.EventSink.TimeoutS != 30 {
 		t.Errorf("numeric fields = %+v", c.EventSink)
 	}
+}
+
+func TestLoadProjectMergesEventSink(t *testing.T) {
+	userPath := writeSinkConfig(t, `{"model":"anthropic/user-model"}`)
+	t.Setenv("HARNESS_CONFIG", userPath)
+
+	projectDir := t.TempDir()
+	project := `{
+	  "event_sink": {
+	    "url": "https://example.test/v1/journal",
+	    "headers": {"Authorization": "Bearer project"},
+	    "generation": "jrnl_project",
+	    "flush_ms": 125,
+	    "batch_max_records": 64,
+	    "batch_max_bytes": 1048576,
+	    "timeout_s": 15
+	  }
+	}`
+	if err := os.WriteFile(filepath.Join(projectDir, ".harness.json"), []byte(project), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+
+	c, err := LoadProject(projectDir)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if c.EventSink == nil {
+		t.Fatal("EventSink is nil; project event_sink was lost while merging the managed user config")
+	}
+	want := EventSinkSpec{
+		URL:             "https://example.test/v1/journal",
+		Headers:         map[string]string{"Authorization": "Bearer project"},
+		Generation:      "jrnl_project",
+		FlushMS:         125,
+		BatchMaxRecords: 64,
+		BatchMaxBytes:   1048576,
+		TimeoutS:        15,
+	}
+	if !reflect.DeepEqual(*c.EventSink, want) {
+		t.Errorf("EventSink = %+v, want %+v", *c.EventSink, want)
+	}
+}
+
+func TestMergeEventSink(t *testing.T) {
+	base := &Config{EventSink: &EventSinkSpec{
+		URL:        "https://user.test/journal",
+		Headers:    map[string]string{"Authorization": "Bearer user"},
+		Generation: "jrnl_user",
+		FlushMS:    250,
+	}}
+	override := &Config{EventSink: &EventSinkSpec{
+		URL:        "https://project.test/journal",
+		Headers:    map[string]string{"Authorization": "Bearer project"},
+		Generation: "jrnl_project",
+		TimeoutS:   15,
+	}}
+
+	t.Run("absent project block inherits without aliasing", func(t *testing.T) {
+		got := merge(base, &Config{})
+		if got.EventSink == nil || !reflect.DeepEqual(*got.EventSink, *base.EventSink) {
+			t.Fatalf("EventSink = %+v, want inherited %+v", got.EventSink, base.EventSink)
+		}
+		got.EventSink.Headers["Authorization"] = "changed"
+		if base.EventSink.Headers["Authorization"] != "Bearer user" {
+			t.Fatal("merged EventSink.Headers aliases the user config")
+		}
+	})
+
+	t.Run("project block replaces wholesale without aliasing", func(t *testing.T) {
+		got := merge(base, override)
+		if got.EventSink == nil || !reflect.DeepEqual(*got.EventSink, *override.EventSink) {
+			t.Fatalf("EventSink = %+v, want project override %+v", got.EventSink, override.EventSink)
+		}
+		got.EventSink.Headers["Authorization"] = "changed"
+		if override.EventSink.Headers["Authorization"] != "Bearer project" {
+			t.Fatal("merged EventSink.Headers aliases the project config")
+		}
+	})
 }
 
 func TestLoadOmitsEventSinkWhenAbsent(t *testing.T) {
