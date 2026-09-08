@@ -862,7 +862,6 @@ func New(opts Options) (*Server, error) {
 		queueDrainPending: make(map[string]bool),
 		waiters:           make(map[*waiter]struct{}),
 		closing:           make(chan struct{}),
-		sinkWake:          make(chan struct{}, 1),
 		sinkDone:          make(chan struct{}),
 		sinkStop:          make(chan struct{}),
 		sessMgr:           sessMgr,
@@ -929,6 +928,7 @@ func New(opts Options) (*Server, error) {
 	// no durable journal to replicate and forwarding it would offer a
 	// receiver a "replica" of records that never reach disk.
 	if opts.EventSink != nil && opts.SessionDir != "" {
+		s.sinkWake = make(chan struct{}, 1)
 		go s.runEventSink()
 	} else {
 		close(s.sinkDone)

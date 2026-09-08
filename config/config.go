@@ -1159,6 +1159,9 @@ func validateEventSink(s *EventSinkSpec) error {
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return fmt.Errorf("event_sink: url %q must use http or https (got scheme %q)", s.URL, u.Scheme)
 	}
+	if u.Host == "" {
+		return fmt.Errorf("event_sink: url %q host is required", s.URL)
+	}
 	for name := range s.Headers {
 		if name == "" {
 			return fmt.Errorf("event_sink.headers: header name is required (empty key)")

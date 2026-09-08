@@ -213,6 +213,18 @@ func (b *blockingSink) Deliver(_ context.Context, batch EventBatch) (int64, erro
 	return batch.ToSeq, nil
 }
 
+func TestEventSinkDisabledHasNoWakeChannel(t *testing.T) {
+	s := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 4)
+	if s.sinkWake != nil {
+		t.Fatal("sinkWake is non-nil without an event sink; durable records pay for an unconsumed wake")
+	}
+	select {
+	case <-s.sinkDone:
+	default:
+		t.Fatal("sinkDone is open without an event sink")
+	}
+}
+
 func TestEventSinkDoesNotRunWithoutASessionDir(t *testing.T) {
 	f := newFakeSink()
 	s := newServer(t, "", &scriptedProvider{name: "test"}, 4, func(o *Options) {
@@ -222,6 +234,9 @@ func TestEventSinkDoesNotRunWithoutASessionDir(t *testing.T) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_n", Status: "busy"})
 
+	if s.sinkWake != nil {
+		t.Fatal("sinkWake is non-nil without a durable session directory; durable records pay for an unconsumed wake")
+	}
 	// sinkDone is closed at construction when no pump starts, so this is a
 	// state assertion rather than a race with a goroutine that may not exist.
 	select {
