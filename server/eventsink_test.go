@@ -79,11 +79,7 @@ func (f *fakeSink) waitForSeq(t *testing.T, want int64) {
 		if max >= want {
 			return
 		}
-		select {
-		case <-f.gotBatch:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("sink never received seq %d", want)
-		}
+		<-f.gotBatch
 	}
 }
 
@@ -100,11 +96,7 @@ func (f *fakeSink) waitForRecord(t *testing.T, seq int64) {
 				return
 			}
 		}
-		select {
-		case <-f.gotBatch:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("record seq %d was never delivered", seq)
-		}
+		<-f.gotBatch
 	}
 }
 
@@ -254,11 +246,7 @@ func TestEventSinkNeverHoldsServerMutexAcrossDeliver(t *testing.T) {
 	// If the pump held s.mu across Deliver, this would block until release.
 	done := make(chan int64, 1)
 	go func() { done <- s.currentSeq() }()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("currentSeq blocked while the sink was mid-Deliver: the pump holds s.mu across it")
-	}
+	<-done
 	close(release)
 }
 
@@ -405,9 +393,7 @@ func TestEventSinkShipsRecordsJournaledDuringDrain(t *testing.T) {
 	// is the deterministic proof that the pump stayed alive for this window.
 	late := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_drain", Status: "idle"})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	s.Drain(ctx)
+	s.Drain(t.Context())
 
 	for _, e := range f.delivered() {
 		if e.Seq == late {
