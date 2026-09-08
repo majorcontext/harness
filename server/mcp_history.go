@@ -195,7 +195,7 @@ var modelToolShimInputSchema = json.RawMessage(`{
 	"required": ["action"]
 }`)
 
-const modelToolShimDescription = "List the provider families and aliases configured on this box. Use this to pick a family for task's own spawn(model:...) override when delegating to a child session. This surface exposes ONLY the list action — inspecting or changing THIS session's own current model is not available here; task's model override is the way to select a model, for a CHILD session, not this one."
+const modelToolShimDescription = "List the provider families and aliases configured on this box, each provider tagged with a \"billing\" of \"subscription\" or \"api\". Use this to pick a family for task's own spawn(model:...) override when delegating to a child session. This surface exposes ONLY the list action — inspecting or changing THIS session's own current model is not available here; task's model override is the way to select a model, for a CHILD session, not this one."
 
 // newSessionMCPRegistry builds the per-request mcpserver.Registry for
 // sess's own /session/{id}/mcp endpoint (handleSessionMCP): always
