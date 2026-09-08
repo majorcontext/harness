@@ -272,6 +272,15 @@ const (
 	// evtCompactionFailed above — never journaled, since a "started" that
 	// never resolves has nothing durable to reconcile on replay.
 	evtCompactionStarted = "compaction.started"
+	// evtClaudeCodeCompacted mirrors engine.EventClaudeCodeCompacted: the
+	// Claude Code CLI's own "compact_boundary" stream-json marker, forwarded
+	// for observability only — see that constant's own doc comment for why
+	// it carries none of evtHistoryCompacted's journal-splice fields. Live
+	// only, like evtCompactionFailed/evtCompactionStarted above — never
+	// journaled, since harness's own journal never changes shape when the
+	// CLI compacts its own context, so there is nothing to reconcile on
+	// replay.
+	evtClaudeCodeCompacted = "compaction.claude_code"
 )
 
 const journalName = "events.jsonl"
@@ -429,6 +438,10 @@ func (s *Server) Publish(ev engine.Event) {
 			CompactLastID:      ev.CompactLastID,
 			CompactTurnsFolded: ev.CompactTurnsFolded,
 		})
+	case engine.EventClaudeCodeCompacted:
+		// Live only, like evtCompactionFailed/evtCompactionStarted above —
+		// see evtClaudeCodeCompacted's own doc comment.
+		s.publishLive(Event{Type: evtClaudeCodeCompacted, SessionID: ev.SessionID, Text: ev.Text})
 	}
 }
 

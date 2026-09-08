@@ -36,6 +36,28 @@ const (
 	// that never resolves has nothing durable to reconcile against on
 	// replay.
 	EventCompactionStarted = "compaction.started"
+
+	// EventClaudeCodeCompacted fires when a claude-code-delegated turn's
+	// stream-json output reports a "system"/"compact_boundary" envelope
+	// (see consumeClaudeCodeStream's "system" case, claude_code_backend.go)
+	// — the CLI's own documented marker that it just compacted ITS OWN
+	// internal context (verified against the published
+	// @anthropic-ai/claude-agent-sdk TypeScript types,
+	// SDKCompactBoundaryMessage). It carries none of
+	// EventHistoryCompacted's journal-splice fields (CompactFirstID/
+	// CompactLastID/CompactSummaryID name harness message IDs that do not
+	// exist here — the CLI compacted its own history, not harness's
+	// journal); Text carries what the envelope's compact_metadata reported
+	// (trigger, pre_tokens, and post_tokens when present), for
+	// observability only. Never journaled — like EventCompactionFailed, a
+	// client reconciling from a durable cursor has nothing to correlate it
+	// against, since harness's own journal never changes shape when the
+	// CLI compacts. Exists to close the "the console cannot even ask" gap
+	// docs/design/context-compaction.md's delegated-session discussion
+	// names: without this, a delegated session's console shows identically
+	// nothing whether the CLI is compacting constantly or never needed to
+	// at all.
+	EventClaudeCodeCompacted = "compaction.claude_code"
 )
 
 // defaultCompactionThreshold is Config.CompactionThreshold's zero-fills-a-

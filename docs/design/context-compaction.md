@@ -407,6 +407,25 @@ the summary message, and the compaction event — the event is the
 reconciliation signal telling it which prefix the summary replaced. The
 `compaction.failed` event (above) is its fire-and-forget counterpart.
 
+**The Claude Code CLI's own compaction, forwarded for observability.** A
+claude-code-delegated turn's `--output-format stream-json` protocol emits a
+`system` envelope with subtype `compact_boundary` (and a `compact_metadata`
+payload: `trigger`, `pre_tokens`, `post_tokens`) the moment the CLI compacts
+its own internal context — verified against the published
+`@anthropic-ai/claude-agent-sdk` npm package's `sdk.d.ts`
+(`SDKCompactBoundaryMessage`) and the CLI's documented streaming-output
+page. `consumeClaudeCodeStream`'s `"system"` case
+(`engine/claude_code_backend.go`) forwards this as `EventClaudeCodeCompacted`
+(`"compaction.claude_code"`), live only like `compaction.failed`/
+`compaction.started` above — never journaled, since harness's own journal
+never changes shape when the CLI compacts. It carries none of
+`history.compacted`'s journal-splice fields (`first_id`/`last_id`/
+`summary_id`): the CLI compacted its OWN history, not a range of harness
+messages, so those fields would name IDs that do not exist. This closes the
+"the console cannot even ask" gap the section above describes for a
+delegated session — without it, a session compacting constantly inside the
+CLI and one that never needed to look identical from the outside.
+
 ## 5. Non-goals
 
 - **No local tokenizer.** Compaction relies entirely on the provider's own

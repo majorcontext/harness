@@ -1128,8 +1128,32 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// session started. See the started return value's own doc
 			// comment above.
 			started = true
-			if env.Subtype == "init" {
+			switch env.Subtype {
+			case "init":
 				s.recordClaudeCodeSessionID(env.SessionID)
+			case "compact_boundary":
+				// The CLI just compacted its OWN internal context — see
+				// EventClaudeCodeCompacted's own doc comment for why this
+				// is forwarded as a distinct, observability-only event
+				// rather than folded into EventHistoryCompacted/
+				// EventCompactionStarted (those name a harness journal
+				// splice that never happens here). CompactMetadata is
+				// permissively nil-checked like every other envelope field
+				// in this file: an older or differently-built `claude`
+				// binary that sends the bare subtype without the metadata
+				// object must not crash a turn over one field.
+				text := "trigger=unknown"
+				if env.CompactMetadata != nil {
+					trigger := env.CompactMetadata.Trigger
+					if trigger == "" {
+						trigger = "unknown"
+					}
+					text = fmt.Sprintf("trigger=%s pre_tokens=%d", trigger, env.CompactMetadata.PreTokens)
+					if env.CompactMetadata.PostTokens > 0 {
+						text += fmt.Sprintf(" post_tokens=%d", env.CompactMetadata.PostTokens)
+					}
+				}
+				s.emit(Event{Type: EventClaudeCodeCompacted, Text: text})
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.
@@ -1414,6 +1438,25 @@ type claudeCodeEnvelope struct {
 	// RateLimitInfo is a "rate_limit_event" envelope's own payload — see
 	// mapClaudeCodeRateLimit. nil for every other event type.
 	RateLimitInfo *claudeCodeRateLimitInfo `json:"rate_limit_info,omitempty"`
+	// CompactMetadata is a "system"/"compact_boundary" envelope's own
+	// payload — see claudeCodeCompactMetadata and
+	// consumeClaudeCodeStream's "system" case. nil for every other event
+	// type or subtype.
+	CompactMetadata *claudeCodeCompactMetadata `json:"compact_metadata,omitempty"`
+}
+
+// claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own
+// compact_metadata object: the CLI's own report of why and how much it
+// just compacted its internal context. Field names and shape verified
+// against the published @anthropic-ai/claude-agent-sdk npm package's
+// sdk.d.ts (SDKCompactBoundaryMessage) — this driver only reads Trigger and
+// PreTokens/PostTokens; the type's own preserved_segment/preserved_messages
+// relink fields exist for the CLI's own resume bookkeeping and carry no
+// meaning to a harness observer, so they are deliberately not decoded here.
+type claudeCodeCompactMetadata struct {
+	Trigger    string `json:"trigger,omitempty"`
+	PreTokens  int    `json:"pre_tokens,omitempty"`
+	PostTokens int    `json:"post_tokens,omitempty"`
 }
 
 // claudeCodeRateLimitInfo is a "rate_limit_event" envelope's own
