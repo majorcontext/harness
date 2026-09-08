@@ -243,6 +243,20 @@ type Event struct {
 	// EventPromptQueued emitted by EnqueuePromptDurable (see queue.go);
 	// 0/omitted on plain enqueues and on every EventPromptDequeued.
 	QueueSeq int64 `json:"queue_seq,omitempty"`
+	// QueueSource, QueueSourceID, and QueueSourceLabel are the queued
+	// prompt's own provenance (see message.PromptSource,
+	// engine.PromptProvenance) — set on EventPromptQueued ONLY, always
+	// Normalized (never empty), mirroring queuedItemJSON/
+	// OperatorBatchEntry's own always-normalized Source. Omitted on
+	// EventPromptDequeued: a dequeue only ever needs to name which entry
+	// left the queue (matched by QueueID), exactly like QueueSeq above.
+	// Carrying this on the event itself, not only on a later
+	// GET /session/{id}/queue read, is what lets a consumer that
+	// reconciles from the event/journal stream alone (rather than
+	// re-polling the queue) see who queued a prompt without a second call.
+	QueueSource      string `json:"queue_source,omitempty"`
+	QueueSourceID    string `json:"queue_source_id,omitempty"`
+	QueueSourceLabel string `json:"queue_source_label,omitempty"`
 }
 
 // Event types.
@@ -2726,6 +2740,51 @@ func (s *Session) PromptEngineResume(ctx context.Context, text string) (*message
 // message, after the text part — see promptParts. A prompt carrying at
 // least one blob is valid with empty text.
 func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin string, id string, blobs ...*message.Blob) (*message.Message, error) {
+	return s.promptWithOrigin(ctx, text, origin, id, nil, nil, blobs...)
+}
+
+// PromptWithOriginFrom is PromptWithOrigin with an explicit PromptProvenance
+// stamped onto the appended message itself (Message.Source/SourceID/
+// SourceLabel — see that field's own doc comment), not only onto a queue
+// entry the prompt might pass through. Every caller that already holds a
+// real, caller-supplied PromptProvenance for text — server/handlers.go's
+// runPrompt (an ordinary prompt_async turn, a dequeued prompt, or a
+// session.send delivery, forwarding whichever of these it is), and
+// SessionManager's own settled-dispatch and drain paths — calls this
+// instead of PromptWithOrigin, which passes a nil prov and leaves the
+// appended message's provenance fields unset: PromptWithOrigin's own
+// callers (Prompt, PromptEngineResume, and every purely-internal driver —
+// the goal loop's own directive text, notably) have no single caller to
+// attribute a queue-shaped "who sent this" to in the first place, so
+// stamping message.PromptSourceAPI onto their own synthetic or internal
+// text would be a false claim, not a harmless default.
+func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin string, id string, prov PromptProvenance, blobs ...*message.Blob) (*message.Message, error) {
+	prov = prov.Normalized()
+	return s.promptWithOrigin(ctx, text, origin, id, &prov, nil, blobs...)
+}
+
+// promptWithOrigin is PromptWithOrigin/PromptWithOriginFrom's shared body,
+// and goal.go's promptTurnWithRetry's own direct call for the ONE further
+// case neither public wrapper covers: a goal-loop turn-boundary drain,
+// which needs operatorBatch stamped (see below) but, per PromptWithOrigin's
+// own doc comment, must NOT get prov stamped (its directive text is not one
+// caller's prompt). Package-private since only that in-package caller needs
+// this combination.
+//
+// prov is nil for PromptWithOrigin's own callers — the appended message's
+// Source/SourceID/SourceLabel stay unset — and non-nil (already Normalized)
+// for PromptWithOriginFrom's, which stamps them. See PromptWithOriginFrom's
+// own doc comment for why this distinction, not a zero-value default,
+// decides whether the message gets a Source at all.
+//
+// operatorBatch is message.Message.OperatorBatch for the appended message —
+// nil for every caller except goal.go's own turn-boundary drain, which
+// passes operatorBatchDrain's own entries (queue.go) straight through,
+// alongside origin (message.OriginOperatorBatch on a turn with a
+// non-empty queue drain, "" otherwise) — see promptTurnWithRetry's own doc
+// comment for why this rides only on the attempts that actually append the
+// turn's directive as new history.
+func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	// A session delegated to the Claude Code CLI (ClaudeCodeProviderFamily
 	// — see engine/claude_code_backend.go) dispatches here, FIRST, before
 	// every check and assembly step below: ContextWindowErr,
@@ -2740,13 +2799,18 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 	// BOTH checks exist) is what also catches the goal-loop's direct
 	// runAgenticLoop retry call, which never reaches this function at all.
 	if s.claudeCodeDelegated() {
-		s.append(message.Message{
-			ID:        ResolveMessageID(id),
-			Role:      message.RoleUser,
-			Parts:     promptParts(text, blobs),
-			CreatedAt: time.Now().UTC(),
-			Origin:    origin,
-		})
+		msg := message.Message{
+			ID:            ResolveMessageID(id),
+			Role:          message.RoleUser,
+			Parts:         promptParts(text, blobs),
+			CreatedAt:     time.Now().UTC(),
+			Origin:        origin,
+			OperatorBatch: operatorBatch,
+		}
+		if prov != nil {
+			msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
+		}
+		s.append(msg)
 		return s.runAgenticLoop(ctx)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
@@ -2801,13 +2865,18 @@ func (s *Session) PromptWithOrigin(ctx context.Context, text string, origin stri
 		s.emitSessionError(err)
 		return nil, err
 	}
-	s.append(message.Message{
-		ID:        ResolveMessageID(id),
-		Role:      message.RoleUser,
-		Parts:     promptParts(text, blobs),
-		CreatedAt: time.Now().UTC(),
-		Origin:    origin,
-	})
+	msg := message.Message{
+		ID:            ResolveMessageID(id),
+		Role:          message.RoleUser,
+		Parts:         promptParts(text, blobs),
+		CreatedAt:     time.Now().UTC(),
+		Origin:        origin,
+		OperatorBatch: operatorBatch,
+	}
+	if prov != nil {
+		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
+	}
+	s.append(msg)
 	return s.runAgenticLoop(ctx)
 }
 
@@ -3082,11 +3151,14 @@ func (s *Session) drainQueuedPromptsIntoHistory() {
 		// parts of the same injected user message. Without them an image
 		// queued while a turn was running would reach the model as a
 		// sentence about a picture it cannot see.
+		block, origin, entries := operatorBatchDrain(queued, operatorContextTask)
 		s.append(message.Message{
-			ID:        newID("msg"),
-			Role:      message.RoleUser,
-			Parts:     promptParts(strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n"), queuedBlobs(queued)),
-			CreatedAt: time.Now().UTC(),
+			ID:            newID("msg"),
+			Role:          message.RoleUser,
+			Parts:         promptParts(strings.TrimSuffix(block, "\n"), queuedBlobs(queued)),
+			CreatedAt:     time.Now().UTC(),
+			Origin:        origin,
+			OperatorBatch: entries,
 		})
 	}
 }

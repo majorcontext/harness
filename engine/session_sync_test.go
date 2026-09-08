@@ -60,7 +60,7 @@ func TestSessionSyncVolumeSkipsFsyncPhase(t *testing.T) {
 		SessionSync:  "volume",
 		OnStorePhase: rec.record,
 	})
-	if _, dup, err := s.EnqueuePromptDurable("hello", 1); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{}); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup %v err %v", dup, err)
 	}
 	if !rec.has("enqueue_durable", "write_record") {
@@ -78,7 +78,7 @@ func TestSessionSyncVolumeSkipsFsyncPhase(t *testing.T) {
 func TestSessionSyncVolumeReloadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir, SessionSync: "volume"})
-	id, dup, err := s.EnqueuePromptDurable("hello", 1)
+	id, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{})
 	if err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: id %d dup %v err %v", id, dup, err)
 	}
@@ -116,7 +116,7 @@ func TestSessionSyncDefaultAndExplicitFsyncStillEmitBothSyncPhases(t *testing.T)
 			if !rec.has("ensure_log", "sync_dir") {
 				t.Errorf("mode %q: sync_dir phase not reported: %+v", mode, rec.calls)
 			}
-			if _, dup, err := s.EnqueuePromptDurable("hello", 1); err != nil || dup {
+			if _, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{}); err != nil || dup {
 				t.Fatalf("EnqueuePromptDurable: dup %v err %v", dup, err)
 			}
 			if !rec.has("enqueue_durable", "fsync") {

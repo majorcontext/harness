@@ -2205,7 +2205,7 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	// fakeclaude is blocked on its own second stdin read. Enqueue while
 	// busy, exactly like the live bug's POST /session/{id}/send arriving
 	// while a claude-code turn is running.
-	if _, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", ""); err != nil {
+	if _, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2254,6 +2254,87 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "QUEUE-MARKER: please continue") {
 		t.Errorf("CLI stdin's second line = %q, want it to carry the queued prompt's text", lines[1])
+	}
+}
+
+// TestClaudeCodeQueueInjectionStampsOperatorBatch is the named-failure
+// test for the live console mis-split bug (meetneptune/boxes:
+// msg_01m210y3yvfmhtykzhd9j6gs2w rendered as 4 fake user bubbles): the
+// delegated backend's own mid-turn drain (claude_code_backend.go, the
+// pump goroutine's <-wake branch) appended a message with no Origin and
+// no structured prompt list, forcing a client to guess boundaries from
+// the rendered "OPERATOR MESSAGES" text — which misparses a prompt whose
+// own text embeds a numbered list. This reuses
+// TestClaudeCodeQueueInjectedMidTurnViaOpenStdin's exact fixture and
+// timing (fakeclaude's "queue_injection" mode, synchronized on its
+// WAITING_FOR_QUEUE marker) but asserts on the STRUCTURED shape instead
+// of the rendered text — and on parity with the native drain's own
+// TestDrainQueuedPromptsIntoHistoryStampsOperatorBatch (queue_operator_
+// batch_test.go): both must stamp Origin=OriginOperatorBatch and an
+// OperatorBatch carrying the prompt's own provenance, the SAME
+// representation regardless of which drain built the message.
+func TestClaudeCodeQueueInjectionStampsOperatorBatch(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "queue_injection")
+
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := s.Prompt(context.Background(), "start"); err != nil {
+			t.Errorf("Prompt: %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("Prompt returned before fakeclaude ever emitted WAITING_FOR_QUEUE")
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+	}
+
+	// A schedule-sourced delivery, the shape the boxes control plane's
+	// schedule_task/cron worker asserts — proves provenance threads all
+	// the way from EnqueuePrompt through the delegated drain, not
+	// just the native one.
+	queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{
+		Source:      message.PromptSourceSchedule,
+		SourceID:    "sched_456",
+		SourceLabel: "nightly CI check",
+	})
+	if err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Prompt did not return within 10s of EnqueuePrompt")
+	}
+
+	var batch *message.Message
+	for _, m := range s.History() {
+		if m.Origin == message.OriginOperatorBatch {
+			m := m
+			batch = &m
+		}
+	}
+	if batch == nil {
+		t.Fatalf("no history message carries Origin=%q; history = %+v", message.OriginOperatorBatch, s.History())
+	}
+	want := []message.OperatorBatchEntry{{
+		EnqueueID: queueID, Text: "QUEUE-MARKER: please continue", Source: message.PromptSourceSchedule,
+		SourceID: "sched_456", SourceLabel: "nightly CI check",
+	}}
+	if len(batch.OperatorBatch) != len(want) || batch.OperatorBatch[0] != want[0] {
+		t.Fatalf("OperatorBatch = %+v, want %+v", batch.OperatorBatch, want)
 	}
 }
 
@@ -2316,7 +2397,7 @@ func TestClaudeCodeMidTurnInjectionWriteFailureDoesNotStrandWatermark(t *testing
 	// The turn is now mid-flight with fakeclaude's own stdin read end
 	// already closed. Enqueue now: the pump's injection write is
 	// guaranteed to land on the closed pipe and fail.
-	if _, _, err := s.EnqueuePrompt("LOST-IF-BUGGY: please handle this", ""); err != nil {
+	if _, _, err := s.EnqueuePrompt("LOST-IF-BUGGY: please handle this", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2425,7 +2506,7 @@ func TestClaudeCodeStopRetiresPumpBlockedInStdinWrite(t *testing.T) {
 	// framing overhead, cannot complete in one buffered chunk while
 	// fakeclaude never reads any of it.
 	huge := strings.Repeat("X", 8*1024*1024)
-	if _, _, err := s.EnqueuePrompt(huge, ""); err != nil {
+	if _, _, err := s.EnqueuePrompt(huge, "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2494,7 +2575,7 @@ func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
 
 	// A 1x1 PNG, the same shape server/prompt_parts.go admits.
 	png := []byte("\x89PNG\r\n\x1a\nQUEUED-PNG-BYTES")
-	if _, _, err := s.EnqueuePrompt("look at this", "", &message.Blob{
+	if _, _, err := s.EnqueuePrompt("look at this", "", PromptProvenance{}, &message.Blob{
 		MediaType: "image/png",
 		Data:      png,
 	}); err != nil {

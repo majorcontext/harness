@@ -196,7 +196,7 @@ func (m *queueModel) DurableEnqueue(t *rapid.T) {
 		seq = 1
 	}
 	text := fmt.Sprintf("durable-%d", rapid.IntRange(0, 1<<20).Draw(t, "textSeed"))
-	if _, _, err := m.s.EnqueuePromptDurable(text, seq); err != nil {
+	if _, _, err := m.s.EnqueuePromptDurable(text, seq, PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePromptDurable(seq=%d): %v", seq, err)
 	}
 }
@@ -205,7 +205,7 @@ func (m *queueModel) DurableEnqueue(t *rapid.T) {
 // watermark movement), which shares the same folded queue and ID space.
 func (m *queueModel) PlainEnqueue(t *rapid.T) {
 	text := fmt.Sprintf("plain-%d", rapid.IntRange(0, 1<<20).Draw(t, "textSeed"))
-	if _, _, err := m.s.EnqueuePrompt(text, ""); err != nil {
+	if _, _, err := m.s.EnqueuePrompt(text, "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 }

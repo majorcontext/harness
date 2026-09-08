@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -259,7 +260,7 @@ func TestEnqueueDuplicateOnIdleWithQueueDrainsHead(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, dup, err := st.sess.EnqueuePromptDurable("queued before duplicate", 1); err != nil || dup {
+	if _, dup, err := st.sess.EnqueuePromptDurable("queued before duplicate", 1, engine.PromptProvenance{}); err != nil || dup {
 		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 
@@ -437,7 +438,7 @@ func TestQueueGetNonResidentReadsFromDisk(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, dup, err := st.sess.EnqueuePromptDurable("pending", 4); err != nil || dup {
+	if _, dup, err := st.sess.EnqueuePromptDurable("pending", 4, engine.PromptProvenance{}); err != nil || dup {
 		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 

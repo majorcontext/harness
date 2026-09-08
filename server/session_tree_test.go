@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -896,7 +897,7 @@ func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
 	if st == nil {
 		t.Fatal("root not resident right after creation")
 	}
-	if _, _, err := st.sess.EnqueuePrompt("stranded head", ""); err != nil {
+	if _, _, err := st.sess.EnqueuePrompt("stranded head", "", engine.PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2308,6 +2309,100 @@ func TestConcurrentPromptDuringResumeIsQueuedNotConcurrent(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "concurrent prompt") {
 		t.Fatalf("queued prompt never appears to have been delivered: %s", data)
+	}
+}
+
+// TestEngineResumeTriggerMessageCarriesNoSource is the named-failure test
+// for the server's own runPrompt/PromptWithOriginFrom seam: the engine's
+// synthetic resume trigger (runOrQueueText's idle-no-queue branch,
+// session_tree.go, message.OriginEngine) is not any caller's prompt, so
+// message.Message.Source's own doc comment says it must stay empty on the
+// wire — the same rule engine.Session.PromptEngineResume already honors
+// (it calls PromptWithOrigin, which passes a nil PromptProvenance).
+// runOrQueueText instead calls runPrompt with a zero-value
+// engine.PromptProvenance{}, which reaches PromptWithOriginFrom and
+// Normalizes to message.PromptSourceAPI — so the resume-trigger message
+// is wrongly journaled with "source":"api", indistinguishable from a real
+// unlabeled API caller.
+func TestEngineResumeTriggerMessageCarriesNoSource(t *testing.T) {
+	rootProv := &scriptedProvider{name: "root", turns: [][]provider.Event{
+		asstTurn("started"),
+		asstTurn("resumed"),
+	}}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
+	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, rootProv, childProv)
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session/"+root.ID+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "start"}},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("initial prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	waitForLineageStatus(t, h, root.ID, "idle", 2*time.Second)
+
+	const resumeTriggerText = "A background task you started has finished. See the engine context below for its result, and continue accordingly."
+	// Opened before the child exists: the resume turn the child's
+	// completion triggers is started by the engine, asynchronously, on an
+	// ALREADY-idle root — an until=idle wait would return at once and
+	// prove nothing (see waitForMessageText's own doc comment).
+	streamRoot := h.openSSE("?session="+root.ID, "")
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID,
+		"agent":     engine.AgentGeneralPurpose,
+		"prompt":    "go",
+		"model":     "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+
+	// The child's completion enqueues a notification on the idle root,
+	// triggering resumeSessionForTaskNotification -> runOrQueueText,
+	// which dispatches the synthetic resume trigger since the root's
+	// queue is empty.
+	waitForMessageText(t, streamRoot, resumeTriggerText, 5*time.Second)
+
+	resp, data = h.do("GET", "/session/"+root.ID+"/message", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("get messages status %d: %s", resp.StatusCode, data)
+	}
+	var msgs []json.RawMessage
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		t.Fatalf("unmarshal messages: %v: %s", err, data)
+	}
+	var found bool
+	for _, raw := range msgs {
+		var m struct {
+			Origin string `json:"origin"`
+			Source string `json:"source"`
+			Parts  []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"parts"`
+		}
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal message: %v: %s", err, raw)
+		}
+		if m.Origin != "engine" {
+			continue
+		}
+		found = true
+		if m.Source != "" {
+			t.Errorf("engine resume-trigger message carries source=%q, want empty (not any caller's prompt): %s", m.Source, raw)
+		}
+	}
+	if !found {
+		t.Fatalf("no origin:engine resume-trigger message found: %s", data)
 	}
 }
 

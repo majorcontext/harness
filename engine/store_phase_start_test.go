@@ -77,7 +77,7 @@ func TestOnStorePhaseStartFiresBeforeCompletion(t *testing.T) {
 	}
 
 	starts, dones = nil, nil
-	if _, dup, err := s.EnqueuePromptDurable("hello", 1); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{}); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup %v err %v", dup, err)
 	}
 	if len(starts) != len(dones) {
@@ -156,7 +156,7 @@ func TestOnStorePhaseStartNilSafe(t *testing.T) {
 	if err := s.Persist(); err != nil {
 		t.Fatal(err)
 	}
-	if _, dup, err := s.EnqueuePromptDurable("hello", 1); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{}); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup %v err %v", dup, err)
 	}
 }

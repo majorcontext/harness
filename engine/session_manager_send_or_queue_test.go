@@ -46,7 +46,7 @@ func TestSendOrQueueRunningChildQueuesInsteadOfRefusing(t *testing.T) {
 	}
 	<-started // the child's first turn is genuinely in flight
 
-	queued, err := mgr.SendOrQueue(context.Background(), childID, "please also cover Y", "")
+	queued, err := mgr.SendOrQueue(context.Background(), childID, "please also cover Y", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue on a running child: err = %v, want nil", err)
 	}
@@ -84,7 +84,7 @@ func TestSendOrQueueSettledChildLaunchesFreshTurnAsynchronously(t *testing.T) {
 	}
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
 
-	queued, err := mgr.SendOrQueue(context.Background(), childID, "please redo this", "")
+	queued, err := mgr.SendOrQueue(context.Background(), childID, "please redo this", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue on a done child: err = %v, want nil", err)
 	}
@@ -126,7 +126,7 @@ func TestSendOrQueueThreadsBlobsThroughRunningChildQueue(t *testing.T) {
 	<-started
 
 	blob := &message.Blob{MediaType: "image/png", Data: []byte("fake-png-bytes")}
-	queued, err := mgr.SendOrQueue(context.Background(), childID, "see attached", "", blob)
+	queued, err := mgr.SendOrQueue(context.Background(), childID, "see attached", "", PromptProvenance{}, blob)
 	if err != nil {
 		t.Fatalf("SendOrQueue: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestSendOrQueueThreadsBlobsThroughRunningChildQueue(t *testing.T) {
 // an id this manager does not track.
 func TestSendOrQueueUnknownSessionIsError(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
-	_, err := mgr.SendOrQueue(context.Background(), "nope", "hi", "")
+	_, err := mgr.SendOrQueue(context.Background(), "nope", "hi", "", PromptProvenance{})
 	if !errors.Is(err, ErrUnknownSession) {
 		t.Fatalf("err = %v, want ErrUnknownSession", err)
 	}
@@ -207,7 +207,7 @@ func TestSendOrQueueRejectsCanceledTarget(t *testing.T) {
 	}
 	waitForStatus(t, mgr, childID, StatusCanceled, time.Second)
 
-	if _, err := mgr.SendOrQueue(context.Background(), childID, "hi", ""); !errors.Is(err, ErrSessionCanceled) {
+	if _, err := mgr.SendOrQueue(context.Background(), childID, "hi", "", PromptProvenance{}); !errors.Is(err, ErrSessionCanceled) {
 		t.Fatalf("err = %v, want ErrSessionCanceled", err)
 	}
 }
@@ -248,7 +248,7 @@ func TestSendOrQueueConcurrentCallsAgainstSameRunningChildNeverCorrupt(t *testin
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			q, err := mgr.SendOrQueue(context.Background(), childID, fmt.Sprintf("msg-%d", i), "")
+			q, err := mgr.SendOrQueue(context.Background(), childID, fmt.Sprintf("msg-%d", i), "", PromptProvenance{})
 			errs[i] = err
 			queueds[i] = q
 		}(i)

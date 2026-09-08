@@ -47,6 +47,139 @@ const OriginEngine = "engine"
 // history — no transcoder reads this field.
 const OriginClaudeCode = "claude_code"
 
+// OriginOperatorBatch marks a Message the engine appended by draining the
+// session's prompt queue — a mid-turn tool-call-boundary drain
+// (engine.go's drainQueuedPromptsIntoHistory) or the Claude-Code-delegated
+// equivalent (engine/claude_code_backend.go), both of which fold every
+// prompt DequeueAllPrompts returns into ONE message rather than one per
+// prompt. Distinct from OriginClaudeCode/OriginEngine/empty (a real human
+// prompt or a model-produced message) so a client never mistakes a batch
+// for a single typed prompt, and — paired with OperatorBatch, this
+// message's structured constituent-prompt list — never has to reparse the
+// batch's own rendered "OPERATOR MESSAGES" text to find the prompts it
+// contains.
+//
+// Like every other Origin value, this is presentation metadata only — see
+// this constant block's own doc comments above. A transcoder sends the
+// message to a provider exactly like any other user message, this field
+// untouched and untransmitted.
+const OriginOperatorBatch = "operator_batch"
+
+// PromptSource classifies who or what queued a prompt into a session's
+// FIFO queue (see engine/queue.go's EnqueuePrompt/EnqueuePromptDurable) —
+// provenance metadata a caller supplies at enqueue time, carried through
+// to OperatorBatchEntry.Source once a batch drain exposes the prompt. Like
+// Origin, this is presentation/attribution metadata only: it is never sent
+// to a provider and never changes how the engine schedules or delivers the
+// prompt.
+//
+// # Trust model: every value here is a CLAIM, not a verified fact
+//
+// Harness authenticates an HTTP caller with a single bearer token
+// (server.Options.AuthToken) — one trust level, not one per human/service
+// distinction. Anything holding that token can assert ANY PromptSource,
+// PromptSourceTyped included: a delegated Claude Code CLI process reaches
+// its own session's HTTP surface through the exact same token
+// (engine/claude_code_backend.go writes it into the child's own
+// --mcp-config), so an in-box agent process can mint a prompt_async/
+// enqueue/session.send call that asserts source=typed for text nobody
+// actually typed. Harness has no mechanism — today or plausible with one
+// token — to distinguish that call from the console's own relay of a real
+// keystroke.
+//
+// PromptSourceTask is the ONE exception: it is server-derived, never
+// caller-suppliable (see its own doc comment and
+// server/prompt_source.go's rejection of it over HTTP) — the only value
+// in this type harness itself computes rather than merely records.
+//
+// A consumer (boxes' console, notably) MUST NOT present PromptSourceTyped
+// as proof of human authorship, or any other value as proof of its own
+// claimed origin — only as the caller's own unverified assertion, exactly
+// like an HTTP request's User-Agent header. Rendering it as a hint
+// ("looks like it came from a person") is fine; rendering it as a
+// certified fact is not.
+type PromptSource string
+
+const (
+	// PromptSourceTyped marks a prompt a live human typed into an
+	// interactive surface (a console, a terminal) — a claim the CALLER
+	// asserts, never inferred, and never the default for an unlabeled
+	// caller (see PromptSourceAPI). Harness cannot verify this claim —
+	// see this type's own "Trust model" doc comment above.
+	PromptSourceTyped PromptSource = "typed"
+	// PromptSourceAPI marks a prompt from a generic programmatic caller —
+	// a script, an unlabeled integration — and is the default an enqueue
+	// call records when its caller names no source at all. Never
+	// PromptSourceTyped: an untagged caller is presented as a generic API
+	// caller, never as a human, until it says otherwise.
+	PromptSourceAPI PromptSource = "api"
+	// PromptSourceSchedule marks a prompt a schedule or cron mechanism
+	// delivered (the boxes control plane's own schedule_task/cron
+	// delivery, notably) rather than a live, one-off request.
+	PromptSourceSchedule PromptSource = "schedule"
+	// PromptSourceTask marks a prompt relayed through this engine's own
+	// cross-session task-tool follow-up mechanism
+	// (SessionManager.SendToDescendant's running-target branch). Set
+	// unconditionally by that internal relay; no external caller can
+	// assert it, since that relay is the only path that ever produces it.
+	PromptSourceTask PromptSource = "task"
+	// PromptSourceCrossBox marks a prompt relayed from another box (a
+	// send_message_to_box-shaped delivery), asserted by the relaying
+	// caller — this engine has no notion of "box" itself.
+	PromptSourceCrossBox PromptSource = "cross_box"
+)
+
+// Normalized returns s, or PromptSourceAPI when s is empty — the recorded
+// default for an enqueue call whose caller named no source (see
+// PromptSourceAPI's own doc comment). Every OperatorBatchEntry.Source is
+// normalized before it is ever exposed, so a client never has to treat
+// empty specially, and a prompt queued before this field existed (an
+// older journal record folding back with no Source at all) reads exactly
+// like an unlabeled caller today.
+func (s PromptSource) Normalized() PromptSource {
+	if s == "" {
+		return PromptSourceAPI
+	}
+	return s
+}
+
+// OperatorBatchEntry is one constituent prompt inside an operator batch —
+// a Message whose Origin is OriginOperatorBatch. Its OperatorBatch field
+// carries one of these per prompt the drain that built the message folded
+// together (see engine/queue.go's DequeueAllPrompts), in the same FIFO
+// order the message's own rendered text numbers them in — the structured
+// form of that same numbered list, so a client reads prompt boundaries
+// from this field instead of scanning rendered text for a "\nN. " marker,
+// which misparses a prompt whose own text contains a numbered list of its
+// own.
+type OperatorBatchEntry struct {
+	// EnqueueID is the prompt's own queue ID, stable across a resumed
+	// session's replay (see engine.QueuedPrompt.ID) — a client can key a
+	// still-live optimistic UI element it rendered when it originally sent
+	// this prompt to the entry that later confirms delivery.
+	EnqueueID int64 `json:"enqueue_id"`
+	// Text is this ONE prompt's own content, unwrapped — never the
+	// batch's numbered/labeled template text, only what the caller
+	// enqueued.
+	Text string `json:"text"`
+	// Source classifies who/what queued this prompt — see PromptSource.
+	// Always Normalized (never empty).
+	Source PromptSource `json:"source"`
+	// SourceID is a free-form identifier for Source's own instance: a
+	// schedule/cron id for PromptSourceSchedule, a calling box id for
+	// PromptSourceCrossBox. Empty when Source names no such id, or none
+	// was given.
+	SourceID string `json:"source_id,omitempty"`
+	// SourceLabel is a free-form, human-readable label for the same
+	// instance (a schedule's own display name, say) — for display only,
+	// never parsed.
+	SourceLabel string `json:"source_label,omitempty"`
+	// AttachmentCount is this one prompt's own attachment count —
+	// mirrors the "[N attachment(s) attached below]" marker in the
+	// message's rendered text. Zero for a text-only prompt.
+	AttachmentCount int `json:"attachment_count,omitempty"`
+}
+
 // Message is one entry in a session's history.
 //
 // The system prompt is deliberately not part of history: it is assembled per
@@ -87,6 +220,40 @@ type Message struct {
 	// a delegated turn's transcript — never sent to a model and never
 	// interpreted by a transcoder.
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+	// OperatorBatch is the structured counterpart to a batch-delivered
+	// message's own human-readable "OPERATOR MESSAGES" text — set only on
+	// a Message whose Origin is OriginOperatorBatch, one entry per
+	// originally-queued prompt the drain that built this message folded
+	// together (see engine/queue.go's DequeueAllPrompts). Nil for every
+	// other message, including one queued prompt dispatched on its own
+	// (never batched, so never ambiguous, so never needs this field).
+	//
+	// Lets a client (boxes' console) read prompt boundaries structurally
+	// instead of parsing the rendered text for a "\nN. " marker, which
+	// misparses a prompt whose own text contains a numbered list — see
+	// OperatorBatchEntry's own doc comment.
+	OperatorBatch []OperatorBatchEntry `json:"operator_batch,omitempty"`
+	// Source, SourceID, and SourceLabel are this message's OWN provenance
+	// — set only on a message a caller-attributable prompt dispatch
+	// appended directly (engine.Session.PromptWithOriginFrom): an
+	// ordinary prompt_async/enqueue/session.send delivery, whether it
+	// dispatched at once or sat in the queue first — see PromptSource's
+	// own doc comment for the values. Empty (the default) for a message
+	// with no such single caller: a model-produced assistant/tool
+	// message, the engine's own resume trigger (OriginEngine), a goal
+	// loop's own directive text, or a batch message (OriginOperatorBatch,
+	// OperatorBatch above) — a batch was never one caller's prompt, so
+	// its OWN per-prompt provenance lives on each OperatorBatchEntry
+	// instead, never here.
+	//
+	// Recording this here, not only on the transient queue entry a
+	// caller's prompt might pass through, is what lets a client read the
+	// SAME provenance for a prompt regardless of whether the target
+	// session happened to be busy when it arrived: a solo-dispatched
+	// prompt (never queued at all) still carries it.
+	Source      PromptSource `json:"source,omitempty"`
+	SourceID    string       `json:"source_id,omitempty"`
+	SourceLabel string       `json:"source_label,omitempty"`
 }
 
 // Normalize scrubs known encoding/json footguns from m's parts in place. It

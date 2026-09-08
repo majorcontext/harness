@@ -263,16 +263,68 @@ below passes `operatorContextGoal`). This only ever
 APPENDS — never rewrites an earlier message — so a provider's prompt-cache
 prefix stays intact, the same principle the managed-processes ephemeral
 status block below relies on, except this message is a REAL, durable
-delivery, not a disposable status line. A turn that ends WITHOUT any tool
-call never reaches this drain point at all (the model's own end-of-turn
-return precedes it), so that path — and anything still queued when it
-happens — is left entirely to the mechanisms below. Because `PursueGoal`'s
-worker turns run through this exact same `Prompt` loop
-(`promptTurnWithRetry`), goal loops inherit tool-call-boundary injection
-automatically, with no separate wiring: a prompt queued while a goal's
-worker turn is mid-tool-call is delivered inside that SAME worker turn —
-matching Claude Code's mid-turn steering granularity — rather than waiting
-for the goal's own turn boundary described next.
+delivery, not a disposable status line.
+
+The appended message also carries the batch structurally, not just as
+rendered text: `Origin` is `message.OriginOperatorBatch` (never empty,
+never `claude_code`), and `OperatorBatch` holds one
+`message.OperatorBatchEntry` per drained prompt — its own text, queue ID,
+and provenance (`Source`/`SourceID`/`SourceLabel`, from the
+`PromptProvenance` an enqueue call supplied) — in the same order the
+rendered text numbers them in. A client (boxes' console) reads prompt
+boundaries from this field instead of scanning the rendered text for a
+`"\nN. "` marker, which misparses a prompt whose own text embeds a
+numbered list of its own. All three drain sites that ever build an
+operator batch — this tool-call-boundary drain (`engine.go`), its
+Claude-Code-delegated equivalent (`engine/claude_code_backend.go`'s
+stdin-writer pump), and `PursueGoal`'s own turn-boundary drain described
+below — call one shared helper, `operatorBatchDrain` (`engine/queue.go`),
+to build the rendered text, `Origin`, and `OperatorBatch` together, so a
+future fourth drain site cannot add the text without also stamping the
+other two.
+
+`PromptProvenance` defaults an unlabeled enqueue call to
+`message.PromptSourceAPI`, never `message.PromptSourceTyped` — a caller
+must assert `typed` explicitly. `message.PromptSourceTask` is reserved
+for `SessionManager.SendToDescendant`'s own running-target relay and is
+never caller-suppliable through the HTTP enqueue routes. Every other
+value, `typed` included, is a CALLER-ASSERTED CLAIM, not a fact harness
+verifies: harness authenticates a caller with one bearer token, not one
+trust level per human/service distinction, and a delegated Claude Code
+CLI process reaches its own session's HTTP surface through that same
+token — so `typed` is reachable from inside the box, not only from a
+human-facing console. A consumer must render every value as attribution
+metadata, never as proof of a message's real origin — see
+`message.PromptSource`'s own "Trust model" doc comment. `SourceID` and
+`SourceLabel` are bounded and sanitized at the HTTP boundary
+(`server/prompt_source.go`'s `sanitizeSourceID`/`sanitizeSourceLabel`):
+`SourceID` rejects (400) past 128 bytes or a non-printable-ASCII byte;
+`SourceLabel` truncates past 256 bytes and strips control characters,
+rejecting only invalid UTF-8 — both durably journaled and re-exposed on
+every batch entry, so an unbounded value would be amplified once per
+drain.
+
+Provenance is not only a batch-message property: a caller's own
+`PromptProvenance` also rides on the message a SOLO (never-batched)
+dispatch appends — `Message.Source`/`SourceID`/`SourceLabel`, set by
+`Session.PromptWithOriginFrom` — so a schedule/typed/cross_box prompt
+carries the SAME attribution whether the target session happened to be
+busy (queued, then batched) or idle (dispatched at once) when it arrived.
+`EventPromptQueued`/the durable `prompt.queued` record also carry
+`QueueSource`/`QueueSourceID`/`QueueSourceLabel`, always `Normalized`, so
+a consumer reconciling from the event/journal stream alone sees who
+queued a prompt without a follow-up `GET /session/{id}/queue` call.
+
+A turn that ends WITHOUT any tool call never reaches this drain point at
+all (the model's own end-of-turn return precedes it), so that path — and
+anything still queued when it happens — is left entirely to the
+mechanisms below. Because `PursueGoal`'s worker turns run through this
+exact same `Prompt` loop (`promptTurnWithRetry`), goal loops inherit
+tool-call-boundary injection automatically, with no separate wiring: a
+prompt queued while a goal's worker turn is mid-tool-call is delivered
+inside that SAME worker turn — matching Claude Code's mid-turn steering
+granularity — rather than waiting for the goal's own turn boundary
+described next.
 
 `PursueGoal` keeps a second, complementary drain at its own turn boundary:
 at the top of every turn (the same `snapshotGoal` boundary #77's
@@ -283,7 +335,11 @@ that arrived in the gap between one turn ending and the next one's snapshot —
 and prepends it to that turn's directive as the same labeled "OPERATOR
 MESSAGES" block (`operatorMessagesBlock`, `operatorContextGoal` — so its
 header says "continue the goal"), ahead of — never replacing — the
-ordinary condition/guidance text. The evaluator's condition string is
+ordinary condition/guidance text. This turn-boundary drain calls the same
+`operatorBatchDrain` helper the two `operatorContextTask` sites above do,
+so the appended message carries `Origin`/`OperatorBatch` here too — the
+`OperatorBatch` entries cover only the drained prompts, never the
+directive text concatenated after them. The evaluator's condition string is
 unchanged by this — it is built from the condition alone, never from the
 block or the turn's rendered directive — so goal injection judges only the
 goal there; the evaluator's separate transcript field does render the full

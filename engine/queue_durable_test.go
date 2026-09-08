@@ -94,7 +94,7 @@ func durableTestSession(t *testing.T) (*Session, *[]Event) {
 
 func TestEnqueuePromptDurableAcceptsAndAdvancesWatermark(t *testing.T) {
 	s, events := durableTestSession(t)
-	id, dup, err := s.EnqueuePromptDurable("hello", 1)
+	id, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{})
 	if err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable = id %d dup %v err %v", id, dup, err)
 	}
@@ -133,12 +133,12 @@ func TestEnqueuePromptDurableAcceptsAndAdvancesWatermark(t *testing.T) {
 // message), nothing persisted or emitted.
 func TestEnqueuePromptDurableDuplicateAndStaleSeqAreNoOps(t *testing.T) {
 	s, events := durableTestSession(t)
-	if _, _, err := s.EnqueuePromptDurable("m5", 5); err != nil {
+	if _, _, err := s.EnqueuePromptDurable("m5", 5, PromptProvenance{}); err != nil {
 		t.Fatal(err)
 	}
 	evBefore := len(*events)
 	for _, seq := range []int64{5, 3} {
-		id, dup, err := s.EnqueuePromptDurable("dup", seq)
+		id, dup, err := s.EnqueuePromptDurable("dup", seq, PromptProvenance{})
 		if err != nil || !dup || id != 0 {
 			t.Fatalf("seq %d: id %d dup %v err %v, want 0 true nil", seq, id, dup, err)
 		}
@@ -151,13 +151,13 @@ func TestEnqueuePromptDurableDuplicateAndStaleSeqAreNoOps(t *testing.T) {
 
 func TestEnqueuePromptDurableRejectsInvalid(t *testing.T) {
 	s, _ := durableTestSession(t)
-	if _, _, err := s.EnqueuePromptDurable("  ", 1); err == nil {
+	if _, _, err := s.EnqueuePromptDurable("  ", 1, PromptProvenance{}); err == nil {
 		t.Fatal("empty text accepted")
 	}
-	if _, _, err := s.EnqueuePromptDurable("x", 0); err == nil {
+	if _, _, err := s.EnqueuePromptDurable("x", 0, PromptProvenance{}); err == nil {
 		t.Fatal("seq 0 accepted")
 	}
-	if _, _, err := NewSession(Config{}).EnqueuePromptDurable("x", 1); err == nil {
+	if _, _, err := NewSession(Config{}).EnqueuePromptDurable("x", 1, PromptProvenance{}); err == nil {
 		t.Fatal("no SessionDir accepted — a durable enqueue with nowhere durable to write must error")
 	}
 }
@@ -172,7 +172,7 @@ func TestEnqueuePromptDurableWriteFailureReturnsErrorAndBurnsID(t *testing.T) {
 		SessionDir: unwritableSessionDir(t),
 		OnEvent:    func(ev Event) { events = append(events, ev) },
 	})
-	if _, _, err := s.EnqueuePromptDurable("doomed", 1); err == nil {
+	if _, _, err := s.EnqueuePromptDurable("doomed", 1, PromptProvenance{}); err == nil {
 		t.Fatal("write failure did not surface as error")
 	}
 	if len(s.QueuedPrompts()) != 0 || s.EnqueueSeq() != 0 || len(events) != 0 {
@@ -199,7 +199,7 @@ func TestEnqueuePromptDurableWriteFailureReturnsErrorAndBurnsID(t *testing.T) {
 // this pins the by-construction property (single lock, one return) instead.
 func TestQueueStateConsistentSnapshot(t *testing.T) {
 	s, _ := durableTestSession(t)
-	if _, _, err := s.EnqueuePromptDurable("hello", 3); err != nil {
+	if _, _, err := s.EnqueuePromptDurable("hello", 3, PromptProvenance{}); err != nil {
 		t.Fatal(err)
 	}
 	watermark, prompts := s.QueueState()

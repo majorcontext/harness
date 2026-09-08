@@ -693,6 +693,22 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				directive = goalGuidance(snap.condition, goalAdjustedNotice)
 			}
 		}
+		// batchOrigin/batchEntries are message.Message.Origin/OperatorBatch
+		// for the message promptTurnWithRetry's first mention of `directive`
+		// appends this turn — empty/nil when queued is empty, exactly like
+		// operatorBatchDrain's own empty-input case. Built alongside
+		// `directive` itself, from the SAME operatorBatchDrain helper the
+		// two operatorContextTask drain sites (engine.go, claude_code_
+		// backend.go) use, so this turn-boundary drain cannot forget to
+		// stamp them the way an earlier version of this fix did — a client
+		// (boxes' console) that only special-cased those two drains still
+		// misparsed THIS one's own "OPERATOR MESSAGES (... continue the
+		// goal)" text for the identical reason (a queued prompt's own body
+		// containing a numbered list). See operatorBatchDrain's own doc
+		// comment for why block is used untrimmed here (concatenated ahead
+		// of directive, not wrapped alone in promptParts).
+		var batchOrigin string
+		var batchEntries []message.OperatorBatchEntry
 		if len(queued) > 0 {
 			// Prepend, never replace: the goal directive/guidance below is
 			// still exactly what it would have been with no queue activity
@@ -707,14 +723,16 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// which includes this turn's directive — and therefore this
 			// block — once the worker turn that received it has run. Only
 			// the condition string itself stays clean.
-			directive = operatorMessagesBlock(queued, operatorContextGoal) + directive
+			var block string
+			block, batchOrigin, batchEntries = operatorBatchDrain(queued, operatorContextGoal)
+			directive = block + directive
 		}
 		// The drained batch's attachments ride to the worker turn beside
 		// that block: operatorMessagesBlock renders text only and announces
 		// each prompt's attachment count, so these bytes are what the count
 		// refers to. An image an operator sent mid-goal would otherwise be
 		// dropped at exactly this boundary — see queuedBlobs (queue.go).
-		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen, queuedBlobs(queued)...); err != nil {
+		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen, batchOrigin, batchEntries, queuedBlobs(queued)...); err != nil {
 			if errors.Is(err, context.Canceled) {
 				// Deliberate abort: leave the goal exactly as it is (a
 				// drain must be resumable), no goal.stalled, no clear.
@@ -1032,6 +1050,15 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // through to recordGoalStalled so a stall record for an attempt is never
 // journaled once an UpdateGoal has moved the goal past this turn's
 // generation — see recordGoalStalled and PursueGoal's stale-discard handling.
+// batchOrigin and batchEntries are message.Message.Origin/OperatorBatch for
+// the message that first mentions directive this turn — PursueGoal's own
+// operatorBatchDrain call, alongside directive itself (empty/nil on a turn
+// whose queue drain was empty, exactly like every other turn before
+// operator-batch stamping existed). Like blobs below, they ride only on
+// the attempts that actually APPEND directive as new history (attempt 1
+// and the fallback branch), never on the reuse branch, which appends
+// nothing at all.
+//
 // blobs are the attachments PursueGoal's turn-boundary drain collected for
 // this turn (nil on every turn with no operator mail). They ride with the
 // directive on the attempts that actually APPEND one — attempt 1 and the
@@ -1039,7 +1066,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 // directive-reuse branch, which appends nothing at all: that branch re-runs
 // the previous attempt's still-unanswered message, which already carries
 // these very blob parts.
-func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64, blobs ...*message.Blob) (attempts int, err error) {
+func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, turn int, gen uint64, batchOrigin string, batchEntries []message.OperatorBatchEntry, blobs ...*message.Blob) (attempts int, err error) {
 	var deterministicAttempt, retryableAttempt, truncatedAttempt, exhaustedAttempt int
 	// anchorID identifies the message directiveReuseEligible and
 	// dropUnansweredDirective both measure their tail from — the point
@@ -1071,8 +1098,12 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 		switch {
 		case attempts == 1:
 			// Nothing to reuse yet: the ordinary path appends the directive
-			// as history's first mention of it this turn.
-			_, perr = s.PromptWithOrigin(ctx, directive, "", "", blobs...)
+			// as history's first mention of it this turn. Calls the
+			// package-private promptWithOrigin directly, not PromptWithOrigin,
+			// so batchOrigin/batchEntries (empty/nil on a turn with no queue
+			// drain) ride onto this SAME message alongside the directive text
+			// — see promptTurnWithRetry's own doc comment.
+			_, perr = s.promptWithOrigin(ctx, directive, batchOrigin, "", nil, batchEntries, blobs...)
 		case s.directiveReuseEligible(anchorID):
 			// The tail after anchorID is exactly the previous attempt's own
 			// unanswered directive (see directiveReuseEligible) — reuse it
@@ -1117,7 +1148,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// happens from here on, never the residue this fallback is
 			// leaving behind for good.
 			anchorID = s.lastMessageID()
-			_, perr = s.PromptWithOrigin(ctx, directive, "", "", blobs...)
+			_, perr = s.promptWithOrigin(ctx, directive, batchOrigin, "", nil, batchEntries, blobs...)
 		}
 		if perr == nil {
 			return attempts, nil

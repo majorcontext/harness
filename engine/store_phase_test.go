@@ -56,7 +56,7 @@ func TestOnStorePhaseReportsCreateAndEnqueuePhases(t *testing.T) {
 	}
 
 	calls = nil
-	if _, dup, err := s.EnqueuePromptDurable("hello", 1); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("hello", 1, PromptProvenance{}); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup %v err %v", dup, err)
 	}
 	wantEnqueue := map[string]bool{"write_record": false, "fsync": false}

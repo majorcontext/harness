@@ -262,7 +262,12 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	// resume trigger with no client message id of its own — see the origin
 	// comment just above. PromptWithOrigin's own mint site resolves it like
 	// any other unset id.
-	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "")
+	// nil prov: this text is the engine's own resume trigger, not any
+	// caller's prompt — a real PromptProvenance value here (even the zero
+	// value) would stamp message.PromptSourceAPI onto it via runPrompt's own
+	// PromptWithOriginFrom path, a false attribution. See runPrompt's own
+	// doc comment on prov.
+	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "", nil)
 	return engine.RunnerHandled
 }
 
@@ -300,7 +305,7 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 // of EnqueuePrompt or runPrompt actually delivers text, so the caller's
 // own response always names the id that ends up in the transcript, never
 // a second, independently-minted one.
-func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message.Blob) (status string, queuedDepth int, errCode int, holder string) {
+func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.PromptProvenance, blobs ...*message.Blob) (status string, queuedDepth int, errCode int, holder string) {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
@@ -333,7 +338,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message
 			// this reason; mirror it. A live review caught this.
 			return "", 0, http.StatusConflict, ""
 		}
-		ourID, _, err := sess.EnqueuePrompt(text, msgID, blobs...)
+		ourID, _, err := sess.EnqueuePrompt(text, msgID, prov, blobs...)
 		if err != nil {
 			return "", 0, http.StatusBadRequest, ""
 		}
@@ -354,7 +359,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message
 		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
-			if _, _, err := st.sess.EnqueuePrompt(text, msgID, blobs...); err != nil {
+			if _, _, err := st.sess.EnqueuePrompt(text, msgID, prov, blobs...); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
@@ -366,7 +371,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
 		// goes exclusively through runOrQueueText above.
-		go s.runPrompt(ctx, id, st, text, "", msgID, blobs...)
+		go s.runPrompt(ctx, id, st, text, "", msgID, &prov, blobs...)
 		return "started", 0, 0, ""
 	}
 }
@@ -465,6 +470,12 @@ type sessionSendBody struct {
 	// handlePrompt's body.ID doc comment) — used verbatim with the same
 	// single fail-safe guard, never validated or rejected.
 	ID string `json:"id"`
+	// promptSourceInput: OPTIONAL provenance (source/source_id/
+	// source_label) — see parsePromptProvenance. Recorded on the appended
+	// message itself (Message.source) whether this send dispatches at
+	// once or sits in the queue first — see runPrompt's own doc comment
+	// on prov.
+	promptSourceInput
 }
 
 // decodeSessionSendBody resolves body into the text-plus-attachments pair
@@ -541,6 +552,11 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	prov, code, err := parsePromptProvenance(body.promptSourceInput)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
+	}
 	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc
 	// comment for why every branch below must report and use this SAME
 	// value rather than resolving a second, possibly different, id later.
@@ -558,7 +574,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// SessionManager registers it the instant Spawn creates it, so
 		// "not a node" here only ever means "an as-yet-unadopted root" or
 		// "genuinely unknown."
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, prov, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
@@ -582,7 +598,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// later reloaded: claimForPrompt's own cold-load path covers it,
 		// unlike an earlier version of this handler that drove a stale
 		// SessionManager-cached object in that case.
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, prov, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
@@ -600,7 +616,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	// does, because SendOrQueue's async turn is SessionManager's own
 	// lifecycle to own, not this server's — exactly like Spawn's
 	// launched goroutine already is for handleSpawnChild.
-	queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, blobs...)
+	queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, prov, blobs...)
 	if sendErr != nil {
 		switch {
 		case errors.Is(sendErr, engine.ErrUnknownSession):
