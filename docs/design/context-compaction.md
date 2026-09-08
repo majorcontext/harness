@@ -123,7 +123,17 @@ already carry the provider switch and the next real native usage — a
 matters because the stale signal the flag exists to distrust is itself
 durable (`recClaudeCodeUsage`): a residency eviction or a process restart
 between the `SetModel` switch and the next `Prompt` does not lose the
-guard along with the live `*Session`.
+guard along with the live `*Session`. It also means an on-disk **snapshot**
+(§4.5) cannot be allowed to silently claim the flag was false: a snapshot
+anchored just past the `recModel` switch record — the normal shape after a
+delegated run, a switch, and one on-idle checkpoint — would otherwise
+disarm the whole mechanism permanently for exactly the sessions the
+incident hit, since a snapshot never replays the record that would re-arm
+it. Adding `forceCompactionCheck` to the snapshot schema therefore also
+bumped `sessionSnapshotVersion`: a snapshot written by a binary that
+predates the field cannot know it exists, so `readSessionSnapshot` must
+discard it (any version mismatch means a full replay, see §4.5) rather
+than decode a missing key as the field's zero value.
 
 The next `maybeAutoCompact` call that sees the flag armed reads it WITHOUT
 clearing it yet. Instead of reading `LastUsage()`, it estimates the prompt
@@ -134,31 +144,59 @@ assembled for the most recent model call in this process, if any — so the
 estimate accounts for the system prompt and skills/MCP catalog a native
 request also carries, not history bytes alone (zero on a session's first
 native call after a delegated run, since no such call has happened in this
-process yet; tool schema bytes are never folded in at all, so the estimate
-can still run under the real request size by a margin this paragraph does
-not bound further). The check bypasses the churn-guard cooldown (a
-regime change the guard's own latched state says nothing about) and —
-unlike the ordinary automatic trigger, which is best-effort and never
-blocks the caller's real turn — turns a failed or inconclusive attempt into
-a loud error that fails the `Prompt` call itself, before the user message
-is appended or the native provider is ever called. The flag is cleared
-ONLY on an outcome that actually answers the question it exists to ask:
-under threshold (nothing to compact), or a `Compact` call that folded
-turns AND left a re-estimate of the result back under the window. Every
-other outcome — `Config.ContextWindowTokens` unset, a `Compact` error, a
-context cancellation, or a `Compact` that ran and folded nothing
-(`SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`, or
-`SkipReasonSummarizerEmpty` — a billed call that returned nothing usable)
-— leaves it armed, so a retried `Prompt` call is checked again instead of
-silently falling back to the stale signal. An operator sees a diagnosable
-compaction failure instead of an opaque provider rejection, on every
-attempt, not only the first.
+process yet — a bound this design states openly, not one the estimate
+hides; tool schema bytes are never folded in at all, so the estimate can
+still run under the real request size by a margin this paragraph does not
+bound further). An image `Blob` part is estimated at a flat ~1,600 tokens
+each, matching Anthropic's own per-image ceiling after it resizes and
+tiles an image for tokenization, regardless of the blob's encoded byte
+size — counting a base64 payload's bytes at the same ~4-bytes-per-token
+rate as text overstated a real image by close to an order of magnitude (a
+1.5 MB screenshot reads as ~500k tokens under the byte rule) and could make
+a session carrying one screenshot in its kept-turns tail appear permanently
+over any native model's window. The check bypasses the churn-guard
+cooldown (a regime change the guard's own latched state says nothing
+about) and — unlike the ordinary automatic trigger, which is best-effort
+and never blocks the caller's real turn — treats a REAL `Compact` error (a
+transport or rate-limit failure, not a skip) as a loud failure that fails
+the `Prompt` call itself, before the user message is appended or the
+native provider is ever called, so a retried `Prompt` call is checked
+again rather than silently falling back to the stale signal.
+
+A `Compact` call that runs to completion but concludes folding cannot
+help — `SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`,
+`SkipReasonSummarizerEmpty` (a billed call that returned nothing usable),
+or a real fold whose re-estimate is still over the window — is a
+DIFFERENT, conclusive outcome, handled differently: it is reported loudly
+(`compaction.failed`, naming the reason) but does **not** fail the
+`Prompt` call. The flag is cleared and the request proceeds to the native
+provider for its own real verdict instead. Failing the caller's every
+future `Prompt` call forever, decided by a crude estimate with no in-band
+recovery, traded one silent failure mode (an opaque provider rejection) for
+a worse one (a permanently un-promptable session); this way the caller
+still gets a diagnosable reason on the attempt that discovered folding
+could not help, and every attempt after that reaches the provider exactly
+as if the flag had never armed. The session's history length at the moment
+of that conclusion is remembered (`forceCompactionExhaustedAt`,
+deliberately NOT persisted, same tradeoff as the churn guard's own
+hysteresis flag below): a LATER `Prompt` call gets exactly one more forced
+check once the journal has genuinely grown past that point — something
+changed since the pass that gave up, at minimum the very turn it let
+through completing — never zero more (a permanent brick) and never one on
+every single subsequent call regardless of whether anything changed (which
+would turn a billed skip reason into a summarizer call on every turn). The
+moment any native turn actually lands real usage, this retry marker is
+retired for good: the ordinary trigger is trustworthy again from there, and
+there is nothing left for it to correct for.
 
 The prompt text is never recorded when this check fails: the check runs
 before the incoming user message is appended (like `ensureInstructions`/
 `ensureSkills` immediately above it), so a failed forced pass costs the
 caller nothing but the round trip — the original text is still theirs to
-resubmit, exactly as if the call had never been made.
+resubmit, exactly as if the call had never been made. This applies equally
+to the real-error case above (`Prompt` fails outright) and the conclusive
+case (`Prompt` proceeds without ever having recorded the pre-compaction
+attempt's own text).
 
 `POST /session/{id}/compact` is guarded the other direction: it refuses a
 CURRENTLY-delegated session. A resident session is checked before
@@ -461,11 +499,24 @@ journal-splice fields (`first_id`/`last_id`/`summary_id`): the CLI
 compacted its OWN history, not a range of harness messages, so those
 fields would name IDs that do not exist. Instead it carries a typed
 `trigger`/`pre_tokens`/`post_tokens` payload (mirroring the CLI's own
-`compact_metadata`; `post_tokens` is 0 both when the CLI genuinely reports
-0 and when it omits the field entirely — the wire format cannot tell those
-apart) — a consumer reads these fields directly rather than parsing the
-event's `text`, which carries the same data as a human-readable string for
-logs only.
+`compact_metadata`) — a consumer reads these fields directly rather than
+parsing the event's `text`, which carries the same data as a
+human-readable string for logs only.
+
+**Wire truth for the absent case.** Each of `trigger`/`pre_tokens`/
+`post_tokens` is `omitempty` on `server.Event` (`server/journal.go`), and
+each is ABSENT — the JSON key is missing, not present holding a zero value
+— whenever the CLI's own envelope omitted `compact_metadata`, or omitted
+that one field within it (the SDK's own type marks `post_tokens`
+optional). This collapses two different real situations into one wire
+shape a consumer cannot tell apart by the key alone: the CLI genuinely
+reporting `0`, and the CLI reporting nothing at all — both serialize
+identically (key absent) once the value has passed through the Go `int`
+zero value and `omitempty`. This is a known, accepted limitation of the
+underlying data, not a bug in this forwarding path. A console or any other
+consumer MUST render "unknown" when a key is missing, never "0" — treating
+an absent `pre_tokens`/`post_tokens` as a reported zero silently invents a
+number the CLI never sent.
 
 UNLIKE `compaction.failed`/`compaction.started` above, this event IS
 journaled (`server/journal.go`'s `Publish` routes it through `emitDurable`,
@@ -478,6 +529,12 @@ console cannot even ask" gap the section above describes for a delegated
 session — a live-only event closes it only for a tab that happens to be
 open at the exact moment the CLI compacts, which is not a fix for the
 gap's general shape.
+
+`server/openapi.yaml`'s `Event` schema documents `compaction.claude_code`
+and its `trigger`/`pre_tokens`/`post_tokens` fields alongside
+`history.compacted`/`compaction.failed`/`compaction.started`, including the
+absent-vs-zero caveat above — the hand-written API contract a caller reads
+instead of this design doc.
 
 ## 5. Non-goals
 

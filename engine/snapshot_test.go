@@ -27,6 +27,7 @@ type foldState struct {
 	Usage                      provider.Usage
 	LastUsage                  provider.Usage
 	HaveLastUsage              bool
+	ForceCompactionCheck       bool
 	GoalActive                 bool
 	GoalCondition              string
 	CompactCount               int
@@ -69,6 +70,7 @@ func foldStateOf(t *testing.T, s *Session) string {
 		Usage:                      s.usage,
 		LastUsage:                  s.lastUsage,
 		HaveLastUsage:              s.haveLastUsage,
+		ForceCompactionCheck:       s.forceCompactionCheck,
 		GoalActive:                 s.goalActive,
 		GoalCondition:              s.goalCondition,
 		CompactCount:               s.compactCount,
@@ -771,5 +773,74 @@ func TestSnapshotCarriesClaudeCodeCost(t *testing.T) {
 	}
 	if gotCost != 1.2345 {
 		t.Errorf("claudeCodeSessionCostUSD = %v after restoreSnapshot, want 1.2345", gotCost)
+	}
+}
+
+// TestSnapshotVersionBumpDiscardsPreFixForceCompactionCheckSnapshot is the
+// red-first regression test for NEW-BLOCKING 8 (review round 2 of
+// andybons/claude-code-compaction-forced-switch): a snapshot written by a
+// binary that predates ForceCompactionCheck's addition to sessionSnapshot
+// cannot know the field exists, so decoding it back always yields the JSON
+// zero value (false), no matter what the LIVE session's
+// forceCompactionCheck actually was at capture time. sessionSnapshotVersion
+// must be bumped so THAT specific pre-fix snapshot shape is discarded, not
+// trusted — the normal sequence of delegated turns, a switch to a native
+// model, and an on-idle snapshot (engine.go's snapshotOnIdle defer) is
+// exactly how a pre-fix binary anchored a snapshot PAST the recModel
+// record that arms the flag, permanently disarming this entire fix for
+// every session that already hit the incident, for exactly session
+// ses_01m1kyhka3ewf8vcth0qbqm222's own shape.
+//
+// This drives a real claude-code-to-native switch (arming
+// forceCompactionCheck live), snapshots at the current (fixed) code, then
+// rewrites the file to look exactly like what a pre-fix writer would have
+// left on disk: Version reset to the pre-fix constant (1) and
+// ForceCompactionCheck cleared (a pre-fix schema never wrote this key at
+// all). LoadSession must discard it and fall back to a full replay that
+// re-derives the flag from the durable recModel fold.
+func TestSnapshotVersionBumpDiscardsPreFixForceCompactionCheckSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:            provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:                message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		SessionDir:           dir,
+		ContextWindowTokens:  1000,
+		CompactionKeepTurns:  1,
+		SnapshotEveryRecords: idleOnly,
+	})
+	seedDelegatedTurn(s, "hello")
+	s.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if !armed {
+		t.Fatal("forceCompactionCheck not armed after the claude-code-to-native switch (test setup)")
+	}
+
+	s.snapshotOnIdle()
+	s.waitSnapshots()
+
+	// Simulate a pre-fix binary's snapshot on disk: Version 1, no
+	// knowledge of ForceCompactionCheck at all (decodes as the Go zero
+	// value regardless of what the live flag was).
+	rewriteSnapshot(t, dir, s.ID, func(snap *sessionSnapshot) {
+		snap.Version = 1
+		snap.ForceCompactionCheck = false
+	})
+
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if loaded.replayedRecords != loaded.recordsWritten {
+		t.Errorf("replayed %d of %d records, want a FULL replay — the version-1 snapshot must be discarded, not trusted",
+			loaded.replayedRecords, loaded.recordsWritten)
+	}
+	loaded.mu.Lock()
+	gotArmed := loaded.forceCompactionCheck
+	loaded.mu.Unlock()
+	if !gotArmed {
+		t.Fatal("reloaded forceCompactionCheck = false, want true (the discarded version-1 snapshot must fall back to a full replay that re-derives it from the durable recModel fold)")
 	}
 }

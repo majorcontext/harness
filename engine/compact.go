@@ -852,9 +852,25 @@ func compactRecordBounds(history []message.Message, firstID, lastID string, turn
 }
 
 // bytesPerTokenEstimate is the standard ~4-bytes-per-token heuristic used by
-// estimatePromptTokensFromHistory below when a provider's own usage
-// accounting is unavailable.
+// estimatePromptTokensFromHistory below for text-shaped content (Text,
+// ToolCall, ToolResult, Reasoning) when a provider's own usage accounting is
+// unavailable.
 const bytesPerTokenEstimate = 4
+
+// imageBlockTokenEstimate approximates one image message.Blob part's
+// contribution to a prompt in TOKENS, independent of its encoded byte size.
+// Anthropic resizes and tiles an image before tokenizing it, so a single
+// image costs roughly this many tokens regardless of resolution or how many
+// bytes its base64 encoding takes. Charging bytesPerTokenEstimate against
+// the encoded payload instead — as estimatePartsBytes used to for every
+// Blob — overstates a real image by close to an order of magnitude (a
+// 1.5 MB screenshot base64-encodes to roughly 2 MB, which the byte
+// heuristic reads as ~500k tokens) and made a forced compaction check that
+// could never fold a screenshot out of its kept-turns tail treat the
+// session as permanently over any native model's window. A non-image Blob
+// (there is no comparably documented per-unit cost) still falls back to the
+// byte heuristic.
+const imageBlockTokenEstimate = 1600
 
 // estimatePromptTokensFromHistory is maybeAutoCompact's fallback for the
 // 2026-08-06 nimble-pizza incident: a Bedrock-via-gateway route reported
@@ -869,54 +885,104 @@ const bytesPerTokenEstimate = 4
 // existed only because the safety net's own trigger signal was silently
 // broken.
 //
-// This walks the actual session history and sums the byte length of every
-// part that contributes real content to a future request — Text, ToolCall
-// arguments, ToolResult content, Blob payloads/URLs, and Reasoning text —
-// then divides by bytesPerTokenEstimate. It is deliberately crude: the goal
-// is not an accurate token count (the real transcoder + provider tokenizer
-// already do that job when accounting works) but a signal that survives a
-// provider reporting nothing at all, so the overflow-prevention layer keeps
-// functioning instead of going permanently dark.
+// This walks the actual session history and sums the estimated token cost of
+// every part that contributes real content to a future request — text-shaped
+// parts (Text, ToolCall arguments, ToolResult content, Reasoning) at
+// bytesPerTokenEstimate, an image Blob at the flat imageBlockTokenEstimate.
+// It is deliberately crude: the goal is not an accurate token count (the real
+// transcoder + provider tokenizer already do that job when accounting works)
+// but a signal that survives a provider reporting nothing at all, so the
+// overflow-prevention layer keeps functioning instead of going permanently
+// dark.
 func estimatePromptTokensFromHistory(history []message.Message) int {
-	var bytes int
+	var textBytes, imageTokens int
 	for _, m := range history {
-		bytes += estimatePartsBytes(m.Parts)
+		b, t := estimatePartsBytes(m.Parts)
+		textBytes += b
+		imageTokens += t
 	}
-	return bytes / bytesPerTokenEstimate
+	return textBytes/bytesPerTokenEstimate + imageTokens
 }
 
-// estimatePartsBytes sums the content bytes of parts for
-// estimatePromptTokensFromHistory, recursing once into ToolResult.Content
-// (itself Text/Blob parts only, per ToolResult's doc comment).
-func estimatePartsBytes(parts message.Parts) int {
-	var bytes int
+// estimatePartsBytes sums the text-shaped content bytes of parts for
+// estimatePromptTokensFromHistory (still to be divided by
+// bytesPerTokenEstimate by the caller), recursing once into
+// ToolResult.Content (itself Text/Blob parts only, per ToolResult's doc
+// comment). It reports an image Blob's contribution separately, already in
+// TOKENS (imageBlockTokenEstimate each) — the two return values use
+// different units and must not be summed before the caller's own division.
+func estimatePartsBytes(parts message.Parts) (textBytes, imageTokens int) {
 	for _, p := range parts {
 		switch v := p.(type) {
 		case *message.Text:
-			bytes += len(v.Text)
+			textBytes += len(v.Text)
 		case *message.ToolCall:
-			bytes += len(v.Name) + len(v.Arguments)
+			textBytes += len(v.Name) + len(v.Arguments)
 		case *message.ToolResult:
-			bytes += len(v.CallID) + estimatePartsBytes(v.Content)
+			textBytes += len(v.CallID)
+			b, t := estimatePartsBytes(v.Content)
+			textBytes += b
+			imageTokens += t
 		case *message.Blob:
-			bytes += len(v.Data) + len(v.URL)
+			if strings.HasPrefix(v.MediaType, "image/") {
+				imageTokens += imageBlockTokenEstimate
+			} else {
+				textBytes += len(v.Data) + len(v.URL)
+			}
 		case *message.Reasoning:
-			bytes += len(v.Text)
+			textBytes += len(v.Text)
 		}
 	}
-	return bytes
+	return textBytes, imageTokens
+}
+
+// lastSystemBytes sums the byte length lastSystem's segments would occupy
+// joined by "\n" — the same total as len(strings.Join(lastSystem, "\n"))
+// without allocating the joined string purely to measure it.
+func lastSystemBytes(lastSystem []string) int {
+	if len(lastSystem) == 0 {
+		return 0
+	}
+	n := len(lastSystem) - 1 // "\n" separators
+	for _, seg := range lastSystem {
+		n += len(seg)
+	}
+	return n
+}
+
+// estimateForcedPromptTokens is maybeAutoCompact's forced-path prompt size
+// estimate: history via estimatePromptTokensFromHistory, plus lastSystem's
+// bytes (see that field's own doc comment) folded in at bytesPerTokenEstimate
+// exactly like the history bytes. It is used at BOTH forced-path call
+// sites — before attempting a fold, to decide whether one is needed, and
+// after a fold completes, to decide whether it actually cleared the window
+// — deliberately as one shared helper: a post-fold re-estimate that omitted
+// lastSystem while the pre-fold estimate included it would let a fold clear
+// forceCompactionCheck (judge the fold sufficient) while the real native
+// request, which DOES carry lastSystem, is still over the window.
+func estimateForcedPromptTokens(history []message.Message, lastSystem []string) int {
+	tokens := estimatePromptTokensFromHistory(history)
+	if n := lastSystemBytes(lastSystem); n > 0 {
+		tokens += n / bytesPerTokenEstimate
+	}
+	return tokens
 }
 
 // maybeAutoCompact is Prompt's automatic-trigger check (see docs/design/
 // context-compaction.md §1): a no-op unless Config.ContextWindowTokens is
-// positive (opt-in) and either at least one turn has completed or a
-// model-switch force-check is pending (see forceCompactionCheck). Ordinarily
-// best-effort: a failed or skipped compaction never blocks the caller's real
-// turn — the turn simply proceeds uncompacted, at the same risk layer 1's
+// positive (opt-in) and either at least one turn has completed, a
+// model-switch force-check is pending (switchForced, see
+// forceCompactionCheck), or a prior forced pass's one-shot retry has come
+// due (growthForced, see forceCompactionExhaustedAt). Ordinarily best-effort:
+// a failed or skipped compaction never blocks the caller's real turn — the
+// turn simply proceeds uncompacted, at the same risk layer 1's
 // context-overflow classification already handles if it actually overflows.
-// The one exception is the forced pass itself (see the forced branch below
-// and PromptWithOrigin's caller, which turns a non-nil return into a loud
-// failure instead of proceeding).
+// A forced check (either reason) is louder about a REAL Compact error (see
+// the err != nil branch below, and PromptWithOrigin's caller, which turns
+// that into a failed Prompt call) — but a forced check that runs to
+// completion and finds folding cannot help is NOT treated as that same kind
+// of failure: see failForcedCompactionLoudly's own doc comment for why it
+// reports and proceeds instead of blocking every future Prompt call.
 func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	s.mu.Lock()
 	windowTokens := s.cfg.ContextWindowTokens
@@ -924,9 +990,22 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	lastUsage := s.lastUsage
 	haveLastUsage := s.haveLastUsage
 	onCooldown := s.compactHysteresis
-	forced := s.forceCompactionCheck
+	switchForced := s.forceCompactionCheck
+	exhaustedAt := s.forceCompactionExhaustedAt
+	historyLen := len(s.history)
 	lastSystem := s.lastSystem
 	s.mu.Unlock()
+
+	// growthForced is forceCompactionExhaustedAt's own one-shot retry: a
+	// PRIOR forced pass concluded folding could not help at length
+	// exhaustedAt, and the journal has since grown past it (at minimum, the
+	// turn that pass let through has completed) — see that field's doc
+	// comment for why growth, not a fixed retry count, gates the retry.
+	// Never true alongside switchForced: a fresh claude-code-to-native
+	// switch always sets forceCompactionCheck itself (SetModel/recModel),
+	// which already forces this check by that route.
+	growthForced := !switchForced && exhaustedAt > 0 && historyLen > exhaustedAt
+	forced := switchForced || growthForced
 
 	// forced is deliberately NOT cleared here. Clearing it unconditionally
 	// at entry meant it protected exactly one attempt: a failed or
@@ -936,11 +1015,13 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	// journal — the original incident, on attempt two. It is cleared ONLY
 	// at the specific points below that actually settle the question this
 	// flag exists to ask ("does the next native request fit"): under
-	// threshold, or a Compact that folded enough to bring a re-estimate
-	// back under threshold. Every other exit (windowTokens <= 0, a Compact
-	// error, a Compact that made no progress) leaves it armed so the next
-	// Prompt call — including an immediate retry — is checked again
-	// instead of silently falling back to the stale signal.
+	// threshold, a Compact that folded enough to bring a re-estimate back
+	// under threshold, or a Compact that concludes (loudly, via
+	// failForcedCompactionLoudly) that folding cannot help at all. Only a
+	// Compact call that fails for a REAL reason (a transport or rate-limit
+	// error, not a skip) leaves it armed exactly as before, so an immediate
+	// retry is checked again instead of silently falling back to the stale
+	// signal.
 	if windowTokens <= 0 {
 		return nil
 	}
@@ -959,27 +1040,16 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		// (applyClaudeCodeUsage), not harness's journal — the thing a
 		// native request actually transcodes and sends. Trusting it here
 		// would compare the wrong number against the new native window, so
-		// skip it entirely and estimate straight from the journal — the
-		// same crude signal maybeAutoCompact already falls back to below
-		// for the analogous "provider reports nothing usable" case.
-		promptTokens = estimatePromptTokensFromHistory(s.History())
-		// The real native request also carries the system segments —
-		// AGENTS.md instructions, Agent Skills, the MCP catalog — which
-		// pure history bytes omit entirely (with defaultCompactionThreshold
-		// at 0.8, a large system segment can consume the whole 20% slack
-		// on its own). lastSystem (see its own doc comment) is the most
-		// recent system slice actually assembled for a model call in THIS
-		// process — zero on a session that has never completed a native
-		// call in this process yet, which is exactly the claude-code-to-
-		// native incident shape this check exists for; the bound in that
-		// case is undocumented no longer only by the note in
-		// docs/design/context-compaction.md, not by this fold. Tool schema
-		// bytes are not folded in at all — there is no comparably cheap
-		// cached source for them — so this estimate can still run under
-		// the real request size.
-		if sysLen := len(strings.Join(lastSystem, "\n")); sysLen > 0 {
-			promptTokens += sysLen / bytesPerTokenEstimate
-		}
+		// skip it entirely and estimate straight from the journal plus
+		// lastSystem — see estimateForcedPromptTokens's own doc comment,
+		// and its doc comment on why this exact formula must also be used
+		// for the post-fold re-estimate below. This estimate is 0 in
+		// exactly the "never completed a native call in this process yet"
+		// case: a bound the design doc documents openly, not one this fold
+		// hides. Tool schema bytes are not folded in at all — there is no
+		// comparably cheap cached source for them — so this estimate can
+		// still run under the real request size.
+		promptTokens = estimateForcedPromptTokens(s.History(), lastSystem)
 	} else {
 		// The prompt occupies the context window as the SUM of all three
 		// input components. Harness injects cache_control by default, so on
@@ -1018,10 +1088,13 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		}
 		// This really does answer the question forced exists to ask: the
 		// next native request fits under the window without folding
-		// anything. Clear it here, whether this check ran forced or not.
+		// anything. Clear both the flag and the exhaustion marker here,
+		// whether this check ran forced or not (either is already false/0
+		// when it wasn't).
 		if forced {
 			s.mu.Lock()
 			s.forceCompactionCheck = false
+			s.forceCompactionExhaustedAt = 0
 			s.mu.Unlock()
 		}
 		return nil
@@ -1030,16 +1103,19 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		// Churn guard (§2): still over threshold since the last automatic
 		// compaction. The pressure must live in the kept region (a single
 		// giant tool result) — folding the prefix again cannot relieve it,
-		// so do not re-fire every turn. A forced check bypasses this
-		// unconditionally: it exists specifically to correct for a regime
-		// change the churn guard's own latched state says nothing about
-		// (a session that was, until this turn, entirely delegated), and
-		// it stays armed across every inconclusive attempt (see the doc
-		// comment above) rather than firing "at most once", so bypassing
-		// the guard can never itself become the every-turn churn it
-		// exists to prevent — the guard would just refuse it again after
-		// the SAME session next completes a real native turn and disarms
-		// forced properly.
+		// so do not re-fire every turn. A forced check (either reason)
+		// bypasses this unconditionally. switchForced exists specifically to
+		// correct for a regime change the churn guard's own latched state
+		// says nothing about (a session that was, until this turn, entirely
+		// delegated). growthForced has its own, separate, self-clearing
+		// throttle — forceCompactionExhaustedAt only re-arms it once the
+		// journal has actually grown since the pass that gave up, and any
+		// real native turn landing afterward (appendWithUsage) retires it
+		// completely — so layering the usage-based churn guard on top would
+		// only create a deadlock: the forced estimate this check computes
+		// never dips under threshold on its own (only an actual fold or a
+		// completed native turn changes it), so onCooldown would never
+		// reset and a growthForced retry could never run at all.
 		return nil
 	}
 
@@ -1056,11 +1132,31 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 			// provider is ever reached. forced is deliberately left armed
 			// (see the doc comment above): a retried Prompt call must be
 			// checked again, not silently fall back to the stale signal.
-			return fmt.Errorf("engine: forced compaction after a claude-code model switch failed: %w", err)
+			return fmt.Errorf("engine: forced compaction failed: %w", err)
 		}
 		// Best-effort: EventCompactionFailed already emitted inside
 		// Compact. The turn proceeds uncompacted.
 		return nil
+	}
+	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
+	// both cost a full-input-price provider call, so both must arm the
+	// churn guard exactly like a successful fold does, REGARDLESS of
+	// whether the forced handling below goes on to succeed or terminate:
+	// terminating a costly attempt without latching here would let a
+	// growthForced retry re-invoke the summarizer every subsequent Prompt
+	// call, defeating the guard entirely. NEVER latch on the two free skip
+	// reasons (not_enough_turns, lone_existing_summary): the churn guard
+	// only clears once LastUsage dips below threshold, so latching it for a
+	// free no-op would permanently disarm automatic compaction for an
+	// over-threshold session that simply doesn't have enough turns yet to
+	// fold (review follow-up on PR #136, Finding A — without this, a
+	// summarizer that always returns empty re-issued a full summarization
+	// call, at full input price, on EVERY subsequent over-threshold turn
+	// indefinitely).
+	if res.TurnsFolded > 0 || res.SkipReason == SkipReasonSummarizerEmpty {
+		s.mu.Lock()
+		s.compactHysteresis = true
+		s.mu.Unlock()
 	}
 	if forced {
 		if res.TurnsFolded == 0 {
@@ -1071,44 +1167,55 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 			// cannot reduce), and summarizer_empty is a billed provider
 			// call that returned nothing usable. None of the three is
 			// progress toward the one thing a forced pass exists to
-			// achieve, so treat all three as failure: forced stays armed
-			// (no clear below) and the caller gets a diagnosable error
-			// instead of a silently oversized journal.
+			// achieve, so none can be silently waved through — but none is
+			// a reason to block every future Prompt call on this session
+			// forever either (see failForcedCompactionLoudly).
 			reason := res.SkipReason
 			if reason == "" {
 				reason = "unknown"
 			}
-			return fmt.Errorf("engine: forced compaction after a claude-code model switch made no progress (skip_reason=%s)", reason)
+			s.failForcedCompactionLoudly(fmt.Sprintf(
+				"engine: forced compaction made no progress (skip_reason=%s); proceeding to the provider uncompacted for its own verdict", reason))
+			return nil
 		}
 		// Folding happened, but a kept-turns tail holding one giant tool
 		// result can leave the journal over the window regardless — the
 		// forced pass never re-checked this before, so a residual
 		// over-window journal reached the provider silently. Re-estimate
-		// exactly like the pre-compact estimate above (lastUsage is still
-		// the stale delegated figure here; only a following native turn
-		// ever refreshes it — see appendWithUsage/recMessage's clears).
-		if post := estimatePromptTokensFromHistory(s.History()); float64(post) >= threshold*float64(windowTokens) {
-			return fmt.Errorf("engine: forced compaction after a claude-code model switch folded %d turns but the journal is still over the window (~%d tokens estimated)", res.TurnsFolded, post)
+		// with the SAME formula as the pre-compact estimate above (see
+		// estimateForcedPromptTokens's doc comment); lastUsage is still the
+		// stale delegated figure here, only a following native turn ever
+		// refreshes it (see appendWithUsage/recMessage's clears).
+		if post := estimateForcedPromptTokens(s.History(), lastSystem); float64(post) >= threshold*float64(windowTokens) {
+			s.failForcedCompactionLoudly(fmt.Sprintf(
+				"engine: forced compaction folded %d turns but the journal is still over the window (~%d tokens estimated); proceeding to the provider uncompacted for its own verdict", res.TurnsFolded, post))
+			return nil
 		}
 		s.mu.Lock()
 		s.forceCompactionCheck = false
-		s.mu.Unlock()
-	}
-	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
-	// both cost a full-input-price provider call, so both must arm the
-	// churn guard exactly like a successful fold does. NEVER latch on the
-	// two free skip reasons (not_enough_turns, lone_existing_summary): the
-	// churn guard only clears once LastUsage dips below threshold, so
-	// latching it for a free no-op would permanently disarm automatic
-	// compaction for an over-threshold session that simply doesn't have
-	// enough turns yet to fold (review follow-up on PR #136, Finding A —
-	// without this, a summarizer that always returns empty re-issued a full
-	// summarization call, at full input price, on EVERY subsequent
-	// over-threshold turn indefinitely).
-	if res.TurnsFolded > 0 || res.SkipReason == SkipReasonSummarizerEmpty {
-		s.mu.Lock()
-		s.compactHysteresis = true
+		s.forceCompactionExhaustedAt = 0
 		s.mu.Unlock()
 	}
 	return nil
+}
+
+// failForcedCompactionLoudly is the terminating half of the forced-check
+// escape hatch (see forceCompactionExhaustedAt's own doc comment): a forced
+// pass that ran Compact to completion but demonstrably cannot help — no
+// turns folded, or a fold that still leaves the journal over the window —
+// must not block every future Prompt call on this session forever the way
+// leaving forceCompactionCheck armed unconditionally would (a permanent
+// brick decided by a crude byte estimate, with no in-band recovery). It
+// reports the failure the same way a best-effort skip already does —
+// EventCompactionFailed, for an operator or tailer watching, never silence
+// — then clears the switch flag and marks the CURRENT history length
+// exhausted so the request proceeds to the provider for its own real
+// verdict, and a later Prompt call only retries once the journal has
+// actually grown past that length.
+func (s *Session) failForcedCompactionLoudly(reason string) {
+	s.emit(Event{Type: EventCompactionFailed, Text: reason})
+	s.mu.Lock()
+	s.forceCompactionCheck = false
+	s.forceCompactionExhaustedAt = len(s.history)
+	s.mu.Unlock()
 }

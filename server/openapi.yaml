@@ -1199,6 +1199,7 @@ components:
             - history.compacted
             - compaction.failed
             - compaction.started
+            - compaction.claude_code
             - text.delta
             - reasoning.delta
             - tool.start
@@ -1374,6 +1375,23 @@ components:
             does not exist yet). It is always followed by exactly one of
             those two, so a client can pair it with the eventual settlement
             to show a "compacting now" indicator.
+            compaction.claude_code is DURABLE (journaled with a seq, unlike
+            compaction.failed/compaction.started above) and fires when a
+            claude-code-delegated turn's own CLI output reports that it
+            compacted ITS OWN internal context — a fact harness's journal
+            otherwise records nothing about, since a delegated session's
+            history is a passive mirror, never itself compacted. It carries
+            none of history.compacted's fold-boundary fields (no harness
+            message ids are folded), only `trigger`, `pre_tokens`, and
+            `post_tokens`, mirrored from the CLI's own report. `text` is
+            also present, a human-readable one-line summary for logs only —
+            never parse it; read the typed fields instead. `trigger`,
+            `pre_tokens`, and `post_tokens` are each ABSENT (the key is
+            missing, not present with a zero value) whenever the CLI's own
+            output omitted that data — `pre_tokens`/`post_tokens` in
+            particular are indistinguishable, on the wire, from a genuine
+            report of 0: a consumer must render "unknown", never "0", for
+            an absent key.
         session_id: { type: string }
         seq:
           type: integer
@@ -1594,6 +1612,34 @@ components:
             The id of the summary message that replaced the folded range —
             already delivered via a preceding `message` event
             (history.compacted).
+        trigger:
+          type: string
+          enum: [auto, manual]
+          description: >
+            Whether the Claude Code CLI's own compaction (compaction.
+            claude_code) ran automatically or was manually invoked, as the
+            CLI itself reported it. ABSENT — the key is missing, not an
+            empty string — when the CLI's output omitted this data
+            entirely.
+        pre_tokens:
+          type: integer
+          description: >
+            The context size, in tokens, the Claude Code CLI reported
+            BEFORE its own compaction (compaction.claude_code), as the CLI
+            itself reported it. ABSENT — the key is missing, not present
+            as 0 — when the CLI's output omitted this data entirely; a
+            present value of exactly 0 is a genuine CLI report and is
+            indistinguishable, on the wire, from that absence.
+        post_tokens:
+          type: integer
+          description: >
+            The context size, in tokens, the Claude Code CLI reported
+            AFTER its own compaction (compaction.claude_code). Same
+            absent-vs-zero caveat as pre_tokens: the CLI's own SDK type
+            marks this field optional, so ABSENT (the CLI reported nothing)
+            and a genuine report of exactly 0 both serialize identically —
+            a client must render "unknown", never "0", when the key is
+            missing.
 
     JournalResponse:
       type: object
