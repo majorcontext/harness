@@ -122,10 +122,12 @@ boundary, only `WorkDir`'s own file counts: the walk never climbs to the
 filesystem root hunting for a first hit, which would inject an ancestor
 outside any repository (a `$HOME` `AGENTS.md`, or a stray file on a developer
 machine or box image) into every session rooted below it. A single file keeps
-the plain one-file header a session with only one AGENTS.md has always seen;
-more than one file adds a header line naming each path and stating that the
-deepest file wins on conflict, adapting the [agents.md](https://agents.md/)
-convention's own nested-file precedence rule rather than the engine's earlier
+the plain one-file header a session with only one AGENTS.md has always seen:
+`Project instructions from <path>:`. More than one file renders instead as one
+generic precedence line — `Project instructions, root to working directory.
+The deepest file wins on conflict.` — followed by a `From <path>:` header
+per file, adapting the [agents.md](https://agents.md/) convention's own
+nested-file precedence rule rather than the engine's earlier
 closest-file-only search. The file is schema-less Markdown — no headings are
 required or parsed. The segment is appended after `Config.System` and before
 hook (`system.transform`) segments, cached for the session, and never written
