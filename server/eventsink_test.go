@@ -276,6 +276,81 @@ func (b *blockingSink) Deliver(_ context.Context, batch EventBatch) (int64, erro
 	return batch.ToSeq, nil
 }
 
+type cancelAwareSink struct {
+	mu        sync.Mutex
+	calls     int
+	firstCtx  context.Context
+	entered   chan struct{}
+	release   chan struct{}
+	delivered chan EventBatch
+}
+
+func (s *cancelAwareSink) Deliver(ctx context.Context, batch EventBatch) (int64, error) {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	if call == 1 {
+		s.firstCtx = ctx
+	}
+	s.mu.Unlock()
+	if call == 1 {
+		close(s.entered)
+		select {
+		case <-ctx.Done():
+		case <-s.release:
+		}
+		return 0, errors.New("first delivery interrupted")
+	}
+	s.delivered <- batch
+	return batch.ToSeq, nil
+}
+
+func (s *cancelAwareSink) firstContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstCtx
+}
+
+func TestDrainCancelsBlockedDeliveryBeforeFinalFlush(t *testing.T) {
+	sink := &cancelAwareSink{
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+		delivered: make(chan EventBatch, 1),
+	}
+	s := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 4, func(o *Options) {
+		o.EventSink = sink
+		o.EventSinkFlush = time.Millisecond
+	})
+	seq := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_cancel", Status: "idle"})
+	<-sink.entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	drained := make(chan struct{})
+	go func() {
+		s.Drain(ctx)
+		close(drained)
+	}()
+
+	<-s.sinkStop
+	if deliveryCtx := sink.firstContext(); deliveryCtx == nil || deliveryCtx.Err() == nil {
+		t.Error("stopEventSink closed sinkStop without canceling the blocked delivery context")
+	}
+	// Unblock the old implementation after recording the failure, so this
+	// regression never waits on a guessed deadline.
+	close(sink.release)
+	<-drained
+
+	select {
+	case batch := <-sink.delivered:
+		if batch.FromSeq != seq || batch.ToSeq != seq {
+			t.Fatalf("final batch = %+v, want seq %d", batch, seq)
+		}
+	default:
+		t.Fatal("Drain canceled the blocked delivery but did not make a final delivery attempt")
+	}
+}
+
 func TestEventSinkDisabledHasNoWakeChannel(t *testing.T) {
 	s := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 4)
 	if s.sinkWake != nil {

@@ -126,6 +126,15 @@ exit before those records existed and lose every one of them, while Drain's
 own `sinkDone` wait returned instantly having guarded nothing.
 `TestEventSinkShipsRecordsJournaledDuringDrain` pins this.
 
+`stopEventSink` also cancels the ordinary pump context. A transport that is
+blocked in `Deliver` can then return instead of outliving the shutdown budget.
+After that cancellation, the pump makes one final catch-up pass under the
+`Drain` context. A failed final delivery does not retry because shutdown has
+already begun. `Close` without `Drain` supplies an already-canceled final
+context: it retires the pump but makes no graceful-delivery promise.
+`TestDrainCancelsBlockedDeliveryBeforeFinalFlush` pins both cancellation and
+the final attempt.
+
 A restarted process ships its restored journal without waiting for a new
 record. `loadJournal` appends the journal straight to `s.journal`, never
 through `emitDurableLocked`, so nothing wakes the pump for records this

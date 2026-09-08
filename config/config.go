@@ -389,8 +389,7 @@ type MCPServerSpec struct {
 }
 
 // EventSinkSpec configures the outbound journal forwarder. URL is the only
-// required field; every numeric field takes its default from cmd/harness
-// when left zero.
+// required field; server applies every numeric default when a value is zero.
 type EventSinkSpec struct {
 	URL string `json:"url"`
 	// Headers are sent on every request, verbatim. This is where a
@@ -1154,13 +1153,18 @@ func validateEventSink(s *EventSinkSpec) error {
 	}
 	u, err := url.Parse(s.URL)
 	if err != nil {
-		return fmt.Errorf("event_sink: url %q is not a valid URL: %w", s.URL, err)
+		return fmt.Errorf("event_sink: url is not valid: %w", err)
+	}
+	// Credentials belong in headers. Reject userinfo before any later error
+	// can include a credential-bearing URL in a log message.
+	if u.User != nil {
+		return fmt.Errorf("event_sink: url must not include userinfo; use headers")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("event_sink: url %q must use http or https (got scheme %q)", s.URL, u.Scheme)
+		return fmt.Errorf("event_sink: url must use http or https (got scheme %q)", u.Scheme)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("event_sink: url %q host is required", s.URL)
+		return fmt.Errorf("event_sink: url host is required")
 	}
 	for name := range s.Headers {
 		if name == "" {

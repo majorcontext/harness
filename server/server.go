@@ -388,6 +388,11 @@ type Server struct {
 	// start — see runEventSink for the records that would otherwise be lost.
 	sinkStop     chan struct{}
 	sinkStopOnce sync.Once
+	sinkCtx      context.Context
+	sinkCancel   context.CancelFunc
+	// sinkFinalCtx is published before sinkStop closes. The pump uses it for
+	// one final catch-up pass after a blocked ordinary delivery is canceled.
+	sinkFinalCtx context.Context
 
 	// mu guards everything below. Lock-ordering invariant: mu is a LEAF with
 	// respect to a session's own mutex — code holding mu must never call a
@@ -929,6 +934,7 @@ func New(opts Options) (*Server, error) {
 	// receiver a "replica" of records that never reach disk.
 	if opts.EventSink != nil && opts.SessionDir != "" {
 		s.sinkWake = make(chan struct{}, 1)
+		s.sinkCtx, s.sinkCancel = context.WithCancel(context.Background())
 		go s.runEventSink()
 	} else {
 		close(s.sinkDone)
@@ -1127,7 +1133,7 @@ func (s *Server) Drain(ctx context.Context) {
 		// Retire the pump only now: the body above has already waited for
 		// in-flight prompts, so their trailing records are journaled and the
 		// pump's final flush can carry them.
-		s.stopEventSink()
+		s.stopEventSink(ctx)
 		select {
 		case <-s.sinkDone:
 		case <-ctx.Done():
@@ -1194,9 +1200,12 @@ func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
 
 // Close releases the journal file, if any.
 func (s *Server) Close() error {
-	// A Close without a Drain still has to retire the pump, or its goroutine
-	// outlives the server.
-	s.stopEventSink()
+	// Close without Drain is not a graceful flush. Cancel ordinary delivery
+	// and give the pump an already-canceled final context so Close never waits
+	// on an external receiver.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.stopEventSink(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.jf != nil {

@@ -151,6 +151,7 @@ func TestLoadRejectsBadEventSink(t *testing.T) {
 		{"unparseable url", `{"event_sink":{"url":"://nope"}}`, "url"},
 		{"non-http scheme", `{"event_sink":{"url":"ftp://h/x"}}`, "http or https"},
 		{"missing host", `{"event_sink":{"url":"https:///path"}}`, "host is required"},
+		{"embedded credentials", `{"event_sink":{"url":"https://user:pass@example.test/path"}}`, "must not include userinfo"},
 		{"negative flush", `{"event_sink":{"url":"https://h/x","flush_ms":-1}}`, "flush_ms"},
 		{"negative records", `{"event_sink":{"url":"https://h/x","batch_max_records":-1}}`, "batch_max_records"},
 		{"negative bytes", `{"event_sink":{"url":"https://h/x","batch_max_bytes":-1}}`, "batch_max_bytes"},

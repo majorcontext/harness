@@ -30,10 +30,16 @@ const (
 	eventSinkRetryDelay        = 2 * time.Second
 )
 
-// stopEventSink retires the pump after a final flush. Idempotent, and safe
-// when no pump was ever started.
-func (s *Server) stopEventSink() {
-	s.sinkStopOnce.Do(func() { close(s.sinkStop) })
+// stopEventSink cancels an active delivery, then asks the pump to make one
+// final catch-up pass under finalCtx. Idempotent and safe without a pump.
+func (s *Server) stopEventSink(finalCtx context.Context) {
+	s.sinkStopOnce.Do(func() {
+		s.sinkFinalCtx = finalCtx
+		if s.sinkCancel != nil {
+			s.sinkCancel()
+		}
+		close(s.sinkStop)
+	})
 }
 
 // notifySinkLocked wakes the pump. It sends a SIGNAL, never a record: a
@@ -73,11 +79,11 @@ func (s *Server) runEventSink() {
 	// pump for records this process did not itself emit. Without this first
 	// flush, a process that restarts and then goes idle replicates nothing
 	// until some unrelated record happens to arrive.
-	s.flushEventSink()
+	s.flushEventSink(s.sinkCtx)
 	for {
 		select {
 		case <-s.sinkStop:
-			s.flushEventSink()
+			s.flushEventSink(s.sinkFinalCtx)
 			return
 		case <-s.sinkWake:
 		}
@@ -86,28 +92,36 @@ func (s *Server) runEventSink() {
 		select {
 		case <-s.sinkStop:
 			t.Stop()
-			s.flushEventSink()
+			s.flushEventSink(s.sinkFinalCtx)
 			return
 		case <-t.C:
 		}
-		s.flushEventSink()
+		s.flushEventSink(s.sinkCtx)
 	}
 }
 
 // flushEventSink delivers everything above the cursor, in batches, until it
 // runs out of records or a delivery fails. It never holds s.mu across
 // Deliver.
-func (s *Server) flushEventSink() {
+func (s *Server) flushEventSink(ctx context.Context) {
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		batch, ok := s.nextEventBatch()
 		if !ok {
 			return
 		}
-		applied, err := s.opts.EventSink.Deliver(context.Background(), batch)
+		applied, err := s.opts.EventSink.Deliver(ctx, batch)
 		if err != nil {
 			s.logWarn("event sink delivery failed", "from_seq", batch.FromSeq, "to_seq", batch.ToSeq, "error", err.Error())
 			t := time.NewTimer(eventSinkRetryDelay)
 			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
 			case <-s.sinkStop:
 				t.Stop()
 				return
