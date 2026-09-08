@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/message"
 )
 
 // fakeSink records every batch it is handed and answers a scripted cursor.
@@ -170,6 +172,30 @@ func TestNextEventBatchHonorsMaxBytes(t *testing.T) {
 	batch, ok = s.nextEventBatch()
 	if !ok || len(batch.Records) != 1 || batch.Records[0].Seq != 1 {
 		t.Fatalf("oversized first-record batch = %+v, ok=%t; want seq 1 alone", batch, ok)
+	}
+}
+
+func TestNextEventBatchIsolatesMarshalFailure(t *testing.T) {
+	poison := Event{
+		Type: evtSessionStatus, SessionID: "ses_poison", Seq: 1,
+		Output: message.Parts{nil},
+	}
+	valid := Event{Type: evtSessionStatus, SessionID: "ses_poison", Seq: 2, Status: "idle"}
+	s := &Server{
+		opts:    Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: 1 << 20},
+		journal: []Event{poison, valid},
+		seq:     2,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok || len(batch.Records) != 1 || batch.FromSeq != 1 || batch.ToSeq != 1 {
+		t.Fatalf("poison batch = %+v, ok=%t; want only seq 1", batch, ok)
+	}
+
+	s.sinkCursor = 1
+	batch, ok = s.nextEventBatch()
+	if !ok || len(batch.Records) != 1 || batch.FromSeq != 2 || batch.ToSeq != 2 {
+		t.Fatalf("post-poison batch = %+v, ok=%t; want valid seq 2", batch, ok)
 	}
 }
 

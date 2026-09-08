@@ -174,6 +174,9 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 		}
 		batch.Records = append(batch.Records, rec)
 		batch.ToSeq = rec.Seq
+		if err != nil {
+			break
+		}
 	}
 	return batch, len(batch.Records) > 0
 }
