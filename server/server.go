@@ -262,12 +262,13 @@ type Options struct {
 	// outbound HTTP client.
 	EventSink EventSink
 	// EventSinkFlush is the coalescing window after a record arrives.
-	// Zero takes defaultEventSinkFlush.
+	// A non-positive value takes defaultEventSinkFlush.
 	EventSinkFlush time.Duration
 	// EventSinkMaxRecords bounds record count. EventSinkMaxBytes bounds the
-	// sum of encoded record bytes; it excludes any transport envelope. Zero
-	// takes the defaults. They chunk a backlog and never drop a record, so one
-	// oversized record is still delivered alone.
+	// sum of encoded record bytes; it excludes any transport envelope. A
+	// non-positive value takes the corresponding default. They chunk a
+	// backlog and never drop a record, so one oversized record is still
+	// delivered alone.
 	EventSinkMaxRecords int
 	EventSinkMaxBytes   int
 	// MCP is the MCP client integration shared by every session this server

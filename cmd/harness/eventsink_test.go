@@ -63,7 +63,8 @@ func TestHTTPEventSinkRejectsNon2xx(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	sink := newHTTPEventSink(&config.EventSinkSpec{URL: ts.URL})
+	sinkURL := ts.URL + "/sink?token=secret_query#secret_fragment"
+	sink := newHTTPEventSink(&config.EventSinkSpec{URL: sinkURL})
 	_, err := sink.Deliver(context.Background(), server.EventBatch{FromSeq: 1, ToSeq: 1})
 	if err == nil {
 		t.Fatal("Deliver succeeded on a 500, want an error so the cursor does not advance")
@@ -73,5 +74,8 @@ func TestHTTPEventSinkRejectsNon2xx(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "secret diagnostic detail") {
 		t.Errorf("error includes untrusted response message: %q", err)
+	}
+	if strings.Contains(err.Error(), "secret_query") || strings.Contains(err.Error(), "secret_fragment") {
+		t.Errorf("error includes configured URL secrets: %q", err)
 	}
 }

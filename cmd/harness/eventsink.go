@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -75,18 +77,24 @@ func (h *httpEventSink) Deliver(ctx context.Context, batch server.EventBatch) (i
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
+		// net/url.Error includes the complete request URL, including query
+		// parameters. Log only the underlying transport failure.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return 0, fmt.Errorf("event sink: post: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, eventSinkReplyMaxBytes+1))
 		if readErr != nil {
-			return 0, fmt.Errorf("event sink: %s returned %d; read diagnostic: %w", h.url, resp.StatusCode, readErr)
+			return 0, fmt.Errorf("event sink: receiver returned %d; read diagnostic: %w", resp.StatusCode, readErr)
 		}
 		if code := eventSinkDiagnosticCode(body); code != "" {
-			return 0, fmt.Errorf("event sink: %s returned %d (%s)", h.url, resp.StatusCode, code)
+			return 0, fmt.Errorf("event sink: receiver returned %d (%s)", resp.StatusCode, code)
 		}
-		return 0, fmt.Errorf("event sink: %s returned %d", h.url, resp.StatusCode)
+		return 0, fmt.Errorf("event sink: receiver returned %d", resp.StatusCode)
 	}
 	var reply sinkReply
 	// A reply that does not parse is an error, not a zero cursor: treating
