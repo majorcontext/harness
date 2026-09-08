@@ -107,29 +107,69 @@ a provider that rejects it outright ("prompt too long") — the live
 2026-09-08 incident this paragraph documents (session
 `ses_01m1kyhka3ewf8vcth0qbqm222`, a 3,667-message, 5-day delegated run).
 
-`SetModel` therefore arms a one-shot `forceCompactionCheck` flag exactly
-when the PRIOR model was claude-code-delegated and the new one is not
-(never on a native-to-native switch, where `LastUsage()` stays a valid
-harness-journal signal regardless of which native model produced it, and
-never on a switch INTO delegation, which disarms harness's own trigger
-entirely per the paragraph above). The very next `maybeAutoCompact` call
-consumes the flag: instead of reading `LastUsage()`, it estimates the
-prompt size straight from `s.History()` (the same crude byte-count fallback
-§1's nimble-pizza case already uses for "provider reports nothing usable"),
-bypasses the churn-guard cooldown (a forced check runs at most once per
-switch, so it can never itself cause the re-fire-every-turn churn that
-guard exists to prevent), and — unlike the ordinary automatic trigger,
-which is best-effort and never blocks the caller's real turn — turns a real
-`Compact` failure into a loud error that fails the `Prompt` call itself,
-before the user message is appended or the native provider is ever called.
-An operator sees a diagnosable compaction failure instead of an opaque
-provider rejection.
+`SetModel` therefore arms a `forceCompactionCheck` flag exactly when the
+PRIOR model was claude-code-delegated and the new one is not (never on a
+native-to-native switch, where `LastUsage()` stays a valid harness-journal
+signal regardless of which native model produced it, and it CLEARS on a
+switch back INTO delegation, which disarms harness's own trigger entirely
+per the paragraph above). The flag is durable, not memory-only: it is true
+exactly when the session's CURRENT model is native and the most recently
+recorded usage-defining event was a delegated turn. `store.go`'s replay
+fold reconstructs it from the same `recModel`/`recMessage` records that
+already carry the provider switch and the next real native usage — a
+`recModel` record moving the provider off delegation arms it, a later
+`recMessage` record carrying real native `Usage` disarms it — and
+`snapshot.go` captures/restores it for the anchored-load fast path. This
+matters because the stale signal the flag exists to distrust is itself
+durable (`recClaudeCodeUsage`): a residency eviction or a process restart
+between the `SetModel` switch and the next `Prompt` does not lose the
+guard along with the live `*Session`.
+
+The next `maybeAutoCompact` call that sees the flag armed reads it WITHOUT
+clearing it yet. Instead of reading `LastUsage()`, it estimates the prompt
+size straight from `s.History()` (the same crude byte-count fallback §1's
+nimble-pizza case already uses for "provider reports nothing usable"),
+folding in the byte length of `Session.lastSystem` — the system segments
+assembled for the most recent model call in this process, if any — so the
+estimate accounts for the system prompt and skills/MCP catalog a native
+request also carries, not history bytes alone (zero on a session's first
+native call after a delegated run, since no such call has happened in this
+process yet; tool schema bytes are never folded in at all, so the estimate
+can still run under the real request size by a margin this paragraph does
+not bound further). The check bypasses the churn-guard cooldown (a
+regime change the guard's own latched state says nothing about) and —
+unlike the ordinary automatic trigger, which is best-effort and never
+blocks the caller's real turn — turns a failed or inconclusive attempt into
+a loud error that fails the `Prompt` call itself, before the user message
+is appended or the native provider is ever called. The flag is cleared
+ONLY on an outcome that actually answers the question it exists to ask:
+under threshold (nothing to compact), or a `Compact` call that folded
+turns AND left a re-estimate of the result back under the window. Every
+other outcome — `Config.ContextWindowTokens` unset, a `Compact` error, a
+context cancellation, or a `Compact` that ran and folded nothing
+(`SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`, or
+`SkipReasonSummarizerEmpty` — a billed call that returned nothing usable)
+— leaves it armed, so a retried `Prompt` call is checked again instead of
+silently falling back to the stale signal. An operator sees a diagnosable
+compaction failure instead of an opaque provider rejection, on every
+attempt, not only the first.
+
+The prompt text is never recorded when this check fails: the check runs
+before the incoming user message is appended (like `ensureInstructions`/
+`ensureSkills` immediately above it), so a failed forced pass costs the
+caller nothing but the round trip — the original text is still theirs to
+resubmit, exactly as if the call had never been made.
 
 `POST /session/{id}/compact` is guarded the other direction: it refuses a
-CURRENTLY-delegated session outright (409, `server/handlers.go`'s
-`rejectClaudeCodeDelegatedCompact`, checked before `claimForPrompt` — the
-same before-the-claim shape `rejectManagedChildTurn` already uses) rather
-than running harness's summarizer against a journal the CLI's own context
+CURRENTLY-delegated session. A resident session is checked before
+`claimForPrompt` (409, `server/handlers.go`'s
+`rejectClaudeCodeDelegatedCompact`, the same before-the-claim shape
+`rejectManagedChildTurn` already uses); every session is re-checked AFTER
+the claim, on the exact object `claimForPrompt` resolved, since `SetModel`
+takes no run slot and a native-to-claude-code switch can land in the
+window between the two. `Session.Compact` itself carries the identical
+guard as the authoritative backstop for any other caller. None of the
+three runs harness's summarizer against a journal the CLI's own context
 management has already made irrelevant.
 
 ## 2. Mechanism
@@ -416,15 +456,28 @@ its own internal context — verified against the published
 (`SDKCompactBoundaryMessage`) and the CLI's documented streaming-output
 page. `consumeClaudeCodeStream`'s `"system"` case
 (`engine/claude_code_backend.go`) forwards this as `EventClaudeCodeCompacted`
-(`"compaction.claude_code"`), live only like `compaction.failed`/
-`compaction.started` above — never journaled, since harness's own journal
-never changes shape when the CLI compacts. It carries none of
-`history.compacted`'s journal-splice fields (`first_id`/`last_id`/
-`summary_id`): the CLI compacted its OWN history, not a range of harness
-messages, so those fields would name IDs that do not exist. This closes the
-"the console cannot even ask" gap the section above describes for a
-delegated session — without it, a session compacting constantly inside the
-CLI and one that never needed to look identical from the outside.
+(`"compaction.claude_code"`). It carries none of `history.compacted`'s
+journal-splice fields (`first_id`/`last_id`/`summary_id`): the CLI
+compacted its OWN history, not a range of harness messages, so those
+fields would name IDs that do not exist. Instead it carries a typed
+`trigger`/`pre_tokens`/`post_tokens` payload (mirroring the CLI's own
+`compact_metadata`; `post_tokens` is 0 both when the CLI genuinely reports
+0 and when it omits the field entirely — the wire format cannot tell those
+apart) — a consumer reads these fields directly rather than parsing the
+event's `text`, which carries the same data as a human-readable string for
+logs only.
+
+UNLIKE `compaction.failed`/`compaction.started` above, this event IS
+journaled (`server/journal.go`'s `Publish` routes it through `emitDurable`,
+not `publishLive`): it names no harness journal splice to reconcile on
+replay, but it is still a fact about the session that happened at a point
+in time, and a client that was not connected at that instant must still be
+able to learn it happened later from an SSE bootstrap replay (`?from=N`)
+or after a box hibernates and wakes. This is what actually closes the "the
+console cannot even ask" gap the section above describes for a delegated
+session — a live-only event closes it only for a tab that happens to be
+open at the exact moment the CLI compacts, which is not a fix for the
+gap's general shape.
 
 ## 5. Non-goals
 
