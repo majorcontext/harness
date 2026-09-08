@@ -692,6 +692,60 @@ components:
         created_at:
           type: string
           format: date-time
+        origin:
+          type: string
+          description: >
+            Who/what produced this message, beyond `role` — presentation
+            metadata only, for a client choosing how to RENDER a message; it
+            never changes how the message is treated as history. Absent for
+            an ordinary message (a real human prompt, or a model-produced
+            assistant/tool message). `claude_code` marks a message a
+            delegated Claude Code CLI turn produced. `engine` marks the
+            engine's own synthetic resume-turn trigger. `operator_batch`
+            marks a message the engine appended by draining the session's
+            prompt queue — a mid-turn or turn-boundary delivery of every
+            prompt DequeueAllPrompts returned at once, rather than one
+            message per prompt; see `operator_batch` below for its
+            structured constituent-prompt list.
+        operator_batch:
+          type: array
+          description: >
+            Present only when `origin` is `operator_batch`: one entry per
+            prompt the drain that built this message folded together, in
+            the same order the message's own rendered "OPERATOR MESSAGES"
+            text numbers them in. Lets a client read prompt boundaries
+            structurally instead of parsing that rendered text for a
+            "\nN. " marker, which misparses a prompt whose own text
+            contains a numbered list of its own.
+          items:
+            $ref: "#/components/schemas/OperatorBatchEntry"
+
+    OperatorBatchEntry:
+      type: object
+      required: [enqueue_id, text, source]
+      properties:
+        enqueue_id:
+          type: integer
+          format: int64
+          description: >
+            The prompt's own queue ID, stable across a resumed session's
+            replay — a client can key a still-live optimistic UI element it
+            rendered when it originally sent this prompt to the entry that
+            later confirms delivery.
+        text:
+          type: string
+          description: This one prompt's own content, unwrapped — never the batch's numbered/labeled template text.
+        source:
+          $ref: "#/components/schemas/PromptSource"
+        source_id:
+          type: string
+          description: Free-form identifier for `source`'s own instance. Omitted when `source` names no such id, or none was given.
+        source_label:
+          type: string
+          description: Free-form, human-readable label for the same instance. Display only, never parsed.
+        attachment_count:
+          type: integer
+          description: This one prompt's own attachment count. Omitted (0) for a text-only prompt.
 
     MessagePlaceholder:
       type: object
@@ -1030,6 +1084,24 @@ components:
             ref — so there is no slot to carry a per-prompt override through
             to a future drain. Re-issue the request once it is confirmed
             `started` if the override must take effect.
+        source:
+          $ref: "#/components/schemas/PromptSource"
+          description: >
+            Optional provenance for this prompt — see PromptSource. Omitted
+            defaults to `api`, never `typed`. Meaningful only if this
+            prompt ends up queued behind a busy turn rather than dispatched
+            at once: it is journaled with the queue entry and surfaced on
+            GET /session/{id}/queue and on the batch entry a later drain
+            exposes (Message.operator_batch) — a solo-dispatched prompt is
+            never batched, so it carries no ambiguous provenance to record.
+            `task` is rejected with 400: it names the engine's own internal
+            task-tool relay, which no caller reaches through this route.
+        source_id:
+          type: string
+          description: Free-form identifier for `source`'s own instance (a schedule/cron id, a calling box id). Optional.
+        source_label:
+          type: string
+          description: Free-form, human-readable label for the same instance (a schedule's own display name). Optional, display only.
 
     EnqueueRequest:
       type: object
@@ -1075,6 +1147,19 @@ components:
             no-override limit as a queued PromptRequest (see PromptRequest's
             `model` description) — there is simply no slot to offer one
             here.
+        source:
+          $ref: "#/components/schemas/PromptSource"
+          description: >
+            Optional provenance for this prompt — see PromptRequest's
+            `source` description for the full contract (default, rejected
+            `task`, where it surfaces). Journaled with the durable
+            prompt.queued record.
+        source_id:
+          type: string
+          description: Free-form identifier for `source`'s own instance. Optional.
+        source_label:
+          type: string
+          description: Free-form, human-readable label for the same instance. Optional, display only.
 
     EnqueueResponse:
       type: object
@@ -1145,7 +1230,7 @@ components:
 
     QueuedItem:
       type: object
-      required: [id, text]
+      required: [id, text, source]
       properties:
         id:
           type: integer
@@ -1159,6 +1244,33 @@ components:
             The idempotency sequence from POST /session/{id}/enqueue.
             Omitted on an entry queued via prompt_async's plain,
             non-attesting path, which carries no seq.
+        source:
+          $ref: "#/components/schemas/PromptSource"
+        source_id:
+          type: string
+          description: >
+            Free-form identifier for `source`'s own instance (a schedule/
+            cron id, a calling box id). Omitted when `source` names no such
+            id, or none was given.
+        source_label:
+          type: string
+          description: >
+            Free-form, human-readable label for the same instance (a
+            schedule's own display name). Display only, never parsed.
+
+    PromptSource:
+      type: string
+      description: >
+        Who or what queued a prompt. `typed` marks a live human typing into
+        an interactive surface — a caller must assert this explicitly, it
+        is never the default. `api` is the default when a request names no
+        source at all: a generic programmatic caller. `schedule` marks a
+        schedule/cron delivery (the boxes control plane's own
+        schedule_task/cron worker, notably). `cross_box` marks a prompt
+        relayed from another box. `task` marks this engine's own internal
+        cross-session task-tool relay — no caller may assert it; a request
+        naming it is rejected with 400.
+      enum: [typed, api, schedule, task, cross_box]
 
     Event:
       type: object

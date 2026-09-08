@@ -3185,6 +3185,17 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 // for why a queued prompt's own id/attachments, not the turn that
 // happens to drain it, is what must reach PromptWithOrigin.
 func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string, blobs ...*message.Blob) (queued bool, err error) {
+	return m.SendOrQueueFrom(ctx, id, text, msgID, PromptProvenance{}, blobs...)
+}
+
+// SendOrQueueFrom is SendOrQueue with an explicit PromptProvenance for the
+// queue branch — see EnqueuePromptFrom's own doc comment for the same
+// pattern. SendOrQueue itself calls this with the zero value, which
+// Normalized folds to PromptSourceAPI. The settled branch's own turn never
+// needs prov: a solo-dispatched prompt is delivered on its own, through
+// PromptWithOrigin directly, never batched into an operator drain.
+func (m *SessionManager) SendOrQueueFrom(ctx context.Context, id, text, msgID string, prov PromptProvenance, blobs ...*message.Blob) (queued bool, err error) {
+	prov = prov.Normalized()
 	// Trim and filter ONCE, before either delivery path — mirrors
 	// SendToDescendant's identical up-front validation (see its own doc
 	// comment for the asymmetry this closes: an earlier revision let a
@@ -3219,8 +3230,11 @@ func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string
 		// Info/Reap/Spawn/finalize call on this ONE session's fsync.
 		s := n.session
 		s.mu.Lock()
-		p := s.enqueueMemoryOnlyLocked(text, resolvedID, usable...)
-		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs},
+		p := s.enqueueMemoryOnlyLocked(text, resolvedID, prov, usable...)
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{
+			ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs,
+			Source: string(p.Source), SourceID: p.SourceID, SourceLabel: p.SourceLabel,
+		},
 			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)
@@ -3996,8 +4010,17 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// task-tool descendant delivery, not an HTTP prompt/send caller) —
 		// PromptWithOrigin's own mint site resolves it at dispatch time,
 		// exactly like a pre-this-feature session log record would.
-		p := s.enqueueMemoryOnlyLocked(text, "")
-		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{ID: p.ID, Text: p.Text, MessageID: p.MessageID},
+		//
+		// PromptSourceTask, hardcoded: this relay is the ONLY path that
+		// ever produces it (see message.PromptSourceTask's own doc
+		// comment) — never caller-suppliable, since SendToDescendant's
+		// own callers (the `task` tool) have no HTTP request to carry a
+		// source field in the first place.
+		p := s.enqueueMemoryOnlyLocked(text, "", PromptProvenance{Source: message.PromptSourceTask})
+		s.queueRecordDeferredLocked(recPromptQueued, promptRecord{
+			ID: p.ID, Text: p.Text, MessageID: p.MessageID,
+			Source: string(p.Source), SourceID: p.SourceID, SourceLabel: p.SourceLabel,
+		},
 			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)

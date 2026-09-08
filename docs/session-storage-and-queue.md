@@ -263,7 +263,26 @@ below passes `operatorContextGoal`). This only ever
 APPENDS — never rewrites an earlier message — so a provider's prompt-cache
 prefix stays intact, the same principle the managed-processes ephemeral
 status block below relies on, except this message is a REAL, durable
-delivery, not a disposable status line. A turn that ends WITHOUT any tool
+delivery, not a disposable status line.
+
+The appended message also carries the batch structurally, not just as
+rendered text: `Origin` is `message.OriginOperatorBatch` (never empty,
+never `claude_code`), and `OperatorBatch` holds one
+`message.OperatorBatchEntry` per drained prompt — its own text, queue ID,
+and provenance (`Source`/`SourceID`/`SourceLabel`, from the
+`PromptProvenance` an enqueue call supplied) — in the same order the
+rendered text numbers them in. A client (boxes' console) reads prompt
+boundaries from this field instead of scanning the rendered text for a
+`"\nN. "` marker, which misparses a prompt whose own text embeds a
+numbered list of its own. Both `operatorContextTask` drain sites share
+this: this tool-call-boundary drain (`engine.go`) and its
+Claude-Code-delegated equivalent (`engine/claude_code_backend.go`'s
+stdin-writer pump) — the SAME representation regardless of which one
+built the message. `PromptProvenance` defaults an unlabeled enqueue call
+to `message.PromptSourceAPI`, never `message.PromptSourceTyped` — a
+caller must assert `typed` explicitly. `message.PromptSourceTask` is
+reserved for `SessionManager.SendToDescendant`'s own running-target
+relay and is never caller-suppliable through the HTTP enqueue routes. A turn that ends WITHOUT any tool
 call never reaches this drain point at all (the model's own end-of-turn
 return precedes it), so that path — and anything still queued when it
 happens — is left entirely to the mechanisms below. Because `PursueGoal`'s

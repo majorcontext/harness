@@ -300,7 +300,7 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 // of EnqueuePrompt or runPrompt actually delivers text, so the caller's
 // own response always names the id that ends up in the transcript, never
 // a second, independently-minted one.
-func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message.Blob) (status string, queuedDepth int, errCode int, holder string) {
+func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.PromptProvenance, blobs ...*message.Blob) (status string, queuedDepth int, errCode int, holder string) {
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == http.StatusNotFound:
@@ -333,7 +333,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message
 			// this reason; mirror it. A live review caught this.
 			return "", 0, http.StatusConflict, ""
 		}
-		ourID, _, err := sess.EnqueuePrompt(text, msgID, blobs...)
+		ourID, _, err := sess.EnqueuePromptFrom(text, msgID, prov, blobs...)
 		if err != nil {
 			return "", 0, http.StatusBadRequest, ""
 		}
@@ -354,7 +354,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, blobs ...*message
 		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
-			if _, _, err := st.sess.EnqueuePrompt(text, msgID, blobs...); err != nil {
+			if _, _, err := st.sess.EnqueuePromptFrom(text, msgID, prov, blobs...); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
@@ -465,6 +465,11 @@ type sessionSendBody struct {
 	// handlePrompt's body.ID doc comment) — used verbatim with the same
 	// single fail-safe guard, never validated or rejected.
 	ID string `json:"id"`
+	// promptSourceInput: OPTIONAL provenance (source/source_id/
+	// source_label) — see parsePromptProvenance. Meaningful only if this
+	// send ends up queued behind a busy turn rather than delivered at
+	// once.
+	promptSourceInput
 }
 
 // decodeSessionSendBody resolves body into the text-plus-attachments pair
@@ -541,6 +546,11 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	prov, code, err := parsePromptProvenance(body.promptSourceInput)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
+	}
 	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc
 	// comment for why every branch below must report and use this SAME
 	// value rather than resolving a second, possibly different, id later.
@@ -558,7 +568,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// SessionManager registers it the instant Spawn creates it, so
 		// "not a node" here only ever means "an as-yet-unadopted root" or
 		// "genuinely unknown."
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, prov, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
@@ -582,7 +592,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		// later reloaded: claimForPrompt's own cold-load path covers it,
 		// unlike an earlier version of this handler that drove a stale
 		// SessionManager-cached object in that case.
-		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, blobs...)
+		status, queuedDepth, errCode, holder := s.sendTextToRoot(id, text, msgID, prov, blobs...)
 		s.writeSendToRootResult(w, id, status, queuedDepth, errCode, holder, msgID)
 		return
 	}
@@ -600,7 +610,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	// does, because SendOrQueue's async turn is SessionManager's own
 	// lifecycle to own, not this server's — exactly like Spawn's
 	// launched goroutine already is for handleSpawnChild.
-	queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, blobs...)
+	queued, sendErr := s.sessMgr.SendOrQueueFrom(context.Background(), id, text, msgID, prov, blobs...)
 	if sendErr != nil {
 		switch {
 		case errors.Is(sendErr, engine.ErrUnknownSession):

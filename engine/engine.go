@@ -3083,10 +3083,12 @@ func (s *Session) drainQueuedPromptsIntoHistory() {
 		// queued while a turn was running would reach the model as a
 		// sentence about a picture it cannot see.
 		s.append(message.Message{
-			ID:        newID("msg"),
-			Role:      message.RoleUser,
-			Parts:     promptParts(strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n"), queuedBlobs(queued)),
-			CreatedAt: time.Now().UTC(),
+			ID:            newID("msg"),
+			Role:          message.RoleUser,
+			Parts:         promptParts(strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n"), queuedBlobs(queued)),
+			CreatedAt:     time.Now().UTC(),
+			Origin:        message.OriginOperatorBatch,
+			OperatorBatch: operatorBatchEntries(queued),
 		})
 	}
 }

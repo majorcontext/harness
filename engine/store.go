@@ -502,6 +502,18 @@ type promptRecord struct {
 	// with no attachments — the pre-feature behavior exactly, not a replay
 	// error.
 	Blobs []*message.Blob `json:"blobs,omitempty"`
+	// Source, SourceID, and SourceLabel are this prompt's own provenance
+	// (see message.PromptSource, engine.PromptProvenance), written on
+	// prompt.queued ONLY — like MessageID/Blobs above, a prompt.dequeued
+	// record only ever needs to name which entry left the queue (matched
+	// by ID). Omitted (empty) on a record written before this field
+	// existed, which folds back to an unset Source — operatorBatchEntries
+	// normalizes that to PromptSourceAPI at read time, not here, so this
+	// stays a plain string rather than importing message.PromptSource for
+	// a field that is otherwise opaque to this package.
+	Source      string `json:"source,omitempty"`
+	SourceID    string `json:"source_id,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
 }
 
 // taskSpawnRecord is a recTaskSpawned record's payload — see that

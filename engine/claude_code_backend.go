@@ -562,10 +562,12 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 				// --resume recovery to make good on.
 				injected := queuedBlobs(queued)
 				s.append(message.Message{
-					ID:        newID("msg"),
-					Role:      message.RoleUser,
-					Parts:     promptParts(block, injected),
-					CreatedAt: time.Now().UTC(),
+					ID:            newID("msg"),
+					Role:          message.RoleUser,
+					Parts:         promptParts(block, injected),
+					CreatedAt:     time.Now().UTC(),
+					Origin:        message.OriginOperatorBatch,
+					OperatorBatch: operatorBatchEntries(queued),
 				})
 				if err := writeClaudeCodeInputMessage(stdin, block, injected); err != nil {
 					// Best-effort, exactly like the first write's own
