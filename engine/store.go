@@ -1529,6 +1529,12 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				// A recMessage record only ever carries Usage for a
+				// native turn (a delegated turn's usage folds through
+				// recClaudeCodeUsage below, never here) — mirrors
+				// appendWithUsage's identical live-path clear. See
+				// forceCompactionCheck's own doc comment.
+				s.forceCompactionCheck = false
 			}
 			// Every message append means a turn has started (or is still
 			// in progress) without yet being finalized — see
@@ -1582,7 +1588,18 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.committedOutcome = &oc
 			}
 		case recModel:
+			// Reconstructs forceCompactionCheck exactly as the live
+			// SetModel switch does (engine.go) — see that field's own
+			// doc comment for why this durable record, not an in-memory
+			// flag, is the arming signal a reload must trust.
+			priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 			s.model = rec.Model
+			switch {
+			case priorDelegated && rec.Model.Provider != ClaudeCodeProviderFamily:
+				s.forceCompactionCheck = true
+			case rec.Model.Provider == ClaudeCodeProviderFamily:
+				s.forceCompactionCheck = false
+			}
 		case recEffort:
 			s.effort = rec.Effort
 		case recServiceTier:

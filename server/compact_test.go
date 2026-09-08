@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -600,9 +601,13 @@ func TestCompactEndpointRejectsClaudeCodeDelegatedSession(t *testing.T) {
 	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{}, nativeProv)
 	id := h.createSession("")
 
+	// Pinned to exactly 409 with a reason naming the Claude Code CLI (NIT 4
+	// of the fix round): the docs and the PR body both specify 409, and a
+	// test that accepts any 4xx cannot fail if the status regresses to,
+	// say, a 400 or a 422 that happens to also carry a nonempty body.
 	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
-	if resp.StatusCode < 400 || resp.StatusCode >= 500 {
-		t.Fatalf("compact on a claude-code-delegated session status = %d, want a 4xx: %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want 409: %s", resp.StatusCode, data)
 	}
 	var out struct {
 		Error string `json:"error"`
@@ -610,8 +615,8 @@ func TestCompactEndpointRejectsClaudeCodeDelegatedSession(t *testing.T) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatalf("decode error body: %v (%s)", err, data)
 	}
-	if out.Error == "" {
-		t.Fatal("error body is empty, want a message naming why compact was refused")
+	if !strings.Contains(out.Error, "Claude Code CLI") {
+		t.Fatalf("error body = %q, want it to name the Claude Code CLI as the reason", out.Error)
 	}
 
 	// Never claimed the run slot: a session that was never running before

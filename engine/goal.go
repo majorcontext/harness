@@ -1079,7 +1079,22 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// instead of appending a second copy: run the turn loop against
 			// history as it stands, answering that same message. See
 			// docs/design/goal-retry-directive-reuse.md §3.
-			_, perr = s.runAgenticLoop(ctx)
+			//
+			// This calls runAgenticLoop directly, bypassing
+			// PromptWithOrigin — which is where the ordinary path's
+			// maybeAutoCompact check normally lives — so a mid-turn model
+			// switch off claude-code (engine/model_tool.go's `model` tool)
+			// left this retry able to reach the native provider with
+			// forceCompactionCheck still armed and the journal uncompacted.
+			// Run the same check here before reusing the loop, exactly like
+			// PromptWithOrigin does before appending: a forced failure aborts
+			// this attempt with a diagnosable error instead of silently
+			// forwarding an oversized journal.
+			if err := s.maybeAutoCompact(ctx); err != nil {
+				perr = err
+			} else {
+				_, perr = s.runAgenticLoop(ctx)
+			}
 		default:
 			// Not safe to reuse: either anchorID is no longer in history
 			// (maybeAutoCompact folded it away since it was captured — see

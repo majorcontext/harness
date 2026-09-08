@@ -129,6 +129,16 @@ type sessionSnapshot struct {
 	LastUsage     provider.Usage `json:"last_usage,omitzero"`
 	HaveLastUsage bool           `json:"have_last_usage,omitempty"`
 
+	// ForceCompactionCheck mirrors Session.forceCompactionCheck — see its
+	// own doc comment. Set only by a fold (recModel/recMessage, store.go)
+	// or the live SetModel/appendWithUsage it mirrors, so a snapshot-
+	// anchored load that omits this field would silently re-trust a stale
+	// delegated-turn lastUsage against a native model's window the moment
+	// the anchor fell after the switch record. False on an OLD snapshot
+	// written before this field existed — the same pre-fix behavior, not
+	// a load failure.
+	ForceCompactionCheck bool `json:"force_compaction_check,omitempty"`
+
 	GoalActive    bool   `json:"goal_active,omitempty"`
 	GoalCondition string `json:"goal_condition,omitempty"`
 
@@ -443,28 +453,29 @@ func (s *Session) waitSnapshots() {
 // that publishes them and are not mutated in place afterwards.
 func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 	snap := &sessionSnapshot{
-		Version:           sessionSnapshotVersion,
-		ID:                s.ID,
-		Seq:               s.recordsWritten,
-		CreatedAt:         time.Now().UTC(),
-		History:           append([]message.Message(nil), s.history...),
-		Model:             s.model,
-		Effort:            s.effort,
-		ServiceTier:       s.serviceTier,
-		Usage:             s.usage,
-		LastUsage:         s.lastUsage,
-		HaveLastUsage:     s.haveLastUsage,
-		GoalActive:        s.goalActive,
-		GoalCondition:     s.goalCondition,
-		CompactCount:      s.compactCount,
-		LastCompactedAt:   s.lastCompactedAt,
-		PromptQueue:       append([]QueuedPrompt(nil), s.promptQueue...),
-		PromptQueueNextID: s.promptQueueNextID,
-		EnqueueSeq:        s.enqueueSeq,
-		ToolResultNextID:  s.toolResultNextID,
-		ToolResultBytes:   s.toolResultBytes,
-		SpawnedChildIDs:   append([]string(nil), s.spawnedChildIDs...),
-		TurnUnsettled:     s.turnUnsettled,
+		Version:              sessionSnapshotVersion,
+		ID:                   s.ID,
+		Seq:                  s.recordsWritten,
+		CreatedAt:            time.Now().UTC(),
+		History:              append([]message.Message(nil), s.history...),
+		Model:                s.model,
+		Effort:               s.effort,
+		ServiceTier:          s.serviceTier,
+		Usage:                s.usage,
+		LastUsage:            s.lastUsage,
+		HaveLastUsage:        s.haveLastUsage,
+		ForceCompactionCheck: s.forceCompactionCheck,
+		GoalActive:           s.goalActive,
+		GoalCondition:        s.goalCondition,
+		CompactCount:         s.compactCount,
+		LastCompactedAt:      s.lastCompactedAt,
+		PromptQueue:          append([]QueuedPrompt(nil), s.promptQueue...),
+		PromptQueueNextID:    s.promptQueueNextID,
+		EnqueueSeq:           s.enqueueSeq,
+		ToolResultNextID:     s.toolResultNextID,
+		ToolResultBytes:      s.toolResultBytes,
+		SpawnedChildIDs:      append([]string(nil), s.spawnedChildIDs...),
+		TurnUnsettled:        s.turnUnsettled,
 
 		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
 		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
@@ -520,6 +531,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.usage = snap.Usage
 	s.lastUsage = snap.LastUsage
 	s.haveLastUsage = snap.HaveLastUsage
+	s.forceCompactionCheck = snap.ForceCompactionCheck
 	s.goalActive = snap.GoalActive
 	s.goalCondition = snap.GoalCondition
 	s.compactCount = snap.CompactCount

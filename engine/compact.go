@@ -47,16 +47,23 @@ const (
 	// EventHistoryCompacted's journal-splice fields (CompactFirstID/
 	// CompactLastID/CompactSummaryID name harness message IDs that do not
 	// exist here — the CLI compacted its own history, not harness's
-	// journal); Text carries what the envelope's compact_metadata reported
-	// (trigger, pre_tokens, and post_tokens when present), for
-	// observability only. Never journaled — like EventCompactionFailed, a
-	// client reconciling from a durable cursor has nothing to correlate it
-	// against, since harness's own journal never changes shape when the
-	// CLI compacts. Exists to close the "the console cannot even ask" gap
+	// journal); ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
+	// ClaudeCodeCompactPostTokens carry the envelope's own compact_metadata,
+	// typed (see their own doc comment on Event) — Text carries the same
+	// data as a human-readable string, for logs only; a consumer that wants
+	// exact numbers must read the typed fields, never parse Text.
+	//
+	// Unlike EventCompactionFailed/EventCompactionStarted, THIS event IS
+	// journaled durably (server/journal.go's Publish routes it through
+	// emitDurable, not publishLive): it names no harness journal splice to
+	// reconcile against on replay, but it is still a fact about the
+	// session's own history that happened at a point in time, and a tab
+	// that was not connected at that instant must still be able to learn
+	// it happened later — the exact "the console cannot even ask" gap
 	// docs/design/context-compaction.md's delegated-session discussion
 	// names: without this, a delegated session's console shows identically
 	// nothing whether the CLI is compacting constantly or never needed to
-	// at all.
+	// at all, forever, for any tab that misses the live moment.
 	EventClaudeCodeCompacted = "compaction.claude_code"
 )
 
@@ -307,7 +314,24 @@ func isLoneExistingSummary(folded []message.Message) bool {
 // the computed range cannot be found) still aborts cleanly AND returns an
 // error: no journal write, no history mutation, and an emitted
 // EventCompactionFailed.
+//
+// Refuses outright for a session CURRENTLY delegated to the Claude Code CLI
+// (claudeCodeDelegated): that CLI manages its own context end to end, and
+// harness's journal for such a session is only ever a passive record of
+// what streamed back, never itself compacted — running the summarizer
+// against it would splice a journal nobody reads. This is the authoritative
+// guard; server/handlers.go's rejectClaudeCodeDelegatedCompact is a
+// cheaper, advisory pre-claim check for a nicer error response, and
+// maybeAutoCompact never reaches here for a delegated session at all
+// (PromptWithOrigin's delegated dispatch returns before maybeAutoCompact
+// runs) — but neither of those takes the run slot for the WHOLE window
+// between checking and calling Compact, so a native-to-claude-code
+// SetModel landing in that window still needs this check to be the one
+// that actually holds.
 func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResult, error) {
+	if s.claudeCodeDelegated() {
+		return CompactResult{}, errors.New("engine: session is delegated to the Claude Code CLI; context is managed by the CLI itself, not by harness")
+	}
 	history := s.History()
 	keepTurns := s.effectiveKeepTurns(opts.KeepTurns)
 
@@ -901,9 +925,22 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	haveLastUsage := s.haveLastUsage
 	onCooldown := s.compactHysteresis
 	forced := s.forceCompactionCheck
-	s.forceCompactionCheck = false
+	lastSystem := s.lastSystem
 	s.mu.Unlock()
 
+	// forced is deliberately NOT cleared here. Clearing it unconditionally
+	// at entry meant it protected exactly one attempt: a failed or
+	// inconclusive forced pass below still consumed it, so a rejected
+	// Prompt's retry took the ORDINARY branch next time, trusted the same
+	// stale delegated-turn lastUsage, and forwarded the same oversized
+	// journal — the original incident, on attempt two. It is cleared ONLY
+	// at the specific points below that actually settle the question this
+	// flag exists to ask ("does the next native request fit"): under
+	// threshold, or a Compact that folded enough to bring a re-estimate
+	// back under threshold. Every other exit (windowTokens <= 0, a Compact
+	// error, a Compact that made no progress) leaves it armed so the next
+	// Prompt call — including an immediate retry — is checked again
+	// instead of silently falling back to the stale signal.
 	if windowTokens <= 0 {
 		return nil
 	}
@@ -926,6 +963,23 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		// same crude signal maybeAutoCompact already falls back to below
 		// for the analogous "provider reports nothing usable" case.
 		promptTokens = estimatePromptTokensFromHistory(s.History())
+		// The real native request also carries the system segments —
+		// AGENTS.md instructions, Agent Skills, the MCP catalog — which
+		// pure history bytes omit entirely (with defaultCompactionThreshold
+		// at 0.8, a large system segment can consume the whole 20% slack
+		// on its own). lastSystem (see its own doc comment) is the most
+		// recent system slice actually assembled for a model call in THIS
+		// process — zero on a session that has never completed a native
+		// call in this process yet, which is exactly the claude-code-to-
+		// native incident shape this check exists for; the bound in that
+		// case is undocumented no longer only by the note in
+		// docs/design/context-compaction.md, not by this fold. Tool schema
+		// bytes are not folded in at all — there is no comparably cheap
+		// cached source for them — so this estimate can still run under
+		// the real request size.
+		if sysLen := len(strings.Join(lastSystem, "\n")); sysLen > 0 {
+			promptTokens += sysLen / bytesPerTokenEstimate
+		}
 	} else {
 		// The prompt occupies the context window as the SUM of all three
 		// input components. Harness injects cache_control by default, so on
@@ -962,18 +1016,30 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 			s.compactHysteresis = false
 			s.mu.Unlock()
 		}
+		// This really does answer the question forced exists to ask: the
+		// next native request fits under the window without folding
+		// anything. Clear it here, whether this check ran forced or not.
+		if forced {
+			s.mu.Lock()
+			s.forceCompactionCheck = false
+			s.mu.Unlock()
+		}
 		return nil
 	}
 	if onCooldown && !forced {
 		// Churn guard (§2): still over threshold since the last automatic
 		// compaction. The pressure must live in the kept region (a single
 		// giant tool result) — folding the prefix again cannot relieve it,
-		// so do not re-fire every turn. A forced check bypasses this: it
-		// runs at most once per model switch (the flag was already cleared
-		// above), so it can never itself cause the re-fire-every-turn churn
-		// this guard exists to prevent, and the guard's own latched state
-		// says nothing about a session that was, until this turn, entirely
-		// delegated.
+		// so do not re-fire every turn. A forced check bypasses this
+		// unconditionally: it exists specifically to correct for a regime
+		// change the churn guard's own latched state says nothing about
+		// (a session that was, until this turn, entirely delegated), and
+		// it stays armed across every inconclusive attempt (see the doc
+		// comment above) rather than firing "at most once", so bypassing
+		// the guard can never itself become the every-turn churn it
+		// exists to prevent — the guard would just refuse it again after
+		// the SAME session next completes a real native turn and disarms
+		// forced properly.
 		return nil
 	}
 
@@ -987,12 +1053,46 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 			// surface as an opaque provider "prompt too long" error instead
 			// of a diagnosable compaction failure — see PromptWithOrigin's
 			// caller, which turns this into a failed Prompt call before the
-			// provider is ever reached.
+			// provider is ever reached. forced is deliberately left armed
+			// (see the doc comment above): a retried Prompt call must be
+			// checked again, not silently fall back to the stale signal.
 			return fmt.Errorf("engine: forced compaction after a claude-code model switch failed: %w", err)
 		}
 		// Best-effort: EventCompactionFailed already emitted inside
 		// Compact. The turn proceeds uncompacted.
 		return nil
+	}
+	if forced {
+		if res.TurnsFolded == 0 {
+			// Every TurnsFolded==0 skip reason leaves the journal exactly
+			// as oversized as it was — not_enough_turns and
+			// lone_existing_summary answer "folding cannot help here" (the
+			// second because the pressure lives in one message a fold
+			// cannot reduce), and summarizer_empty is a billed provider
+			// call that returned nothing usable. None of the three is
+			// progress toward the one thing a forced pass exists to
+			// achieve, so treat all three as failure: forced stays armed
+			// (no clear below) and the caller gets a diagnosable error
+			// instead of a silently oversized journal.
+			reason := res.SkipReason
+			if reason == "" {
+				reason = "unknown"
+			}
+			return fmt.Errorf("engine: forced compaction after a claude-code model switch made no progress (skip_reason=%s)", reason)
+		}
+		// Folding happened, but a kept-turns tail holding one giant tool
+		// result can leave the journal over the window regardless — the
+		// forced pass never re-checked this before, so a residual
+		// over-window journal reached the provider silently. Re-estimate
+		// exactly like the pre-compact estimate above (lastUsage is still
+		// the stale delegated figure here; only a following native turn
+		// ever refreshes it — see appendWithUsage/recMessage's clears).
+		if post := estimatePromptTokensFromHistory(s.History()); float64(post) >= threshold*float64(windowTokens) {
+			return fmt.Errorf("engine: forced compaction after a claude-code model switch folded %d turns but the journal is still over the window (~%d tokens estimated)", res.TurnsFolded, post)
+		}
+		s.mu.Lock()
+		s.forceCompactionCheck = false
+		s.mu.Unlock()
 	}
 	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
 	// both cost a full-input-price provider call, so both must arm the

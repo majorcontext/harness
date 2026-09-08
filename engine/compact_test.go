@@ -1768,3 +1768,308 @@ func TestPromptFailsLoudlyWhenForcedCompactionFailsAfterClaudeCodeSwitch(t *test
 		t.Errorf("provider calls = %d, want 1 (the failed compaction summary only — the real turn must never reach the provider)", len(prov.requests))
 	}
 }
+
+// TestForceCompactionCheckSurvivesReload is the red-first regression test
+// for BLOCKING 1 of the andybons/claude-code-compaction-forced-switch fix
+// round: forceCompactionCheck used to be a memory-only Session field,
+// deliberately excluded from the journal fold AND the snapshot. The stale
+// signal it exists to distrust — a delegated turn's lastUsage, folded in by
+// recClaudeCodeUsage — is durable, so any process restart or residency
+// eviction between the SetModel switch and the next Prompt lost the arming
+// flag while the stale figure survived intact: a reload took the ORDINARY
+// branch, trusted the small CLI-reported lastUsage, and forwarded the full,
+// never-compacted journal to the native provider — the original incident,
+// on a cold session. This seeds a delegated session, switches to a native
+// model, then RELOADS from the durable journal instead of continuing to
+// use the live *Session (simulating exactly that gap), and prompts on the
+// reloaded session.
+//
+// Named failure this pins: pre-fix, the reloaded session's
+// forceCompactionCheck is false (never folded from recModel/recMessage,
+// never restored from a snapshot), so CompactionCount stays 0 and the final
+// native request still carries every seeded pre-switch message.
+func TestForceCompactionCheckSurvivesReload(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist of the delegated run", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}}
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		SessionDir:          dir,
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preSwitchHistoryLen := len(s.History())
+
+	// applyClaudeCodeUsage's real shape (see
+	// TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch's identical
+	// setup): a small CLI-internal figure, nothing like harness's actual
+	// journal size seeded above.
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	// Simulate a residency eviction or a process restart between the
+	// switch and the next Prompt: reload from the durable journal instead
+	// of continuing to use s.
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loaded.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("Prompt on the reloaded session after a claude-code-to-native switch: %v (must compact and succeed, not fail)", err)
+	}
+
+	if got := loaded.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after the post-reload turn = %d, want 1 (the reload must have re-derived forceCompactionCheck from the durable recModel/recMessage fold and forced compaction before the native provider call)", got)
+	}
+	if len(prov.requests) != 2 {
+		t.Fatalf("provider calls = %d, want 2 (1 compaction summary + 1 native worker turn)", len(prov.requests))
+	}
+	finalReq := prov.requests[len(prov.requests)-1]
+	if len(finalReq.Messages) >= preSwitchHistoryLen {
+		t.Errorf("final native request carried %d messages (pre-switch history was %d) — forced compaction must have trimmed it before the provider call",
+			len(finalReq.Messages), preSwitchHistoryLen)
+	}
+}
+
+// TestForceCompactionCheckStaysArmedAfterFailedRetry is the red-first
+// regression test for BLOCKING 2: maybeAutoCompact used to read AND clear
+// forceCompactionCheck unconditionally at entry, before doing any work — so
+// a forced pass that itself FAILED (the summarization call errors) still
+// consumed the flag. The caller (Prompt) fails loudly on attempt one, exactly
+// as intended, but the user's natural response — retry — took the ORDINARY
+// branch on attempt two, trusted the same stale delegated lastUsage, and
+// forwarded the same oversized journal: the loud-failure guarantee lasted
+// exactly one attempt, then silently reverted to the original incident.
+//
+// This forces the FIRST Prompt call's compaction attempt to fail (no
+// scripted provider turns at all, mirroring
+// TestPromptFailsLoudlyWhenForcedCompactionFailsAfterClaudeCodeSwitch), then
+// retries with a provider now able to complete the fold, and requires the
+// retry to have re-checked and forced compaction rather than skipping it.
+func TestForceCompactionCheckStaysArmedAfterFailedRetry(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	// No scripted turns: the forced compaction's own summarization call is
+	// the very first Stream call and exhausts prov.turns immediately, so
+	// Compact fails for a real reason.
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	preSwitchHistoryLen := len(s.History())
+
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	if _, err := s.Prompt(context.Background(), "continue"); err == nil {
+		t.Fatal("first Prompt after the switch succeeded, want the forced compaction (no scripted turns) to fail")
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Fatalf("CompactionCount after the failed first attempt = %d, want 0", got)
+	}
+
+	// The retry: if forceCompactionCheck were cleared by the failed
+	// attempt above (the BLOCKING 2 bug), this second Prompt call would
+	// take the ORDINARY branch, trust the still-stale delegated lastUsage,
+	// skip compaction entirely, and forward the full pre-switch journal.
+	prov.turns = [][]provider.Event{
+		compactSummaryTurn("gist of the delegated run", provider.Usage{InputTokens: 5}),
+		compactTurn("native reply", provider.Usage{InputTokens: 50}),
+	}
+	if _, err := s.Prompt(context.Background(), "continue"); err != nil {
+		t.Fatalf("retry Prompt: %v (must compact and succeed, not fail again or silently skip compaction)", err)
+	}
+	if got := s.CompactionCount(); got != 1 {
+		t.Fatalf("CompactionCount after the retry = %d, want 1 (the retry must have re-checked forceCompactionCheck, still armed, and forced compaction)", got)
+	}
+	finalReq := prov.requests[len(prov.requests)-1]
+	if len(finalReq.Messages) >= preSwitchHistoryLen {
+		t.Errorf("final native request carried %d messages (pre-switch history was %d) — the retry's forced compaction must have trimmed it",
+			len(finalReq.Messages), preSwitchHistoryLen)
+	}
+}
+
+// TestMaybeAutoCompactForcedTreatsEmptySummaryAsFailure is the red-first
+// regression test for the first half of SHOULD 3: a forced pass's own
+// summarization call that runs, completes, and returns nothing usable
+// (SkipReasonSummarizerEmpty, TurnsFolded == 0) is a REAL, billed provider
+// call that made no progress toward the one thing a forced pass exists to
+// achieve — it must be treated as failure (forceCompactionCheck stays
+// armed, Prompt fails loud), not silently waved through as the benign
+// "nothing to fold" no-op TurnsFolded == 0 correctly is on the ORDINARY
+// best-effort path.
+func TestMaybeAutoCompactForcedTreatsEmptySummaryAsFailure(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("", provider.Usage{InputTokens: 5}), // the model returns nothing usable
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	long := strings.Repeat("x", 800)
+	for i := 0; i < 5; i++ {
+		seedDelegatedTurn(s, long)
+	}
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	_, err := s.Prompt(context.Background(), "continue")
+	if err == nil {
+		t.Fatal("Prompt after a forced compaction with an empty summary succeeded, want a loud error (SHOULD 3)")
+	}
+	// Pinned to the "made no progress" reason specifically (not just any
+	// compaction-shaped error): an empty summary means Compact folded
+	// NOTHING, so a re-estimate over the unchanged history would ALSO
+	// report over-window and could mask a missing TurnsFolded==0 check
+	// with a different error carrying the same "compact" substring.
+	if !strings.Contains(err.Error(), "made no progress") {
+		t.Errorf("Prompt error = %q, want it to name the empty summary as no progress", err.Error())
+	}
+	if got := s.CompactionCount(); got != 0 {
+		t.Errorf("CompactionCount = %d, want 0 (the summarizer never produced a usable fold)", got)
+	}
+	if len(prov.requests) != 1 {
+		t.Errorf("provider calls = %d, want 1 (the empty-summary compaction attempt only — the native turn must never be reached)", len(prov.requests))
+	}
+}
+
+// TestMaybeAutoCompactForcedFailsWhenStillOverAfterFold is the red-first
+// regression test for the second half of SHOULD 3: a forced pass never
+// re-checked its own work after a real fold, so a kept-turns tail holding
+// one giant message could leave the journal over the window regardless —
+// silently reaching the provider as the same "prompt too long" rejection
+// the whole mechanism exists to prevent. keep_turns=1 keeps only the final
+// (huge) delegated turn; folding away everything before it cannot relieve
+// that turn's own size, so the post-fold re-estimate must still be over the
+// window and Prompt must fail loud, WITHOUT ever reaching the native
+// provider.
+func TestMaybeAutoCompactForcedFailsWhenStillOverAfterFold(t *testing.T) {
+	nativeModel := message.ModelRef{Provider: "test", Model: "m1"}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": prov},
+		Model:               message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ContextWindowTokens: 1000,
+		CompactionKeepTurns: 1,
+	})
+
+	seedDelegatedTurn(s, strings.Repeat("x", 100))
+	seedDelegatedTurn(s, strings.Repeat("x", 100))
+	seedDelegatedTurn(s, strings.Repeat("x", 6000)) // kept verbatim (keep_turns=1); alone well over threshold*window (800 tokens)
+
+	s.mu.Lock()
+	s.lastUsage = provider.Usage{InputTokens: 50}
+	s.haveLastUsage = true
+	s.mu.Unlock()
+
+	s.SetModel(nativeModel)
+
+	_, err := s.Prompt(context.Background(), "continue")
+	if err == nil {
+		t.Fatal("Prompt after a forced compaction that folded but left the journal still over the window succeeded, want a loud error (SHOULD 3)")
+	}
+	if !strings.Contains(err.Error(), "still over the window") {
+		t.Errorf("Prompt error = %q, want it to name the residual over-window size", err.Error())
+	}
+	if got := s.CompactionCount(); got != 1 {
+		t.Errorf("CompactionCount = %d, want 1 (the fold itself succeeded; only the RE-ESTIMATE after it must fail loud)", got)
+	}
+	if len(prov.requests) != 1 {
+		t.Errorf("provider calls = %d, want 1 (the summarization call only — the native turn must never be reached)", len(prov.requests))
+	}
+}
+
+// TestCompactRefusesCurrentlyDelegatedSession is the red-first regression
+// test for the second half of SHOULD 5: server/handlers.go's
+// rejectClaudeCodeDelegatedCompact and its post-claim re-check are both
+// server-side conveniences — SetModel takes no run slot, so a native-to-
+// claude-code switch can land in the window between either check and the
+// actual Session.Compact call, and any OTHER future caller of Compact has
+// neither check at all. Session.Compact itself must refuse outright for a
+// session CURRENTLY delegated to the Claude Code CLI, independent of any
+// caller's own guard.
+func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+	})
+	seedDelegatedTurn(s, "hello")
+	seedDelegatedTurn(s, "hello again")
+
+	_, err := s.Compact(context.Background(), CompactOptions{})
+	if err == nil {
+		t.Fatal("Compact on a currently-delegated session succeeded, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "Claude Code CLI") {
+		t.Errorf("Compact error = %q, want it to name the Claude Code CLI as the reason", err.Error())
+	}
+	if len(prov.requests) != 0 {
+		t.Errorf("provider calls = %d, want 0 (Compact must refuse before ever calling the provider)", len(prov.requests))
+	}
+}
+
+// TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated is the
+// red-first regression test for NIT 1: forceCompactionCheck used to survive
+// a switch BACK to claude-code delegation — SetModel's switch table cleared
+// it on no branch. Harmless only because PromptWithOrigin's delegated
+// dispatch returns before maybeAutoCompact ever runs for a delegated
+// session, an invariant nothing pinned with a test before this one. Checks
+// the field directly (white-box, same package).
+func TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated(t *testing.T) {
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+	})
+
+	s.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+	s.mu.Lock()
+	armed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if !armed {
+		t.Fatal("forceCompactionCheck not armed after a claude-code-to-native switch (test setup)")
+	}
+
+	s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"})
+	s.mu.Lock()
+	stillArmed := s.forceCompactionCheck
+	s.mu.Unlock()
+	if stillArmed {
+		t.Error("forceCompactionCheck still true after switching BACK to claude-code delegation, want it cleared — nothing to force-check while delegated")
+	}
+}

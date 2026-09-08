@@ -210,6 +210,22 @@ type Event struct {
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 
+	// ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
+	// ClaudeCodeCompactPostTokens are carried by EventClaudeCodeCompacted
+	// only — see that constant's own doc comment. They are the CLI's own
+	// compact_metadata report (claudeCodeCompactMetadata,
+	// claude_code_backend.go), typed rather than left for a consumer to
+	// string-parse out of Text: Trigger is "auto" or "manual" (empty when
+	// the envelope omitted compact_metadata entirely), PreTokens the
+	// context size the CLI reported before its own fold. PostTokens is 0
+	// both when the CLI genuinely reports 0 and when it omits the field —
+	// the wire and journal formats cannot tell those two apart (the SDK's
+	// own type marks post_tokens optional) — a known, documented
+	// limitation, not a bug.
+	ClaudeCodeCompactTrigger    string `json:"trigger,omitempty"`
+	ClaudeCodeCompactPreTokens  int    `json:"pre_tokens,omitempty"`
+	ClaudeCodeCompactPostTokens int    `json:"post_tokens,omitempty"`
+
 	// Prompt-queue fields (set on EventPromptQueued/EventPromptDequeued; see
 	// queue.go). QueueID is the queue-assigned, session-monotonic prompt ID.
 	// QueueText is the queued prompt text, carried on BOTH events (not just
@@ -1373,28 +1389,39 @@ type Session struct {
 	// Guarded by mu.
 	compactHysteresis bool
 
-	// forceCompactionCheck is set by SetModel exactly when the session
-	// switches AWAY from ClaudeCodeProviderFamily to a native model (see
-	// SetModel). maybeAutoCompact's ordinary signal for "how big is the
-	// next request" is s.lastUsage — but applyClaudeCodeUsage sets
-	// lastUsage from the CLI's OWN internal, self-managed context
-	// accounting (claude_code_backend.go), a number with no relationship
-	// to harness's own journal size, since the CLI runs its own compaction
-	// over its own history. Trusting that stale, wrong-scale figure right
-	// after a switch to a native model — which transcodes and sends
-	// harness's ACTUAL journal, not the CLI's — is exactly how a session
-	// like ses_01m1kyhka3ewf8vcth0qbqm222 (3,667-message delegated
-	// journal, switched to a native model, immediately rejected as "prompt
-	// too long") went uncompacted. Consumed (and cleared) by the very next
-	// maybeAutoCompact call: while set, that call estimates straight from
-	// s.History() instead of lastUsage, bypasses the churn-guard cooldown
-	// (irrelevant coming from a different regime), and — unlike the
-	// ordinary best-effort trigger — reports a real Compact failure to its
-	// caller instead of swallowing it, so Prompt fails loudly with a
-	// compaction error rather than silently forwarding an oversized
-	// journal to the provider. Deliberately NOT persisted: a reload
-	// re-evaluates from scratch, exactly like compactHysteresis above, and
-	// a session can only be mid-way through this exact switch while live.
+	// forceCompactionCheck is true exactly when the session's CURRENT
+	// model is native and the most recently recorded usage-defining event
+	// was a claude-code-delegated turn — i.e. no native turn has completed
+	// since the last switch off ClaudeCodeProviderFamily. maybeAutoCompact's
+	// ordinary signal for "how big is the next request" is s.lastUsage —
+	// but applyClaudeCodeUsage sets lastUsage from the CLI's OWN internal,
+	// self-managed context accounting (claude_code_backend.go), a number
+	// with no relationship to harness's own journal size, since the CLI
+	// runs its own compaction over its own history. Trusting that stale,
+	// wrong-scale figure right after a switch to a native model — which
+	// transcodes and sends harness's ACTUAL journal, not the CLI's — is
+	// exactly how a session like ses_01m1kyhka3ewf8vcth0qbqm222 (3,667-
+	// message delegated journal, switched to a native model, immediately
+	// rejected as "prompt too long") went uncompacted.
+	//
+	// Set by SetModel on a claude-code-to-native switch and by store.go's
+	// recModel replay fold of the identical transition — the durable
+	// record already names the prior provider, so replay reconstructs this
+	// exactly rather than trusting an in-memory flag that a process
+	// restart or a residency eviction between the switch and the next
+	// Prompt would otherwise lose (the flag alone survived exactly one
+	// process lifetime; the stale lastUsage it exists to distrust is
+	// durable, so the guard has to be too). Also captured/restored by
+	// snapshot.go for the anchored-load fast path. Cleared by SetModel/
+	// recModel on a switch BACK to ClaudeCodeProviderFamily (nothing to
+	// force-check while delegated) and by appendWithUsage/recMessage
+	// replay the moment a native turn actually completes with real usage
+	// (a trustworthy lastUsage exists again). maybeAutoCompact itself only
+	// clears it on an outcome that actually answers the "does the next
+	// request fit" question — see that function's own doc comment; it
+	// stays armed across a failed or inconclusive forced pass so a retry
+	// is checked again rather than silently falling back to the stale
+	// signal.
 	// Guarded by mu.
 	forceCompactionCheck bool
 
@@ -1713,10 +1740,12 @@ func newSession(cfg Config) *Session {
 // session's s.lastUsage reflects the CLI's own internal context, not
 // harness's journal, so the ordinary automatic trigger's signal is stale
 // the moment a native model starts actually sending that journal. A switch
-// the OTHER way (native to delegated), or between two native models, never
-// sets it — native lastUsage always reflects harness's own last real
-// request, whatever model produced it, so the ordinary trigger's signal
-// stays valid across that kind of switch.
+// BACK to ClaudeCodeProviderFamily clears it — the CLI owns its own
+// context again and there is nothing left to force-check until the next
+// native switch. A switch between two native models never touches it —
+// native lastUsage always reflects harness's own last real request,
+// whatever model produced it, so the ordinary trigger's signal stays valid
+// across that kind of switch.
 func (s *Session) SetModel(ref message.ModelRef) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1726,8 +1755,11 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
 	s.persistModel(ref)
-	if priorDelegated && ref.Provider != ClaudeCodeProviderFamily {
+	switch {
+	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
+	case ref.Provider == ClaudeCodeProviderFamily:
+		s.forceCompactionCheck = false
 	}
 	if !s.contextWindowExplicit {
 		nextTokens, nextSource, miss := resolveContextWindow(0, ref)
@@ -2376,6 +2408,12 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.usage.CacheWriteTokens += usage.CacheWriteTokens
 		s.lastUsage = *usage
 		s.haveLastUsage = true
+		// This path is exclusively a native turn's real usage — a
+		// delegated turn's usage folds through applyClaudeCodeUsage
+		// instead (see that method's own doc comment), never here — so
+		// lastUsage really does reflect harness's own journal again.
+		// See forceCompactionCheck's own doc comment.
+		s.forceCompactionCheck = false
 	}
 	s.persistMessage(&m, usage)
 	// The append boundary (snapshot.go, rule 2): history, usage, and the
