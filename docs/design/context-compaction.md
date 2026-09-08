@@ -157,37 +157,40 @@ a session carrying one screenshot in its kept-turns tail appear permanently
 over any native model's window. The check bypasses the churn-guard
 cooldown (a regime change the guard's own latched state says nothing
 about) and — unlike the ordinary automatic trigger, which is best-effort
-and never blocks the caller's real turn — treats a REAL `Compact` error (a
-transport or rate-limit failure, not a skip) as a loud failure that fails
-the `Prompt` call itself, before the user message is appended or the
-native provider is ever called, so a retried `Prompt` call is checked
-again rather than silently falling back to the stale signal.
+and never blocks the caller's real turn — settles every `Compact` outcome,
+including a real error, before returning (see below) rather than silently
+falling back to the stale signal.
 
-A `Compact` call that runs to completion but concludes folding cannot
-help — `SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`,
-`SkipReasonSummarizerEmpty` (a billed call that returned nothing usable),
-or a real fold whose re-estimate is still over the window — is a
-DIFFERENT, conclusive outcome, handled differently: it is reported loudly
-(`compaction.failed`, naming the reason) but does **not** fail the
+Every way a forced `Compact` call can end without folding enough to clear
+the estimate — `SkipReasonNotEnoughTurns`, `SkipReasonLoneExistingSummary`,
+`SkipReasonSummarizerEmpty` (a billed call that returned nothing usable), a
+real fold whose re-estimate is still over the window, or the `Compact` call
+itself erroring (a transport or rate-limit failure, or a deterministic one
+such as the fold range itself overflowing the summarizer model's own
+window) — is a conclusive outcome, handled the same way: it is reported
+loudly (`compaction.failed`, naming the reason) but does **not** fail the
 `Prompt` call. The flag is cleared and the request proceeds to the native
 provider for its own real verdict instead. Failing the caller's every
-future `Prompt` call forever, decided by a crude estimate with no in-band
-recovery, traded one silent failure mode (an opaque provider rejection) for
-a worse one (a permanently un-promptable session); this way the caller
-still gets a diagnosable reason on the attempt that discovered folding
-could not help, and every attempt after that reaches the provider exactly
-as if the flag had never armed. The session's history length at the moment
-of that conclusion is remembered (`forceCompactionExhaustedAt`,
-deliberately NOT persisted, same tradeoff as the churn guard's own
-hysteresis flag below): a LATER `Prompt` call gets exactly one more forced
-check once the journal has genuinely grown past that point — something
-changed since the pass that gave up, at minimum the very turn it let
-through completing — never zero more (a permanent brick) and never one on
-every single subsequent call regardless of whether anything changed (which
-would turn a billed skip reason into a summarizer call on every turn). The
-moment any native turn actually lands real usage, this retry marker is
-retired for good: the ordinary trigger is trustworthy again from there, and
-there is nothing left for it to correct for.
+future `Prompt` call forever, decided by a crude estimate (or a single
+provider error) with no in-band recovery, traded one silent failure mode
+(an opaque provider rejection) for a worse one (a permanently
+un-promptable session); this way the caller still gets a diagnosable
+reason on the attempt that discovered folding could not help, and every
+attempt after that reaches the provider exactly as if the flag had never
+armed. There is deliberately no further retry armed after this: an earlier
+design re-armed a one-shot check the next time the journal grew past the
+point a pass gave up at, but `maybeAutoCompact` runs before the incoming
+user message is appended, so a terminated forced pass that lets the turn
+through grows the journal by construction on every later `Prompt` call —
+that mechanism could not distinguish "growth because a retry is due" from
+"growth because the caller sent another prompt," and measurement showed it
+reissuing the summarizer once per `Prompt` call indefinitely while pressure
+persisted, exactly the per-turn billed-call shape this design otherwise
+guards against. The mechanism instead stays off until either a native turn
+lands real usage (`appendWithUsage` already clears the flag the moment
+that happens — the ordinary trigger is trustworthy again from there) or the
+model is switched again (`SetModel` re-arms it exactly as it did the first
+time).
 
 The prompt text is never recorded when this check fails: the check runs
 before the incoming user message is appended (like `ensureInstructions`/

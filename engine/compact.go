@@ -970,19 +970,16 @@ func estimateForcedPromptTokens(history []message.Message, lastSystem []string) 
 
 // maybeAutoCompact is Prompt's automatic-trigger check (see docs/design/
 // context-compaction.md §1): a no-op unless Config.ContextWindowTokens is
-// positive (opt-in) and either at least one turn has completed, a
-// model-switch force-check is pending (switchForced, see
-// forceCompactionCheck), or a prior forced pass's one-shot retry has come
-// due (growthForced, see forceCompactionExhaustedAt). Ordinarily best-effort:
-// a failed or skipped compaction never blocks the caller's real turn — the
-// turn simply proceeds uncompacted, at the same risk layer 1's
-// context-overflow classification already handles if it actually overflows.
-// A forced check (either reason) is louder about a REAL Compact error (see
-// the err != nil branch below, and PromptWithOrigin's caller, which turns
-// that into a failed Prompt call) — but a forced check that runs to
-// completion and finds folding cannot help is NOT treated as that same kind
-// of failure: see failForcedCompactionLoudly's own doc comment for why it
-// reports and proceeds instead of blocking every future Prompt call.
+// positive (opt-in) and either at least one turn has completed or a
+// model-switch force-check is pending (forced, see forceCompactionCheck).
+// Ordinarily best-effort: a failed or skipped compaction never blocks the
+// caller's real turn — the turn simply proceeds uncompacted, at the same
+// risk layer 1's context-overflow classification already handles if it
+// actually overflows. A forced check treats EVERY Compact outcome —
+// success, a conclusive no-progress skip, or a real error — as one it must
+// settle before returning: see failForcedCompactionLoudly's own doc comment
+// for why none of them blocks every future Prompt call on this session
+// forever.
 func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	s.mu.Lock()
 	windowTokens := s.cfg.ContextWindowTokens
@@ -990,22 +987,9 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	lastUsage := s.lastUsage
 	haveLastUsage := s.haveLastUsage
 	onCooldown := s.compactHysteresis
-	switchForced := s.forceCompactionCheck
-	exhaustedAt := s.forceCompactionExhaustedAt
-	historyLen := len(s.history)
+	forced := s.forceCompactionCheck
 	lastSystem := s.lastSystem
 	s.mu.Unlock()
-
-	// growthForced is forceCompactionExhaustedAt's own one-shot retry: a
-	// PRIOR forced pass concluded folding could not help at length
-	// exhaustedAt, and the journal has since grown past it (at minimum, the
-	// turn that pass let through has completed) — see that field's doc
-	// comment for why growth, not a fixed retry count, gates the retry.
-	// Never true alongside switchForced: a fresh claude-code-to-native
-	// switch always sets forceCompactionCheck itself (SetModel/recModel),
-	// which already forces this check by that route.
-	growthForced := !switchForced && exhaustedAt > 0 && historyLen > exhaustedAt
-	forced := switchForced || growthForced
 
 	// forced is deliberately NOT cleared here. Clearing it unconditionally
 	// at entry meant it protected exactly one attempt: a failed or
@@ -1016,12 +1000,14 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	// at the specific points below that actually settle the question this
 	// flag exists to ask ("does the next native request fit"): under
 	// threshold, a Compact that folded enough to bring a re-estimate back
-	// under threshold, or a Compact that concludes (loudly, via
-	// failForcedCompactionLoudly) that folding cannot help at all. Only a
-	// Compact call that fails for a REAL reason (a transport or rate-limit
-	// error, not a skip) leaves it armed exactly as before, so an immediate
-	// retry is checked again instead of silently falling back to the stale
-	// signal.
+	// under threshold, or a Compact call that concludes — loudly, via
+	// failForcedCompactionLoudly — that this pass cannot answer that
+	// question, whether because folding made no progress, a fold still
+	// left the journal over the window, or the Compact call itself errored.
+	// There is no remaining case that leaves it armed: see
+	// failForcedCompactionLoudly's own doc comment for why every one of
+	// those outcomes must clear it, and SetModel/appendWithUsage for the
+	// only two ways it re-arms afterward.
 	if windowTokens <= 0 {
 		return nil
 	}
@@ -1088,13 +1074,10 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		}
 		// This really does answer the question forced exists to ask: the
 		// next native request fits under the window without folding
-		// anything. Clear both the flag and the exhaustion marker here,
-		// whether this check ran forced or not (either is already false/0
-		// when it wasn't).
+		// anything.
 		if forced {
 			s.mu.Lock()
 			s.forceCompactionCheck = false
-			s.forceCompactionExhaustedAt = 0
 			s.mu.Unlock()
 		}
 		return nil
@@ -1103,36 +1086,46 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		// Churn guard (§2): still over threshold since the last automatic
 		// compaction. The pressure must live in the kept region (a single
 		// giant tool result) — folding the prefix again cannot relieve it,
-		// so do not re-fire every turn. A forced check (either reason)
-		// bypasses this unconditionally. switchForced exists specifically to
-		// correct for a regime change the churn guard's own latched state
-		// says nothing about (a session that was, until this turn, entirely
-		// delegated). growthForced has its own, separate, self-clearing
-		// throttle — forceCompactionExhaustedAt only re-arms it once the
-		// journal has actually grown since the pass that gave up, and any
-		// real native turn landing afterward (appendWithUsage) retires it
-		// completely — so layering the usage-based churn guard on top would
-		// only create a deadlock: the forced estimate this check computes
-		// never dips under threshold on its own (only an actual fold or a
-		// completed native turn changes it), so onCooldown would never
-		// reset and a growthForced retry could never run at all.
+		// so do not re-fire every turn. A forced check bypasses this
+		// unconditionally: it exists specifically to correct for a regime
+		// change (a session that was, until this turn, entirely delegated)
+		// the churn guard's own latched state says nothing about, and the
+		// forced estimate this check computes never dips under threshold on
+		// its own — only an actual fold or a completed native turn changes
+		// it — so layering the usage-based churn guard on top would only
+		// deadlock a forced check against itself.
 		return nil
 	}
 
 	res, err := s.Compact(ctx, CompactOptions{})
 	if err != nil {
 		if forced {
-			// Unlike the ordinary best-effort trigger, a forced check exists
-			// specifically because the caller is about to send an
-			// over-threshold journal to a provider that will reject it. A
-			// swallowed failure here would let that request through and
-			// surface as an opaque provider "prompt too long" error instead
-			// of a diagnosable compaction failure — see PromptWithOrigin's
-			// caller, which turns this into a failed Prompt call before the
-			// provider is ever reached. forced is deliberately left armed
-			// (see the doc comment above): a retried Prompt call must be
-			// checked again, not silently fall back to the stale signal.
-			return fmt.Errorf("engine: forced compaction failed: %w", err)
+			// A forced pass's own summarization call failing is, like the
+			// no-progress outcomes failForcedCompactionLoudly already
+			// handles below, a conclusive answer to the question this pass
+			// exists to ask ("does the next native request fit") — not a
+			// reason to retry immediately. The two ways Compact fails here
+			// are a deterministic content shape (the fold range itself too
+			// large for the summarizer model's own window — Compact's own
+			// doc comment names this explicitly; retrying reissues the
+			// identical oversized range against the identical model, the
+			// same waste engine/goal.go:1173 already fails fast on for a
+			// live native turn) or a genuinely transient one (a rate limit,
+			// a transport error). Neither is worth blocking every future
+			// Prompt call on this session forever for: there is no
+			// growth-triggered retry left to eventually rescue a session
+			// stuck this way (see docs/design/context-compaction.md), so an
+			// unconditional block would be permanent, and a transient
+			// failure gets no benefit from blocking THIS call specifically
+			// — the very next Prompt call re-arms nothing on its own (see
+			// failForcedCompactionLoudly), so an operator or caller who
+			// wants another attempt already has one: SetModel. Report it
+			// loudly and let the request proceed to the provider for its
+			// own real verdict, exactly like the no-progress outcomes
+			// below.
+			s.failForcedCompactionLoudly(fmt.Sprintf(
+				"engine: forced compaction failed: %s; proceeding to the provider uncompacted for its own verdict", err))
+			return nil
 		}
 		// Best-effort: EventCompactionFailed already emitted inside
 		// Compact. The turn proceeds uncompacted.
@@ -1140,12 +1133,13 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 	}
 	// Latch on a real fold (TurnsFolded > 0) OR on a summarizer_empty skip —
 	// both cost a full-input-price provider call, so both must arm the
-	// churn guard exactly like a successful fold does, REGARDLESS of
+	// churn guard exactly like a successful fold does, regardless of
 	// whether the forced handling below goes on to succeed or terminate:
-	// terminating a costly attempt without latching here would let a
-	// growthForced retry re-invoke the summarizer every subsequent Prompt
-	// call, defeating the guard entirely. NEVER latch on the two free skip
-	// reasons (not_enough_turns, lone_existing_summary): the churn guard
+	// a forced check never retries on its own after this pass (see
+	// docs/design/context-compaction.md), but an ordinary, non-forced
+	// trigger on a LATER turn must still see this call as billed. NEVER
+	// latch on the two free skip reasons (not_enough_turns,
+	// lone_existing_summary): the churn guard
 	// only clears once LastUsage dips below threshold, so latching it for a
 	// free no-op would permanently disarm automatic compaction for an
 	// over-threshold session that simply doesn't have enough turns yet to
@@ -1193,29 +1187,29 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		}
 		s.mu.Lock()
 		s.forceCompactionCheck = false
-		s.forceCompactionExhaustedAt = 0
 		s.mu.Unlock()
 	}
 	return nil
 }
 
 // failForcedCompactionLoudly is the terminating half of the forced-check
-// escape hatch (see forceCompactionExhaustedAt's own doc comment): a forced
-// pass that ran Compact to completion but demonstrably cannot help — no
-// turns folded, or a fold that still leaves the journal over the window —
-// must not block every future Prompt call on this session forever the way
-// leaving forceCompactionCheck armed unconditionally would (a permanent
-// brick decided by a crude byte estimate, with no in-band recovery). It
+// escape hatch (see forceCompactionCheck's own doc comment): a forced pass
+// that cannot settle "does the next native request fit" any other way — no
+// turns folded, a fold that still leaves the journal over the window, or
+// the Compact call itself erroring — must not block every future Prompt
+// call on this session forever the way leaving forceCompactionCheck armed
+// unconditionally would (a permanent brick, with no in-band recovery). It
 // reports the failure the same way a best-effort skip already does —
 // EventCompactionFailed, for an operator or tailer watching, never silence
-// — then clears the switch flag and marks the CURRENT history length
-// exhausted so the request proceeds to the provider for its own real
-// verdict, and a later Prompt call only retries once the journal has
-// actually grown past that length.
+// — then clears the flag so the request proceeds to the provider for its
+// own real verdict. There is deliberately no retry left armed after this:
+// the mechanism stays off until a native turn lands real usage
+// (appendWithUsage already retires it) or the model is switched again
+// (SetModel re-arms it) — see docs/design/context-compaction.md for why an
+// earlier growth-triggered retry was removed rather than fixed.
 func (s *Session) failForcedCompactionLoudly(reason string) {
 	s.emit(Event{Type: EventCompactionFailed, Text: reason})
 	s.mu.Lock()
 	s.forceCompactionCheck = false
-	s.forceCompactionExhaustedAt = len(s.history)
 	s.mu.Unlock()
 }

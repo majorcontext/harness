@@ -1414,56 +1414,24 @@ type Session struct {
 	// durable, so the guard has to be too). Also captured/restored by
 	// snapshot.go for the anchored-load fast path. Cleared by SetModel/
 	// recModel on a switch BACK to ClaudeCodeProviderFamily (nothing to
-	// force-check while delegated) and by appendWithUsage/recMessage
-	// replay the moment a native turn actually completes with real usage
-	// (a trustworthy lastUsage exists again). maybeAutoCompact itself only
-	// clears it on an outcome that actually answers the "does the next
-	// request fit" question — see that function's own doc comment; it
-	// stays armed only for as long as a retry could still change that
-	// answer. A forced pass that fails for a REAL reason (the
-	// summarization call errors) leaves this armed, so an immediate retry
-	// is checked again. A forced pass that runs Compact to completion but
-	// concludes folding cannot help — no turns to fold, a lone existing
-	// summary, an empty summarizer result, or a fold that still leaves the
-	// journal over the window — is a DIFFERENT, conclusive outcome: no
-	// retry of the identical journal shape changes that answer, so
-	// maybeAutoCompact clears this instead (see failForcedCompactionLoudly),
-	// reports the failure loudly, and lets the request reach the provider
-	// for its own real verdict rather than blocking every future Prompt
-	// call on this session forever. See forceCompactionExhaustedAt for how
-	// a LATER Prompt call still gets one more attempt once the journal has
-	// actually grown past the point that pass gave up at.
+	// force-check while delegated), by appendWithUsage/recMessage replay
+	// the moment a native turn actually completes with real usage (a
+	// trustworthy lastUsage exists again), and by maybeAutoCompact itself
+	// on EVERY outcome that settles the "does the next request fit"
+	// question this flag exists to ask — under threshold, a fold that
+	// clears the estimate, or a Compact call that concludes (loudly, via
+	// failForcedCompactionLoudly) that this pass cannot answer it at all,
+	// whether because folding made no progress, a fold still left the
+	// journal over the window, or the Compact call itself errored. There is
+	// deliberately no growth-triggered retry left after that: a session
+	// that stays over the window gets another forced check only from a
+	// later SetModel, never on its own (see failForcedCompactionLoudly's
+	// own doc comment for why an earlier one-shot retry on journal growth
+	// was removed rather than fixed — it could not tell "the journal grew
+	// because a retry is due" from "the journal grew because the caller
+	// sent another prompt").
 	// Guarded by mu.
 	forceCompactionCheck bool
-
-	// forceCompactionExhaustedAt is 0 until a forced compaction pass
-	// concludes folding cannot help at the session's history length AT
-	// THAT TIME (see forceCompactionCheck's own doc comment) — then it
-	// holds that length. maybeAutoCompact re-arms a fresh, one-shot forced
-	// check (growthForced) the next time len(s.history) exceeds this value:
-	// something about the journal has changed since the pass that gave up
-	// (at minimum, the very turn that pass let through has completed), so
-	// the question is worth asking again. This is its own throttle,
-	// independent of compactHysteresis: a growthForced check bypasses the
-	// ordinary churn guard exactly like a switchForced one (the guard's own
-	// forced estimate never dips under threshold on its own, so gating on
-	// it here would deadlock — no attempt could ever run to change that
-	// estimate), and instead relies on TWO separate things to keep this
-	// from becoming a summarizer call on every turn: growth must have
-	// actually happened since the last attempt (not merely elapsed time or
-	// call count), and appendWithUsage clears this to 0 the moment any REAL
-	// native turn completes — from that point the ordinary trigger is
-	// trustworthy again and this mechanism has nothing left to correct
-	// for. The residual an unresolved session accepts is a bounded run of
-	// retries while pressure genuinely persists (e.g. a kept-turns tail
-	// that takes several more turns to age out), never an unbounded one:
-	// each retry either succeeds (clearing this) or narrows the same
-	// question by however much the journal grew. Deliberately NOT persisted
-	// (same tradeoff as compactHysteresis, see that field's own doc
-	// comment): a reload re-evaluates from scratch, and the worst cost is
-	// one extra no-progress attempt.
-	// Guarded by mu.
-	forceCompactionExhaustedAt int
 
 	// contextWindowExplicit is true when the ORIGINAL Config.ContextWindowTokens
 	// passed to NewSession/LoadSession was already positive — an operator
@@ -2451,14 +2419,10 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		// This path is exclusively a native turn's real usage — a
 		// delegated turn's usage folds through applyClaudeCodeUsage
 		// instead (see that method's own doc comment), never here — so
-		// lastUsage really does reflect harness's own journal again.
-		// See forceCompactionCheck's own doc comment. A real native turn
-		// landing also fully retires forceCompactionExhaustedAt's own
-		// growth-triggered retry (see that field's doc comment): the
-		// ordinary trigger is trustworthy again from here on, so there is
-		// nothing left for a growthForced re-check to correct for.
+		// lastUsage really does reflect harness's own journal again. See
+		// forceCompactionCheck's own doc comment: the ordinary trigger is
+		// trustworthy again from here on.
 		s.forceCompactionCheck = false
-		s.forceCompactionExhaustedAt = 0
 	}
 	s.persistMessage(&m, usage)
 	// The append boundary (snapshot.go, rule 2): history, usage, and the
