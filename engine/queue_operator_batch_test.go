@@ -53,19 +53,19 @@ func TestDrainQueuedPromptsIntoHistoryStampsOperatorBatch(t *testing.T) {
 
 	// First prompt: no source named — must fold to PromptSourceAPI, never
 	// PromptSourceTyped (an untagged caller is never presented as human).
-	id1, _, err := s.EnqueuePrompt("first operator prompt", "")
+	id1, _, err := s.EnqueuePrompt("first operator prompt", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 	// Second prompt: an explicit schedule delivery, the shape the boxes
 	// control plane's schedule_task/cron worker asserts.
-	id2, _, err := s.EnqueuePromptFrom("second operator prompt", "", PromptProvenance{
+	id2, _, err := s.EnqueuePrompt("second operator prompt", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_123",
 		SourceLabel: "nightly CI check",
 	})
 	if err != nil {
-		t.Fatalf("EnqueuePromptFrom: %v", err)
+		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
 	close(release)

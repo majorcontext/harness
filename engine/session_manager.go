@@ -2954,7 +2954,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// are final here. Start prewarm before the prompt-driving goroutine.
 	child.startStartupPrewarm()
 	go func() {
-		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt, "", nil)
+		msg, perr := drainQueueAndPrompt(n.ctx, child, opts.Prompt, "", PromptProvenance{}, nil)
 		if resume := m.finalizeTurn(child.ID, msg, perr); resume != nil {
 			go resume()
 		}
@@ -3020,7 +3020,7 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 //
 // msgID and blobs are the FIRST call's own — a caller that already
 // resolved a client message id or attachments for text (SendOrQueue) —
-// threaded through PromptWithOrigin exactly like the server's own
+// threaded through PromptWithOriginFrom exactly like the server's own
 // runPrompt does for a root (see PromptWithOrigin's doc comment); every
 // call with no id/attachments of its own (Spawn's initial prompt, Send,
 // SendToDescendant) passes "", nil, unchanged from this function's
@@ -3031,7 +3031,15 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // makes an attachment survive a child's queue (item 4 of the
 // session.send unification): the old text-only signature dropped
 // QueuedPrompt.Blobs entirely on every dequeue.
-func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, blobs []*message.Blob) (*message.Message, error) {
+//
+// prov is likewise the FIRST call's own — SendOrQueue's own caller-
+// supplied provenance (PromptProvenance{} from Spawn/Send/
+// SendToDescendant, which have no HTTP-level source concept of their own,
+// same as an unlabeled prompt_async caller). Every SUBSEQUENT drained item
+// uses ITS OWN QueuedPrompt.Source/SourceID/SourceLabel instead, mirroring
+// msgID/blobs above: a queued prompt's own provenance must reach its own
+// eventual turn, not silently borrow the turn that happened to drain it.
+func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, prov PromptProvenance, blobs []*message.Blob) (*message.Message, error) {
 	// The FIRST call is guarded too, not just the loop — a review
 	// finding: on the finalizeTurn re-drive and settled-relaunch paths a
 	// cancel landing between the closure's creation and its `go resume()`
@@ -3042,7 +3050,7 @@ func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, bl
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	msg, err := s.PromptWithOrigin(ctx, text, "", msgID, blobs...)
+	msg, err := s.PromptWithOriginFrom(ctx, text, "", msgID, prov, blobs...)
 	for {
 		if ctx.Err() != nil {
 			return msg, err
@@ -3051,7 +3059,8 @@ func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, bl
 		if !ok {
 			return msg, err
 		}
-		msg, err = s.PromptWithOrigin(ctx, next.Text, "", next.MessageID, next.Blobs...)
+		nextProv := PromptProvenance{Source: next.Source, SourceID: next.SourceID, SourceLabel: next.SourceLabel}
+		msg, err = s.PromptWithOriginFrom(ctx, next.Text, "", next.MessageID, nextProv, next.Blobs...)
 	}
 }
 
@@ -3133,7 +3142,7 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	defer stop()
 	var msg *message.Message
 	if isChild {
-		msg, err = drainQueueAndPrompt(runCtx, s, text, "", nil)
+		msg, err = drainQueueAndPrompt(runCtx, s, text, "", PromptProvenance{}, nil)
 	} else {
 		msg, err = s.Prompt(runCtx, text)
 	}
@@ -3184,17 +3193,17 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 // PromptWithOrigin directly — see drainQueueAndPrompt's own doc comment
 // for why a queued prompt's own id/attachments, not the turn that
 // happens to drain it, is what must reach PromptWithOrigin.
-func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string, blobs ...*message.Blob) (queued bool, err error) {
-	return m.SendOrQueueFrom(ctx, id, text, msgID, PromptProvenance{}, blobs...)
-}
-
-// SendOrQueueFrom is SendOrQueue with an explicit PromptProvenance for the
-// queue branch — see EnqueuePromptFrom's own doc comment for the same
-// pattern. SendOrQueue itself calls this with the zero value, which
-// Normalized folds to PromptSourceAPI. The settled branch's own turn never
-// needs prov: a solo-dispatched prompt is delivered on its own, through
-// PromptWithOrigin directly, never batched into an operator drain.
-func (m *SessionManager) SendOrQueueFrom(ctx context.Context, id, text, msgID string, prov PromptProvenance, blobs ...*message.Blob) (queued bool, err error) {
+// prov is this call's own explicit PromptProvenance — see EnqueuePrompt's
+// own doc comment for the same pattern. Threaded through BOTH branches
+// below, not only the queue one: a solo-dispatched prompt (the settled
+// branch, delivered on its own through PromptWithOriginFrom, never
+// batched into an operator drain) still needs its OWN caller-asserted
+// provenance recorded on the message it appends — otherwise attribution
+// would depend on whether the target session happened to be busy when
+// this call landed, which is exactly the gap a caller with no provenance
+// of its own (the zero value, which Normalized folds to PromptSourceAPI)
+// must not reopen.
+func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string, prov PromptProvenance, blobs ...*message.Blob) (queued bool, err error) {
 	prov = prov.Normalized()
 	// Trim and filter ONCE, before either delivery path — mirrors
 	// SendToDescendant's identical up-front validation (see its own doc
@@ -3235,7 +3244,10 @@ func (m *SessionManager) SendOrQueueFrom(ctx context.Context, id, text, msgID st
 			ID: p.ID, Text: p.Text, MessageID: p.MessageID, Blobs: p.Blobs,
 			Source: string(p.Source), SourceID: p.SourceID, SourceLabel: p.SourceLabel,
 		},
-			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+			Event{
+				Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
+				QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+			})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)
 		m.unlockAndFlushPersist()
@@ -3263,9 +3275,9 @@ func (m *SessionManager) SendOrQueueFrom(ctx context.Context, id, text, msgID st
 		var msg *message.Message
 		var perr error
 		if isChild {
-			msg, perr = drainQueueAndPrompt(runCtx, s, text, resolvedID, usable)
+			msg, perr = drainQueueAndPrompt(runCtx, s, text, resolvedID, prov, usable)
 		} else {
-			msg, perr = s.PromptWithOrigin(runCtx, text, "", resolvedID, usable...)
+			msg, perr = s.PromptWithOriginFrom(runCtx, text, "", resolvedID, prov, usable...)
 		}
 		if resume := m.finalizeTurn(id, msg, perr); resume != nil {
 			go resume()
@@ -4021,7 +4033,10 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 			ID: p.ID, Text: p.Text, MessageID: p.MessageID,
 			Source: string(p.Source), SourceID: p.SourceID, SourceLabel: p.SourceLabel,
 		},
-			Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+			Event{
+				Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
+				QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+			})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)
 		m.unlockAndFlushPersist()
@@ -4059,7 +4074,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// descendant here (isDescendantLocked guaranteed it above), so
 		// isChild is always true — this call can never actually reach a
 		// root.
-		msg, perr := drainQueueAndPrompt(nodeCtx, s, text, "", nil)
+		msg, perr := drainQueueAndPrompt(nodeCtx, s, text, "", PromptProvenance{Source: message.PromptSourceTask}, nil)
 		if resume := m.finalizeTurn(targetID, msg, perr); resume != nil {
 			go resume()
 		}
@@ -4258,7 +4273,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 			nodeCtx := n.ctx
 			m.unlockAndFlushPersist()
 			return func() {
-				nmsg, nperr := drainQueueAndPrompt(nodeCtx, s, next.Text, next.MessageID, next.Blobs)
+				nextProv := PromptProvenance{Source: next.Source, SourceID: next.SourceID, SourceLabel: next.SourceLabel}
+				nmsg, nperr := drainQueueAndPrompt(nodeCtx, s, next.Text, next.MessageID, nextProv, next.Blobs)
 				// go, not inline — matching every other recursive resume
 				// invocation in this file (triggerResumeLocked's own
 				// closures): keeps a pathological repeatedly-re-enqueued

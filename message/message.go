@@ -72,13 +72,40 @@ const OriginOperatorBatch = "operator_batch"
 // Origin, this is presentation/attribution metadata only: it is never sent
 // to a provider and never changes how the engine schedules or delivers the
 // prompt.
+//
+// # Trust model: every value here is a CLAIM, not a verified fact
+//
+// Harness authenticates an HTTP caller with a single bearer token
+// (server.Options.AuthToken) — one trust level, not one per human/service
+// distinction. Anything holding that token can assert ANY PromptSource,
+// PromptSourceTyped included: a delegated Claude Code CLI process reaches
+// its own session's HTTP surface through the exact same token
+// (engine/claude_code_backend.go writes it into the child's own
+// --mcp-config), so an in-box agent process can mint a prompt_async/
+// enqueue/session.send call that asserts source=typed for text nobody
+// actually typed. Harness has no mechanism — today or plausible with one
+// token — to distinguish that call from the console's own relay of a real
+// keystroke.
+//
+// PromptSourceTask is the ONE exception: it is server-derived, never
+// caller-suppliable (see its own doc comment and
+// server/prompt_source.go's rejection of it over HTTP) — the only value
+// in this type harness itself computes rather than merely records.
+//
+// A consumer (boxes' console, notably) MUST NOT present PromptSourceTyped
+// as proof of human authorship, or any other value as proof of its own
+// claimed origin — only as the caller's own unverified assertion, exactly
+// like an HTTP request's User-Agent header. Rendering it as a hint
+// ("looks like it came from a person") is fine; rendering it as a
+// certified fact is not.
 type PromptSource string
 
 const (
 	// PromptSourceTyped marks a prompt a live human typed into an
-	// interactive surface (a console, a terminal). A caller must assert
-	// this explicitly — it is never inferred, and never the default for
-	// an unlabeled caller (see PromptSourceAPI).
+	// interactive surface (a console, a terminal) — a claim the CALLER
+	// asserts, never inferred, and never the default for an unlabeled
+	// caller (see PromptSourceAPI). Harness cannot verify this claim —
+	// see this type's own "Trust model" doc comment above.
 	PromptSourceTyped PromptSource = "typed"
 	// PromptSourceAPI marks a prompt from a generic programmatic caller —
 	// a script, an unlabeled integration — and is the default an enqueue
@@ -206,6 +233,27 @@ type Message struct {
 	// misparses a prompt whose own text contains a numbered list — see
 	// OperatorBatchEntry's own doc comment.
 	OperatorBatch []OperatorBatchEntry `json:"operator_batch,omitempty"`
+	// Source, SourceID, and SourceLabel are this message's OWN provenance
+	// — set only on a message a caller-attributable prompt dispatch
+	// appended directly (engine.Session.PromptWithOriginFrom): an
+	// ordinary prompt_async/enqueue/session.send delivery, whether it
+	// dispatched at once or sat in the queue first — see PromptSource's
+	// own doc comment for the values. Empty (the default) for a message
+	// with no such single caller: a model-produced assistant/tool
+	// message, the engine's own resume trigger (OriginEngine), a goal
+	// loop's own directive text, or a batch message (OriginOperatorBatch,
+	// OperatorBatch above) — a batch was never one caller's prompt, so
+	// its OWN per-prompt provenance lives on each OperatorBatchEntry
+	// instead, never here.
+	//
+	// Recording this here, not only on the transient queue entry a
+	// caller's prompt might pass through, is what lets a client read the
+	// SAME provenance for a prompt regardless of whether the target
+	// session happened to be busy when it arrived: a solo-dispatched
+	// prompt (never queued at all) still carries it.
+	Source      PromptSource `json:"source,omitempty"`
+	SourceID    string       `json:"source_id,omitempty"`
+	SourceLabel string       `json:"source_label,omitempty"`
 }
 
 // Normalize scrubs known encoding/json footguns from m's parts in place. It

@@ -547,7 +547,8 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 				// and this append is what makes the delivery visible in
 				// the session transcript.
 				beforeAppendLen := len(s.History())
-				block := strings.TrimSuffix(operatorMessagesBlock(queued, operatorContextTask), "\n")
+				rawBlock, origin, entries := operatorBatchDrain(queued, operatorContextTask)
+				block := strings.TrimSuffix(rawBlock, "\n")
 				// A queued prompt can carry attachments, so this drain
 				// delivers BOTH halves, exactly as the native loop's
 				// drainQueuedPromptsIntoHistory does with the same two
@@ -566,8 +567,8 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 					Role:          message.RoleUser,
 					Parts:         promptParts(block, injected),
 					CreatedAt:     time.Now().UTC(),
-					Origin:        message.OriginOperatorBatch,
-					OperatorBatch: operatorBatchEntries(queued),
+					Origin:        origin,
+					OperatorBatch: entries,
 				})
 				if err := writeClaudeCodeInputMessage(stdin, block, injected); err != nil {
 					// Best-effort, exactly like the first write's own

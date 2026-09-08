@@ -211,13 +211,13 @@ func TestSessionIndexMatchesLoadSession(t *testing.T) {
 			name:  "prompt queue",
 			turns: [][]provider.Event{},
 			drive: func(t *testing.T, s *Session) {
-				if _, _, err := s.EnqueuePrompt("first", ""); err != nil {
+				if _, _, err := s.EnqueuePrompt("first", "", PromptProvenance{}); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := s.EnqueuePrompt("second", ""); err != nil {
+				if _, _, err := s.EnqueuePrompt("second", "", PromptProvenance{}); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := s.EnqueuePromptDurable("third", 1); err != nil {
+				if _, _, err := s.EnqueuePromptDurable("third", 1, PromptProvenance{}); err != nil {
 					t.Fatal(err)
 				}
 				if _, _, ok := s.DequeuePrompt("delivered"); !ok {

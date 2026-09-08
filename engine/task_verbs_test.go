@@ -479,7 +479,7 @@ func TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	msg, err := drainQueueAndPrompt(ctx, s, "wasted directive", "", nil)
+	msg, err := drainQueueAndPrompt(ctx, s, "wasted directive", "", PromptProvenance{}, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("drainQueueAndPrompt on a canceled ctx: err = %v, want context.Canceled", err)
 	}

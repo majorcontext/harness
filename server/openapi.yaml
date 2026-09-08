@@ -719,6 +719,25 @@ components:
             contains a numbered list of its own.
           items:
             $ref: "#/components/schemas/OperatorBatchEntry"
+        source:
+          allOf:
+            - $ref: "#/components/schemas/PromptSource"
+          description: >
+            Present only on a message a single caller-attributable prompt
+            dispatch appended directly (an ordinary prompt_async/enqueue/
+            session.send delivery, whether it dispatched at once or sat in
+            the queue first) — an UNVERIFIED CLAIM, see PromptSource's own
+            "Trust model" description. Absent for a model-produced
+            assistant/tool message, the engine's own resume trigger, a goal
+            loop's own directive text, or a batch message: a batch was
+            never one caller's prompt, so its own per-prompt provenance
+            lives on each `operator_batch` entry instead, never here.
+        source_id:
+          type: string
+          description: Free-form identifier for `source`'s own instance. Omitted when `source` names no such id, or none was given.
+        source_label:
+          type: string
+          description: Free-form, human-readable label for the same instance. Display only, never parsed.
 
     OperatorBatchEntry:
       type: object
@@ -1085,17 +1104,20 @@ components:
             to a future drain. Re-issue the request once it is confirmed
             `started` if the override must take effect.
         source:
-          $ref: "#/components/schemas/PromptSource"
+          allOf:
+            - $ref: "#/components/schemas/PromptSourceRequest"
           description: >
-            Optional provenance for this prompt — see PromptSource. Omitted
-            defaults to `api`, never `typed`. Meaningful only if this
-            prompt ends up queued behind a busy turn rather than dispatched
-            at once: it is journaled with the queue entry and surfaced on
-            GET /session/{id}/queue and on the batch entry a later drain
-            exposes (Message.operator_batch) — a solo-dispatched prompt is
-            never batched, so it carries no ambiguous provenance to record.
-            `task` is rejected with 400: it names the engine's own internal
-            task-tool relay, which no caller reaches through this route.
+            Optional provenance for this prompt — an UNVERIFIED CLAIM the
+            caller asserts, not an authenticated fact (see PromptSource's
+            own doc comment for the trust model this shares). Omitted
+            defaults to `api`, never `typed`. Recorded on the appended
+            message itself (Message.source) whether this prompt dispatches
+            at once or sits in the queue first — journaled with the queue
+            entry, surfaced on GET /session/{id}/queue, and on the batch
+            entry a later drain exposes (Message.operator_batch) if it ends
+            up batched. `task` is rejected with 400: it names the engine's
+            own internal task-tool relay, which no caller reaches through
+            this route.
         source_id:
           type: string
           description: Free-form identifier for `source`'s own instance (a schedule/cron id, a calling box id). Optional.
@@ -1148,12 +1170,13 @@ components:
             `model` description) — there is simply no slot to offer one
             here.
         source:
-          $ref: "#/components/schemas/PromptSource"
+          allOf:
+            - $ref: "#/components/schemas/PromptSourceRequest"
           description: >
             Optional provenance for this prompt — see PromptRequest's
             `source` description for the full contract (default, rejected
-            `task`, where it surfaces). Journaled with the durable
-            prompt.queued record.
+            `task`, unverified-claim trust model, where it surfaces).
+            Journaled with the durable prompt.queued record.
         source_id:
           type: string
           description: Free-form identifier for `source`'s own instance. Optional.
@@ -1268,9 +1291,34 @@ components:
         schedule/cron delivery (the boxes control plane's own
         schedule_task/cron worker, notably). `cross_box` marks a prompt
         relayed from another box. `task` marks this engine's own internal
-        cross-session task-tool relay — no caller may assert it; a request
-        naming it is rejected with 400.
+        cross-session task-tool relay — the ONE value here harness itself
+        computes; every other value is journaled and surfaced exactly as
+        the caller asserted it, unverified.
+
+
+        Trust model: harness authenticates an HTTP caller with a single
+        bearer token — one trust level, not one per human/service
+        distinction — so it cannot verify WHICH of these values a given
+        caller may honestly assert. In particular, a delegated Claude Code
+        CLI process running inside a box reaches this same session's HTTP
+        surface through that session's own token, so `typed` is reachable
+        from inside the box, not only from a human-facing console. Treat
+        every value (`task` excepted) as the caller's own unverified claim
+        — an attribution hint, never proof of the message's real origin.
       enum: [typed, api, schedule, task, cross_box]
+
+    PromptSourceRequest:
+      type: string
+      description: >
+        PromptSource's caller-suppliable subset — every value a request
+        (PromptRequest, EnqueueRequest) may assert. Excludes `task`: it
+        names the engine's own internal task-tool relay, which no HTTP
+        caller reaches through these routes, so it is not offered here at
+        all rather than merely rejected at request time (see
+        PromptRequest's `source` description for the actual 400 a request
+        naming it gets — this narrower enum only keeps a generated client
+        from offering the value in the first place).
+      enum: [typed, api, schedule, cross_box]
 
     Event:
       type: object
@@ -1698,6 +1746,22 @@ components:
             durable-enqueue.md) on a prompt.queued event emitted by POST
             /session/{id}/enqueue. Absent/0 on a plain prompt_async-queued
             entry and on every prompt.dequeued event, regardless of origin.
+        queue_source:
+          allOf:
+            - $ref: "#/components/schemas/PromptSource"
+          description: >
+            The queued prompt's own provenance, always Normalized (never
+            empty) — present on prompt.queued only, letting a consumer that
+            reconciles from the event/journal stream alone see who queued a
+            prompt without a separate GET /session/{id}/queue call. Absent
+            on prompt.dequeued (see queue_seq's own note on the same
+            asymmetry) and on every other event type.
+        queue_source_id:
+          type: string
+          description: Free-form identifier for `queue_source`'s own instance. Present on prompt.queued only, omitted when none was given.
+        queue_source_label:
+          type: string
+          description: Free-form, human-readable label for the same instance. Present on prompt.queued only, display only.
         worktree_path:
           type: string
           description: >

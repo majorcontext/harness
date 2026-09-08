@@ -2205,7 +2205,7 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	// fakeclaude is blocked on its own second stdin read. Enqueue while
 	// busy, exactly like the live bug's POST /session/{id}/send arriving
 	// while a claude-code turn is running.
-	if _, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", ""); err != nil {
+	if _, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2302,21 +2302,21 @@ func TestClaudeCodeQueueInjectionStampsOperatorBatch(t *testing.T) {
 
 	// A schedule-sourced delivery, the shape the boxes control plane's
 	// schedule_task/cron worker asserts — proves provenance threads all
-	// the way from EnqueuePromptFrom through the delegated drain, not
+	// the way from EnqueuePrompt through the delegated drain, not
 	// just the native one.
-	queueID, _, err := s.EnqueuePromptFrom("QUEUE-MARKER: please continue", "", PromptProvenance{
+	queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_456",
 		SourceLabel: "nightly CI check",
 	})
 	if err != nil {
-		t.Fatalf("EnqueuePromptFrom: %v", err)
+		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Prompt did not return within 10s of EnqueuePromptFrom")
+		t.Fatal("Prompt did not return within 10s of EnqueuePrompt")
 	}
 
 	var batch *message.Message
@@ -2397,7 +2397,7 @@ func TestClaudeCodeMidTurnInjectionWriteFailureDoesNotStrandWatermark(t *testing
 	// The turn is now mid-flight with fakeclaude's own stdin read end
 	// already closed. Enqueue now: the pump's injection write is
 	// guaranteed to land on the closed pipe and fail.
-	if _, _, err := s.EnqueuePrompt("LOST-IF-BUGGY: please handle this", ""); err != nil {
+	if _, _, err := s.EnqueuePrompt("LOST-IF-BUGGY: please handle this", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2506,7 +2506,7 @@ func TestClaudeCodeStopRetiresPumpBlockedInStdinWrite(t *testing.T) {
 	// framing overhead, cannot complete in one buffered chunk while
 	// fakeclaude never reads any of it.
 	huge := strings.Repeat("X", 8*1024*1024)
-	if _, _, err := s.EnqueuePrompt(huge, ""); err != nil {
+	if _, _, err := s.EnqueuePrompt(huge, "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -2575,7 +2575,7 @@ func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
 
 	// A 1x1 PNG, the same shape server/prompt_parts.go admits.
 	png := []byte("\x89PNG\r\n\x1a\nQUEUED-PNG-BYTES")
-	if _, _, err := s.EnqueuePrompt("look at this", "", &message.Blob{
+	if _, _, err := s.EnqueuePrompt("look at this", "", PromptProvenance{}, &message.Blob{
 		MediaType: "image/png",
 		Data:      png,
 	}); err != nil {

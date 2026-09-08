@@ -262,7 +262,7 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 	// resume trigger with no client message id of its own — see the origin
 	// comment just above. PromptWithOrigin's own mint site resolves it like
 	// any other unset id.
-	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "")
+	go s.runPrompt(ctx, id, st, text, message.OriginEngine, "", engine.PromptProvenance{})
 	return engine.RunnerHandled
 }
 
@@ -333,7 +333,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.Promp
 			// this reason; mirror it. A live review caught this.
 			return "", 0, http.StatusConflict, ""
 		}
-		ourID, _, err := sess.EnqueuePromptFrom(text, msgID, prov, blobs...)
+		ourID, _, err := sess.EnqueuePrompt(text, msgID, prov, blobs...)
 		if err != nil {
 			return "", 0, http.StatusBadRequest, ""
 		}
@@ -354,7 +354,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.Promp
 		return "queued", remaining, 0, ""
 	default: // code == 0: claimed cleanly
 		if len(st.sess.QueuedPrompts()) > 0 {
-			if _, _, err := st.sess.EnqueuePromptFrom(text, msgID, prov, blobs...); err != nil {
+			if _, _, err := st.sess.EnqueuePrompt(text, msgID, prov, blobs...); err != nil {
 				s.releasePromptClaim(st)
 				return "", 0, http.StatusBadRequest, ""
 			}
@@ -366,7 +366,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.Promp
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
 		// goes exclusively through runOrQueueText above.
-		go s.runPrompt(ctx, id, st, text, "", msgID, blobs...)
+		go s.runPrompt(ctx, id, st, text, "", msgID, prov, blobs...)
 		return "started", 0, 0, ""
 	}
 }
@@ -610,7 +610,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	// does, because SendOrQueue's async turn is SessionManager's own
 	// lifecycle to own, not this server's — exactly like Spawn's
 	// launched goroutine already is for handleSpawnChild.
-	queued, sendErr := s.sessMgr.SendOrQueueFrom(context.Background(), id, text, msgID, prov, blobs...)
+	queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, prov, blobs...)
 	if sendErr != nil {
 		switch {
 		case errors.Is(sendErr, engine.ErrUnknownSession):

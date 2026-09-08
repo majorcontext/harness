@@ -256,18 +256,14 @@ func usablePromptBlobs(blobs []*message.Blob) []*message.Blob {
 	return usable
 }
 
-func (s *Session) EnqueuePrompt(text string, messageID string, blobs ...*message.Blob) (id int64, resolvedMessageID string, err error) {
-	return s.EnqueuePromptFrom(text, messageID, PromptProvenance{}, blobs...)
-}
-
-// EnqueuePromptFrom is EnqueuePrompt with an explicit PromptProvenance —
-// see that type's own doc comment. EnqueuePrompt itself calls this with
-// the zero value, which Normalized folds to PromptSourceAPI, exactly
-// preserving every existing EnqueuePrompt caller's behavior. A caller that
-// knows who/what is enqueuing (server/handlers.go's prompt_async/enqueue
-// handlers, forwarding a request's own optional source fields) calls this
-// directly instead.
-func (s *Session) EnqueuePromptFrom(text string, messageID string, prov PromptProvenance, blobs ...*message.Blob) (id int64, resolvedMessageID string, err error) {
+// EnqueuePrompt appends text to s's durable prompt queue with an explicit
+// PromptProvenance — see that type's own doc comment for the values and
+// engine.PromptProvenance.Normalized for the empty-Source default. Every
+// caller (server/handlers.go's prompt_async/enqueue/session.send handlers)
+// forwards a request's own optional source fields here; a caller with no
+// provenance of its own passes the zero value, which Normalized folds to
+// PromptSourceAPI.
+func (s *Session) EnqueuePrompt(text string, messageID string, prov PromptProvenance, blobs ...*message.Blob) (id int64, resolvedMessageID string, err error) {
 	trimmed := strings.TrimSpace(text)
 	usable := usablePromptBlobs(blobs)
 	if trimmed == "" && len(usable) == 0 {
@@ -284,7 +280,10 @@ func (s *Session) EnqueuePromptFrom(text string, messageID string, prov PromptPr
 	// Emit while still holding s.mu (see ClearGoal in goal.go): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue)})
+	s.emit(Event{
+		Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
+		QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+	})
 	s.mu.Unlock()
 	return p.ID, p.MessageID, nil
 }
@@ -319,7 +318,7 @@ func (s *Session) EnqueuePromptFrom(text string, messageID string, prov PromptPr
 // stored as given — already resolved by EnqueuePrompt's own caller, or ""
 // for a caller (SendToDescendant) with no client message ID of its own,
 // left for PromptWithOrigin to resolve at dispatch time. prov is stored
-// Normalized — every caller (EnqueuePromptFrom, SessionManager.SendOrQueue/
+// Normalized — every caller (EnqueuePrompt, SessionManager.SendOrQueue/
 // SendToDescendant) normalizes its own before calling this. Caller holds
 // s.mu.
 func (s *Session) enqueueMemoryOnlyLocked(text string, messageID string, prov PromptProvenance, blobs ...*message.Blob) QueuedPrompt {
@@ -475,15 +474,10 @@ func (s *Session) flushQueueRecordsLocked() {
 // identical seq is required to resend the identical blobs too (the caller
 // reconstructs the same request on retry; this method has no way to detect
 // a seq reused with DIFFERENT content, same as it already has none for text).
-func (s *Session) EnqueuePromptDurable(text string, seq int64, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
-	return s.EnqueuePromptDurableFrom(text, seq, PromptProvenance{}, blobs...)
-}
-
-// EnqueuePromptDurableFrom is EnqueuePromptDurable with an explicit
-// PromptProvenance — see EnqueuePromptFrom's own doc comment for the same
-// pattern and why it exists. EnqueuePromptDurable calls this with the
-// zero value, which Normalized folds to PromptSourceAPI.
-func (s *Session) EnqueuePromptDurableFrom(text string, seq int64, prov PromptProvenance, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
+// EnqueuePromptDurable is EnqueuePrompt's durable, idempotent-by-seq
+// sibling, with the same explicit PromptProvenance parameter — see
+// EnqueuePrompt's own doc comment for the same pattern.
+func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProvenance, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	usable := usablePromptBlobs(blobs)
 	if trimmed == "" && len(usable) == 0 {
@@ -561,7 +555,10 @@ func (s *Session) EnqueuePromptDurableFrom(text string, seq int64, prov PromptPr
 	// Emit while still holding s.mu (see EnqueuePrompt above): keeps event
 	// order matching log order under a concurrent dequeue. OnEvent must not
 	// call back into this Session — that would deadlock on s.mu, held here.
-	s.emit(Event{Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueSeq: seq, QueueLen: len(s.promptQueue)})
+	s.emit(Event{
+		Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueSeq: seq, QueueLen: len(s.promptQueue),
+		QueueSource: string(prov.Source.Normalized()), QueueSourceID: prov.SourceID, QueueSourceLabel: prov.SourceLabel,
+	})
 	return id, false, nil
 }
 
@@ -808,4 +805,32 @@ func operatorBatchEntries(prompts []QueuedPrompt) []message.OperatorBatchEntry {
 		}
 	}
 	return entries
+}
+
+// operatorBatchDrain is the ONE place that builds an operator-batch drain's
+// three wire pieces together — the rendered "OPERATOR MESSAGES" text
+// (operatorMessagesBlock), the Origin tag, and the structured
+// OperatorBatchEntry list (operatorBatchEntries) — so a drain site cannot
+// build one without the other two. Every producer of an operator-batch
+// message calls this rather than the three underlying pieces directly:
+// engine.go's drainQueuedPromptsIntoHistory and engine/
+// claude_code_backend.go's Claude-Code-delegated equivalent (both
+// operatorContextTask, appending the block as a standalone message) and
+// goal.go's PursueGoal turn-boundary drain (operatorContextGoal, prepending
+// the block to that turn's own directive/guidance text) — see
+// operatorMessagesBlock's own doc comment for what distinguishes the two
+// ctx values. block is operatorMessagesBlock's own return value, UNTRIMMED
+// (still carrying its own trailing blank line): a standalone-message
+// producer trims its own trailing newline before wrapping it in
+// promptParts, matching its prior behavior exactly; goal.go's producer
+// concatenates it as-is, ahead of the directive, exactly as it already did
+// before this helper existed. Returns block == "" (and origin == "",
+// entries == nil) for an empty prompts slice — no producer's own drain call
+// happens once DequeueAllPrompts already returned nothing, so this is
+// defense in depth, not a reachable production shape.
+func operatorBatchDrain(prompts []QueuedPrompt, mctx operatorContext) (block string, origin string, entries []message.OperatorBatchEntry) {
+	if len(prompts) == 0 {
+		return "", "", nil
+	}
+	return operatorMessagesBlock(prompts, mctx), message.OriginOperatorBatch, operatorBatchEntries(prompts)
 }

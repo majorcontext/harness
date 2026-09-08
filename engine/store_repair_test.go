@@ -38,7 +38,7 @@ func TestDurableEnqueueRepairsTornHeader(t *testing.T) {
 		t.Fatalf("EnqueueSeq = %d, want 0 (a torn header carries no restorable state)", wm)
 	}
 
-	id1, dup, err := s.EnqueuePromptDurable("first", 1)
+	id1, dup, err := s.EnqueuePromptDurable("first", 1, PromptProvenance{})
 	if err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable(seq=1): id=%d dup=%v err=%v, want a fresh accepted enqueue", id1, dup, err)
 	}
@@ -59,7 +59,7 @@ func TestDurableEnqueueRepairsTornHeader(t *testing.T) {
 	// no corrupt-line cascade: pre-fix, this reload would hard-fail with
 	// "corrupt record at line 1" once the repaired-in record was no longer
 	// the file's last line.
-	id2, dup, err := reloaded.EnqueuePromptDurable("second", 2)
+	id2, dup, err := reloaded.EnqueuePromptDurable("second", 2, PromptProvenance{})
 	if err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable(seq=2): id=%d dup=%v err=%v", id2, dup, err)
 	}
@@ -108,7 +108,7 @@ func TestPlainEnqueueRepairsTornTailAfterValidRecords(t *testing.T) {
 	}
 
 	// The first write after load is where the repair actually fires.
-	id2, _, err := s.EnqueuePrompt("second", "")
+	id2, _, err := s.EnqueuePrompt("second", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestPlainEnqueueRepairsTornTailAfterValidRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first reload: %v", err)
 	}
-	id3, _, err := reloaded.EnqueuePrompt("third", "")
+	id3, _, err := reloaded.EnqueuePrompt("third", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("EnqueuePrompt on reloaded session: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestDurableEnqueueRepairsMissingTrailingNewlineWithoutDataLoss(t *testing.T
 
 	s := NewSession(Config{SessionDir: dir})
 	s.ID = id
-	if _, _, err := s.EnqueuePromptDurable("first", 1); err != nil {
+	if _, _, err := s.EnqueuePromptDurable("first", 1, PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePromptDurable(seq=1): %v", err)
 	}
 
@@ -215,7 +215,7 @@ func TestDurableEnqueueRepairsMissingTrailingNewlineWithoutDataLoss(t *testing.T
 
 	// Trigger ensureLog's repair via a write, then verify the first record
 	// SURVIVED (not truncated away) alongside the new one.
-	if _, _, err := reloaded.EnqueuePromptDurable("second", 2); err != nil {
+	if _, _, err := reloaded.EnqueuePromptDurable("second", 2, PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePromptDurable(seq=2): %v", err)
 	}
 	reloaded2, err := LoadSession(Config{SessionDir: dir}, id)

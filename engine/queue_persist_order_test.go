@@ -137,7 +137,7 @@ func TestEnqueuePromptDurableDrainsParkedRecordsFirst(t *testing.T) {
 		Event{Type: EventPromptQueued, QueueID: a.ID, QueueText: a.Text, QueueLen: 1})
 	s.mu.Unlock()
 
-	if _, dup, err := s.EnqueuePromptDurable("message B", 1); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("message B", 1, PromptProvenance{}); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable = (dup %v, err %v), want a fresh accept", dup, err)
 	}
 

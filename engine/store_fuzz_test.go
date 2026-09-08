@@ -112,12 +112,12 @@ func FuzzLoadSessionReplay(f *testing.F) {
 		// isn't the duplicate path this invariant is about) or when the
 		// probe would overflow int64.
 		if watermark > 0 {
-			if _, dup, err := s.EnqueuePromptDurable("probe-dup", watermark); err != nil || !dup {
+			if _, dup, err := s.EnqueuePromptDurable("probe-dup", watermark, PromptProvenance{}); err != nil || !dup {
 				t.Fatalf("EnqueuePromptDurable at watermark %d: dup=%v err=%v, want dup=true err=nil", watermark, dup, err)
 			}
 		}
 		if watermark < math.MaxInt64-1 {
-			id, dup, err := s.EnqueuePromptDurable("probe-fresh", watermark+1)
+			id, dup, err := s.EnqueuePromptDurable("probe-fresh", watermark+1, PromptProvenance{})
 			if err != nil || dup {
 				t.Fatalf("EnqueuePromptDurable at watermark+1 (%d): id=%d dup=%v err=%v, want dup=false err=nil", watermark+1, id, dup, err)
 			}

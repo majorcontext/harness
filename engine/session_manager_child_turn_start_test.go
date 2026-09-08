@@ -98,7 +98,7 @@ func TestChildTurnStartObserverFiresOnSendOrQueueSettledRelaunch(t *testing.T) {
 	// just one scripted turn, so this second call runs out of script
 	// and errors (io.ErrUnexpectedEOF) -- still a genuine reserved,
 	// STARTED turn from SendOrQueue's own point of view.
-	queued, err := mgr.SendOrQueue(context.Background(), childID, "again", "")
+	queued, err := mgr.SendOrQueue(context.Background(), childID, "again", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestChildTurnStartObserverFiresOnceForAWholeReservedRun(t *testing.T) {
 		t.Fatal("ChildTurnStartObserver never fired for the initial turn")
 	}
 
-	queued, err := mgr.SendOrQueue(context.Background(), childID, "follow up", "")
+	queued, err := mgr.SendOrQueue(context.Background(), childID, "follow up", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize(t *testing.T) {
 	// reserveSendLocked/finalizeTurnFrom's fixed gates cover, unlike
 	// ReportTurnStart/ReportTurnEnd's external=true path, which this
 	// fix deliberately does NOT touch (see the !external guard).
-	queued, err := mgr2.SendOrQueue(context.Background(), childID, "second turn", "")
+	queued, err := mgr2.SendOrQueue(context.Background(), childID, "second turn", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize(t *testing.T) {
 	// message is not merely accepted but genuinely DELIVERED once the
 	// current turn ends, end to end, for a warm orphan exactly like an
 	// ordinary child.
-	queued2, err := mgr2.SendOrQueue(context.Background(), childID, "queued follow-up", "")
+	queued2, err := mgr2.SendOrQueue(context.Background(), childID, "queued follow-up", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("SendOrQueue (follow-up): %v", err)
 	}

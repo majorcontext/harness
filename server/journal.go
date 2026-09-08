@@ -181,6 +181,14 @@ type Event struct {
 	// see docs/plans/2026-07-21-durable-enqueue.md. 0/omitted on a plain
 	// enqueue (prompt_async) and on every prompt.dequeued.
 	QueueSeq int64 `json:"queue_seq,omitempty"`
+	// QueueSource, QueueSourceID, and QueueSourceLabel mirror
+	// engine.Event.QueueSource/QueueSourceID/QueueSourceLabel: the queued
+	// prompt's own provenance (see message.PromptSource), always
+	// Normalized (never empty) on a prompt.queued record. Omitted on
+	// prompt.dequeued, same as QueueSeq above.
+	QueueSource      string `json:"queue_source,omitempty"`
+	QueueSourceID    string `json:"queue_source_id,omitempty"`
+	QueueSourceLabel string `json:"queue_source_label,omitempty"`
 
 	// ParentSessionID is set only on a session.spawned record: the parent
 	// of Event.SessionID. It is what makes events.jsonl self-contained —
@@ -711,6 +719,10 @@ func (s *Server) publishQueue(ev engine.Event) {
 		QueueReason: ev.QueueReason,
 		QueueLen:    &queueLen,
 		QueueSeq:    ev.QueueSeq,
+
+		QueueSource:      ev.QueueSource,
+		QueueSourceID:    ev.QueueSourceID,
+		QueueSourceLabel: ev.QueueSourceLabel,
 	})
 }
 

@@ -1748,7 +1748,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	// (durable), not the live tree's ParentID — see
 	// handleSessionSend's identical warm-orphan doc comment for why.
 	if sess, ok := s.sessMgr.Session(id); ok && sess.TaskParentID() != "" {
-		queued, sendErr := s.sessMgr.SendOrQueueFrom(context.Background(), id, text, msgID, prov, blobs...)
+		queued, sendErr := s.sessMgr.SendOrQueue(context.Background(), id, text, msgID, prov, blobs...)
 		if sendErr != nil {
 			switch {
 			case errors.Is(sendErr, engine.ErrUnknownSession):
@@ -1798,7 +1798,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// text) into the run slot just claimed above. See
 		// dispatchQueueHead and enqueueOrDispatch's identical shape for the
 		// same-session-BUSY counterpart of this same rule.
-		ourID, _, err := st.sess.EnqueuePromptFrom(text, msgID, prov, blobs...)
+		ourID, _, err := st.sess.EnqueuePrompt(text, msgID, prov, blobs...)
 		if err != nil {
 			// handlePrompt already rejects an empty parts list and joins
 			// non-empty text above, so this is not reachable in practice;
@@ -1897,7 +1897,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
 
-	go s.runPrompt(ctx, id, st, text, "", msgID, blobs...)
+	go s.runPrompt(ctx, id, st, text, "", msgID, prov, blobs...)
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
 }
 
@@ -1956,7 +1956,7 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, _, err := sess.EnqueuePromptFrom(text, msgID, prov, blobs...)
+	ourID, _, err := sess.EnqueuePrompt(text, msgID, prov, blobs...)
 	if err != nil {
 		// handlePrompt already rejects an empty parts list and joins
 		// non-empty text, so this is not reachable in practice; fail closed
@@ -2129,7 +2129,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	// Idle: we hold the run slot. Durable-first, then dispatch the queue
 	// HEAD — not necessarily this request's prompt (global FIFO, same rule
 	// as handlePrompt's idle-with-queue branch).
-	ourID, dup, err := st.sess.EnqueuePromptDurableFrom(text, body.Seq, prov, blobs...)
+	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq, prov, blobs...)
 	if dup {
 		s.releasePromptClaim(st)
 		// Stranded-head liveness fix: THIS request's prompt was a no-op,
@@ -2199,7 +2199,7 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, dup, err := sess.EnqueuePromptDurableFrom(text, seq, prov, blobs...)
+	ourID, dup, err := sess.EnqueuePromptDurable(text, seq, prov, blobs...)
 	if dup {
 		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
 		return
@@ -2368,7 +2368,15 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 	// deliberately dispatches the QUEUE HEAD instead of its own trigger
 	// text, exactly so a real queued message is never displaced by the
 	// resume trigger — see runOrQueueText's own doc comment.
-	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID, head.Blobs...)
+	//
+	// head's own provenance (Source/SourceID/SourceLabel, already
+	// Normalized at enqueue time), not the zero value: a dequeued prompt
+	// dispatched solo still carries the SAME provenance it would have
+	// carried had it instead ended up in an operator-batch drain — see
+	// runPrompt's own doc comment on prov.
+	go s.runPrompt(ctx, id, st, head.Text, "", head.MessageID,
+		engine.PromptProvenance{Source: head.Source, SourceID: head.SourceID, SourceLabel: head.SourceLabel},
+		head.Blobs...)
 	if s.dispatchQueueHeadRace != nil {
 		// Test-only seam — see its own doc comment (server.go).
 		s.dispatchQueueHeadRace()
@@ -2400,7 +2408,22 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // runOrQueueText's synthetic resume trigger, which has no client message id
 // of its own — PromptWithOrigin's own mint site resolves either case
 // identically.
-func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, blobs ...*message.Blob) {
+//
+// prov is the caller-attributable PromptProvenance for THIS text, forwarded
+// to Session.PromptWithOriginFrom so a solo-dispatched prompt's own
+// Source/SourceID/SourceLabel land on the message it appends, exactly like
+// a batched one's do on OperatorBatchEntry — the same value regardless of
+// whether the target session happened to be busy when it arrived. Every
+// caller supplies one: handlePrompt's own parsed body (an ordinary
+// prompt_async turn), dispatchQueueHead's dequeued QueuedPrompt's own
+// provenance (a dequeued prompt), or sendTextToRoot's own parsed body (a
+// session.send delivery) — except runOrQueueText's synthetic resume
+// trigger, which passes the zero value: that text is the engine's own,
+// not any caller's prompt, so PromptProvenance{} here is a placeholder
+// only in the sense that Origin (message.OriginEngine) already marks the
+// message as synthetic; Normalized still folds it to PromptSourceAPI, the
+// same "no ambiguous provenance" default a bare EnqueuePrompt call use.
+func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, prov engine.PromptProvenance, blobs ...*message.Blob) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2415,7 +2438,7 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	msg, err := st.sess.PromptWithOrigin(ctx, text, origin, msgID, blobs...)
+	msg, err := st.sess.PromptWithOriginFrom(ctx, text, origin, msgID, prov, blobs...)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
