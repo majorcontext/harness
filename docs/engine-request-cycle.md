@@ -118,10 +118,12 @@ worktree` checkout or a submodule, which use a `.git` file, resolve the same
 root a normal checkout does), or `WorkDir` itself when no ancestor holds one —
 and injects every `AGENTS.md` (falling back to `AGENT.md` per directory) found
 from that root down to `WorkDir` inclusive, root first. Without a repository
-boundary, only `WorkDir`'s own file counts: the walk never climbs to the
-filesystem root hunting for a first hit, which would inject an ancestor
-outside any repository (a `$HOME` `AGENTS.md`, or a stray file on a developer
-machine or box image) into every session rooted below it. A single file keeps
+boundary, only `WorkDir`'s own file counts: no ancestor's instruction file is
+ever injected in that case, even though the walk still ascends to the
+filesystem root to confirm no `.git` boundary exists. An unbounded injection
+would carry an ancestor outside any repository (a `$HOME` `AGENTS.md`, or a
+stray file on a developer machine or box image) into every session rooted
+below it. A single file keeps
 the plain one-file header a session with only one AGENTS.md has always seen:
 `Project instructions from <path>:`. More than one file renders instead as one
 generic precedence line — `Project instructions, root to working directory.

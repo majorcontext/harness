@@ -8,11 +8,10 @@
 // conflict against an ancestor. loadInstructionChain implements that: it finds
 // the repository root — the nearest ancestor of WorkDir with a .git entry
 // (file or directory, so a worktree or submodule checkout still resolves the
-// right root), or the top of the upward walk when WorkDir is not inside a
-// repository — and injects every AGENTS.md (or AGENT.md fallback) found from
-// that root down to WorkDir inclusive, root first. os.ReadFile follows
-// symlinks, so the spec's `ln -s AGENTS.md AGENT.md` compatibility setup works
-// transparently.
+// right root), or WorkDir itself when no ancestor holds one — and injects
+// every AGENTS.md (or AGENT.md fallback) found from that root down to WorkDir
+// inclusive, root first. os.ReadFile follows symlinks, so the spec's
+// `ln -s AGENTS.md AGENT.md` compatibility setup works transparently.
 //
 // Discovery touches disk, so fresh sessions run it in bounded asynchronous
 // startup prewarm after final construction. Loaded sessions run it lazily on
