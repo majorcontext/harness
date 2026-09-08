@@ -1626,20 +1626,23 @@ components:
           description: >
             The context size, in tokens, the Claude Code CLI reported
             BEFORE its own compaction (compaction.claude_code), as the CLI
-            itself reported it. ABSENT — the key is missing, not present
-            as 0 — when the CLI's output omitted this data entirely; a
-            present value of exactly 0 is a genuine CLI report and is
-            indistinguishable, on the wire, from that absence.
+            itself reported it. The server encodes this field with
+            `omitempty`, so the CLI omitting the data entirely and the CLI
+            genuinely reporting exactly 0 both serialize identically — the
+            key is simply ABSENT in both cases. A client cannot tell those
+            two apart from the wire alone and must render "unknown", never
+            "0", whenever the key is missing.
         post_tokens:
           type: integer
           description: >
             The context size, in tokens, the Claude Code CLI reported
             AFTER its own compaction (compaction.claude_code). Same
-            absent-vs-zero caveat as pre_tokens: the CLI's own SDK type
-            marks this field optional, so ABSENT (the CLI reported nothing)
-            and a genuine report of exactly 0 both serialize identically —
-            a client must render "unknown", never "0", when the key is
-            missing.
+            absent-vs-zero caveat as pre_tokens, and for the same reason:
+            the CLI's own SDK type marks this field optional, and the
+            server's `omitempty` encoding then makes "the CLI reported
+            nothing" and "the CLI reported exactly 0" indistinguishable —
+            both leave the key ABSENT. A client must render "unknown",
+            never "0", whenever the key is missing.
 
     JournalResponse:
       type: object
