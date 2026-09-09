@@ -1,6 +1,6 @@
 # Fast transcript bootstrap
 
-Status: proposed. Not built.
+Status: implemented.
 Extends: `docs/design/journal-snapshotting.md` (Layer B), `docs/design/
 live-event-tip-cursor.md`, `docs/design/transcript-tail-seqs.md`.
 Related (other repo): `meetneptune/boxes`'s `docs/design/
