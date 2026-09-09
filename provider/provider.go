@@ -163,7 +163,11 @@ const (
 	ChainRefusalPropertyChanged ChainRefusal = "property_changed"
 	// ChainRefusalPrefixChanged reports an input prefix that is no longer
 	// byte-identical to the lineage call's own input plus its response.
-	// ChainRefusalItem holds the index of the first item that differs.
+	// This reason locates the mismatch two ways. Normally it reports the
+	// index of the first item that differs in ChainRefusalItem. When the
+	// input is too short to extend the prefix at all, no such index
+	// exists, so it reports "input_shorter_than_prefix" in
+	// ChainRefusalDetail instead.
 	ChainRefusalPrefixChanged ChainRefusal = "prefix_changed"
 )
 
