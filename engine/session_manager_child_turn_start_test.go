@@ -303,14 +303,15 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 	wg.Wait()
 
 	// A failed Spawn or a timed-out waitForStatus above has already named
-	// the exact failure, and a child that never reached StatusDone will
-	// never fire an end either. Stop here rather than blocking below for a
-	// signal that cannot arrive: that wait is deliberately deadline-free,
-	// so it would bury the real diagnosis behind the global go test
-	// timeout. A t.Fatalf from one of those goroutines is not the test
-	// goroutine's, so it marks the test failed and exits only that
-	// goroutine -- its deferred wg.Done still runs and wg.Wait still
-	// returns here. A review finding on the first cut of this fix.
+	// the exact failure, and a child that never reached StatusDone never
+	// fires an end either. Stop here rather than blocking below for a
+	// signal that cannot arrive: that wait is deadline-free by design, so
+	// it would bury the real diagnosis behind the global go test timeout.
+	//
+	// waitForStatus reports through t.Fatalf from one of those spawn
+	// goroutines, not from the test goroutine, so it marks the test failed
+	// and exits only that goroutine: the deferred wg.Done still runs and
+	// wg.Wait still returns here.
 	if t.Failed() {
 		return
 	}
@@ -321,8 +322,8 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 	// AFTER m.mu is released (see ChildTurnObserver's own doc comment),
 	// while markChangedLocked wakes waitForStatus's Changed seam while the
 	// lock is still held. Reading the counters straight after wg.Wait()
-	// therefore raced the callback and reported "0 ends, want 1" for
-	// whichever child lost.
+	// races the callback, which is the "0 ends, want 1" flake this test
+	// pins.
 	//
 	// Block on the observer's own signal instead, one per child. No
 	// deadline: a genuinely missing end hangs here and surfaces as a test
@@ -335,10 +336,9 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 	// unlockAndFlushPersist before the child's turn goroutine is even
 	// started, so it has always run by the time that child's end fires.
 	//
-	// A flat n is right here: the early return above leaves only the case
-	// where every child spawned and settled, and every settled child fires
-	// exactly one end (finalizeTurnFrom's gate is depth > 0, which holds
-	// for all of them).
+	// A flat n: the early return above leaves only the case where every
+	// child spawned and settled, and every settled child fires exactly one
+	// end (finalizeTurnFrom's gate is depth > 0, true for all of them).
 	for i := 0; i < n; i++ {
 		<-endFired
 	}
