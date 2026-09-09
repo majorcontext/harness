@@ -1325,7 +1325,7 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 		// session.
 		return transcriptJSON{}, false
 	}
-	seq, liveFrom, reportErr := s.transcriptCursorLocked(id, page.Messages, tipAtStart, nil)
+	seq, liveFrom, reportErr := s.transcriptCursorLocked(id, page.Messages, tipAtStart, nil, true)
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}

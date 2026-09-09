@@ -459,3 +459,168 @@ func TestColdWindowedBootstrap_AfterCompaction(t *testing.T) {
 }
 
 func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
+
+// TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal is the
+// regression test for a correctness bug an Opus review of PR #265 found:
+// coldWindowedBootstrap fed its tail window straight to
+// transcriptWatermarkLocked, which scans s.journal -- the SERVER's own
+// in-memory event log, process-wide and cumulative, independent of
+// residency -- for a compaction summary absent from the passed-in
+// history and, on finding one, capped the returned watermark toward it.
+// That cap exists for a summary excluded by a LIVE compaction race (see
+// transcriptWatermarkLocked's own doc comment); it is a false positive
+// for a summary simply older than a bounded window, which is the only
+// way a windowed, already-non-resident read can ever exclude one
+// (docs/design/fast-transcript-bootstrap.md §4.4).
+//
+// The bug requires s.journal to ALREADY hold this session's compaction
+// summary before the windowed call runs: lookupSession's LoadSession
+// branch never registers a session as resident, so a plain GET
+// stream_from=1 (no limit) journals the summary via
+// transcriptCursorLocked and leaves the session just as cold as before --
+// exactly what step 1 below does, mirroring the reviewer's repro. The
+// harness is built FIRST, against an EMPTY dir (so its boot-time
+// reconcile(), which also fully replays and journals every session
+// already on disk, finds nothing -- the same setup
+// TestTranscriptStreamFrom_ConsistentWithSnapshot uses for the identical
+// reason) -- the seed session is written to that same dir only
+// afterward, out-of-process. Without the explicit step-1 read below,
+// the bug cannot manifest: a virgin session has nothing in s.journal
+// yet, so the cap never engages regardless of windowing, which is why
+// TestColdWindowedBootstrap_AfterCompaction (added earlier in this
+// file, before this bug was found) never caught it.
+func TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal(t *testing.T) {
+	dir := t.TempDir()
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 20}),
+		compactAsstTurn("three", provider.Usage{InputTokens: 30}),
+		compactAsstTurn("summary", provider.Usage{InputTokens: 5}),
+	}}
+	seed := engine.NewSession(engine.Config{
+		Providers:  provider.Registry{seedProv.name: seedProv},
+		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir: dir,
+		WorkDir:    dir,
+	})
+	for i, text := range []string{"go1", "go2", "go3"} {
+		if _, err := seed.Prompt(context.Background(), text); err != nil {
+			t.Fatalf("seed Prompt %d: %v", i, err)
+		}
+	}
+	if _, err := seed.Compact(context.Background(), engine.CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if err := seed.PersistErr(); err != nil {
+		t.Fatalf("seed PersistErr: %v", err)
+	}
+
+	// Step 1: ONE full stream_from=1 read seeds s.journal with the
+	// compaction summary (and the two kept messages), and leaves the
+	// session cold (see the doc comment above).
+	full, fullMeta := getTranscript(t, h, seed.ID)
+	if fullMeta.status != 200 {
+		t.Fatalf("GET full (seed s.journal) = %d: %s", fullMeta.status, fullMeta.body)
+	}
+	if h.srv.residentSession(seed.ID) != nil {
+		t.Fatal("seed.ID became resident from a plain GET -- test setup invariant broken")
+	}
+
+	// Step 2: a windowed read whose 2-message tail excludes the
+	// compaction summary (post-compaction history is exactly 3 messages:
+	// summary, kept-user, kept-assistant).
+	resp, data := h.do("GET", "/session/"+seed.ID+"/message?stream_from=1&limit=2", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET windowed (post-seed) = %d: %s", resp.StatusCode, data)
+	}
+	var windowed transcriptResponse
+	if err := json.Unmarshal(data, &windowed); err != nil {
+		t.Fatalf("decode: %v (%s)", err, data)
+	}
+
+	if windowed.StreamFrom != full.StreamFrom {
+		t.Errorf("windowed stream_from = %d, want %d (parity with the full path already established for this session -- a compaction summary OLDER than the window must never cap it)", windowed.StreamFrom, full.StreamFrom)
+	}
+	if windowed.LiveFrom != full.LiveFrom {
+		t.Errorf("windowed live_from = %d, want %d (parity with the full path)", windowed.LiveFrom, full.LiveFrom)
+	}
+}
+
+// TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow
+// extends TestColdWindowedBootstrap_ParityWithFullRead's parity oracle to
+// a compacted session with a window SMALLER than the total history (that
+// test's own limit=100 always covered everything, so it could never
+// exercise a compaction summary sitting outside the window at all). Per
+// docs/design/fast-transcript-bootstrap.md §4.1, stream_from/live_from
+// must match the full path exactly whenever the window reaches the
+// session's newest message -- which a "newest page" window always does --
+// regardless of how small the window is or how much older history (a
+// compaction summary included) it excludes.
+//
+// Unlike TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal,
+// this test writes the seed session to disk BEFORE the harness boots, so
+// Server.reconcile's own startup replay (server/journal.go) journals the
+// compaction summary into s.journal before either read below runs --
+// s.journal is seeded here too, just by a different, equally realistic
+// path (an already-populated SessionDir at process start) than the other
+// test's explicit prior read.
+func TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow(t *testing.T) {
+	dir := t.TempDir()
+	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 20}),
+		compactAsstTurn("three", provider.Usage{InputTokens: 30}),
+		compactAsstTurn("summary", provider.Usage{InputTokens: 5}),
+	}}
+	seed := engine.NewSession(engine.Config{
+		Providers:  provider.Registry{seedProv.name: seedProv},
+		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir: dir,
+		WorkDir:    dir,
+	})
+	for i, text := range []string{"go1", "go2", "go3"} {
+		if _, err := seed.Prompt(context.Background(), text); err != nil {
+			t.Fatalf("seed Prompt %d: %v", i, err)
+		}
+	}
+	if _, err := seed.Compact(context.Background(), engine.CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if err := seed.PersistErr(); err != nil {
+		t.Fatalf("seed PersistErr: %v", err)
+	}
+
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	// limit=2 of a 3-message post-compaction history (summary, kept-user,
+	// kept-assistant): a genuinely partial window that excludes the
+	// summary, called FIRST against a still-virgin s.journal.
+	windowedResp, windowedData := h.do("GET", "/session/"+seed.ID+"/message?stream_from=1&limit=2", nil)
+	if windowedResp.StatusCode != 200 {
+		t.Fatalf("GET windowed = %d: %s", windowedResp.StatusCode, windowedData)
+	}
+	var windowed transcriptResponse
+	if err := json.Unmarshal(windowedData, &windowed); err != nil {
+		t.Fatalf("decode windowed: %v (%s)", err, windowedData)
+	}
+	if len(windowed.Messages) != 2 {
+		t.Fatalf("got %d windowed messages, want 2 (a genuinely partial window)", len(windowed.Messages))
+	}
+
+	full, fullMeta := getTranscript(t, h, seed.ID)
+	if fullMeta.status != 200 {
+		t.Fatalf("GET full (oracle) = %d: %s", fullMeta.status, fullMeta.body)
+	}
+	if len(full.Messages) != 3 {
+		t.Fatalf("got %d full messages, want 3 (summary + 2 kept)", len(full.Messages))
+	}
+
+	if windowed.StreamFrom != full.StreamFrom {
+		t.Errorf("windowed stream_from = %d, want %d (full-read oracle)", windowed.StreamFrom, full.StreamFrom)
+	}
+	if windowed.LiveFrom != full.LiveFrom {
+		t.Errorf("windowed live_from = %d, want %d (full-read oracle)", windowed.LiveFrom, full.LiveFrom)
+	}
+}

@@ -366,6 +366,65 @@ concurrent prompt makes the session resident, the fast path bails out to
 This design adds no new compaction handling because it never runs the
 watermark computation over a compacting session at all.
 
+### 4.4a An already-landed compaction (not a sandwich — a correctness bug
+found by review, fixed)
+
+§4.4 above rules out an ACTIVE compaction racing this design's read. It
+does not, on its own, rule out an ALREADY-LANDED one: a compaction that
+completed before this call started, whose summary message simply sits at
+an ordinal *older than the returned window*. An Opus review of the first
+version of this change found that `transcriptWatermarkLocked`, called
+unchanged with the tail window as `history`, could not tell that case
+apart from the live sandwich it exists to protect — both look identical
+to its loop: "a compaction summary's `evtMessage` record is in `s.journal`
+but absent from `history`." For a windowed read, that condition is true
+for EVERY compaction summary older than the window, always, not merely
+during a race — `s.journal` is this **process's** own cumulative event
+log, populated by any earlier full `stream_from=1` read of this session
+or by `Server.reconcile`'s startup replay of whatever already sits in
+`SessionDir`, and neither has anything to do with whether a compaction is
+happening *now*. The old code applied the sandwich's cap anyway, dragging
+`stream_from` down toward `summaryCeiling - 1` — in the worst case,
+toward the very start of the session — silently reopening exactly the
+backlog flood `live_from` exists to prevent (§1, §4.1), scaling with
+session length and worst on the long, already-compacted, cold sessions
+this design targets. `live_from` itself stayed correct throughout (it is
+`max(seq, tipAtStart)`, and `tipAtStart` never depends on this
+computation), so the failure was an over-delivery on `stream_from`
+resume, not a gap — but it directly broke this section's own "same
+watermark computation, fed a smaller slice" claim (§4.1) and
+`transcriptJSON`'s only-additive-narrowing contract (§5).
+
+**The fix.** `transcriptWatermarkLocked` takes a `windowed bool` parameter
+(threaded through `transcriptCursorLocked`, `false` from
+`transcriptSyncedThrough`, `true` from `coldWindowedBootstrap`). When
+`windowed` is true, the function skips `summaryCeiling` and
+`pendingCeilings` entirely — no cap fires, ever — and answers with
+`highest` alone: the greatest journaled seq among messages the window
+actually returned. This is sound, not merely convenient, because
+`coldWindowedBootstrap` only reaches this call after re-confirming
+non-residency (§4.3's own second `liveSessionObject` check): a cold
+session cannot be mid-compaction (§4.4's own argument), so no summary
+this call could ever see is excluded by a race. And because the window is
+always a "newest page" (`beforeSeq<=0`, so `page.LastSeq` equals the
+session's current total), the single highest-seq message across the
+**whole** session — the true tip `stream_from` must report — is *always*
+inside the window; `highest` alone already equals what a full read would
+compute, with nothing left for a ceiling to legitimately lower. The
+unwindowed path (`windowed == false`) is untouched: every existing
+sandwich, race, and pending-ceiling test still exercises the same code,
+unconditionally.
+
+See `TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal` and
+`TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow`
+(`server/transcript_bootstrap_window_test.go`) for the regression tests:
+both seed `s.journal` with an already-landed compaction summary (one via
+an explicit prior full read, the other via `Server.reconcile`'s startup
+replay of a pre-existing `SessionDir`), then assert the windowed path's
+`stream_from`/`live_from` exactly match the full path's — red-verified
+against the pre-fix code, which collapsed `stream_from` toward the
+session's start in both cases.
+
 ### 4.5 Resident sessions
 
 Unaffected. `coldWindowedBootstrap` bails out immediately for a resident

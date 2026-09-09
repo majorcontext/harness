@@ -375,7 +375,7 @@ func TestTranscriptWatermarkLocked_CompactionSummarySandwich(t *testing.T) {
 	h.srv.emitDurableLocked(staleEv)
 	// Deliberately no evtHistoryCompacted record: this is the gap between
 	// compaction's two separate emits, before the second one lands.
-	got := h.srv.transcriptWatermarkLocked(sessionID, []message.Message{first, stale})
+	got := h.srv.transcriptWatermarkLocked(sessionID, []message.Message{first, stale}, false)
 	h.srv.mu.Unlock()
 
 	if staleEv.Seq <= summaryEv.Seq {
