@@ -595,8 +595,27 @@ func isNotFoundErrorCode(code string) bool {
 	}
 }
 
+// isInvalidPreviousResponseMessage reports whether an error message names
+// previous_response_id itself. The live ChatGPT Codex backend rejects an
+// unusable reference as
+//
+//	{"type":"error","status":400,"error":{"type":"invalid_request_error",
+//	 "message":"Invalid `previous_response_id`."}}
+//
+// carrying no error code at all, so isNotFoundErrorCode cannot see it and
+// the chain miss escapes as a plain, non-retryable turn error. The wire
+// field name in the message is the only signal that frame has. Matching it
+// stays narrow: "invalid_request_error" alone describes every malformed
+// request, and a message naming this one field describes only a request
+// whose reference the server would not take. A false positive costs exactly
+// one complete re-send on a fresh connection, which is what an unusable
+// reference needs anyway.
+func isInvalidPreviousResponseMessage(message string) bool {
+	return strings.Contains(message, "previous_response_id")
+}
+
 func streamError(code, message string) error {
-	if isNotFoundErrorCode(code) {
+	if isNotFoundErrorCode(code) || isInvalidPreviousResponseMessage(message) {
 		if message == "" {
 			message = "previous response not found"
 		}
@@ -618,17 +637,27 @@ func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
 	}
 	var ev struct {
 		Code     string `json:"code"`
+		Message  string `json:"message"`
 		Response struct {
 			Error struct {
-				Code string `json:"code"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
 			} `json:"error"`
 		} `json:"response"`
 		Error struct {
-			Code string `json:"code"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		} `json:"error"`
 	}
-	return json.Unmarshal(data, &ev) == nil &&
-		(isNotFoundErrorCode(ev.Code) || isNotFoundErrorCode(ev.Response.Error.Code) || isNotFoundErrorCode(ev.Error.Code))
+	if json.Unmarshal(data, &ev) != nil {
+		return false
+	}
+	return isNotFoundErrorCode(ev.Code) ||
+		isNotFoundErrorCode(ev.Response.Error.Code) ||
+		isNotFoundErrorCode(ev.Error.Code) ||
+		isInvalidPreviousResponseMessage(ev.Message) ||
+		isInvalidPreviousResponseMessage(ev.Response.Error.Message) ||
+		isInvalidPreviousResponseMessage(ev.Error.Message)
 }
 
 func (s *stream) handle(name string, data []byte) error {

@@ -99,9 +99,12 @@ Only `CodexFamily` requests with WebSocket transport and a non-empty
 - Compare every context-bearing property before projecting an input suffix.
 - Match `prior input + prior assistant output` before sending the suffix.
 - Keep the complete request immutable for mismatch and HTTP fallback.
-- Recover only an immediate first-frame chain miss once: the documented
-  `previous_response_not_found` code or the `404`/`not_found` HTTP-status
-  vocabulary the same rejection has also been observed to carry.
+- Recover only an immediate first-frame chain miss once. The rejection can
+  arrive as the documented `previous_response_not_found` code, as the
+  `404`/`not_found` HTTP-status vocabulary, or with no code at all, as an
+  `invalid_request_error` whose message names `previous_response_id`.
+  Classify all three. Match the last one on that field name, not on
+  `invalid_request_error`, which describes every malformed request.
 - Recover a chain miss on a chained request, or on a reused connection even
   when the request itself was already complete. Do not recover one on a
   freshly dialed connection carrying a non-chained request.

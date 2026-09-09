@@ -413,9 +413,11 @@ immutable and is also the body used for every HTTP fallback.
 A dial, send, or first-frame transport failure clears lineage and uses the
 existing HTTP fallback for that call. A request can also recover once when its
 immediate first frame reports a chain miss — the documented
-`previous_response_not_found` code, or the `404`/`not_found` HTTP-status
-vocabulary the same rejection has also carried — as long as the request was
-chained, or its connection was reused: a reused connection can carry the
+`previous_response_not_found` code, the `404`/`not_found` HTTP-status
+vocabulary the same rejection has also carried, or a codeless
+`invalid_request_error` whose message names `previous_response_id` — as long
+as the request was chained, or its connection was reused: a reused
+connection can carry the
 server's own implicit session state even when the local request is already
 complete (a model switch, for example, whose next request the property
 comparison above already refuses to chain). Recovery dials a fresh connection,

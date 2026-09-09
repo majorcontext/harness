@@ -304,12 +304,27 @@ A retry can use lineage only when the prior attempt completed cleanly. A failed
 attempt cannot update lineage. Partial model output and partial tool intent do
 not enter the next incremental baseline.
 
-The adapter classifies a Codex "conversation gone" rejection as a chain miss:
-the documented `previous_response_not_found` code, or the plain HTTP-status
-vocabulary (`404`, `not_found`) the same condition has also been observed to
-carry. Recovery is intentionally narrower than an ordinary "before visible
-output" check. Only a miss in the immediate first response frame can recover,
-and only once per turn.
+The adapter classifies a Codex "conversation gone" rejection as a chain miss.
+The same condition arrives in three vocabularies:
+
+- The documented `previous_response_not_found` error code.
+- The plain HTTP-status vocabulary, `404` or `not_found`.
+- No error code at all: an `invalid_request_error` whose message names
+  `previous_response_id`. The live ChatGPT Codex backend sends this form,
+  measured on 2026-09-09:
+
+```json
+{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}}
+```
+
+The third form is matched on the `previous_response_id` field name in the
+message, never on `invalid_request_error`, which describes every malformed
+request. A false positive costs one complete re-send on a fresh connection,
+which is what an unusable reference needs anyway.
+
+Recovery is intentionally narrower than an ordinary "before visible output"
+check. Only a miss in the immediate first response frame can recover, and only
+once per turn.
 
 A chain miss can also occur on a request that carried no `previous_response_id`
 of its own. A reused pooled connection can carry the server's own implicit
@@ -471,6 +486,8 @@ Implementation follows test-driven development.
 - A chain-miss code (`previous_response_not_found`, `404`, or `not_found`) on
   the first frame causes one full-request recovery on a freshly dialed
   connection.
+- A codeless `invalid_request_error` naming `previous_response_id` recovers
+  the same way; an `invalid_request_error` naming any other field does not.
 - A first-frame chain miss on a request that was already complete (not
   chained) also recovers when it arrived on a reused connection, and does not
   recover on a freshly dialed one.
