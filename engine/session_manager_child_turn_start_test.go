@@ -263,10 +263,23 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 		m.starts[id]++
 		lock.Unlock()
 	})
+	// endFired is how this test learns an end actually happened. The
+	// counters stay the oracle for both directions, missing and surplus;
+	// this channel only supplies the ordering the assertion needs.
+	//
+	// Buffered past n and sent to non-blocking, so test bookkeeping can
+	// never block a manager goroutine: a surplus fire lands in m.ends
+	// (where the per-child check below catches it) instead of wedging the
+	// observer.
+	endFired := make(chan string, 4*n)
 	mgr.SetChildTurnObserver(func(id string, _ *message.Message, _ error, _ bool) {
 		lock.Lock()
 		m.ends[id]++
 		lock.Unlock()
+		select {
+		case endFired <- id:
+		default:
+		}
 	})
 
 	ids := make([]string, n)
@@ -288,6 +301,39 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 		}(i)
 	}
 	wg.Wait()
+
+	// StatusDone does NOT order the end observer, so wg.Wait() returning is
+	// not permission to read m.ends yet: finalizeTurnFrom queues that
+	// observer through deferPersist and unlockAndFlushPersist runs it only
+	// AFTER m.mu is released (see ChildTurnObserver's own doc comment),
+	// while markChangedLocked wakes waitForStatus's Changed seam while the
+	// lock is still held. Reading the counters straight after wg.Wait()
+	// therefore raced the callback and reported "0 ends, want 1" for
+	// whichever child lost.
+	//
+	// Block on the observer's own signal instead, one per child. No
+	// deadline: a genuinely missing end hangs here and surfaces as a test
+	// timeout with a goroutine dump naming the stuck goroutine, which is
+	// strictly more diagnostic than a guessed deadline that would turn the
+	// same defect back into a flake.
+	//
+	// This settles the start side too. A spawned child's start observer is
+	// queued in Spawn's own m.mu hold and flushed by its
+	// unlockAndFlushPersist before the child's turn goroutine is even
+	// started, so it has always run by the time that child's end fires.
+	//
+	// One end per child that actually spawned, not a flat n: a child whose
+	// Spawn failed (already reported above, and skipped by the assertion
+	// below) never runs a turn and so never ends.
+	spawned := 0
+	for _, id := range ids {
+		if id != "" {
+			spawned++
+		}
+	}
+	for i := 0; i < spawned; i++ {
+		<-endFired
+	}
 
 	lock.Lock()
 	defer lock.Unlock()
