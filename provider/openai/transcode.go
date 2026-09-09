@@ -81,7 +81,13 @@ func responsesRequestPropertiesMatch(previous, current *apiRequest) bool {
 // context-bearing property that differs between the lineage request and the
 // current one, or "" when every property matches. The name reaches an
 // operator as provider.RequestMetadata.ChainRefusalDetail, so this returns
-// field names only, never a field value.
+// a field name and never a field value.
+//
+// One returned name is not a wire property: "request" is the sentinel for a
+// missing request on one side, which keeps the nil handling
+// responsesRequestPropertiesMatch has always had. No refusal reports it --
+// wsPool.stream tests entry.lineage before it asks for a diff, and passes
+// its own complete request as the current one.
 func responsesRequestPropertyDiff(previous, current *apiRequest) string {
 	if previous == nil || current == nil {
 		if previous == current {
