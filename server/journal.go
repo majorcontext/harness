@@ -1079,7 +1079,40 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 		s.transcriptSyncRace()
 	}
 
+	var reportErr error
+	seq, liveFrom, reportErr = s.transcriptCursorLocked(id, history, tipAtStart, persistErr)
+	if reportErr != nil {
+		s.reportError(reportErr)
+	}
+	return history, seq, liveFrom, seqs, true
+}
+
+// transcriptCursorLocked is transcriptSyncedThrough's own lock section,
+// factored out unchanged (docs/design/fast-transcript-bootstrap.md §3.3) so
+// a cold, windowed read (coldWindowedBootstrap, handlers.go) can share it
+// instead of growing a second, subtly different implementation of the same
+// race-close. Given ANY message slice that is a snapshot no later than
+// tipAtStart's own already-released critical section — sess.History() in
+// full, or a bounded engine.ReadMessagePage tail — it marks each of
+// history's messages seen, journals any not yet seen, and returns the same
+// (seq, liveFrom) pair transcriptSyncedThrough has always computed: seq is
+// the durable watermark transcriptWatermarkLocked derives from history,
+// and liveFrom is max(seq, tipAtStart). The live-event-tip-cursor.md §4
+// proof this pair carries depends only on that snapshot property, never on
+// history being the whole session — see fast-transcript-bootstrap.md §4.1.
+//
+// persistErr is optional: a cold caller with no resident *engine.Session
+// (nothing to ask PersistErr of) passes nil, and checkPersistErrLocked is a
+// no-op for a nil error.
+//
+// It acquires s.mu itself rather than expecting an already-locked caller:
+// every current and future caller wants exactly this one critical section
+// — the seen-marking loop, the persist-error check, and the watermark
+// read — and nothing else inside it, so there is no reason to split lock
+// acquisition from the work it protects.
+func (s *Server) transcriptCursorLocked(id string, history []message.Message, tipAtStart int64, persistErr error) (seq, liveFrom int64, reportErr error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range history {
 		m := history[i]
 		// A message.IsSyntheticOrphanID entry (message.ResolveOrphanToolCalls'
@@ -1102,18 +1135,13 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 		s.markSeenLocked(id, m.ID)
 		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
 	}
-	reportErr := s.checkPersistErrLocked(id, persistErr)
+	reportErr = s.checkPersistErrLocked(id, persistErr)
 	seq = s.transcriptWatermarkLocked(id, history)
 	liveFrom = tipAtStart
 	if seq > liveFrom {
 		liveFrom = seq
 	}
-	s.mu.Unlock()
-
-	if reportErr != nil {
-		s.reportError(reportErr)
-	}
-	return history, seq, liveFrom, seqs, true
+	return seq, liveFrom, reportErr
 }
 
 // messageDurableOrdinals returns, parallel to history, each entry's
