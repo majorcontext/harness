@@ -133,6 +133,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		chainRefusal = provider.ChainRefusalConnectionIdle
 	}
 	var chainRefusalDetail string
+	var chainRefusalItem *int
 
 	var subUsage *message.SubscriptionUsage
 	if !reuse {
@@ -198,7 +199,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		chainRefusal = provider.ChainRefusalNone
 	} else {
 		chainRefusal = provider.ChainRefusalPrefixChanged
-		chainRefusalDetail = inputItemLocator(item)
+		chainRefusalItem, chainRefusalDetail = inputItemLocator(item)
 	}
 	entry.mu.Unlock()
 
@@ -267,6 +268,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		PreviousResponseUsed: false,
 		ChainRefusal:         chainRefusal,
 		ChainRefusalDetail:   chainRefusalDetail,
+		ChainRefusalItem:     chainRefusalItem,
 	}
 	if chainedRequest {
 		metadata.Mode = provider.RequestModeIncremental

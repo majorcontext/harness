@@ -965,6 +965,9 @@ func TestWebSocketChainRefusalMetadataNamesTheReason(t *testing.T) {
 	if got.ChainRefusal != provider.ChainRefusalPropertyChanged || got.ChainRefusalDetail != "max_output_tokens" {
 		t.Fatalf("property refusal = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPropertyChanged, "max_output_tokens")
 	}
+	if got.ChainRefusalItem != nil {
+		t.Fatalf("property refusal item = %v, want none: only a prefix refusal has an item", got.ChainRefusalItem)
+	}
 
 	// Same properties as the call that installed resp_two, but its first
 	// input item is no longer byte-identical -- exactly what a re-rendered
@@ -972,11 +975,50 @@ func TestWebSocketChainRefusalMetadataNamesTheReason(t *testing.T) {
 	prefix := lineageRequest("refusal", userMessage("one!"), assistantMessage("resp_one", "two"), userMessage("three"), assistantMessage("resp_two", "two"), userMessage("five"))
 	prefix.MaxTokens = 200
 	got = lineageTerminalMetadata(t, streamLineageTurn(t, client, prefix))
-	if got.ChainRefusal != provider.ChainRefusalPrefixChanged || got.ChainRefusalDetail != "input[0]" {
-		t.Fatalf("prefix refusal = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPrefixChanged, "input[0]")
+	if got.ChainRefusal != provider.ChainRefusalPrefixChanged {
+		t.Fatalf("prefix refusal = %q, want %q", got.ChainRefusal, provider.ChainRefusalPrefixChanged)
+	}
+	// The index rides its own numeric field. Item 0 is also the value a
+	// plain int field cannot tell apart from "no item".
+	if got.ChainRefusalItem == nil || *got.ChainRefusalItem != 0 {
+		t.Fatalf("prefix refusal item = %v, want a reported 0", got.ChainRefusalItem)
+	}
+	if got.ChainRefusalDetail != "" {
+		t.Fatalf("prefix refusal detail = %q, want empty: the index is not a detail string", got.ChainRefusalDetail)
 	}
 	if got.Mode != provider.RequestModeFull || got.PreviousResponseUsed {
 		t.Fatalf("prefix refusal metadata = %+v, want a full, unchained request", got)
+	}
+}
+
+// TestInputItemLocatorKeepsTheIndexOutOfTheDetailString pins the reported
+// regression. inputItemLocator used to render "input[<n>]" into
+// ChainRefusalDetail. BetterStack ingest reads that value as a path
+// expression and splits it, so a live row stored chain_refusal_detail="input"
+// with the index moved to a sibling chain_refusal_detail_json=[139] field
+// that no dashboard reads: the operator saw THAT request assembly rewrote
+// history, never WHICH item. The index must travel as a number, and every
+// detail string this adapter reports must be free of the "[" that triggers
+// the split.
+func TestInputItemLocatorKeepsTheIndexOutOfTheDetailString(t *testing.T) {
+	for _, index := range []int{0, 1, 4, 85, 139} {
+		item, detail := inputItemLocator(index)
+		if item == nil || *item != index {
+			t.Errorf("locator(%d) item = %v, want %d", index, item, index)
+		}
+		if detail != "" {
+			t.Errorf("locator(%d) detail = %q, want empty", index, detail)
+		}
+	}
+
+	// A current input too short to extend the prefix at all has no index to
+	// report, so this case keeps a bracket-free detail string instead.
+	item, detail := inputItemLocator(-1)
+	if item != nil {
+		t.Errorf("locator(-1) item = %v, want none", item)
+	}
+	if detail != "input_shorter_than_prefix" {
+		t.Errorf("locator(-1) detail = %q, want %q", detail, "input_shorter_than_prefix")
 	}
 }
 

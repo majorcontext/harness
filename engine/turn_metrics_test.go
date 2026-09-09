@@ -353,13 +353,20 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 // uncached, and nothing said why. The refusal reason and its locator must
 // reach the turn_metrics record so a log query can rank causes, and a
 // chained call must report neither.
+//
+// The locator rides chain_refusal_item as a NUMBER. It used to ride
+// chain_refusal_detail as "input[4]", which the BetterStack ingest reads as
+// a path expression and splits: a live row stored
+// chain_refusal_detail="input" and moved the index into a sibling
+// chain_refusal_detail_json field nothing queries.
 func TestTurnMetricsReportsChainRefusal(t *testing.T) {
+	changedItem := 4
 	metadata := &provider.RequestMetadata{
 		Mode:               provider.RequestModeFull,
 		CompleteInputItems: 9,
 		SentInputItems:     9,
 		ChainRefusal:       provider.ChainRefusalPrefixChanged,
-		ChainRefusalDetail: "input[4]",
+		ChainRefusalItem:   &changedItem,
 	}
 	prov := &scriptedProvider{name: "codex", turns: [][]provider.Event{{
 		{Type: provider.EventDone, Message: &message.Message{ID: "msg_a", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}, StopReason: provider.StopEndTurn, RequestMetadata: metadata},
@@ -377,8 +384,11 @@ func TestTurnMetricsReportsChainRefusal(t *testing.T) {
 		t.Fatalf("metrics records = %d, want 1", len(recorded))
 	}
 	got := recorded[0]
-	if got.ChainRefusal != provider.ChainRefusalPrefixChanged || got.ChainRefusalDetail != "input[4]" {
-		t.Fatalf("refusal metrics = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPrefixChanged, "input[4]")
+	if got.ChainRefusal != provider.ChainRefusalPrefixChanged {
+		t.Fatalf("refusal metrics = %q, want %q", got.ChainRefusal, provider.ChainRefusalPrefixChanged)
+	}
+	if got.ChainRefusalItem == nil || *got.ChainRefusalItem != changedItem {
+		t.Fatalf("refusal item = %v, want %d", got.ChainRefusalItem, changedItem)
 	}
 
 	var log bytes.Buffer
@@ -387,10 +397,49 @@ func TestTurnMetricsReportsChainRefusal(t *testing.T) {
 	t.Cleanup(func() { defaultTurnMetricsStderr = oldLogger })
 	defaultTurnMetricsLog(got)
 	record := log.String()
-	for _, field := range []string{`"chain_refusal":"prefix_changed"`, `"chain_refusal_detail":"input[4]"`} {
+	for _, field := range []string{`"chain_refusal":"prefix_changed"`, `"chain_refusal_item":4`} {
 		if !strings.Contains(record, field) {
 			t.Errorf("turn_metrics record %q does not contain %s", record, field)
 		}
+	}
+	// Surplus check: a prefix refusal reports no detail string at all, and
+	// the record carries no bracketed locator for a log pipeline to split.
+	if strings.Contains(record, "chain_refusal_detail") {
+		t.Errorf("prefix-refusal turn_metrics record %q reports a detail string", record)
+	}
+	if strings.Contains(record, "input[") {
+		t.Errorf("turn_metrics record %q still renders a bracketed locator", record)
+	}
+
+	// Item 0 is a real, common answer -- request assembly rewrote the very
+	// first input item -- and it is the value an int field with omitempty
+	// silently drops.
+	log.Reset()
+	firstItem := 0
+	defaultTurnMetricsLog(TurnMetrics{
+		Model:            message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		RequestMode:      provider.RequestModeFull,
+		ChainRefusal:     provider.ChainRefusalPrefixChanged,
+		ChainRefusalItem: &firstItem,
+	})
+	if zero := log.String(); !strings.Contains(zero, `"chain_refusal_item":0`) {
+		t.Errorf("turn_metrics record %q drops item 0", zero)
+	}
+
+	// A property refusal keeps the detail string and reports no item.
+	log.Reset()
+	defaultTurnMetricsLog(TurnMetrics{
+		Model:              message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		RequestMode:        provider.RequestModeFull,
+		ChainRefusal:       provider.ChainRefusalPropertyChanged,
+		ChainRefusalDetail: "instructions",
+	})
+	property := log.String()
+	if !strings.Contains(property, `"chain_refusal_detail":"instructions"`) {
+		t.Errorf("property turn_metrics record %q does not name the property", property)
+	}
+	if strings.Contains(property, "chain_refusal_item") {
+		t.Errorf("property turn_metrics record %q reports an input item", property)
 	}
 
 	// Surplus check: a chained call must not emit either key, so a query

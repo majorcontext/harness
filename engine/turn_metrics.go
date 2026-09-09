@@ -65,12 +65,15 @@ type TurnMetrics struct {
 	// ChainRecovered distinguishes an immediate chain-miss full retry from an
 	// initially full request.
 	ChainRecovered bool
-	// ChainRefusal and ChainRefusalDetail carry provider.RequestMetadata's
-	// own refusal fields verbatim: why a call that could have chained sent
-	// the complete input instead, and where. Both are empty on a chained
-	// call.
+	// ChainRefusal, ChainRefusalDetail, and ChainRefusalItem carry
+	// provider.RequestMetadata's own refusal fields verbatim: why a call
+	// that could have chained sent the complete input instead, and where.
+	// All three are empty on a chained call. See that type for which
+	// locator each reason carries; ChainRefusalDetail is always a name and
+	// ChainRefusalItem is always an input index.
 	ChainRefusal       provider.ChainRefusal
 	ChainRefusalDetail string
+	ChainRefusalItem   *int
 }
 
 // defaultTurnMetricsStderr is the JSON handler every default turn_metrics
@@ -122,6 +125,13 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 		args = append(args, "chain_refusal", m.ChainRefusal)
 		if m.ChainRefusalDetail != "" {
 			args = append(args, "chain_refusal_detail", m.ChainRefusalDetail)
+		}
+		// A number, not a bracketed string inside chain_refusal_detail: the
+		// BetterStack ingest reads "input[139]" as a path expression and
+		// stores only "input". Emitted whenever an index exists, item 0
+		// included.
+		if m.ChainRefusalItem != nil {
+			args = append(args, "chain_refusal_item", *m.ChainRefusalItem)
 		}
 	}
 	defaultTurnMetricsStderr.Info("turn_metrics", args...)

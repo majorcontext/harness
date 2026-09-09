@@ -3420,6 +3420,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			var previousResponseUsed, chainRecovered bool
 			var chainRefusal provider.ChainRefusal
 			var chainRefusalDetail string
+			var chainRefusalItem *int
 			if ev.RequestMetadata != nil {
 				requestMode = ev.RequestMetadata.Mode
 				completeInputItems = ev.RequestMetadata.CompleteInputItems
@@ -3428,6 +3429,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				chainRecovered = ev.RequestMetadata.ChainRecovered
 				chainRefusal = ev.RequestMetadata.ChainRefusal
 				chainRefusalDetail = ev.RequestMetadata.ChainRefusalDetail
+				chainRefusalItem = ev.RequestMetadata.ChainRefusalItem
 			}
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
@@ -3452,6 +3454,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				ChainRecovered:       chainRecovered,
 				ChainRefusal:         chainRefusal,
 				ChainRefusalDetail:   chainRefusalDetail,
+				ChainRefusalItem:     chainRefusalItem,
 			})
 			if ev.SubscriptionUsage != nil {
 				// See provider.Event.SubscriptionUsage's own doc comment:

@@ -791,8 +791,11 @@ present, `turn_metrics` also includes `request_mode`, `complete_input_items`,
 WebSocket calls report `request_mode` as `full` or `incremental`. An immediate
 chain-miss recovery reports the final complete retry as `full` and sets
 `chain_recovered=true`. A call that could have chained but did not also
-reports `chain_refusal`, plus `chain_refusal_detail` when the reason has a
-locator; a chained call reports neither key. Read
+reports `chain_refusal`, plus one locator key when the reason has one:
+`chain_refusal_detail` for a name, or the numeric `chain_refusal_item` for
+an input index (`0` included — a log pipeline that reads a bracketed
+`input[<n>]` string as a path expression drops the index, so the index is
+its own field). A chained call reports none of the three. Read
 `docs/design/codex-websocket-chaining.md` for the reason vocabulary. HTTP and
 adapters without projection metadata omit these fields. Startup prewarm emits no `EventDone` and therefore has no `turn_metrics`
 record; its separate lifecycle metric is described above.

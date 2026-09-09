@@ -373,18 +373,35 @@ It does not report the cause. A refused call therefore also names one reason
 (`provider.ChainRefusal`), and a chained call names none. The pool computes
 the reason where it makes the decision (`provider/openai/ws_pool.go`).
 
-| Reason | Cause | `chain_refusal_detail` |
-|---|---|---|
-| `no_lineage` | No usable lineage: the session's first call, or a lineage that a partial, failed, canceled, or concurrent call invalidated | empty |
-| `connection_idle` | The pooled connection sat idle past `wsDefaultIdleTimeout` (5 minutes) and took its lineage with it | empty |
-| `connection_aged` | The pooled connection reached `wsDefaultMaxConnectionAge` (55 minutes) | empty |
-| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` |
-| `prefix_changed` | The input prefix is no longer byte-identical to the lineage call's input plus its response | `input[<n>]` for the first item that differs, or `input_shorter_than_prefix` |
+| Reason | Cause | `chain_refusal_detail` | `chain_refusal_item` |
+|---|---|---|---|
+| `no_lineage` | No usable lineage: the session's first call, or a lineage that a partial, failed, canceled, or concurrent call invalidated | omitted | omitted |
+| `connection_idle` | The pooled connection sat idle past `wsDefaultIdleTimeout` (5 minutes) and took its lineage with it | omitted | omitted |
+| `connection_aged` | The pooled connection reached `wsDefaultMaxConnectionAge` (55 minutes) | omitted | omitted |
+| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` | omitted |
+| `prefix_changed` | The input prefix is no longer byte-identical to the lineage call's input plus its response | omitted | the index of the first item that differs, `0` included |
+| `prefix_changed` | The input is too short to extend the prefix at all, so no item index exists | `input_shorter_than_prefix` | omitted |
 
-A reason carries a property name or an input index. It never carries item
-content, and it never carries a response ID.
+A reason carries at most one locator, and the two locators have different
+shapes on purpose:
 
-Group `chain_refusal` to rank causes. A high `prefix_changed` rate means
+- `chain_refusal_detail` is a NAME. It holds no `[` or `]`.
+- `chain_refusal_item` is a NUMBER: an index into the complete input array.
+
+Keep the index in its own numeric field. A rendered `input[<n>]` locator
+survives Go and the fleet's Vector collector intact, but the BetterStack
+ingest reads that value as a path expression: it stored
+`chain_refusal_detail` as `"input"` and moved the subscript into a sibling
+`chain_refusal_detail_json` field that no query reads. That left the
+operator with the half of the answer they already had. A number also groups
+and aggregates directly, which the rendered locator never did.
+
+A reason never carries item content, and it never carries a response ID.
+
+Group `chain_refusal` to rank causes, then group `chain_refusal_item` within
+`prefix_changed` to find WHICH item request assembly rewrote: a cluster on
+one index points at one assembly site, and item `0` points at the head of
+the input. A high `prefix_changed` rate means
 request assembly rewrote history that the server already holds: ambient status
 must render the same bytes on every call of one tool loop (see
 `docs/design/managed-processes.md` section 4). A high `connection_idle` rate
