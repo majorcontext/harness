@@ -302,6 +302,19 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 	}
 	wg.Wait()
 
+	// A failed Spawn or a timed-out waitForStatus above has already named
+	// the exact failure, and a child that never reached StatusDone will
+	// never fire an end either. Stop here rather than blocking below for a
+	// signal that cannot arrive: that wait is deliberately deadline-free,
+	// so it would bury the real diagnosis behind the global go test
+	// timeout. A t.Fatalf from one of those goroutines is not the test
+	// goroutine's, so it marks the test failed and exits only that
+	// goroutine -- its deferred wg.Done still runs and wg.Wait still
+	// returns here. A review finding on the first cut of this fix.
+	if t.Failed() {
+		return
+	}
+
 	// StatusDone does NOT order the end observer, so wg.Wait() returning is
 	// not permission to read m.ends yet: finalizeTurnFrom queues that
 	// observer through deferPersist and unlockAndFlushPersist runs it only
@@ -322,16 +335,11 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 	// unlockAndFlushPersist before the child's turn goroutine is even
 	// started, so it has always run by the time that child's end fires.
 	//
-	// One end per child that actually spawned, not a flat n: a child whose
-	// Spawn failed (already reported above, and skipped by the assertion
-	// below) never runs a turn and so never ends.
-	spawned := 0
-	for _, id := range ids {
-		if id != "" {
-			spawned++
-		}
-	}
-	for i := 0; i < spawned; i++ {
+	// A flat n is right here: the early return above leaves only the case
+	// where every child spawned and settled, and every settled child fires
+	// exactly one end (finalizeTurnFrom's gate is depth > 0, which holds
+	// for all of them).
+	for i := 0; i < n; i++ {
 		<-endFired
 	}
 
