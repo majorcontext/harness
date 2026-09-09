@@ -2638,10 +2638,16 @@ paths:
           required: false
           schema: { type: integer, minimum: 0, default: 100, maximum: 1000 }
           description: >
-            Maximum messages in the page. 0 or omitted means 100. A value
-            above the maximum is REJECTED with 400, not clamped, so a
-            generated client that enforces the schema and this server agree
-            on what a request means.
+            Maximum messages in the page, or (combined with `stream_from`)
+            in the Transcript envelope's own windowed `messages`. 0 or
+            omitted means 100. WITHOUT `stream_from`, a value above the
+            maximum is REJECTED with 400, not clamped, so a generated
+            client that enforces the schema and this server agree on what
+            a request means. WITH `stream_from`, a value above the maximum
+            is instead BOUNDED to it, never rejected — see `stream_from`'s
+            own description below for why that path's own contract is
+            clamp-not-reject on both the cold and the resident branch
+            alike.
         - name: stream_from
           in: query
           required: false
