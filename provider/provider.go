@@ -163,7 +163,7 @@ const (
 	ChainRefusalPropertyChanged ChainRefusal = "property_changed"
 	// ChainRefusalPrefixChanged reports an input prefix that is no longer
 	// byte-identical to the lineage call's own input plus its response.
-	// Detail names the first item that differs.
+	// ChainRefusalItem holds the index of the first item that differs.
 	ChainRefusalPrefixChanged ChainRefusal = "prefix_changed"
 )
 
@@ -177,12 +177,28 @@ type RequestMetadata struct {
 	// ChainRecovered is true when an incremental request received an immediate
 	// chain miss and completed after one full-request retry.
 	ChainRecovered bool `json:"chain_recovered"`
-	// ChainRefusal and ChainRefusalDetail report why this call did not
-	// chain. Both are empty on a chained call, and on an adapter or
-	// transport that cannot chain. ChainRefusalDetail is empty for a
-	// refusal whose reason needs no locator.
+	// ChainRefusal reports why this call did not chain. It is empty on a
+	// chained call, and on an adapter or transport that cannot chain.
+	//
+	// ChainRefusalDetail and ChainRefusalItem are the two locator shapes a
+	// reason can carry, and a reason carries at most one. Both are empty
+	// for a reason that needs no locator.
+	//
+	// ChainRefusalDetail is a NAME: a wire property name for
+	// ChainRefusalPropertyChanged, or "input_shorter_than_prefix" for the
+	// prefix refusal that has no index to report. It stays free of "[" and
+	// "]" on purpose, because a log pipeline can read a bracketed value as
+	// a path expression and split it (see inputItemLocator in
+	// provider/openai/transcode.go).
+	//
+	// ChainRefusalItem is an INDEX into the complete input array, set only
+	// by ChainRefusalPrefixChanged, and nil otherwise. A pointer, not a
+	// plain int: item 0 is a real and common answer, so "no item" needs a
+	// value of its own. A number is also directly aggregatable, which a
+	// rendered locator never was.
 	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
 	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
+	ChainRefusalItem   *int         `json:"chain_refusal_item,omitempty"`
 }
 
 // Event is one streaming event from a model call.

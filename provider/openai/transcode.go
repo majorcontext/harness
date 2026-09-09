@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/majorcontext/harness/imageclamp"
@@ -708,11 +707,19 @@ func dataURL(b *message.Blob) string {
 	return "data:" + b.MediaType + ";base64," + base64.StdEncoding.EncodeToString(b.Data)
 }
 
-// inputItemLocator renders an input index as the locator a prefix refusal
-// reports. Index only: an item's own content never leaves the adapter.
-func inputItemLocator(index int) string {
+// inputItemLocator splits an input index into the two locator fields a
+// prefix refusal reports: the index itself, and a detail string for the one
+// case that has no index. Index only: an item's own content never leaves the
+// adapter.
+//
+// The index stays a number and never joins the detail string. A rendered
+// "input[<n>]" survives Go and Vector intact, but the BetterStack ingest
+// reads that value as a path expression: it stores chain_refusal_detail
+// as "input" and moves the subscript into a sibling chain_refusal_detail_json
+// field, which leaves the operator with the useless half of the answer.
+func inputItemLocator(index int) (*int, string) {
 	if index < 0 {
-		return "input_shorter_than_prefix"
+		return nil, "input_shorter_than_prefix"
 	}
-	return "input[" + strconv.Itoa(index) + "]"
+	return &index, ""
 }
