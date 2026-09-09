@@ -1079,7 +1079,47 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 		s.transcriptSyncRace()
 	}
 
+	var reportErr error
+	seq, liveFrom, reportErr = s.transcriptCursorLocked(id, history, tipAtStart, persistErr, false)
+	if reportErr != nil {
+		s.reportError(reportErr)
+	}
+	return history, seq, liveFrom, seqs, true
+}
+
+// transcriptCursorLocked is transcriptSyncedThrough's own lock section,
+// factored out unchanged (docs/design/fast-transcript-bootstrap.md §3.3) so
+// a cold, windowed read (coldWindowedBootstrap, handlers.go) can share it
+// instead of growing a second, subtly different implementation of the same
+// race-close. Given ANY message slice that is a snapshot no later than
+// tipAtStart's own already-released critical section — sess.History() in
+// full, or a bounded engine.ReadMessagePage tail — it marks each of
+// history's messages seen, journals any not yet seen, and returns the same
+// (seq, liveFrom) pair transcriptSyncedThrough has always computed: seq is
+// the durable watermark transcriptWatermarkLocked derives from history,
+// and liveFrom is max(seq, tipAtStart). The live-event-tip-cursor.md §4
+// proof this pair carries depends only on that snapshot property, never on
+// history being the whole session — see fast-transcript-bootstrap.md §4.1.
+//
+// persistErr is optional: a cold caller with no resident *engine.Session
+// (nothing to ask PersistErr of) passes nil, and checkPersistErrLocked is a
+// no-op for a nil error.
+//
+// windowed forwards to transcriptWatermarkLocked unchanged (see its own
+// doc comment, "A windowed read and an already-landed compaction"): a
+// resident-history caller passes false (unchanged behavior), and
+// coldWindowedBootstrap passes true, because its history is a bounded tail
+// page that can legitimately exclude an old compaction summary with no
+// live race involved at all.
+//
+// It acquires s.mu itself rather than expecting an already-locked caller:
+// every current and future caller wants exactly this one critical section
+// — the seen-marking loop, the persist-error check, and the watermark
+// read — and nothing else inside it, so there is no reason to split lock
+// acquisition from the work it protects.
+func (s *Server) transcriptCursorLocked(id string, history []message.Message, tipAtStart int64, persistErr error, windowed bool) (seq, liveFrom int64, reportErr error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range history {
 		m := history[i]
 		// A message.IsSyntheticOrphanID entry (message.ResolveOrphanToolCalls'
@@ -1102,18 +1142,13 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 		s.markSeenLocked(id, m.ID)
 		s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
 	}
-	reportErr := s.checkPersistErrLocked(id, persistErr)
-	seq = s.transcriptWatermarkLocked(id, history)
+	reportErr = s.checkPersistErrLocked(id, persistErr)
+	seq = s.transcriptWatermarkLocked(id, history, windowed)
 	liveFrom = tipAtStart
 	if seq > liveFrom {
 		liveFrom = seq
 	}
-	s.mu.Unlock()
-
-	if reportErr != nil {
-		s.reportError(reportErr)
-	}
-	return history, seq, liveFrom, seqs, true
+	return seq, liveFrom, reportErr
 }
 
 // messageDurableOrdinals returns, parallel to history, each entry's
@@ -1249,8 +1284,66 @@ func messageDurableOrdinals(history []message.Message) []int64 {
 // (its evtHistoryCompacted record present without a matching in-memory
 // evtMessage), and summaryCeiling covers the newly-widened sandwich window
 // above. See TestTranscriptWatermarkLocked_CompactionSummarySandwich.
+//
+// # A windowed read and an already-landed compaction
+//
+// windowed is true for exactly one caller: coldWindowedBootstrap
+// (handlers.go), whose history is engine.ReadMessagePage's own bounded tail
+// page, never the session's complete current view (docs/design/
+// fast-transcript-bootstrap.md §4.4). s.journal, unlike history, is
+// per-process and cumulative: once ANYTHING journals a session's full
+// history (an earlier stream_from=1 read, or a turn this process itself
+// drove, or Server.reconcile's own startup replay), a compaction summary
+// excluded from THIS window can sit in s.journal at essentially any seq —
+// below the window's own messages (the common case: one batch fold
+// journals the whole then-current history in array order, so an excluded
+// summary sits at the LOWEST seq of that batch), or, for a session that
+// has been through more than one compaction, ABOVE them (an earlier
+// summary folded away by a LATER one can have been journaled live, in real
+// chronological order, strictly after messages that now sit ahead of it in
+// the folded numbering — docs/design/fast-transcript-bootstrap.md §4.4a).
+// The two ceiling mechanisms above cannot tell any of this apart from the
+// live sandwich race they exist for — both see "a compaction summary
+// absent from history" regardless of why — but a windowed caller does not
+// need them to, and the guarantee this parameter provides is a BOUND, not
+// the exact parity an earlier version of this comment claimed:
+//
+//   - windowed==true never returns a seq above the session's true tip.
+//     highest (below) is computed only from messages actually present in
+//     the returned window, so it can never exceed whatever this process
+//     has genuinely observed for this session — there is nothing here
+//     that could inflate it.
+//   - Every message EXCLUDED from a windowed watermark by skipping the
+//     ceiling is either backward-paging content (older than the window,
+//     recoverable with before_seq/limit exactly as it always was, and
+//     never claimed as "delivered" by this response) or folded-away
+//     content (no longer exists in ANY current fold, windowed or full —
+//     nothing could ever hand it back regardless of this parameter). In
+//     neither case is it a live, currently-rendered message the SSE
+//     cursor must carry forward: the residency recheck
+//     coldWindowedBootstrap already performs (after its own
+//     ReadMessagePage read, before calling transcriptCursorLocked) rules
+//     out an ACTIVE compaction, since compacting requires a resident
+//     session (§4.4's own argument) — so nothing this call could ever
+//     return as "excluded" is a message this call's own caller still
+//     needs delivered live; applying either ceiling here would instead
+//     cap the watermark toward the session's START for no reason, the
+//     false positive TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal
+//     and TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow
+//     red-verify and this parameter exists to prevent.
+//     TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip red-
+//     verifies the OTHER direction this comment used to overclaim: even
+//     when an excluded summary's true seq is ABOVE the window's own
+//     messages (a multi-compaction session), the returned watermark still
+//     never exceeds the true tip, and every currently-rendered message is
+//     still either in the window or safely resumable above it.
+//
+// The unwindowed (windowed==false) path is byte-for-byte unchanged: every
+// existing TestTranscriptStreamFrom_Compaction* and
+// TestTranscriptWatermarkLocked_* test still exercises it exactly as
+// before.
 // Caller holds s.mu.
-func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message) int64 {
+func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message, windowed bool) int64 {
 	inHistory := make(map[string]bool, len(history))
 	for i := range history {
 		inHistory[history[i].ID] = true
@@ -1261,11 +1354,12 @@ func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.M
 	// summary is absent from history, that summary's OWN message ID — its
 	// seq is looked up in a second pass below, once highest is known, so the
 	// common (no concurrent compaction) case never pays for the lookup.
+	// Left nil when windowed: see below.
 	var pendingCeilings []string
 	// summaryCeiling caps the watermark directly from a compaction summary's
 	// own evtMessage record, without waiting for its evtHistoryCompacted
 	// record — see the "two-emit sandwich window" section above. -1 means no
-	// absent summary evtMessage was seen.
+	// absent summary evtMessage was seen. Left at -1 when windowed.
 	summaryCeiling := int64(-1)
 	for _, ev := range s.journal {
 		if ev.SessionID != sessionID {
@@ -1277,7 +1371,12 @@ func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.M
 				continue
 			}
 			if !inHistory[ev.Message.ID] {
-				if engine.IsCompactionSummaryID(ev.Message.ID) && (summaryCeiling == -1 || ev.Seq < summaryCeiling) {
+				// windowed: a message absent from history here means only
+				// "older than the returned window," never a live race — see
+				// the doc comment above the ceiling computation below for
+				// why the two are indistinguishable to this loop but never
+				// need to be told apart for a windowed caller.
+				if !windowed && engine.IsCompactionSummaryID(ev.Message.ID) && (summaryCeiling == -1 || ev.Seq < summaryCeiling) {
 					summaryCeiling = ev.Seq
 				}
 				continue
@@ -1286,10 +1385,17 @@ func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.M
 				highest = ev.Seq
 			}
 		case evtHistoryCompacted:
-			if !inHistory[ev.CompactSummaryID] {
+			if !windowed && !inHistory[ev.CompactSummaryID] {
 				pendingCeilings = append(pendingCeilings, ev.CompactSummaryID)
 			}
 		}
+	}
+	if windowed {
+		// No ceiling for a windowed caller: see the doc comment above this
+		// function ("A windowed read and an already-landed compaction") for
+		// why the cap this section otherwise applies would be a false
+		// positive here, not a narrower version of the same protection.
+		return highest
 	}
 	ceiling := summaryCeiling
 	if len(pendingCeilings) > 0 {

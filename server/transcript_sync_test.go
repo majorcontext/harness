@@ -375,7 +375,7 @@ func TestTranscriptWatermarkLocked_CompactionSummarySandwich(t *testing.T) {
 	h.srv.emitDurableLocked(staleEv)
 	// Deliberately no evtHistoryCompacted record: this is the gap between
 	// compaction's two separate emits, before the second one lands.
-	got := h.srv.transcriptWatermarkLocked(sessionID, []message.Message{first, stale})
+	got := h.srv.transcriptWatermarkLocked(sessionID, []message.Message{first, stale}, false)
 	h.srv.mu.Unlock()
 
 	if staleEv.Seq <= summaryEv.Seq {
@@ -429,17 +429,24 @@ func TestTranscriptStreamFrom_EmptyHistoryReportsZero(t *testing.T) {
 	}
 }
 
-// TestTranscriptStreamFrom_RejectsCombinationWithPaging: stream_from names
-// a different response envelope than before_seq/limit. Answering one
-// silently (handleMessages used to let before_seq/limit win, discarding
+// TestTranscriptStreamFrom_RejectsCombinationWithBeforeSeq: stream_from
+// names a different response envelope than before_seq. Answering one
+// silently (handleMessages used to let before_seq win, discarding
 // stream_from) hides that the caller named two incompatible intentions —
 // intParam enforces the identical rule against a repeated before_seq or
 // limit value for the same reason.
-func TestTranscriptStreamFrom_RejectsCombinationWithPaging(t *testing.T) {
+//
+// stream_from+limit is deliberately NOT in this list: docs/design/
+// fast-transcript-bootstrap.md relaxes exactly that one combination into a
+// legal, meaningful request (a windowed bootstrap) — see
+// TestTranscriptStreamFrom_LimitAcceptedBeforeSeqStillRejected and
+// TestColdWindowedBootstrap_LatestWindowNoFullReplay
+// (transcript_bootstrap_window_test.go).
+func TestTranscriptStreamFrom_RejectsCombinationWithBeforeSeq(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	id := h.createSession("")
 
-	for _, query := range []string{"?stream_from=1&before_seq=5", "?stream_from=1&limit=5"} {
+	for _, query := range []string{"?stream_from=1&before_seq=5", "?stream_from=1&before_seq=5&limit=5"} {
 		resp, data := h.do("GET", "/session/"+id+"/message"+query, nil)
 		if resp.StatusCode != 400 {
 			t.Errorf("GET message%s = %d, want 400: %s", query, resp.StatusCode, data)

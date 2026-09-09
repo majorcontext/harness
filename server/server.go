@@ -641,6 +641,19 @@ type Server struct {
 	// in production.
 	transcriptSyncRace func()
 
+	// coldWindowBootstrapRace is a test-only seam: when non-nil,
+	// coldWindowedBootstrap (handlers.go) invokes it right after its
+	// engine.ReadMessagePage read returns, before its second
+	// liveSessionObject residency recheck — letting a test force a
+	// concurrent claimForPrompt to promote a session to resident
+	// deterministically in that exact gap, proving the recheck catches it
+	// and falls back to transcriptSyncedThrough instead of answering from a
+	// page that may already be stale relative to a turn now running (see
+	// TestColdWindowedBootstrap_ResidencyRaceFallsBackConsistently and
+	// docs/design/fast-transcript-bootstrap.md §4.3). Always nil in
+	// production.
+	coldWindowBootstrapRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime

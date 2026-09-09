@@ -1215,31 +1215,31 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	paged := query.Has("before_seq") || query.Has("limit")
-	if paged && query.Has("stream_from") {
+	hasBeforeSeq := query.Has("before_seq")
+	hasLimit := query.Has("limit")
+	hasStreamFrom := query.Has("stream_from")
+
+	if hasBeforeSeq && hasStreamFrom {
 		// Two different intentions named on one request: intParam (below)
 		// already rejects this shape for a repeated before_seq/limit value
 		// for the identical reason — answering one silently hides that the
-		// caller has a bug, rather than telling it.
-		writeErr(w, http.StatusBadRequest, "stream_from cannot be combined with before_seq or limit")
+		// caller has a bug, rather than telling it. stream_from+limit is
+		// NOT rejected here: docs/design/fast-transcript-bootstrap.md
+		// relaxes exactly that one combination into a windowed bootstrap,
+		// answered below.
+		writeErr(w, http.StatusBadRequest, "stream_from cannot be combined with before_seq")
 		return
 	}
-	if paged {
+	if hasBeforeSeq || (hasLimit && !hasStreamFrom) {
 		s.handleMessagePage(w, query, id)
 		return
 	}
-	if query.Has("stream_from") {
-		msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
+	if hasStreamFrom {
+		limit, ok := intParam(w, query, "limit")
 		if !ok {
-			writeErr(w, http.StatusNotFound, "no such session")
 			return
 		}
-		writeJSON(w, http.StatusOK, transcriptJSON{
-			Messages:   marshalMessages(msgs),
-			StreamFrom: seq,
-			LiveFrom:   liveFrom,
-			Seqs:       seqs,
-		})
+		s.handleTranscriptBootstrap(w, id, limit)
 		return
 	}
 	sess, ok := s.lookupSession(id)
@@ -1251,8 +1251,137 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, marshalMessages(msgs))
 }
 
-// transcriptJSON is the ?stream_from=1 envelope: the session's whole message
-// history PLUS the durable event-journal seq it is synced through (see
+// handleTranscriptBootstrap answers GET /session/{id}/message?stream_from=1
+// (optionally combined with &limit=K): the transcriptJSON envelope, same as
+// always for limit == 0, or (docs/design/fast-transcript-bootstrap.md) a
+// bounded tail window answered without a full engine.LoadSession replay
+// whenever the session is not already resident and limit names a window.
+//
+// limit == 0 is byte-for-byte the pre-existing behavior: coldWindowedBootstrap
+// is never even attempted, and this calls transcriptSyncedThrough exactly as
+// handleMessages did before this function existed.
+//
+// A limit > 0 is honored on EVERY path, not only the cold one:
+// coldWindowedBootstrap's own "ok=false" cases (resident, no readable
+// index/page, or a lost residency race) fall through to
+// transcriptSyncedThrough for the correct cursor, and windowTranscriptTail
+// below then narrows its already-correct Messages/Seqs to the same tail a
+// cold read would have answered. This is trivial precisely because it is
+// resident (or otherwise already fully in memory): the full history is
+// already the read this call pays for, so windowing it after the fact
+// costs nothing beyond a slice. The cursor is computed by
+// transcriptSyncedThrough BEFORE this narrowing and is left untouched — it
+// already describes the session's complete history, a strictly stronger
+// (never wrong) statement than "the returned window alone", so narrowing
+// Messages/Seqs afterward cannot invalidate it.
+func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, limit int) {
+	if limit > 0 {
+		if resp, ok := s.coldWindowedBootstrap(id, limit); ok {
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		// Resident (already cheap in memory), no readable index/page (first
+		// read of a pre-index session, or a genuine I/O error), or lost the
+		// residency race in coldWindowedBootstrap: fall through to the
+		// always-correct path below, windowed to the same tail limit names.
+	}
+	msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	if limit > 0 {
+		msgs, seqs = windowTranscriptTail(msgs, seqs, limit)
+	}
+	writeJSON(w, http.StatusOK, transcriptJSON{
+		Messages:   marshalMessages(msgs),
+		StreamFrom: seq,
+		LiveFrom:   liveFrom,
+		Seqs:       seqs,
+	})
+}
+
+// windowTranscriptTail narrows history and seqs — parallel, oldest-first,
+// same length (transcriptSyncedThrough's own contract) — to their last
+// limit entries. limit above engine.MaxMessagePageLimit is clamped to it,
+// never rejected, mirroring engine.MessagePageWindow's own clamp-not-reject
+// rule for the cold path (coldWindowedBootstrap's engine.ReadMessagePage
+// call) — a caller sees the same behavior for an oversized limit
+// regardless of which path answers stream_from+limit. Returns both slices
+// unchanged when history already fits within limit.
+func windowTranscriptTail(history []message.Message, seqs []int64, limit int) ([]message.Message, []int64) {
+	if limit > engine.MaxMessagePageLimit {
+		limit = engine.MaxMessagePageLimit
+	}
+	if len(history) <= limit {
+		return history, seqs
+	}
+	start := len(history) - limit
+	return history[start:], seqs[start:]
+}
+
+// coldWindowedBootstrap answers a windowed transcript bootstrap for a
+// session this process does not hold resident, reading only the journal's
+// tail through engine.ReadMessagePage — O(window), never the whole-journal
+// os.ReadFile plus double whole-buffer bytes.Split engine.LoadSession pays
+// (docs/design/fast-transcript-bootstrap.md §1). ok is false for every case
+// the caller (handleTranscriptBootstrap) should instead answer from
+// transcriptSyncedThrough: resident (already cheap in memory, and the only
+// path proven correct against a live session's own durableDebt-deferred
+// writes), no usable index/page (first-ever read of a pre-index session, or
+// a genuine I/O error — engine.ReadSessionIndex already retries a stale
+// sidecar internally, so an error here is a harder failure), or a residency
+// transition raced this read.
+func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bool) {
+	if s.liveSessionObject(id) != nil {
+		return transcriptJSON{}, false
+	}
+	// Sampled first, before the disk read below — see transcriptCursorLocked
+	// and live-event-tip-cursor.md §4 for why tipAtStart must precede the
+	// history snapshot it will be maxed against.
+	tipAtStart := s.currentSeq()
+	page, err := engine.ReadMessagePage(s.opts.SessionDir, id, 0, limit) // beforeSeq<=0: newest page
+	if err != nil {
+		return transcriptJSON{}, false
+	}
+	if s.coldWindowBootstrapRace != nil {
+		// Test-only seam: let a test force a concurrent claimForPrompt to
+		// promote id to resident deterministically in this exact gap.
+		// Always nil in production.
+		s.coldWindowBootstrapRace()
+	}
+	if s.liveSessionObject(id) != nil {
+		// A concurrent claimForPrompt promoted id to resident strictly
+		// between the check above and this one (docs/design/
+		// fast-transcript-bootstrap.md §4.3). Bail: the caller falls back
+		// to transcriptSyncedThrough, which answers from the now-resident
+		// (and now cheap) in-memory history instead of a page that may
+		// already be stale relative to a turn now running against this
+		// session.
+		return transcriptJSON{}, false
+	}
+	seq, liveFrom, reportErr := s.transcriptCursorLocked(id, page.Messages, tipAtStart, nil, true)
+	if reportErr != nil {
+		s.reportError(reportErr)
+	}
+	seqs := make([]int64, len(page.Messages))
+	for i := range page.Messages {
+		seqs[i] = int64(page.FirstSeq + i)
+	}
+	return transcriptJSON{
+		Messages:   marshalMessages(page.Messages),
+		StreamFrom: seq,
+		LiveFrom:   liveFrom,
+		Seqs:       seqs,
+	}, true
+}
+
+// transcriptJSON is the ?stream_from=1 envelope: the session's message
+// history — the WHOLE thing for a request naming no limit, or (docs/
+// design/fast-transcript-bootstrap.md) only its LATEST window when the
+// request also names limit, answered on every path (cold or resident)
+// from the identical bounded tail a before_seq/limit MessagePage would —
+// PLUS the durable event-journal seq it is synced through (see
 // transcriptSyncedThrough), so a client can open GET /event?from=<stream_from>
 // immediately after this snapshot with no REPLAY window that can re-deliver
 // or drop a message straddling the two reads — the "race-closed bootstrap"
