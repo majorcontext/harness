@@ -1106,12 +1106,17 @@ type Session struct {
 	// ever has ONE turn in flight at a time (SessionManager's own
 	// StatusRunning gating), so a simple bool — set true on ANY new
 	// append, false only by finalizeTurn's own marker — is sufficient;
-	// no sequence numbers or per-attempt bookkeeping needed. Only ever
-	// meaningful for a non-root node (finalizeTurn only writes the
-	// marker for one — see its own doc comment); recovery itself is
-	// never invoked for a root (adoptReloadedLocked's own early return),
-	// so an unmarked root session's turnUnsettled value is simply never
-	// consulted.
+	// no sequence numbers or per-attempt bookkeeping needed. Meaningful
+	// for EVERY node, root included: finalizeTurn's own settled-marker
+	// call used to be gated to non-root nodes only, on the assumption
+	// that "recovery is never invoked for a root" made a root's value
+	// moot — a live prod finding (an OOMKilled root session left
+	// silently wedged with no recovery and no way to tell a genuine
+	// crash from an ordinary reload) closed that gap on both ends:
+	// adoptRootLocked now calls recoverInterruptedTurnLocked for a
+	// root's own turn, so finalizeTurn must clear this for a root too,
+	// or every ordinary root completion would misread as a crash on its
+	// very next reload.
 	turnUnsettled bool
 
 	// committedOutcome is the exact taskNotification finalizeTurn (or

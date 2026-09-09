@@ -250,8 +250,23 @@ func TestTranscriptSeqs_PagesAdjacentAcrossCompaction(t *testing.T) {
 	if meta.status != 200 {
 		t.Fatalf("GET transcript = %d: %s", meta.status, meta.body)
 	}
-	if len(got.Messages) != 6 {
-		t.Fatalf("len(messages) = %d, want 6 (1 summary + msg_5,6,7,8 + 1 synthetic repair): ids %v", len(got.Messages), messageIDs(got.Messages))
+	// 7, not 6: this fixture's own last message (msg_8) is a lone
+	// tool_call with no result -- exactly the shape
+	// recoverInterruptedTurnLocked treats as an unfinalized turn (see
+	// engine.Session.hasUnfinalizedTurn's own doc comment), same as the
+	// ORPHAN shape this test already exploits for message.
+	// ResolveOrphanToolCalls. ReportTurnStart's own cold-adopt of this
+	// session (handleCompact calls it before Compact runs) now durably
+	// appends a synthetic "turn was interrupted" closer for a ROOT too,
+	// not only a child -- a live prod finding closed that gap. The
+	// closer lands BEFORE Compact ever sees this history, rides along in
+	// the same kept turn as msg_8 (Compact's own turn-fold count is
+	// unaffected -- TurnsFolded stays 2, asserted above), and, being a
+	// bare assistant message with no tool call, stays AFTER the
+	// read-time synthetic orphan repair in display order (that repair
+	// inserts positionally, right after msg_8).
+	if len(got.Messages) != 7 {
+		t.Fatalf("len(messages) = %d, want 7 (1 summary + msg_5,6,7,8 + 1 synthetic repair + 1 recovery closer): ids %v", len(got.Messages), messageIDs(got.Messages))
 	}
 	if len(got.Seqs) != len(got.Messages) {
 		t.Fatalf("len(seqs) = %d, want %d (parallel to messages)", len(got.Seqs), len(got.Messages))
@@ -276,14 +291,19 @@ func TestTranscriptSeqs_PagesAdjacentAcrossCompaction(t *testing.T) {
 	// (a): the EXACT ordinal sequence, fold and skip composed in one pass
 	// -- not merely monotonic, which an inflated journal-seq value (the
 	// original defect) would also satisfy after a fold.
-	wantSeqs := []int64{1, 2, 3, 4, 5, 0}
-	// The synthetic repair is always the LAST message (ResolveOrphanToolCalls
-	// appends it right after the tool_call it closes, and msg_8 -- the
-	// orphaned tool_call -- is this fixture's own last message), so
-	// wantSeqs' trailing 0 lines up with orphanIdx == 5 by construction;
-	// assert that construction held before trusting the comparison below.
-	if orphanIdx != len(got.Messages)-1 {
-		t.Fatalf("orphan-repair message at index %d, want the last index %d (test fixture assumption)", orphanIdx, len(got.Messages)-1)
+	wantSeqs := []int64{1, 2, 3, 4, 5, 0, 6}
+	// The synthetic orphan repair is SECOND TO LAST, not last:
+	// ResolveOrphanToolCalls appends it right after the tool_call it
+	// closes (msg_8, this fixture's own last REAL message), but
+	// ReportTurnStart's own recovery closer (see the message-count
+	// comment above) is a genuinely later, durable message that rides
+	// after msg_8 in the real history -- read-time orphan repair
+	// inserts positionally and does not reorder it. wantSeqs' trailing
+	// [0, 6] lines up with orphanIdx == len(got.Messages)-2 by
+	// construction; assert that construction held before trusting the
+	// comparison below.
+	if orphanIdx != len(got.Messages)-2 {
+		t.Fatalf("orphan-repair message at index %d, want the second-to-last index %d (test fixture assumption)", orphanIdx, len(got.Messages)-2)
 	}
 	for i, seq := range got.Seqs {
 		if seq != wantSeqs[i] {

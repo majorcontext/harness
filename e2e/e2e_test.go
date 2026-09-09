@@ -674,6 +674,11 @@ func TestKillMidPrompt(t *testing.T) {
 
 	// Only the durably-complete records survive: the user message (persisted at
 	// prompt start) but not the stalled assistant message (never assembled).
+	// Still exactly 1, not 2, despite this same root now also being a
+	// recoverInterruptedTurnLocked candidate (see the second prompt below):
+	// recovery is reactive, firing only when something actually claims/
+	// adopts this session (a prompt), never from a bare read -- this GET
+	// alone must not mutate history.
 	msgs := p2.messages(id)
 	if len(msgs) != 1 {
 		t.Fatalf("post-kill messages = %d, want 1 (user only): %+v", len(msgs), msgs)
@@ -692,10 +697,28 @@ func TestKillMidPrompt(t *testing.T) {
 	}
 
 	// A new prompt succeeds end-to-end against the (now unblocked) fake.
+	//
+	// This is the ROOT-recovery fix's own visible effect (a live prod
+	// finding: an OOMKilled root's turn used to be silently lost forever,
+	// with no marker and no unwedging — see recoverInterruptedTurnLocked's
+	// own doc comment, engine/session_manager.go). The killed first prompt
+	// left this root's turn genuinely unfinalized; this second prompt is
+	// the first thing to actually claim/adopt the root in process 2 (the
+	// bare reads above -- listSessionIDs, messages -- do not), so
+	// ReportTurnStart's own adopt-on-first-sight recovers it right here:
+	// a synthetic "interrupted" marker lands BEFORE this prompt's own new
+	// user message. Expect user(pre-kill) + MARKER(recovered) + user(new)
+	// + assistant(new) = 4, not the pre-fix 3 (which silently dropped the
+	// killed turn's own existence with no trace at all).
 	p2.prompt(id, "second prompt after recovery")
-	// Expect user(pre-kill) + user(new) + assistant(new) = 3.
-	final := p2.waitMessages(id, 3)
+	final := p2.waitMessages(id, 4)
 	assertUniqueMessageIDs(t, final)
+	if got := final[1]; got.Role != "assistant" || !strings.Contains(textOf(got), "interrupted") {
+		t.Fatalf("messages[1] = %+v, want the synthetic recovery marker (role assistant, text mentions \"interrupted\")", got)
+	}
+	if got := final[2]; got.Role != "user" || textOf(got) != "second prompt after recovery" {
+		t.Fatalf("messages[2] = %+v, want the new user prompt", got)
+	}
 	if got := final[len(final)-1]; got.Role != "assistant" || textOf(got) == "" {
 		t.Fatalf("final message not a non-empty assistant reply: %+v", got)
 	}

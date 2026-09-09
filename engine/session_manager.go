@@ -807,7 +807,19 @@ type sessionNode struct {
 	//     id, and there is provably no live ancestor left to ever
 	//     deliver its notification to (nearestLiveAncestorLocked already
 	//     returned nil). Leaving it un-reapable would leak a Failed
-	//     pseudo-root forever.
+	//     pseudo-root forever. Gated on s.hasTaskParent() at that call
+	//     site specifically to exclude case 3 below — a durably
+	//     parent-less session reads identically to this one at the
+	//     tree-bookkeeping level (parentID == ""), but is not
+	//     "root-shaped," it IS a root.
+	//  3. Never armed for a GENUINE root (s.hasTaskParent() == false)
+	//     recovered via adoptRootLocked's own unconditional
+	//     recoverInterruptedTurnLocked call: a root's target is also
+	//     always nil (it has no ancestor by definition), but it is very
+	//     much still in use — arming pendingForget for it would make
+	//     Reap's bottom-up sweep collect a live root the instant it is
+	//     next momentarily childless, exactly the outcome case 1's own
+	//     ForgetRoot guard exists to prevent for an explicitly-kept root.
 	//
 	// Reap's own eligibility check treats pendingForget as the ONE
 	// exception to "a root is never reaped" — see its doc comment.
@@ -912,13 +924,14 @@ func (m *SessionManager) AdoptRoot(s *Session) error {
 	m.mu.Lock()
 	// unlockAndFlushPersist, not a plain m.mu.Unlock() — see that
 	// method's own doc comment for the convention. adoptRootLocked now
-	// calls recoverCrashedChildrenLocked, which can genuinely queue
-	// deferred persists (recovering a crashed child durably commits its
-	// outcome, delivers, and settles it — all via m.deferPersist) — a
+	// calls recoverCrashedChildrenLocked AND recoverInterruptedTurnLocked
+	// (for s's OWN turn), both of which can genuinely queue deferred
+	// persists (recovering a crashed child, or s itself, durably commits
+	// an outcome, delivers, and settles it — all via m.deferPersist) — a
 	// plain Unlock() here would silently drop every one of those writes
 	// for the one caller (handleCreate) that reaches this method. Today
 	// that caller only ever adopts a brand-new, childless session, so
-	// the sweep is a harmless no-op in production as of this writing —
+	// both sweeps are a harmless no-op in production as of this writing —
 	// but AdoptRoot is public API, and "safe by coincidence of the one
 	// current caller" is exactly the trap this convention exists to
 	// close before a future caller (or a test) adopts a root that DOES
@@ -959,11 +972,43 @@ func (m *SessionManager) AdoptReloaded(s *Session) error {
 // mutate s.tools/s.cfg here BEFORE the caller's own Session.Prompt call
 // begins — sequential with respect to that call, in the same goroutine,
 // never concurrent with it. Callers hold m.mu.
+//
+// A live prod finding: this is also the ONLY place a ROOT's OWN
+// interrupted turn ever gets recovered. adoptReloadedLocked's early
+// return for a session with no durable TaskParentID lands here for every
+// root reload, and — before this call was added — nothing downstream
+// ever called recoverInterruptedTurnLocked for it; a root left
+// hasUnfinalizedTurn()==true by a process kill mid-turn (an OOMKilled
+// container, e.g.) stayed silently wedged in that state forever, with no
+// synthetic marker and no automatic un-wedging, until some caller
+// happened to send it a brand-new prompt regardless. See
+// recoverInterruptedTurnLocked's own call below for why firing it
+// unconditionally here — even via ReportTurnStart's recover=false
+// adopt-on-first-sight path — is safe for a root specifically, unlike
+// the self-contradiction adoptReloadedLocked's own doc comment describes
+// for a live CHILD.
 func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 	s.cfg.SessionManager = m
 	s.tools[taskToolName] = taskTool()
 	n := m.adoptLocked(s, "", 0)
 	m.installTaskToolLocked(s, 0)
+	// Unconditional, regardless of whichever caller reached adoptRootLocked
+	// (AdoptRoot directly, or adoptReloadedLocked's recover=false and
+	// recover=true branches alike): recoverInterruptedTurnLocked's own
+	// top guard (hasUnfinalizedTurn()) already makes this a safe no-op
+	// for the overwhelmingly common case (a brand-new or cleanly-settled
+	// root). When it is NOT a no-op, running it here is never
+	// self-contradicting the way it would be for a live child adopted
+	// via ReportTurnStart: nearestLiveAncestorLocked always returns nil
+	// for a genuine root (s.hasTaskParent() is false, so there is no
+	// ancestor to falsely notify that this node "died" moments before it
+	// runs again) — the only two effects left are a transient status
+	// flip ReportTurnStart's own unconditional StatusRunning reset
+	// overwrites a few lines later in that caller, and the synthetic
+	// closing message appended to history, which is exactly the fix:
+	// making a silently lost turn visible instead of leaving the session
+	// wedged.
+	m.recoverInterruptedTurnLocked(n, s)
 	// See recoverCrashedChildrenLocked's own doc comment: a root is the
 	// single most common node ANY caller (a box's own restart, a plain
 	// GET-triggered ReportTurnStart) adopts fresh, so this is the
@@ -1031,8 +1076,11 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 // failure mode:
 //
 //   - cmd/harness -resume: a genuine root (s.TaskParentID() == "") never
-//     reaches recovery at all — the early return above skips straight to
-//     adoptRootLocked. The one case that DOES reach recovery here (s is
+//     reaches recovery HERE — the early return above skips straight to
+//     adoptRootLocked, which now runs recoverInterruptedTurnLocked
+//     unconditionally on its own (see that method's own doc comment for
+//     why a root never needs this method's recover gate in the first
+//     place). The one case that DOES reach recovery in THIS method (s is
 //     a former task-tool child, resumed standalone) can never have a
 //     live tracked ancestor either way: sessMgr is a brand-new, empty
 //     tree for this one-shot run, so nearestLiveAncestorLocked always
@@ -1653,6 +1701,19 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 // its parent, if it ever queried or auto-resumed based on this child's
 // outcome, waited forever for a notification that could never arrive.
 //
+// A later live prod finding extended this same mechanism to a ROOT
+// session's own interrupted turn (adoptRootLocked's own unconditional
+// call): a root has no parent to notify, so nothing about the original
+// child-recovery gap applied to it directly — but a root left with
+// hasUnfinalizedTurn()==true by the identical kind of crash (an
+// OOMKilled container, mid-turn) was, before that call existed, left
+// wedged in exactly the same silent, unrecoverable-looking state
+// forever, with no synthetic marker ever appended and nothing to clear
+// the flag until some caller happened to drive a brand-new turn on it
+// regardless. This method's target==nil branch below is what makes
+// running it safe for a genuine root: see s.hasTaskParent()'s use there
+// and at the notification-draining site above it.
+//
 // Detection: n was just reconstructed by adoptLocked, so its status is
 // still the freshly-adopted default (StatusIdle) — this checks s's own
 // durable signature instead (see turnUnsettled's own doc comment,
@@ -1886,8 +1947,21 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// block exactly. A live review finding: an earlier version of this
 	// method delivered only notify, silently dropping any grandchild
 	// results n itself had not yet forwarded.
+	// Gated on s.hasTaskParent(): a genuine root (false) keeps its own
+	// pending notifications rather than draining them here. Unlike a
+	// terminal CHILD — whose n.status just became permanently
+	// Failed/Done below and will never run another turn to read its own
+	// queue — a recovered root's status flip is only ever transient: the
+	// caller that reached this adoption (a live prompt, cmd/harness
+	// -resume) goes on to run a real turn on this exact session next,
+	// and THAT turn's own checkoutTaskNotificationsSegment call is what
+	// these notifications are actually for. Draining them here, only to
+	// drop them a few lines below (a genuine root never has a live
+	// ancestor to forward to either), would silently discard real,
+	// already-completed child results the root's own next turn was
+	// waiting to act on.
 	var forwarded []taskNotification
-	if s.hasPendingTaskNotifications() {
+	if s.hasTaskParent() && s.hasPendingTaskNotifications() {
 		forwarded = s.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
@@ -1945,28 +2019,42 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		if len(forwarded) > 0 {
 			delivered = forwarded
 		}
-	} else {
-		// No live ancestor to deliver to — either every ancestor up to
-		// the root is already terminal (the whole tree is being torn
-		// down), or n.parentID == "" because adoptReloadedLocked could
-		// not find ITS OWN parent tracked (the "true depth is
-		// unrecoverable" case its own doc comment describes) — n now
-		// LOOKS like a root at the tree-bookkeeping level, even though
-		// it durably remembers a real TaskParentID. A live review noted
-		// this second case is a genuine, accepted degraded outcome for
-		// an already-degraded situation (a broken lineage chain AND an
-		// interrupted turn): no ancestor is ever told this child died —
-		// there IS no reachable ancestor to tell — but n itself does not
-		// leak: see Reap's own pendingForget handling, which this method
-		// also arms here so a "root-shaped" node with no real subtree
-		// beneath it (already true: n is a leaf, just adopted) is
-		// collected on the very next Reap() call instead of sitting
-		// forever in m.nodes looking like a protected root. forwarded is
-		// simply dropped here the same way finalizeTurn drops its own
-		// forwarded set when no live ancestor exists: nothing is
-		// listening, and there is nothing on target's side to persist.
+	} else if s.hasTaskParent() {
+		// No live ancestor to deliver to, and s DURABLY remembers a real
+		// task-tree parent — either every ancestor up to the root is
+		// already terminal (the whole tree is being torn down), or
+		// n.parentID == "" because adoptReloadedLocked could not find
+		// ITS OWN parent tracked (the "true depth is unrecoverable" case
+		// its own doc comment describes) — n now LOOKS like a root at
+		// the tree-bookkeeping level, even though it durably remembers a
+		// real TaskParentID. A live review noted this second case is a
+		// genuine, accepted degraded outcome for an already-degraded
+		// situation (a broken lineage chain AND an interrupted turn): no
+		// ancestor is ever told this child died — there IS no reachable
+		// ancestor to tell — but n itself does not leak: see Reap's own
+		// pendingForget handling, which this method also arms here so a
+		// "root-shaped" node with no real subtree beneath it (already
+		// true: n is a leaf, just adopted) is collected on the very next
+		// Reap() call instead of sitting forever in m.nodes looking like
+		// a protected root. forwarded is simply dropped here the same
+		// way finalizeTurn drops its own forwarded set when no live
+		// ancestor exists: nothing is listening, and there is nothing on
+		// target's side to persist.
 		n.pendingForget = true
 	}
+	// else (target == nil AND s.hasTaskParent() == false): n is a
+	// GENUINE root, not merely root-shaped — adoptRootLocked's own call
+	// site. It never has a live ancestor to notify (that is what being a
+	// root means), so target == nil proves nothing is wrong here the way
+	// it does for the orphaned-child branch above, and this case must
+	// NOT arm n.pendingForget: doing so would make Reap's bottom-up
+	// sweep collect a live, still-in-use root the instant it is next
+	// momentarily childless (Reap's own eligibility check treats
+	// pendingForget as the ONE exception to "a root is never reaped" —
+	// see that field's own doc comment) — a root recovered this way must
+	// stay exactly as protected as any other root. forwarded was never
+	// drained for this case in the first place (see the drain site
+	// above), so there is nothing to drop here either.
 
 	// Queue the actual durable writes to run AFTER m.mu is released (see
 	// SessionManager.deferPersist/unlockAndFlushPersist's own doc
@@ -2254,12 +2342,14 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 	// method's own doc comment for the full convention every entry
 	// point in this file that MIGHT queue a durable write via
 	// m.deferPersist must follow. adoptReloadedLocked below is called
-	// with recover=false, so recoverInterruptedTurnLocked (the only
-	// deferPersist source currently reachable from it) never actually
-	// runs on this path today — but a plain Unlock() here is a silent-
-	// drop trap for any future change that adds one, the same class of
-	// finding a live review already caught and fixed for
-	// fireIdleResumeAsync.
+	// with recover=false, so recoverInterruptedTurnLocked never runs
+	// FROM THAT CALL's own recover-gated branch on this path — but when
+	// sess turns out to be a genuine root, adoptReloadedLocked routes
+	// straight to adoptRootLocked instead, which calls
+	// recoverInterruptedTurnLocked unconditionally (see its own doc
+	// comment for why that is safe even here). A plain Unlock() would
+	// silently drop that deferPersist write today, not merely guard
+	// against a hypothetical future one.
 	defer m.unlockAndFlushPersist()
 	n, ok := m.nodes[sess.ID]
 	if !ok {
@@ -2267,8 +2357,13 @@ func (m *SessionManager) ReportTurnStart(sess *Session) {
 		// StatusRunning and n.finalized = false a few lines below,
 		// regardless of what recovery would have set — see
 		// adoptReloadedLocked's own doc comment for why firing recovery
-		// here would be self-contradicting (report this exact node dead,
-		// then immediately run it).
+		// here would be self-contradicting for a live CHILD (report this
+		// exact node dead, then immediately run it). This gate does not
+		// apply to a root: adoptReloadedLocked routes a session with no
+		// durable TaskParentID to adoptRootLocked regardless of recover,
+		// and that call's own doc comment explains why recovering a
+		// root's own interrupted turn here is never self-contradicting
+		// the way it is for a child.
 		n = m.adoptReloadedLocked(sess, false)
 	}
 	// Always re-attach to the LIVE object, even for an already-tracked
@@ -4568,38 +4663,44 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// recoverInterruptedTurnLocked tell an ordinary, properly-finalized
 	// outcome (this call reaching this point at all) apart from a
 	// genuine crash, instead of the unreliable trailing-message-role
-	// heuristic a live review found broken in both directions. Only
-	// meaningful for a non-root node — a root is never a
-	// recoverInterruptedTurnLocked candidate (adoptReloadedLocked's own
-	// early return). Queued via deferPersist AFTER the delivery thunks
-	// above, deliberately: a crash between "notify delivered" and "this
-	// child's own turn marked settled" must still leave the child
-	// looking unsettled on the next reload (a safe, if redundant, retry
-	// of recovery for something already delivered — the SAME crash-
-	// window discipline recoverInterruptedTurnLocked's own reorder
-	// established, applied here too for the ordinary-completion path).
+	// heuristic a live review found broken in both directions. Queued
+	// via deferPersist AFTER the delivery thunks above, deliberately: a
+	// crash between "notify delivered" and "this node's own turn marked
+	// settled" must still leave it looking unsettled on the next reload
+	// (a safe, if redundant, retry of recovery for something already
+	// delivered — the SAME crash-window discipline recoverInterruptedTurn
+	// Locked's own reorder established, applied here too for the
+	// ordinary-completion path).
 	//
-	// Gated on hasTaskParent(), NOT n.parentID != "" — a live review
-	// finding: the in-memory sessionNode.parentID and the durable
-	// TaskParentID() can disagree for a node adoptReloadedLocked attached
-	// with attachTo=="" because its real parent was not tracked (the
-	// "true depth is unrecoverable" case — see that method's own doc
-	// comment), even though it durably DOES have a real TaskParentID.
-	// Gating this on the in-memory pointer meant such a node's turns were
-	// NEVER marked settled, even on a completely ordinary, successful
-	// completion — hasUnfinalizedTurn() stayed true forever, and a LATER
-	// AdoptReloaded(recover=true) for it (adoptReloadedLocked's own
-	// root/non-root branch DOES use TaskParentID(), so it does not treat
-	// this node as a root) spuriously ran recovery against a turn that
-	// had already finished cleanly. hasTaskParent() is the SAME predicate
-	// adoptReloadedLocked's own root/non-root branch uses, so the two
-	// ends of this exact crash/degraded-lineage window can no longer
-	// disagree about which nodes this covers.
-	if n.session.hasTaskParent() {
-		n.session.markTurnSettled()
-		childSess := n.session
-		m.deferPersist(func() { childSess.persistTurnSettled() })
-	}
+	// Unconditional as of a live prod finding — this used to be gated on
+	// hasTaskParent(), excluding every genuine ROOT: "a root is never a
+	// recoverInterruptedTurnLocked candidate" was true only because
+	// adoptRootLocked never called it, a gap that call's own doc comment
+	// now closes. Leaving THIS gate root-excluded after that fix would
+	// have made hasUnfinalizedTurn() permanently, uselessly true for
+	// EVERY root that ever completes a turn — recoverInterruptedTurn
+	// Locked would then misfire on every single ordinary root reload
+	// (a box's routine restart, cmd/harness -resume), not only a
+	// genuinely crashed one, appending a false "this turn was
+	// interrupted" marker onto a perfectly healthy session's history
+	// every time. The two ends of this mechanism (set true on append,
+	// cleared here on settle) must cover the exact same nodes for either
+	// end to mean anything; a root is no longer the one node kind this
+	// method leaves permanently unsettled.
+	//
+	// hasTaskParent(), not n.parentID != "", is still the right predicate
+	// everywhere ELSE in this package that needs to tell "genuine root"
+	// from "ordinary child" apart (recoverInterruptedTurnLocked's own
+	// forwarding gate, notably) — the in-memory sessionNode.parentID and
+	// the durable TaskParentID() can disagree for a node adopted with
+	// attachTo=="" because its real parent was not tracked (the "true
+	// depth is unrecoverable" case — see adoptReloadedLocked's own doc
+	// comment). This call no longer needs to distinguish the two at all,
+	// which is what makes it safe to drop the check here specifically,
+	// rather than switching it from one predicate to the other.
+	n.session.markTurnSettled()
+	settledSess := n.session
+	m.deferPersist(func() { settledSess.persistTurnSettled() })
 	m.unlockAndFlushPersist()
 
 	// Deliberately returned, never fired here (no "go resume()"): the

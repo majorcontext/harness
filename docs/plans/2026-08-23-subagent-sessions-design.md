@@ -463,6 +463,86 @@ cheap header decode (`readSessionInfo`) does not currently read
 `TaskParentID` or the last record's type — a larger, separate piece of
 work, deliberately deferred rather than folded into this fix.
 
+**A root's own interrupted turn was never covered at all.** Everything
+above recovers a CHILD's crashed turn on behalf of a live ancestor —
+`adoptReloadedLocked`'s early return for a session with no durable
+`TaskParentID` skipped straight to `adoptRootLocked`, which never called
+`recoverInterruptedTurnLocked` for the root's OWN turn. A root has no
+ancestor to notify, so nothing about the child-recovery gap applied to
+it directly, but the identical crash — the process dying mid-turn —
+left a root exactly as silently wedged: `hasUnfinalizedTurn()` stayed
+true forever, with no synthetic marker ever appended and no automatic
+un-wedging, until some caller happened to drive a brand-new prompt on it
+regardless.
+
+Live prod finding, 2026-09: a box's pod was OOMKilled mid-turn on the
+ROOT session of a claude-code-delegated lineage. The box's own lifecycle
+state never left `running` (an OOM-killed container restart is invisible
+to it), and the session sat silently unresponsive for roughly 18 minutes
+— through several activity-probe reloads, each one adopting the root
+via `ReportTurnStart`'s cold-adopt path — until a human happened to send
+a new prompt, which `--resume`d the delegated CLI's own durable session
+and continued as if nothing had happened. Nothing ever told the user (or
+any consumer) that the PRIOR turn had been silently lost.
+
+**Fix: surface and unwedge, not silently auto-refire.** `adoptRootLocked`
+now calls `recoverInterruptedTurnLocked` unconditionally for the root's
+own turn, mirroring the non-root path. This is safe even from
+`ReportTurnStart`'s `recover=false` adopt-on-first-sight call (which is
+otherwise self-contradicting for a live CHILD — see that method's own
+doc comment) because `nearestLiveAncestorLocked` always returns nil for
+a genuine root: there is no ancestor to falsely notify "this node died"
+moments before it runs again. The only two effects are a transient
+status flip `ReportTurnStart`'s own following `StatusRunning` reset
+overwrites immediately, and the synthetic closing message appended to
+history — exactly the fix: a visible "this turn was interrupted by a
+process restart and could not complete" marker instead of silence, and
+`hasUnfinalizedTurn()` cleared so the session is immediately usable
+again. The design deliberately stops there: it does NOT auto-refire the
+lost prompt. A lost turn can represent expensive or destructive work
+partway done; silently re-running it without a human or caller back in
+the loop is a worse failure mode than a visible "resend to continue."
+Nothing in the existing native or delegated recovery paths auto-refires
+either (see "Decision: treat it as failed, synthetically" above — a
+child gets a synthetic FAILED/DONE notification, never an automatic
+retry), so this keeps one consistent policy across every recovered node.
+
+This required widening `recoverInterruptedTurnLocked`'s own
+"no live ancestor" branch, which previously assumed target==nil could
+only mean an ORPHANED child (`adoptReloadedLocked`'s "true depth is
+unrecoverable" case) with no real subtree of its own — safe to drain its
+pending task notifications (dropping them, nothing is listening) and arm
+`pendingForget` so `Reap` collects it. A genuine root reaches the
+identical branch (it, too, has no live ancestor) but is NOT
+root-shaped-by-accident — it IS a root, very much still in use. Both
+behaviors are now gated on `Session.hasTaskParent()`: false (genuine
+root) skips the notification drain entirely (a root's own pending
+notifications are for ITS OWN next turn's `checkoutTaskNotifications
+Segment`, not something to forward or drop) and never arms
+`pendingForget` (arming it would make `Reap` garbage-collect a live root
+the instant it is next momentarily childless).
+
+It also required widening `finalizeTurn`'s own settled-marker call
+(`Session.markTurnSettled`/`persistTurnSettled`, backed by the same
+`child_turn.settled` log record `recoverInterruptedTurnLocked` clears
+too), previously gated to `hasTaskParent()` on the assumption that "a
+root is never a recovery candidate" made a root's `turnUnsettled` value
+moot. Leaving that gate in place after the fix above would have made
+`hasUnfinalizedTurn()` permanently true for every root that ever
+completes a turn — normal or not — misfiring recovery (a false
+"interrupted" marker) on every ordinary root reload, not only a
+genuinely crashed one. The call is now unconditional; `hasTaskParent()`
+remains the right predicate everywhere else in this package that still
+needs to tell a genuine root from an ordinary child apart.
+
+Delegated (claude-code) sessions are covered by the same mechanism with
+no special-casing: the synthetic closer lands only in harness's own
+`Session.history`, never in the CLI's own on-disk transcript (continuity
+across delegated turns is `--resume`, keyed on the durably-stored CLI
+session id — see `claude_code_backend.go`'s package doc), so the next
+prompt still resumes the CLI's session exactly as before, now on top of
+a harness-side session that is no longer silently wedged.
+
 ## Non-goals (v1)
 
 - Streaming child transcripts into a UI live (boxes follow-up; the
