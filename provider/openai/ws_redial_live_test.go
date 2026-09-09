@@ -329,3 +329,170 @@ func TestCodexIdleToleranceLive(t *testing.T) {
 		t.Logf("IDLE TOLERANCE >= %s: a chained request succeeded after %s of no traffic", gap, gap)
 	}
 }
+
+// TestCodexIdleKeepaliveLive tests what, if anything, keeps an idle pooled
+// Codex connection alive. TestCodexIdleToleranceLive measured the bare
+// pool's behavior: a chained request succeeds after 60s of no traffic and
+// fails after 90s, with the server's own close reason "keepalive ping
+// timeout". wsPool leaves an idle connection with no reader at all
+// (wsFrameSource reads only while a response streams), so this asks
+// whether that is the cause.
+//
+// Two modes, each on its own connection:
+//
+//	read pump      one goroutine owns every read, so it sits inside
+//	               conn.Read for the whole idle gap — where
+//	               coder/websocket answers a server ping automatically.
+//	pump plus ping the same, and it also sends a client ping on an
+//	               interval. coder/websocket's Ping needs a concurrent
+//	               reader for its pong, which the pump provides.
+//
+// The named failure each mode pins: if a mode survives a gap the bare pool
+// cannot, that mode is the fix and the reuse window can then be widened. If
+// NEITHER survives, no keepalive can work, and the only correct change is
+// to shrink the reuse window toward the measured ~60s life.
+//
+// A read pump is also the only shape a real fix could take: canceling a
+// coder/websocket read closes the connection, so an idle-only reader could
+// never hand the socket back to the pool.
+//
+// Measured 2026-09-09, against a bare-pool life of 60-90s:
+//
+//   - Both modes chained successfully after a 7m gap. A reader alone is
+//     therefore enough: coder/websocket answers the server ping from inside
+//     Read, which is exactly what the reader-less pool never does.
+//   - One earlier read-pump run died at ~75s with a bare "failed to read
+//     frame header: EOF" and no close handshake. It did not reproduce. Treat
+//     a read pump as the keepalive mechanism, not as a guarantee: the path
+//     can still drop, which the pool must handle regardless.
+//   - Every client ping was answered on the 30s interval, so a client ping
+//     is available as belt-and-braces, but the measurement does not show it
+//     is required.
+func TestCodexIdleKeepaliveLive(t *testing.T) {
+	gap := 7 * time.Minute
+	if spec := os.Getenv("CODEX_PUMP_GAP"); spec != "" {
+		d, err := time.ParseDuration(spec)
+		if err != nil {
+			t.Fatalf("CODEX_PUMP_GAP %q: %v", spec, err)
+		}
+		gap = d
+	}
+	tests := []struct {
+		name         string
+		pingInterval time.Duration
+	}{
+		{name: "read_pump_only"},
+		{name: "read_pump_plus_client_ping", pingInterval: 30 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, model := liveCodexClient(t)
+			ctx, cancel := context.WithTimeout(context.Background(), gap+5*time.Minute)
+			defer cancel()
+
+			req := &provider.Request{
+				Model:      model,
+				System:     []string{"Answer with one lowercase word and nothing else."},
+				Messages:   []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "Say: one"}}}},
+				SessionKey: "harness-live-keepalive-" + tt.name,
+			}
+			prepared, err := client.prepareRequest(req, false)
+			if err != nil {
+				t.Fatalf("prepareRequest: %v", err)
+			}
+			conn := liveDial(t, ctx, prepared)
+
+			frames := make(chan wsFrame, 256)
+			pumpErr := make(chan error, 1)
+			go func() {
+				for {
+					name, data, err := readResponsesFrame(ctx, conn)
+					if err != nil {
+						pumpErr <- err
+						close(frames)
+						return
+					}
+					frames <- wsFrame{name: name, data: data}
+				}
+			}()
+			drain := func(what string) string {
+				t.Helper()
+				var responseID string
+				for {
+					select {
+					case f, ok := <-frames:
+						if !ok {
+							t.Fatalf("%s: read pump ended: %v", what, <-pumpErr)
+						}
+						var ev struct {
+							Response struct {
+								ID string `json:"id"`
+							} `json:"response"`
+						}
+						if json.Unmarshal(f.data, &ev) == nil && ev.Response.ID != "" {
+							responseID = ev.Response.ID
+						}
+						if isWSTerminalEvent(f.name) {
+							if f.name != "response.completed" {
+								t.Fatalf("%s terminated with %s: %s", what, f.name, f.data)
+							}
+							return responseID
+						}
+					case err := <-pumpErr:
+						t.Fatalf("%s: read pump failed: %v", what, err)
+					case <-ctx.Done():
+						t.Fatalf("%s: probe context ended: %v", what, ctx.Err())
+					}
+				}
+			}
+
+			if err := sendResponseCreate(ctx, conn, prepared.body); err != nil {
+				t.Fatalf("sendResponseCreate: %v", err)
+			}
+			responseID := drain("baseline request")
+			if responseID == "" {
+				t.Fatal("baseline request completed with no response ID")
+			}
+
+			// A zero interval leaves pings off; the timer then never fires
+			// within the gap.
+			pingEvery := tt.pingInterval
+			if pingEvery <= 0 {
+				pingEvery = gap + time.Minute
+			}
+			ping := time.NewTicker(pingEvery)
+			defer ping.Stop()
+			deadline := time.NewTimer(gap)
+			defer deadline.Stop()
+			start := time.Now()
+		wait:
+			for {
+				select {
+				case <-deadline.C:
+					break wait
+				case <-ping.C:
+					if err := conn.Ping(ctx); err != nil {
+						t.Fatalf("KEEPALIVE FAILED after %s: client ping: %v", time.Since(start).Round(time.Second), err)
+					}
+					t.Logf("client ping answered at %s idle", time.Since(start).Round(time.Second))
+				case err := <-pumpErr:
+					t.Fatalf("KEEPALIVE FAILED: connection died after %s idle (target %s): %v", time.Since(start).Round(time.Second), gap, err)
+				case <-ctx.Done():
+					t.Fatalf("probe context ended while waiting %s: %v", gap, ctx.Err())
+				}
+			}
+
+			chained := responseCreateOptions{
+				PreviousResponseID: responseID,
+				Input:              []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Say: two"}]}`)},
+				InputSet:           true,
+			}
+			if err := sendResponseCreate(ctx, conn, prepared.body, chained); err != nil {
+				t.Fatalf("sendResponseCreate after %s idle: %v", gap, err)
+			}
+			drain("chained request")
+			t.Logf("KEEPALIVE WORKS: a chained request succeeded after %s of no request traffic, "+
+				"a gap the reader-less pool cannot survive", gap)
+		})
+	}
+}
