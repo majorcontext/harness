@@ -90,9 +90,19 @@ func TestHandleJournal_ResidentButNeverPersisted_EmptyPage(t *testing.T) {
 }
 
 // TestHandleJournal_ReturnsRecordsOldestFirst drives one real prompt turn
-// and checks the journal reports the session header, model, and both
-// messages in oldest-first order with ascending Seq — the shape a debugging
-// client actually walks.
+// and checks the journal reports the session header, model, both messages,
+// and the turn-settled marker in oldest-first order with ascending Seq —
+// the shape a debugging client actually walks.
+//
+// The settled marker (record type "child_turn.settled", folded by
+// hasUnfinalizedTurn/markTurnSettled — see their own doc comments,
+// engine.go) now appears for a ROOT's ordinary turn too, not only a
+// child's: a live prod finding closed a gap where a root's own crashed
+// mid-turn state was never recovered on reload, which required
+// finalizeTurn to also clear turnUnsettled for a root on ordinary
+// completion — otherwise every root's hasUnfinalizedTurn() would read
+// true forever and misfire recovery on every later reload, crashed or
+// not. This test's own expected count moved from 4 to 5 to match.
 func TestHandleJournal_ReturnsRecordsOldestFirst(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn("hi there"),
@@ -116,8 +126,8 @@ func TestHandleJournal_ReturnsRecordsOldestFirst(t *testing.T) {
 		t.Fatalf("journal status %d: %s", resp.StatusCode, data)
 	}
 	got := decodeJournal(t, data)
-	if len(got.Records) != 4 {
-		t.Fatalf("records = %+v, want 4 (session, model, user message, assistant message)", got.Records)
+	if len(got.Records) != 5 {
+		t.Fatalf("records = %+v, want 5 (session, model, user message, assistant message, turn settled)", got.Records)
 	}
 	for i, r := range got.Records {
 		if r.Seq != i+1 {
