@@ -450,7 +450,24 @@ type apiEvent struct {
 // signal — see that method.
 func (p *serveProc) eventTip() int64 {
 	p.t.Helper()
-	resp, data := p.do(http.MethodGet, "/event/tip", nil)
+	// Bounded, unlike p.do's own unbounded http.DefaultClient call: this read
+	// is eventReplay's completion signal, and handleEventTip takes the
+	// server-global s.mu. Unbounded, a wedge in that mutex would trade this
+	// package's loud, immediate failure for a hang until go test's own
+	// 10-minute panic, which reports the timeout instead of the wedge.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event/tip", nil)
+	if err != nil {
+		p.t.Fatalf("tip request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		p.t.Fatalf("GET /event/tip: %v", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		p.t.Fatalf("GET /event/tip: status %d body %s", resp.StatusCode, data)
 	}
@@ -777,7 +794,13 @@ func TestKillMidPrompt(t *testing.T) {
 		t.Fatalf("final message not a non-empty assistant reply: %+v", got)
 	}
 
-	// Journal still contiguous after the recovery prompt.
+	// Journal still contiguous after the recovery prompt. Wait for idle
+	// first: waitMessages returns on the assistant message, and this turn's
+	// own turn.end and session.status idle records are journaled just after
+	// it, so reading the tip here without waiting would leave whether they
+	// are covered up to timing -- the exact prefix-coverage gap eventReplay
+	// stops the read from hiding.
+	p2.waitStatus(id, "idle")
 	assertContiguousSeqs(t, p2.eventReplay())
 }
 

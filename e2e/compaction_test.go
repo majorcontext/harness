@@ -197,7 +197,10 @@ func TestAutoCompactionAcrossRestart(t *testing.T) {
 	}
 
 	// The durable journal shows the summary message BEFORE history.compacted,
-	// and history.compacted names the fold.
+	// and history.compacted names the fold. Wait for idle first, so the tip
+	// eventReplay reads covers turn 3's own trailing records too, rather than
+	// leaving that to timing.
+	p1.waitStatus(id, "idle")
 	events := p1.eventReplay()
 	assertContiguousSeqs(t, events)
 	var summaryID string
