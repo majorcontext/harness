@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/message"
@@ -834,5 +835,220 @@ func TestNotFoundAfterRecoveryDialEscapesWithoutInfiniteRetry(t *testing.T) {
 	}
 	if connsAfter := server.connCount(); connsAfter != connsBefore+1 {
 		t.Fatalf("connection count = %d, want exactly %d: one recovery dial and no further retries", connsAfter, connsBefore+1)
+	}
+}
+
+// TestResponsesRequestPropertyDiffNamesTheChangedProperty states the
+// operator-facing half of a property refusal: knowing that a request could
+// not chain is not actionable, knowing WHICH context-bearing property moved
+// is. Every name is a wire field name, never a value, so nothing in a
+// refusal reason can carry prompt content.
+func TestResponsesRequestPropertyDiffNamesTheChangedProperty(t *testing.T) {
+	base := func() *apiRequest {
+		return &apiRequest{
+			Model:           "gpt-5",
+			Instructions:    "be brief",
+			MaxOutputTokens: 100,
+			PromptCacheKey:  "ses_1",
+			ServiceTier:     "ultrafast",
+			Tools:           []apiToolDef{{Type: "function", Name: "bash", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*apiRequest)
+		want   string
+	}{
+		{name: "identical", mutate: func(*apiRequest) {}, want: ""},
+		{name: "model", mutate: func(r *apiRequest) { r.Model = "gpt-6" }, want: "model"},
+		{name: "instructions", mutate: func(r *apiRequest) { r.Instructions = "be terse" }, want: "instructions"},
+		{name: "tools", mutate: func(r *apiRequest) {
+			r.Tools = append(r.Tools, apiToolDef{Type: "function", Name: "edit_file", Parameters: json.RawMessage(`{"type":"object"}`)})
+		}, want: "tools"},
+		{name: "max_output_tokens", mutate: func(r *apiRequest) { r.MaxOutputTokens = 200 }, want: "max_output_tokens"},
+		{name: "prompt_cache_key", mutate: func(r *apiRequest) { r.PromptCacheKey = "ses_2" }, want: "prompt_cache_key"},
+		{name: "service_tier", mutate: func(r *apiRequest) { r.ServiceTier = "standard" }, want: "service_tier"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previous, current := base(), base()
+			tc.mutate(current)
+			if got := responsesRequestPropertyDiff(previous, current); got != tc.want {
+				t.Fatalf("responsesRequestPropertyDiff = %q, want %q", got, tc.want)
+			}
+			if want := tc.want == ""; responsesRequestPropertiesMatch(previous, current) != want {
+				t.Fatalf("responsesRequestPropertiesMatch = %v, want %v", !want, want)
+			}
+		})
+	}
+}
+
+// TestIncrementalInputDiffReportsFirstChangedItem pins the second half of a
+// refusal reason: which input item stopped matching. An index localizes the
+// culprit (a mutated ambient status block lands on the newest user message,
+// a compaction rewrite lands early) without exporting any item content.
+func TestIncrementalInputDiffReportsFirstChangedItem(t *testing.T) {
+	previous := &apiRequest{Input: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"one"}`),
+	}}
+	responseItems := []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"two"}`)}
+	suffix := json.RawMessage(`{"type":"function_call_output","call_id":"c1","output":"three"}`)
+
+	t.Run("match", func(t *testing.T) {
+		current := []json.RawMessage{previous.Input[0], responseItems[0], suffix}
+		got, index, ok := incrementalInputDiff(previous, responseItems, current)
+		if !ok {
+			t.Fatalf("refused a matching prefix at item %d", index)
+		}
+		if len(got) != 1 || string(got[0]) != string(suffix) {
+			t.Fatalf("suffix = %s, want %s", got, suffix)
+		}
+		if index != -1 {
+			t.Fatalf("index = %d, want -1 on a match", index)
+		}
+	})
+
+	t.Run("changed request item", func(t *testing.T) {
+		changed := json.RawMessage(`{"type":"message","role":"user","content":"one!"}`)
+		current := []json.RawMessage{changed, responseItems[0], suffix}
+		if _, index, ok := incrementalInputDiff(previous, responseItems, current); ok || index != 0 {
+			t.Fatalf("diff = (index %d, ok %v), want (0, false)", index, ok)
+		}
+	})
+
+	t.Run("changed response item", func(t *testing.T) {
+		changed := json.RawMessage(`{"type":"message","role":"assistant","content":"two!"}`)
+		current := []json.RawMessage{previous.Input[0], changed, suffix}
+		if _, index, ok := incrementalInputDiff(previous, responseItems, current); ok || index != 1 {
+			t.Fatalf("diff = (index %d, ok %v), want (1, false)", index, ok)
+		}
+	})
+
+	t.Run("shorter than the prefix", func(t *testing.T) {
+		current := []json.RawMessage{previous.Input[0]}
+		if _, index, ok := incrementalInputDiff(previous, responseItems, current); ok || index != -1 {
+			t.Fatalf("diff = (index %d, ok %v), want (-1, false)", index, ok)
+		}
+	})
+}
+
+func lineageTerminalMetadata(t *testing.T, events []provider.Event) provider.RequestMetadata {
+	t.Helper()
+	if len(events) == 0 {
+		t.Fatal("no events")
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil {
+		t.Fatalf("terminal event = %+v, want EventDone with request metadata", terminal)
+	}
+	return *terminal.RequestMetadata
+}
+
+// TestWebSocketChainRefusalMetadataNamesTheReason is the whole point of the
+// refusal vocabulary: a full-mode call re-sends the entire input uncached,
+// and today's metadata reports only THAT it happened. Each case below drives
+// one distinct cause through the real pool and asserts the reported reason.
+func TestWebSocketChainRefusalMetadataNamesTheReason(t *testing.T) {
+	server := newWSLineageServer(t)
+	for _, responseID := range []string{"resp_one", "resp_two", "resp_three"} {
+		server.scripts <- wsLineageScript{beforeWait: completedLineageFrames(responseID, "two")}
+	}
+	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	first := lineageTerminalMetadata(t, streamLineageTurn(t, client, lineageRequest("refusal", userMessage("one"))))
+	if first.ChainRefusal != provider.ChainRefusalNoLineage || first.ChainRefusalDetail != "" {
+		t.Fatalf("first turn refusal = %q/%q, want %q with no detail", first.ChainRefusal, first.ChainRefusalDetail, provider.ChainRefusalNoLineage)
+	}
+
+	property := lineageRequest("refusal", userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"))
+	property.MaxTokens = 200
+	got := lineageTerminalMetadata(t, streamLineageTurn(t, client, property))
+	if got.ChainRefusal != provider.ChainRefusalPropertyChanged || got.ChainRefusalDetail != "max_output_tokens" {
+		t.Fatalf("property refusal = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPropertyChanged, "max_output_tokens")
+	}
+
+	// Same properties as the call that installed resp_two, but its first
+	// input item is no longer byte-identical -- exactly what a re-rendered
+	// ambient status block did before it became chain-stable.
+	prefix := lineageRequest("refusal", userMessage("one!"), assistantMessage("resp_one", "two"), userMessage("three"), assistantMessage("resp_two", "two"), userMessage("five"))
+	prefix.MaxTokens = 200
+	got = lineageTerminalMetadata(t, streamLineageTurn(t, client, prefix))
+	if got.ChainRefusal != provider.ChainRefusalPrefixChanged || got.ChainRefusalDetail != "input[0]" {
+		t.Fatalf("prefix refusal = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPrefixChanged, "input[0]")
+	}
+	if got.Mode != provider.RequestModeFull || got.PreviousResponseUsed {
+		t.Fatalf("prefix refusal metadata = %+v, want a full, unchained request", got)
+	}
+}
+
+// TestWebSocketChainedTurnReportsNoRefusal asserts the surplus half: a call
+// that DID chain must carry no refusal reason, so a log query can count
+// refusals without subtracting chained calls.
+func TestWebSocketChainedTurnReportsNoRefusal(t *testing.T) {
+	server := newWSLineageServer(t)
+	for _, responseID := range []string{"resp_one", "resp_two"} {
+		server.scripts <- wsLineageScript{beforeWait: completedLineageFrames(responseID, "two")}
+	}
+	client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	streamLineageTurn(t, client, lineageRequest("chained", userMessage("one")))
+	got := lineageTerminalMetadata(t, streamLineageTurn(t, client, lineageRequest("chained", userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"))))
+	if !got.PreviousResponseUsed || got.Mode != provider.RequestModeIncremental {
+		t.Fatalf("second turn metadata = %+v, want an incremental chained request", got)
+	}
+	if got.ChainRefusal != provider.ChainRefusalNone || got.ChainRefusalDetail != "" {
+		t.Fatalf("chained turn reported refusal %q/%q, want none", got.ChainRefusal, got.ChainRefusalDetail)
+	}
+}
+
+// ageEntry pushes one pool entry's connection lifestamps into the past, so
+// a test reaches the reuse-refused paths under the PRODUCTION idle timeout
+// and maximum connection age instead of shrinking either one (the idle
+// timeout also bounds every frame read, so a tiny value breaks the read
+// before it can expire a connection).
+func ageEntry(t *testing.T, pool *wsPool, sessionKey string, idle, age time.Duration) {
+	t.Helper()
+	entry := pool.entryFor(sessionKey)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.conn == nil {
+		t.Fatal("pool entry holds no connection to age")
+	}
+	entry.lastUsedAt = entry.lastUsedAt.Add(-idle)
+	entry.connectedAt = entry.connectedAt.Add(-age)
+}
+
+// TestWebSocketDroppedConnectionRefusalKeepsItsCause is the red-first guard
+// for the reason a lost pooled connection reports. A dropped socket takes
+// its lineage with it, so the generic "no usable lineage" answer is true but
+// useless: it hides the fact that the fleet paid a whole uncached re-send
+// for ordinary think time between two turns. The specific cause must win.
+func TestWebSocketDroppedConnectionRefusalKeepsItsCause(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		idle time.Duration
+		age  time.Duration
+		want provider.ChainRefusal
+	}{
+		{name: "idle", idle: 2 * wsDefaultIdleTimeout, want: provider.ChainRefusalConnectionIdle},
+		{name: "aged", age: 2 * wsDefaultMaxConnectionAge, want: provider.ChainRefusalConnectionAged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newWSLineageServer(t)
+			for _, responseID := range []string{"resp_one", "resp_two"} {
+				server.scripts <- wsLineageScript{beforeWait: completedLineageFrames(responseID, "two")}
+			}
+			client := &Client{APIKey: "test", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+			session := "dropped-" + tc.name
+
+			streamLineageTurn(t, client, lineageRequest(session, userMessage("one")))
+			ageEntry(t, client.wsPoolFor(), session, tc.idle, tc.age)
+			second := lineageTerminalMetadata(t, streamLineageTurn(t, client, lineageRequest(session, userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three"))))
+			if second.ChainRefusal != tc.want {
+				t.Fatalf("refusal = %q, want %q", second.ChainRefusal, tc.want)
+			}
+			if second.Mode != provider.RequestModeFull {
+				t.Fatalf("mode = %q, want a full request", second.Mode)
+			}
+		})
 	}
 }

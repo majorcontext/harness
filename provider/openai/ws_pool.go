@@ -112,13 +112,27 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	}
 	entry.busy = true
 	now := time.Now()
-	reuse := entry.conn != nil &&
-		!entry.connectedAt.IsZero() &&
-		now.Sub(entry.connectedAt) < p.maxConnectionAge &&
-		now.Sub(entry.lastUsedAt) < p.idleTimeout
+	live := entry.conn != nil && !entry.connectedAt.IsZero()
+	aged := live && now.Sub(entry.connectedAt) >= p.maxConnectionAge
+	idled := live && now.Sub(entry.lastUsedAt) >= p.idleTimeout
+	reuse := live && !aged && !idled
 	entry.lastUsedAt = now
 	conn := entry.conn
 	entry.mu.Unlock()
+
+	// A dropped connection takes its lineage with it, so the reason the
+	// pool refused to reuse this socket IS the reason the next request
+	// cannot chain (see provider.ChainRefusal).
+	chainRefusal := provider.ChainRefusalNoLineage
+	switch {
+	case reuse:
+		chainRefusal = provider.ChainRefusalNone
+	case aged:
+		chainRefusal = provider.ChainRefusalConnectionAged
+	case idled:
+		chainRefusal = provider.ChainRefusalConnectionIdle
+	}
+	var chainRefusalDetail string
 
 	var subUsage *message.SubscriptionUsage
 	if !reuse {
@@ -163,15 +177,28 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		createOptions.Input = completeRequest.Input
 		createOptions.InputSet = true
 		createOptions.Generate = &generate
-	} else if req.Family == CodexFamily && entry.lineage != nil &&
-		entry.lineage.responseID != "" &&
-		entry.lineage.generation == generation &&
-		responsesRequestPropertiesMatch(entry.lineage.request, &completeRequest) {
-		if suffix, ok := incrementalInput(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
-			createOptions.PreviousResponseID = entry.lineage.responseID
-			createOptions.Input = suffix
-			createOptions.InputSet = true
+		chainRefusal = provider.ChainRefusalNone
+	} else if req.Family != CodexFamily {
+		// Only a Codex-family request can chain at all, so a refusal reason
+		// would be noise here.
+		chainRefusal = provider.ChainRefusalNone
+	} else if entry.lineage == nil || entry.lineage.responseID == "" || entry.lineage.generation != generation {
+		// A connection-level reason recorded above survives: the lineage is
+		// absent BECAUSE its socket went, which is the more specific answer.
+		if chainRefusal == provider.ChainRefusalNone {
+			chainRefusal = provider.ChainRefusalNoLineage
 		}
+	} else if property := responsesRequestPropertyDiff(entry.lineage.request, &completeRequest); property != "" {
+		chainRefusal = provider.ChainRefusalPropertyChanged
+		chainRefusalDetail = property
+	} else if suffix, item, ok := incrementalInputDiff(entry.lineage.request, entry.lineage.outputItems, completeRequest.Input); ok {
+		createOptions.PreviousResponseID = entry.lineage.responseID
+		createOptions.Input = suffix
+		createOptions.InputSet = true
+		chainRefusal = provider.ChainRefusalNone
+	} else {
+		chainRefusal = provider.ChainRefusalPrefixChanged
+		chainRefusalDetail = inputItemLocator(item)
 	}
 	entry.mu.Unlock()
 
@@ -238,6 +265,8 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		CompleteInputItems:   len(completeRequest.Input),
 		SentInputItems:       len(completeRequest.Input),
 		PreviousResponseUsed: false,
+		ChainRefusal:         chainRefusal,
+		ChainRefusalDetail:   chainRefusalDetail,
 	}
 	if chainedRequest {
 		metadata.Mode = provider.RequestModeIncremental

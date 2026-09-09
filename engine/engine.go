@@ -3418,12 +3418,16 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			var requestMode provider.RequestMode
 			var completeInputItems, sentInputItems int
 			var previousResponseUsed, chainRecovered bool
+			var chainRefusal provider.ChainRefusal
+			var chainRefusalDetail string
 			if ev.RequestMetadata != nil {
 				requestMode = ev.RequestMetadata.Mode
 				completeInputItems = ev.RequestMetadata.CompleteInputItems
 				sentInputItems = ev.RequestMetadata.SentInputItems
 				previousResponseUsed = ev.RequestMetadata.PreviousResponseUsed
 				chainRecovered = ev.RequestMetadata.ChainRecovered
+				chainRefusal = ev.RequestMetadata.ChainRefusal
+				chainRefusalDetail = ev.RequestMetadata.ChainRefusalDetail
 			}
 			s.emitTurnMetrics(TurnMetrics{
 				SessionID:        s.ID,
@@ -3446,6 +3450,8 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				SentInputItems:       sentInputItems,
 				PreviousResponseUsed: previousResponseUsed,
 				ChainRecovered:       chainRecovered,
+				ChainRefusal:         chainRefusal,
+				ChainRefusalDetail:   chainRefusalDetail,
 			})
 			if ev.SubscriptionUsage != nil {
 				// See provider.Event.SubscriptionUsage's own doc comment:

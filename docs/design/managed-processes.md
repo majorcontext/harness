@@ -253,14 +253,16 @@ lifetime**, every subsequent request-assembly appends an ephemeral status
 block to the *newest* user message:
 
 ```
-[processes: dev ready :3000 14m log=.harness/proc/dev.log | db exited(1) 2m ago log=.harness/proc/db.log]
+[processes: dev ready :3000 since 2026-09-08T17:48:27Z log=.harness/proc/dev.log | db exited(1) at 2026-09-08T18:03:09Z log=.harness/proc/db.log]
 ```
 
 One token per process that has *itself* ever been started (a declared but
 never-started process is omitted even once the block starts appearing for
-others). `ready`/`running`/`starting` report elapsed time since start;
-`exited`/`stopped` report elapsed time since finish, suffixed `ago`, and
-`exited` additionally carries the exit code. A process with declared
+others). `ready`/`running`/`starting` report `since <instant>`;
+`exited`/`stopped` report `at <instant>`, and `exited` additionally carries
+the exit code. Each instant is absolute UTC RFC3339, never a duration
+relative to request assembly — see "Where this rides, and why it is safe"
+below for why. A process with declared
 `ports` (§1a) carries a `:3000` (or `:3000,3001`) token right after its
 state — `dev`'s in the example above — omitted entirely for a process
 with no declared ports (`db`'s). The log path is relativized against the
@@ -281,11 +283,20 @@ earlier message. Three things fall out of that:
    only in the local `messages` slice handed to `provider.Request`, which
    is discarded after the call. A resumed session (`LoadSession`) replays
    only what was actually appended — the block was never there.
-2. **Only the newest message changes.** Every earlier message in the
-   request is byte-identical to a request built before any process was
-   ever started, which is what keeps a provider's prompt cache warm (the
-   same reasoning `provider/anthropic/transcode.go`'s cache-marker
-   placement already depends on).
+2. **Only the newest message changes, and it renders the same bytes
+   every time.** Every earlier message in the request is byte-identical to
+   a request built before any process was ever started, which is what
+   keeps a provider's prompt cache warm (the same reasoning
+   `provider/anthropic/transcode.go`'s cache-marker placement already
+   depends on). "Earlier" is not sufficient on its own: the newest user
+   message STAYS the newest one for every model call of a tool loop, so
+   the block sits inside the cached prefix from the second call onward.
+   Each token therefore names an absolute instant (`statusInstant`,
+   `engine/process.go`) rather than an elapsed duration. An elapsed
+   duration re-rendered a different string on each call, which cost the
+   Codex WebSocket input-suffix projection (`chain_refusal=prefix_changed`,
+   `docs/design/codex-websocket-chaining.md`) and the prompt cache with it.
+   `TestAmbientProcessStatusIsStableWhileNothingChanges` pins this.
 3. **The goal loop needs no special-casing.** `Session.PursueGoal`'s
    worker turns are ordinary `Prompt` calls; the injection point is inside
    `Prompt`'s own `streamTurn`, so a goal-driven worker turn sees the exact

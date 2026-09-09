@@ -347,3 +347,61 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 		t.Fatalf("serialized turn_metrics record leaked response ID: %s", record)
 	}
 }
+
+// TestTurnMetricsReportsChainRefusal is the operator-facing half of a
+// full-mode call: request_mode=full says the whole input was re-sent
+// uncached, and nothing said why. The refusal reason and its locator must
+// reach the turn_metrics record so a log query can rank causes, and a
+// chained call must report neither.
+func TestTurnMetricsReportsChainRefusal(t *testing.T) {
+	metadata := &provider.RequestMetadata{
+		Mode:               provider.RequestModeFull,
+		CompleteInputItems: 9,
+		SentInputItems:     9,
+		ChainRefusal:       provider.ChainRefusalPrefixChanged,
+		ChainRefusalDetail: "input[4]",
+	}
+	prov := &scriptedProvider{name: "codex", turns: [][]provider.Event{{
+		{Type: provider.EventDone, Message: &message.Message{ID: "msg_a", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}, StopReason: provider.StopEndTurn, RequestMetadata: metadata},
+	}}}
+	var recorded []TurnMetrics
+	s := NewSession(Config{
+		Providers:     provider.Registry{"codex": prov},
+		Model:         message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		OnTurnMetrics: func(m TurnMetrics) { recorded = append(recorded, m) },
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("metrics records = %d, want 1", len(recorded))
+	}
+	got := recorded[0]
+	if got.ChainRefusal != provider.ChainRefusalPrefixChanged || got.ChainRefusalDetail != "input[4]" {
+		t.Fatalf("refusal metrics = %q/%q, want %q/%q", got.ChainRefusal, got.ChainRefusalDetail, provider.ChainRefusalPrefixChanged, "input[4]")
+	}
+
+	var log bytes.Buffer
+	oldLogger := defaultTurnMetricsStderr
+	defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(&log, nil))
+	t.Cleanup(func() { defaultTurnMetricsStderr = oldLogger })
+	defaultTurnMetricsLog(got)
+	record := log.String()
+	for _, field := range []string{`"chain_refusal":"prefix_changed"`, `"chain_refusal_detail":"input[4]"`} {
+		if !strings.Contains(record, field) {
+			t.Errorf("turn_metrics record %q does not contain %s", record, field)
+		}
+	}
+
+	// Surplus check: a chained call must not emit either key, so a query
+	// can count refusals without excluding chained calls first.
+	log.Reset()
+	defaultTurnMetricsLog(TurnMetrics{
+		Model:                message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		RequestMode:          provider.RequestModeIncremental,
+		PreviousResponseUsed: true,
+	})
+	if chained := log.String(); strings.Contains(chained, "chain_refusal") {
+		t.Errorf("chained turn_metrics record %q reports a refusal key", chained)
+	}
+}
