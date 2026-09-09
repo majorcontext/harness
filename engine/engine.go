@@ -3447,6 +3447,8 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				// TurnMetrics's doc comment.
 				SystemLen:            len(strings.Join(system, "\n")),
 				ToolsCount:           len(tools),
+				ServiceTier:          req.ServiceTier,
+				Effort:               req.Effort,
 				RequestMode:          requestMode,
 				CompleteInputItems:   completeInputItems,
 				SentInputItems:       sentInputItems,
