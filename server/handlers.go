@@ -1260,6 +1260,20 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 // limit == 0 is byte-for-byte the pre-existing behavior: coldWindowedBootstrap
 // is never even attempted, and this calls transcriptSyncedThrough exactly as
 // handleMessages did before this function existed.
+//
+// A limit > 0 is honored on EVERY path, not only the cold one:
+// coldWindowedBootstrap's own "ok=false" cases (resident, no readable
+// index/page, or a lost residency race) fall through to
+// transcriptSyncedThrough for the correct cursor, and windowTranscriptTail
+// below then narrows its already-correct Messages/Seqs to the same tail a
+// cold read would have answered. This is trivial precisely because it is
+// resident (or otherwise already fully in memory): the full history is
+// already the read this call pays for, so windowing it after the fact
+// costs nothing beyond a slice. The cursor is computed by
+// transcriptSyncedThrough BEFORE this narrowing and is left untouched — it
+// already describes the session's complete history, a strictly stronger
+// (never wrong) statement than "the returned window alone", so narrowing
+// Messages/Seqs afterward cannot invalidate it.
 func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, limit int) {
 	if limit > 0 {
 		if resp, ok := s.coldWindowedBootstrap(id, limit); ok {
@@ -1269,13 +1283,15 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		// Resident (already cheap in memory), no readable index/page (first
 		// read of a pre-index session, or a genuine I/O error), or lost the
 		// residency race in coldWindowedBootstrap: fall through to the
-		// always-correct path below, which is cheap in every one of those
-		// cases except the middle one.
+		// always-correct path below, windowed to the same tail limit names.
 	}
 	msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
+	}
+	if limit > 0 {
+		msgs, seqs = windowTranscriptTail(msgs, seqs, limit)
 	}
 	writeJSON(w, http.StatusOK, transcriptJSON{
 		Messages:   marshalMessages(msgs),
@@ -1283,6 +1299,25 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
 	})
+}
+
+// windowTranscriptTail narrows history and seqs — parallel, oldest-first,
+// same length (transcriptSyncedThrough's own contract) — to their last
+// limit entries. limit above engine.MaxMessagePageLimit is clamped to it,
+// never rejected, mirroring engine.MessagePageWindow's own clamp-not-reject
+// rule for the cold path (coldWindowedBootstrap's engine.ReadMessagePage
+// call) — a caller sees the same behavior for an oversized limit
+// regardless of which path answers stream_from+limit. Returns both slices
+// unchanged when history already fits within limit.
+func windowTranscriptTail(history []message.Message, seqs []int64, limit int) ([]message.Message, []int64) {
+	if limit > engine.MaxMessagePageLimit {
+		limit = engine.MaxMessagePageLimit
+	}
+	if len(history) <= limit {
+		return history, seqs
+	}
+	start := len(history) - limit
+	return history[start:], seqs[start:]
 }
 
 // coldWindowedBootstrap answers a windowed transcript bootstrap for a
@@ -1341,8 +1376,12 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 	}, true
 }
 
-// transcriptJSON is the ?stream_from=1 envelope: the session's whole message
-// history PLUS the durable event-journal seq it is synced through (see
+// transcriptJSON is the ?stream_from=1 envelope: the session's message
+// history — the WHOLE thing for a request naming no limit, or (docs/
+// design/fast-transcript-bootstrap.md) only its LATEST window when the
+// request also names limit, answered on every path (cold or resident)
+// from the identical bounded tail a before_seq/limit MessagePage would —
+// PLUS the durable event-journal seq it is synced through (see
 // transcriptSyncedThrough), so a client can open GET /event?from=<stream_from>
 // immediately after this snapshot with no REPLAY window that can re-deliver
 // or drop a message straddling the two reads — the "race-closed bootstrap"

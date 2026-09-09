@@ -173,6 +173,12 @@ func TestColdWindowedBootstrap_ParityWithFullRead(t *testing.T) {
 // with a subsequent live read: no message the race added is missing, and
 // nothing the stale windowed page already had is duplicated (the fallback
 // discards the windowed page outright rather than merging it).
+//
+// The fallback still honors the caller's own limit (windowTranscriptTail,
+// handlers.go): the response is the TAIL of the post-race history, not
+// the whole 8 messages a plain fallback-ignores-limit read would have
+// returned — proving windowing survives the fallback path too, not only
+// coldWindowedBootstrap's own success path.
 func TestColdWindowedBootstrap_ResidencyRaceFallsBackConsistently(t *testing.T) {
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("raced")}})
@@ -208,12 +214,14 @@ func TestColdWindowedBootstrap_ResidencyRaceFallsBackConsistently(t *testing.T) 
 		t.Fatal("expected session to be resident after the race promoted it")
 	}
 
-	// The fallback answers from full current history: 6 original messages
-	// (user+assistant per turn) plus the raced turn's own user+assistant
-	// pair = 8, never the stale 3-message window the cold path had already
-	// read.
-	if len(got.Messages) != 8 {
-		t.Fatalf("got %d messages, want 8 (fell back to the full, post-race history, not the stale window)", len(got.Messages))
+	// The fallback answers from the CURRENT (post-race) history — 6
+	// original messages plus the raced turn's own user+assistant pair = 8
+	// — windowed to the same limit=3 the request named, never the whole
+	// 8 and never the stale 3-message window the cold path had already
+	// read (a different 3: the race added 2 new messages, shifting the
+	// tail).
+	if len(got.Messages) != 3 {
+		t.Fatalf("got %d messages, want 3 (limit=3, honored on the fallback path too, against the post-race history)", len(got.Messages))
 	}
 
 	seen := make(map[string]bool, len(got.Messages))
@@ -886,5 +894,91 @@ func TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip(t *testing.T) 
 	}
 	if !sawSummary2 {
 		t.Errorf("resuming SSE from windowed stream_from %d never redelivered summary2 %s, which the window excluded", windowed.StreamFrom, summary2ID)
+	}
+}
+
+// TestTranscriptBootstrap_ResidentSessionHonorsLimit is the regression test
+// for a Copilot review finding on PR #265: handleTranscriptBootstrap
+// honored limit only on coldWindowedBootstrap's own success path, silently
+// ignoring it on every fallback (a resident session, an unreadable index/
+// page, or a lost residency race) and returning the WHOLE history instead
+// — contradicting both the PR description and openapi.yaml's own
+// "stream_from+limit narrows messages to the latest window" claim for a
+// resident session, the single most common case (a console's own session
+// is resident for as long as it stays actively open).
+//
+// windowTranscriptTail narrows transcriptSyncedThrough's own Messages/Seqs
+// to their tail AFTER the cursor is computed from the complete history, so
+// StreamFrom/LiveFrom must be identical to what a plain, unwindowed
+// stream_from=1 read of the SAME resident session reports — narrowing the
+// returned window never invalidates a cursor that already describes the
+// whole history.
+func TestTranscriptBootstrap_ResidentSessionHonorsLimit(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn("one"), asstTurn("two"), asstTurn("three"),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("")
+	for _, text := range []string{"go1", "go2", "go3"} {
+		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": text}},
+		})
+		if resp.StatusCode != 202 {
+			t.Fatalf("prompt_async(%q) = %d: %s", text, resp.StatusCode, data)
+		}
+		h.waitIdle(id)
+	}
+	if h.srv.residentSession(id) == nil {
+		t.Fatal("session not resident -- test setup invariant broken")
+	}
+
+	full, fullMeta := getTranscript(t, h, id) // stream_from=1, no limit
+	if fullMeta.status != 200 {
+		t.Fatalf("GET full = %d: %s", fullMeta.status, fullMeta.body)
+	}
+	if len(full.Messages) != 6 {
+		t.Fatalf("got %d full messages, want 6 (3 turns' user+assistant pairs)", len(full.Messages))
+	}
+
+	resp, data := h.do("GET", "/session/"+id+"/message?stream_from=1&limit=2", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET windowed(resident) = %d: %s", resp.StatusCode, data)
+	}
+	if h.srv.residentSession(id) == nil {
+		t.Fatal("session unexpectedly not resident anymore -- test setup invariant broken")
+	}
+	var windowed transcriptResponse
+	if err := json.Unmarshal(data, &windowed); err != nil {
+		t.Fatalf("decode: %v (%s)", err, data)
+	}
+	if len(windowed.Messages) != 2 {
+		t.Fatalf("got %d windowed messages, want 2 (the resident session's own tail) -- limit was ignored on the resident fallback path", len(windowed.Messages))
+	}
+
+	wantTail := full.Messages[len(full.Messages)-2:]
+	for i := range wantTail {
+		if windowed.Messages[i].ID != wantTail[i].ID {
+			t.Errorf("windowed.Messages[%d].ID = %s, want %s (full path's own tail)", i, windowed.Messages[i].ID, wantTail[i].ID)
+		}
+	}
+	if len(windowed.Seqs) != 2 {
+		t.Fatalf("got %d windowed seqs, want 2", len(windowed.Seqs))
+	}
+	wantSeqsTail := full.Seqs[len(full.Seqs)-2:]
+	for i := range wantSeqsTail {
+		if windowed.Seqs[i] != wantSeqsTail[i] {
+			t.Errorf("windowed.Seqs[%d] = %d, want %d (full path's own tail)", i, windowed.Seqs[i], wantSeqsTail[i])
+		}
+	}
+
+	// The cursor covers the resident session's COMPLETE history, computed
+	// before narrowing to the tail -- so it must be identical to the
+	// unwindowed full path's own cursor, not merely consistent with the
+	// smaller returned window.
+	if windowed.StreamFrom != full.StreamFrom {
+		t.Errorf("windowed stream_from = %d, want %d (the full path's own cursor, unaffected by narrowing Messages/Seqs to the tail)", windowed.StreamFrom, full.StreamFrom)
+	}
+	if windowed.LiveFrom != full.LiveFrom {
+		t.Errorf("windowed live_from = %d, want %d", windowed.LiveFrom, full.LiveFrom)
 	}
 }

@@ -2658,13 +2658,17 @@ paths:
             Combined with `limit`, the Transcript envelope carries only the
             LATEST `limit` messages instead of the whole history — a
             windowed bootstrap (docs/design/fast-transcript-bootstrap.md)
-            answered from the same bounded tail read `before_seq`/`limit`
-            already uses, not a full history replay. `stream_from`,
-            `live_from`, and `seqs` mean exactly what they always have; only
+            honored on every path, not only when the session is cold: a
+            session this process does not hold resident answers from the
+            same bounded tail read `before_seq`/`limit` already uses,
+            never a full history replay; a resident session (or any other
+            case that falls back to the always-correct path) narrows its
+            own already-in-memory history to the identical tail instead,
+            which costs nothing beyond a slice. `stream_from`, `live_from`,
+            and `seqs` mean exactly what they always have either way; only
             `messages` is narrowed to the window. A value above
             `MaxMessagePageLimit` is bounded, not rejected, here (unlike
-            plain `before_seq`/`limit` paging): this path always reaches the
-            engine's own page reader directly.
+            plain `before_seq`/`limit` paging), on both paths alike.
       responses:
         "200":
           description: OK
