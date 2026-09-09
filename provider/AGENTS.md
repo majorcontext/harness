@@ -110,6 +110,12 @@ Only `CodexFamily` requests with WebSocket transport and a non-empty
   freshly dialed connection carrying a non-chained request.
 - Send that recovery as the complete request on a freshly dialed connection,
   not the one that produced the miss.
+- Do not size the reuse window from `chain_refusal=connection_idle`. It
+  undercounts: the measured idle life of an unread pooled connection is 60 to
+  90 seconds, well under `wsDefaultIdleTimeout`, so the usual idle loss
+  becomes an HTTP fallback that reports no `request_mode` and no refusal
+  reason. `idleTimeout` is also the per-frame read deadline, so split the two
+  before changing either value.
 - Invalidate later, repeated, partial, failed, canceled, or truncated lineage.
 - Never log, persist, or export a response ID as projection metadata.
 
