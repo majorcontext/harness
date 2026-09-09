@@ -3175,6 +3175,13 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 
 	mgr1 := NewSessionManager(context.Background(), 3, 0)
 	flushes := newFlushSignal(t, mgr1)
+	// Armed BEFORE the spawn that eventually triggers it: mid's own
+	// completion delivers a notification to the still-idle root, which
+	// claims a real engine-initiated resume turn on it. The simulated
+	// crash below must happen with that turn already finished, not
+	// mid-flight — see the wait further down for what a reload in that
+	// window does to this whole scenario.
+	resumes1 := newResumeClaims(t, mgr1)
 	root1 := mgr1.NewRoot(rootCfg)
 
 	midID, err := mgr1.Spawn(SpawnOptions{ParentID: root1.ID, Prompt: "go", Model: modelFor("mid"), AgentType: AgentGeneralPurpose})
@@ -3196,6 +3203,50 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, midID)
 		if err != nil {
 			t.Fatalf("LoadSession (settle poll): %v", err)
+		}
+		return !s.hasUnfinalizedTurn()
+	})
+
+	// The ROOT must be quiesced on disk too, not just mid. mid's own
+	// completion delivered a notification to the then-idle root back in
+	// mgr1, which fired a real engine-initiated resume turn on it
+	// (fireIdleResumeAsync). That turn appends its trigger message, so
+	// the root's log carries turnUnsettled=true until its own
+	// child_turn.settled record lands.
+	//
+	// Reloading inside that window makes root2 look like a session whose
+	// turn was interrupted by a crash, which silently changes the
+	// scenario under test: adoptRootLocked calls
+	// recoverInterruptedTurnLocked for the ROOT itself, which marks it
+	// StatusFailed. The root is then TERMINAL before
+	// recoverCrashedChildrenLocked (the very next line) sweeps down to
+	// the grandchild, so nearestLiveAncestorLocked walks past mid
+	// (legitimately done) AND past the now-failed root, finds no live
+	// ancestor at all, delivers the grandchild's notification nowhere,
+	// and fires no resume — leaving waitSettled below blocked forever on
+	// a claim that can never come, which surfaces as a whole-package
+	// 10-minute timeout rather than a named failure.
+	//
+	// Both halves are required, in this order. waitSettled first — the
+	// claimed-then-idle pair, the same bracket every other test in this
+	// file uses for an engine-initiated resume: the root's resume is
+	// asynchronous (go fireIdleResumeAsync), so a bare "is it settled on
+	// disk" poll is satisfied by the trivially-settled state BEFORE that
+	// turn has appended anything at all, and the reload then races the
+	// very turn it was supposed to wait for. The claim proves the turn
+	// started; the return to idle proves it finished in memory.
+	//
+	// The durable poll then proves that turn's settled marker actually
+	// reached disk. In-memory idle is not sufficient on its own: the
+	// marker's write is queued through deferPersist and flushed only
+	// after m.mu releases, so LoadSession can still observe
+	// turnUnsettled=true for a turn that has already gone idle. Disk
+	// state, not memory state, is what the reload below reads.
+	resumes1.waitSettled(t, mgr1, root1.ID)
+	flushes.waitUntilMsg(t, "test setup: the root's own resume-turn settled marker never landed durably", func() bool {
+		s, err := LoadSession(Config{Providers: reg, SessionDir: dir}, root1.ID)
+		if err != nil {
+			t.Fatalf("LoadSession (root settle poll): %v", err)
 		}
 		return !s.hasUnfinalizedTurn()
 	})
