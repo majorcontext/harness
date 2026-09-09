@@ -348,6 +348,82 @@ func TestTurnMetricsReportsCodexIncrementalProjection(t *testing.T) {
 	}
 }
 
+// TestTurnMetricsReportsServiceTierAndEffort pins the two per-session
+// latency knobs a turn_metrics line must carry. Without them the fleet's
+// Codex speed tier is unobservable in logs: the tier lives only in the
+// session, readable through GET /session/{id}, so no log query can correlate
+// TTFT with tier, and the value disappears the moment a box goes idle.
+//
+// Both keys are omitted, never emitted empty. An unset tier means harness
+// sends no service_tier at all and the backend applies its own default,
+// which is a genuinely different state from any named tier; the same holds
+// for message.EffortUnset against the named EffortOff. A query counts each
+// by key presence, so flattening either to "" would silently merge two
+// populations.
+func TestTurnMetricsReportsServiceTierAndEffort(t *testing.T) {
+	var log bytes.Buffer
+	oldLogger := defaultTurnMetricsStderr
+	defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(&log, nil))
+	t.Cleanup(func() { defaultTurnMetricsStderr = oldLogger })
+
+	base := TurnMetrics{Model: message.ModelRef{Provider: "codex", Model: "gpt-5"}}
+
+	set := base
+	set.ServiceTier = "priority"
+	set.Effort = message.EffortHigh
+	defaultTurnMetricsLog(set)
+	record := log.String()
+	for _, field := range []string{`"service_tier":"priority"`, `"effort":"high"`} {
+		if !strings.Contains(record, field) {
+			t.Errorf("turn_metrics record %q does not contain %s", record, field)
+		}
+	}
+
+	// EffortOff is a NAMED level, not the absence of one: it must still
+	// report, or "reasoning explicitly disabled" merges into "never asked".
+	log.Reset()
+	off := base
+	off.Effort = message.EffortOff
+	defaultTurnMetricsLog(off)
+	if got := log.String(); !strings.Contains(got, `"effort":"off"`) {
+		t.Errorf("turn_metrics record %q drops an explicit off effort", got)
+	}
+
+	// Plumbing: the values must actually reach the emit site from the
+	// assembled request, not merely serialize once handed to the logger.
+	prov := &scriptedProvider{name: "codex", turns: [][]provider.Event{{
+		{Type: provider.EventDone, Message: &message.Message{ID: "msg_a", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}, StopReason: provider.StopEndTurn},
+	}}}
+	var recorded []TurnMetrics
+	sess := NewSession(Config{
+		Providers:     provider.Registry{"codex": prov},
+		Model:         message.ModelRef{Provider: "codex", Model: "gpt-5"},
+		ServiceTier:   "priority",
+		Effort:        message.EffortHigh,
+		OnTurnMetrics: func(m TurnMetrics) { recorded = append(recorded, m) },
+	})
+	if _, err := sess.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("metrics records = %d, want 1", len(recorded))
+	}
+	if got := recorded[0]; got.ServiceTier != "priority" || got.Effort != message.EffortHigh {
+		t.Errorf("plumbed metrics = %q/%q, want %q/%q", got.ServiceTier, got.Effort, "priority", message.EffortHigh)
+	}
+
+	// The missing half: an unset tier and an unset effort emit NO key at
+	// all, so a query can count either by presence.
+	log.Reset()
+	defaultTurnMetricsLog(base)
+	unset := log.String()
+	for _, key := range []string{"service_tier", "effort"} {
+		if strings.Contains(unset, key) {
+			t.Errorf("turn_metrics record %q reports %q for an unset value, want the key omitted", unset, key)
+		}
+	}
+}
+
 // TestTurnMetricsReportsChainRefusal is the operator-facing half of a
 // full-mode call: request_mode=full says the whole input was re-sent
 // uncached, and nothing said why. The refusal reason and its locator must

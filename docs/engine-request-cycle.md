@@ -775,10 +775,13 @@ tool-argument chunk must never be mistaken for "first byte"; if `EventDone`
 itself is the first event, `ttft_ms` covers the whole call and `stream_ms` is
 0), `stream_ms` (first delta to `EventDone`), `input_tokens`/`output_tokens`/
 `cache_read_tokens`/`cache_write_tokens` (passed through from
-`provider.Usage` verbatim), `system_len`/`tools_count`, and `retry` (the
-1-indexed attempt number `streamTurnWithRetry` — `engine/prompt_retry.go` —
-was on when this call completed; 1 for a turn that succeeded on its first
-try). `system_len` is computed identically to the server's `request.meta`
+`provider.Usage` verbatim), `system_len`/`tools_count`, `service_tier` and
+`effort` (this request's own two per-session latency knobs, each emitted only
+when set — an unset one means harness sent no such field and the backend
+applied its own default, which a query must count apart from any named
+value), and `retry` (the 1-indexed attempt number `streamTurnWithRetry` —
+`engine/prompt_retry.go` — was on when this call completed; 1 for a turn that
+succeeded on its first try). `system_len` is computed identically to the server's `request.meta`
 record (`len(strings.Join(req.System, "\n"))`, see `server/journal.go`'s
 `OnRequest`) — deliberately, not coincidentally: `session_id` + `model` +
 `system_len` together are a natural join key between a `turn_metrics` stderr

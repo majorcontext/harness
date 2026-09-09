@@ -56,6 +56,20 @@ type TurnMetrics struct {
 	SystemLen int
 	// ToolsCount is the number of tools offered on this request.
 	ToolsCount int
+	// ServiceTier and Effort are this request's own two per-session latency
+	// knobs, read from the assembled provider.Request exactly like SystemLen
+	// and ToolsCount above rather than re-read from the Session: a
+	// SetServiceTier or SetEffort call landing mid-turn takes effect on the
+	// NEXT request, so the request's own values are what this completed call
+	// actually ran with.
+	//
+	// Both zero values mean "harness sent no field, the backend applied its
+	// own default", which is a distinct state from any named value —
+	// message.EffortOff in particular is a named level, not an absence. See
+	// defaultTurnMetricsLog for the omit-when-empty wire treatment that
+	// keeps the two countable apart.
+	ServiceTier string
+	Effort      message.Effort
 	// RequestMode and the item counts report optional provider transport
 	// projection metadata. RequestMode is empty when the provider omitted it.
 	RequestMode          provider.RequestMode
@@ -118,6 +132,16 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 			"previous_response_used", m.PreviousResponseUsed,
 			"chain_recovered", m.ChainRecovered,
 		)
+	}
+	// Omitted, never empty, for the same reason as the refusal keys below:
+	// an unset tier or effort means harness sent no such field at all and
+	// the backend chose, which a query must be able to count apart from
+	// any named value.
+	if m.ServiceTier != "" {
+		args = append(args, "service_tier", m.ServiceTier)
+	}
+	if m.Effort != message.EffortUnset {
+		args = append(args, "effort", m.Effort)
 	}
 	// Omitted, never empty: a query counts refusals by key presence, and a
 	// chained call has no reason to report.
