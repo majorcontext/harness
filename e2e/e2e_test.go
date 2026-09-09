@@ -445,14 +445,51 @@ type apiEvent struct {
 	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
-// eventReplay connects to GET /event?from=0, reads the durable replay batch,
-// and disconnects. /event is a long-lived stream (replay, then live, then
-// heartbeats), so the read is bounded by a context deadline: the replay is
-// written and flushed immediately on connect, and the subsequent block hits
-// the deadline, at which point we return what we collected.
+// eventTip returns GET /event/tip: the box-global journal tip, the highest
+// seq assigned to a durable record so far. It is eventReplay's completion
+// signal — see that method.
+func (p *serveProc) eventTip() int64 {
+	p.t.Helper()
+	resp, data := p.do(http.MethodGet, "/event/tip", nil)
+	if resp.StatusCode != http.StatusOK {
+		p.t.Fatalf("GET /event/tip: status %d body %s", resp.StatusCode, data)
+	}
+	var tip struct {
+		Seq int64 `json:"seq"`
+	}
+	if err := json.Unmarshal(data, &tip); err != nil {
+		p.t.Fatalf("decode tip: %v (%s)", err, data)
+	}
+	return tip.Seq
+}
+
+// eventReplay connects to GET /event?from=0 and returns every durable record
+// through the journal tip, read here at call time.
+//
+// /event is a long-lived stream (replay, then live, then heartbeats), so the
+// read needs a signal for "the replay is complete". The tip is that signal,
+// and answering exactly this question is why it is on the wire (see
+// /event/tip, server/openapi.yaml). It is also exact, not a guess: handleEvent
+// snapshots the replay batch and registers the subscriber under one lock hold,
+// so a connection opened after a tip read of T always carries every seq in
+// (0, T]. Reaching T therefore ends the read on its first success, and the
+// deadline below is a failure bound only.
+//
+// A fixed 1500ms window used to end the read instead, which broke both ways on
+// a slow or loaded machine. A window that closed mid-replay returned a PREFIX,
+// and each caller's own assertContiguousSeqs then proved "the journal replays
+// gap-free" over that prefix while the records after it went unchecked
+// (measured on this scenario: 7 of 11 records, seqs 8..11 never read). A
+// window that closed before the first frame returned nothing, failing a
+// perfectly healthy server with "no durable events replayed". Neither shape
+// can happen now: short means fatal, right here, naming what is missing.
 func (p *serveProc) eventReplay() []apiEvent {
 	p.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	tip := p.eventTip()
+	if tip == 0 {
+		return nil // nothing durable yet; the caller's own assertion decides
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?from=0", nil)
 	if err != nil {
@@ -465,17 +502,25 @@ func (p *serveProc) eventReplay() []apiEvent {
 	}
 	defer resp.Body.Close()
 	var events []apiEvent
+	var highest int64
 	dec := newSSEScanner(resp.Body)
-	for {
+	for highest < tip {
 		data, err := dec.next()
 		if err != nil {
-			break // deadline reached or stream ended: replay already consumed
+			break // deadline reached or stream ended: the check below reports it
 		}
 		var ev apiEvent
 		if err := json.Unmarshal(data, &ev); err != nil {
 			continue
 		}
 		events = append(events, ev)
+		if ev.Seq > highest {
+			highest = ev.Seq
+		}
+	}
+	if highest < tip {
+		p.t.Fatalf("journal replay incomplete: got %d events, highest seq %d, want through tip %d\nstderr:\n%s",
+			len(events), highest, tip, p.stderr.String())
 	}
 	return events
 }
