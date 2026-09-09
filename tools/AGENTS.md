@@ -15,6 +15,8 @@ separate design changes that constraint.
 - Keep state and route codecs in pure helpers.
 - Test the exact committed HTML.
 - Wait for conditions in Node tests. Do not use fixed sleeps.
+- Poll a condition that stays true after it becomes true.
+- Assert a transient state only when the scenario holds that state open.
 - Keep CORS and CSP requirements explicit.
 - Do not rename renderer-owned CSS classes during a styling-only change.
 
