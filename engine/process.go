@@ -361,12 +361,29 @@ func formatProcessStatus(info process.Info, workDir string) string {
 	ports := formatPorts(info.Ports)
 	switch st.State {
 	case process.StateExited:
-		return fmt.Sprintf("%s exited(%d)%s %s ago log=%s", info.Name, st.ExitCode, ports, roughDuration(time.Since(st.FinishedAt)), logPath)
+		return fmt.Sprintf("%s exited(%d)%s%s log=%s", info.Name, st.ExitCode, ports, statusInstant("at", st.FinishedAt), logPath)
 	case process.StateStopped:
-		return fmt.Sprintf("%s stopped%s %s ago log=%s", info.Name, ports, roughDuration(time.Since(st.FinishedAt)), logPath)
+		return fmt.Sprintf("%s stopped%s%s log=%s", info.Name, ports, statusInstant("at", st.FinishedAt), logPath)
 	default:
-		return fmt.Sprintf("%s %s%s %s log=%s", info.Name, st.State, ports, roughDuration(time.Since(st.StartedAt)), logPath)
+		return fmt.Sprintf("%s %s%s%s log=%s", info.Name, st.State, ports, statusInstant("since", st.StartedAt), logPath)
 	}
+}
+
+// statusInstant renders one ambient-block timestamp as " <word>
+// <RFC3339-UTC>", or "" for a zero instant.
+//
+// Absolute, not elapsed: this token sits inside the newest user message of
+// every request assembled for the rest of the session, and that message
+// stays the newest one for every model call of a tool loop. An elapsed
+// duration re-renders differently on each of those calls, which loses the
+// Codex WebSocket input-suffix projection (docs/design/
+// codex-websocket-chaining.md) and any provider prompt cache with it. An
+// instant only changes when the process itself does.
+func statusInstant(word string, at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return " " + word + " " + at.UTC().Format(time.RFC3339)
 }
 
 // formatPorts renders a declared process's Ports as a leading-space

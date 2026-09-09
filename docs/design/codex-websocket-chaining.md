@@ -359,11 +359,37 @@ A completed WebSocket model call reports `provider.RequestMetadata` on its
 - `sent_input_items`.
 - `previous_response_used`.
 - `chain_recovered`.
+- `chain_refusal` and `chain_refusal_detail`, on a refused call only.
 
 HTTP calls and providers that omit request metadata omit all projection fields.
 A successful full-request recovery after `previous_response_not_found` reports
 `request_mode=full`, `previous_response_used=false`, and
 `chain_recovered=true`.
+
+### Chain refusal reasons
+
+`request_mode=full` reports that the call re-sent every input item uncached.
+It does not report the cause. A refused call therefore also names one reason
+(`provider.ChainRefusal`), and a chained call names none. The pool computes
+the reason where it makes the decision (`provider/openai/ws_pool.go`).
+
+| Reason | Cause | `chain_refusal_detail` |
+|---|---|---|
+| `no_lineage` | No usable lineage: the session's first call, or a lineage that a partial, failed, canceled, or concurrent call invalidated | empty |
+| `connection_idle` | The pooled connection sat idle past `wsDefaultIdleTimeout` (5 minutes) and took its lineage with it | empty |
+| `connection_aged` | The pooled connection reached `wsDefaultMaxConnectionAge` (55 minutes) | empty |
+| `property_changed` | A context-bearing property moved since the lineage call | the wire property name, for example `instructions` or `service_tier` |
+| `prefix_changed` | The input prefix is no longer byte-identical to the lineage call's input plus its response | `input[<n>]` for the first item that differs, or `input_shorter_than_prefix` |
+
+A reason carries a property name or an input index. It never carries item
+content, and it never carries a response ID.
+
+Group `chain_refusal` to rank causes. A high `prefix_changed` rate means
+request assembly rewrote history that the server already holds: ambient status
+must render the same bytes on every call of one tool loop (see
+`docs/design/managed-processes.md` section 4). A high `connection_idle` rate
+means the fleet pays a full re-send after ordinary think time, which is a pool
+tuning question, not an assembly defect.
 
 A `generate:false` prewarm is not a model inference, user turn, assistant
 message, or `turn_metrics` record. The engine emits separate `startup_prewarm`
@@ -491,7 +517,8 @@ Validate behavior and the shipped metrics before broad rollout:
 
 Use `startup_prewarm.status` to compare eligibility, readiness, and first-turn
 consumption. Use `turn_metrics.chain_recovered` to monitor chain misses without
-exposing response IDs.
+exposing response IDs. Group `turn_metrics.chain_refusal` to rank why full
+requests happen.
 
 Rollback disables Responses WebSocket transport or reverts the adapter change.
 Canonical history and journals require no migration or repair.

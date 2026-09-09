@@ -65,6 +65,12 @@ type TurnMetrics struct {
 	// ChainRecovered distinguishes an immediate chain-miss full retry from an
 	// initially full request.
 	ChainRecovered bool
+	// ChainRefusal and ChainRefusalDetail carry provider.RequestMetadata's
+	// own refusal fields verbatim: why a call that could have chained sent
+	// the complete input instead, and where. Both are empty on a chained
+	// call.
+	ChainRefusal       provider.ChainRefusal
+	ChainRefusalDetail string
 }
 
 // defaultTurnMetricsStderr is the JSON handler every default turn_metrics
@@ -109,6 +115,14 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 			"previous_response_used", m.PreviousResponseUsed,
 			"chain_recovered", m.ChainRecovered,
 		)
+	}
+	// Omitted, never empty: a query counts refusals by key presence, and a
+	// chained call has no reason to report.
+	if m.ChainRefusal != provider.ChainRefusalNone {
+		args = append(args, "chain_refusal", m.ChainRefusal)
+		if m.ChainRefusalDetail != "" {
+			args = append(args, "chain_refusal_detail", m.ChainRefusalDetail)
+		}
 	}
 	defaultTurnMetricsStderr.Info("turn_metrics", args...)
 }

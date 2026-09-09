@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -274,5 +276,107 @@ func TestAmbientBlockIsEngineContextPart(t *testing.T) {
 	// ambient block is an EngineContext.
 	if _, ok := m.Parts[0].(*message.Text); !ok {
 		t.Errorf("user's own prompt part = %T, want *message.Text", m.Parts[0])
+	}
+}
+
+// fakeProcessRegistry reports one fixed process.Info, so a test can render
+// the ambient block twice with no real child process and no state change
+// between the two renders.
+type fakeProcessRegistry struct{ info process.Info }
+
+func (f *fakeProcessRegistry) Start(context.Context, string) (process.Status, error) {
+	return f.info.Status, nil
+}
+func (f *fakeProcessRegistry) Stop(context.Context, string) (process.Status, error) {
+	return f.info.Status, nil
+}
+func (f *fakeProcessRegistry) Restart(context.Context, string) (process.Status, error) {
+	return f.info.Status, nil
+}
+func (f *fakeProcessRegistry) Status(string) (process.Status, error) { return f.info.Status, nil }
+func (f *fakeProcessRegistry) Logs(string, int) (string, process.Status, error) {
+	return "", f.info.Status, nil
+}
+func (f *fakeProcessRegistry) List() []process.Info              { return []process.Info{f.info} }
+func (f *fakeProcessRegistry) Declare(string, process.Def) error { return nil }
+func (f *fakeProcessRegistry) Undeclare(string) error            { return nil }
+func (f *fakeProcessRegistry) EverStarted() bool                 { return true }
+
+// TestAmbientProcessStatusIsStableWhileNothingChanges pins the prompt-cache
+// invariant docs/design/managed-processes.md §4 claims: the block rides the
+// NEWEST user message, that message stays the newest one for every model
+// call of a tool loop, and a Codex WebSocket chain (see
+// docs/design/codex-websocket-chaining.md) projects an input suffix only
+// while every earlier item is byte-identical. A block whose text changes
+// between two calls of one loop therefore costs a whole uncached re-send.
+//
+// Input: one ready process, unchanged. State: two renders of the ambient
+// segment, 90 seconds of session time apart. Wrong output: two different
+// strings. Red-verified against the elapsed-time rendering this replaces:
+// "dev ready :3000 0s log=..." then "dev ready :3000 1m log=...".
+func TestAmbientProcessStatusIsStableWhileNothingChanges(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		reg := &fakeProcessRegistry{info: process.Info{
+			Name:  "dev",
+			Ports: []int{3000},
+			Status: process.Status{
+				Name:      "dev",
+				State:     process.StateReady,
+				StartedAt: time.Now(),
+				Ready:     true,
+				Log:       "/work/.harness/proc/dev.log",
+			},
+		}}
+		first := processStatusSegment(reg, "/work")
+		if !strings.Contains(first, "dev ready") {
+			t.Fatalf("ambient block = %q, want it to report dev ready", first)
+		}
+		// Advances only this bubble's fake clock; no real time passes.
+		time.Sleep(90 * time.Second)
+		if second := processStatusSegment(reg, "/work"); second != first {
+			t.Fatalf("ambient block changed while no process state changed:\n first  = %q\n second = %q", first, second)
+		}
+	})
+}
+
+// TestAmbientProcessStatusReportsAbsoluteInstants states the replacement
+// contract the stability test above depends on: each token names WHEN the
+// process reached its state, as an absolute UTC RFC3339 instant, never a
+// duration relative to the moment the request was assembled.
+func TestAmbientProcessStatusReportsAbsoluteInstants(t *testing.T) {
+	started := time.Date(2026, 9, 8, 17, 48, 27, 0, time.UTC)
+	finished := time.Date(2026, 9, 8, 18, 3, 9, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		status process.Status
+		want   string
+	}{
+		{
+			name:   "ready",
+			status: process.Status{State: process.StateReady, StartedAt: started, Log: "/work/dev.log"},
+			want:   "dev ready since 2026-09-08T17:48:27Z log=dev.log",
+		},
+		{
+			name:   "exited",
+			status: process.Status{State: process.StateExited, StartedAt: started, FinishedAt: finished, ExitCode: 3, HasExitCode: true, Log: "/work/dev.log"},
+			want:   "dev exited(3) at 2026-09-08T18:03:09Z log=dev.log",
+		},
+		{
+			name:   "stopped",
+			status: process.Status{State: process.StateStopped, StartedAt: started, FinishedAt: finished, Log: "/work/dev.log"},
+			want:   "dev stopped at 2026-09-08T18:03:09Z log=dev.log",
+		},
+		{
+			name:   "never finished still reports no instant",
+			status: process.Status{State: process.StateStopped, StartedAt: started, Log: "/work/dev.log"},
+			want:   "dev stopped log=dev.log",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatProcessStatus(process.Info{Name: "dev", Status: tc.status}, "/work")
+			if got != tc.want {
+				t.Fatalf("formatProcessStatus = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

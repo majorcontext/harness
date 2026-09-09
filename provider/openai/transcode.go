@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/majorcontext/harness/imageclamp"
@@ -73,20 +74,52 @@ type apiRequest struct {
 // the same context-bearing properties. Input is compared separately by
 // incrementalInput, and Stream is a transport framing detail.
 func responsesRequestPropertiesMatch(previous, current *apiRequest) bool {
+	return responsesRequestPropertyDiff(previous, current) == ""
+}
+
+// responsesRequestPropertyDiff returns the wire name of the first
+// context-bearing property that differs between the lineage request and the
+// current one, or "" when every property matches. The name reaches an
+// operator as provider.RequestMetadata.ChainRefusalDetail, so this returns
+// a field name and never a field value.
+//
+// One returned name is not a wire property: "request" is the sentinel for a
+// missing request on one side, which keeps the nil handling
+// responsesRequestPropertiesMatch has always had. No refusal reports it --
+// wsPool.stream tests entry.lineage before it asks for a diff, and passes
+// its own complete request as the current one.
+func responsesRequestPropertyDiff(previous, current *apiRequest) string {
 	if previous == nil || current == nil {
-		return previous == current
+		if previous == current {
+			return ""
+		}
+		return "request"
 	}
-	return previous.Model == current.Model &&
-		previous.Instructions == current.Instructions &&
-		apiToolsEqual(previous.Tools, current.Tools) &&
-		float64PointersEqual(previous.Temperature, current.Temperature) &&
-		float64PointersEqual(previous.TopP, current.TopP) &&
-		previous.MaxOutputTokens == current.MaxOutputTokens &&
-		previous.Store == current.Store &&
-		reflect.DeepEqual(previous.Include, current.Include) &&
-		reflect.DeepEqual(previous.Reasoning, current.Reasoning) &&
-		previous.PromptCacheKey == current.PromptCacheKey &&
-		previous.ServiceTier == current.ServiceTier
+	switch {
+	case previous.Model != current.Model:
+		return "model"
+	case previous.Instructions != current.Instructions:
+		return "instructions"
+	case !apiToolsEqual(previous.Tools, current.Tools):
+		return "tools"
+	case !float64PointersEqual(previous.Temperature, current.Temperature):
+		return "temperature"
+	case !float64PointersEqual(previous.TopP, current.TopP):
+		return "top_p"
+	case previous.MaxOutputTokens != current.MaxOutputTokens:
+		return "max_output_tokens"
+	case previous.Store != current.Store:
+		return "store"
+	case !reflect.DeepEqual(previous.Include, current.Include):
+		return "include"
+	case !reflect.DeepEqual(previous.Reasoning, current.Reasoning):
+		return "reasoning"
+	case previous.PromptCacheKey != current.PromptCacheKey:
+		return "prompt_cache_key"
+	case previous.ServiceTier != current.ServiceTier:
+		return "service_tier"
+	}
+	return ""
 }
 
 func apiToolsEqual(previous, current []apiToolDef) bool {
@@ -113,24 +146,32 @@ func float64PointersEqual(previous, current *float64) bool {
 // and response items. Prefix values compare as JSON, so insignificant object
 // formatting does not prevent chaining.
 func incrementalInput(previous *apiRequest, responseItems, current []json.RawMessage) ([]json.RawMessage, bool) {
+	suffix, _, ok := incrementalInputDiff(previous, responseItems, current)
+	return suffix, ok
+}
+
+// incrementalInputDiff is incrementalInput plus the locator a refusal
+// reports: the index of the first input item that differs, or -1 when the
+// prefix matched or when current is too short to extend it at all.
+func incrementalInputDiff(previous *apiRequest, responseItems, current []json.RawMessage) ([]json.RawMessage, int, bool) {
 	if previous == nil {
-		return nil, false
+		return nil, -1, false
 	}
 	prefixLength := len(previous.Input) + len(responseItems)
 	if len(current) < prefixLength {
-		return nil, false
+		return nil, -1, false
 	}
 	for i, item := range previous.Input {
 		if !rawJSONEqual(item, current[i]) {
-			return nil, false
+			return nil, i, false
 		}
 	}
 	for i, item := range responseItems {
 		if !rawJSONEqual(item, current[len(previous.Input)+i]) {
-			return nil, false
+			return nil, len(previous.Input) + i, false
 		}
 	}
-	return current[prefixLength:], true
+	return current[prefixLength:], -1, true
 }
 
 func rawJSONEqual(previous, current json.RawMessage) bool {
@@ -665,4 +706,13 @@ func transcodeBlob(b *message.Blob) (apiContentPart, error) {
 
 func dataURL(b *message.Blob) string {
 	return "data:" + b.MediaType + ";base64," + base64.StdEncoding.EncodeToString(b.Data)
+}
+
+// inputItemLocator renders an input index as the locator a prefix refusal
+// reports. Index only: an item's own content never leaves the adapter.
+func inputItemLocator(index int) string {
+	if index < 0 {
+		return "input_shorter_than_prefix"
+	}
+	return "input[" + strconv.Itoa(index) + "]"
 }

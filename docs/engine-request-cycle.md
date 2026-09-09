@@ -790,8 +790,11 @@ present, `turn_metrics` also includes `request_mode`, `complete_input_items`,
 `sent_input_items`, `previous_response_used`, and `chain_recovered`. Codex
 WebSocket calls report `request_mode` as `full` or `incremental`. An immediate
 chain-miss recovery reports the final complete retry as `full` and sets
-`chain_recovered=true`. HTTP and adapters without projection metadata omit these
-fields. Startup prewarm emits no `EventDone` and therefore has no `turn_metrics`
+`chain_recovered=true`. A call that could have chained but did not also
+reports `chain_refusal`, plus `chain_refusal_detail` when the reason has a
+locator; a chained call reports neither key. Read
+`docs/design/codex-websocket-chaining.md` for the reason vocabulary. HTTP and
+adapters without projection metadata omit these fields. Startup prewarm emits no `EventDone` and therefore has no `turn_metrics`
 record; its separate lifecycle metric is described above.
 
 Usage remains the completed response's provider report. For OpenAI Responses,

@@ -133,6 +133,40 @@ const (
 	RequestModeIncremental RequestMode = "incremental"
 )
 
+// ChainRefusal names why a request that COULD have projected an input suffix
+// sent the complete input instead. A full request re-sends every earlier item
+// uncached, so the reason is the operator's first question and the mode alone
+// does not answer it.
+//
+// A refusal reason is a transport fact, like every other RequestMetadata
+// field: a wire property name or an input index, never item content, and
+// never a response identifier.
+type ChainRefusal string
+
+const (
+	// ChainRefusalNone is the zero value: this call chained, or its adapter
+	// and transport cannot chain at all.
+	ChainRefusalNone ChainRefusal = ""
+	// ChainRefusalNoLineage reports that no usable lineage existed to chain
+	// onto: the session's first call, or a lineage a previous partial,
+	// failed, canceled, or concurrent call invalidated.
+	ChainRefusalNoLineage ChainRefusal = "no_lineage"
+	// ChainRefusalConnectionIdle reports a lineage lost with its pooled
+	// connection after the connection sat idle past the pool's idle timeout.
+	// A think-time or CI-wait gap between two turns produces this.
+	ChainRefusalConnectionIdle ChainRefusal = "connection_idle"
+	// ChainRefusalConnectionAged reports a lineage lost with its pooled
+	// connection at the pool's maximum connection age.
+	ChainRefusalConnectionAged ChainRefusal = "connection_aged"
+	// ChainRefusalPropertyChanged reports a context-bearing request property
+	// that moved since the lineage call. Detail names the wire property.
+	ChainRefusalPropertyChanged ChainRefusal = "property_changed"
+	// ChainRefusalPrefixChanged reports an input prefix that is no longer
+	// byte-identical to the lineage call's own input plus its response.
+	// Detail names the first item that differs.
+	ChainRefusalPrefixChanged ChainRefusal = "prefix_changed"
+)
+
 // RequestMetadata contains non-secret transport projection facts for one
 // completed provider call. It never contains a provider response identifier.
 type RequestMetadata struct {
@@ -143,6 +177,12 @@ type RequestMetadata struct {
 	// ChainRecovered is true when an incremental request received an immediate
 	// chain miss and completed after one full-request retry.
 	ChainRecovered bool `json:"chain_recovered"`
+	// ChainRefusal and ChainRefusalDetail report why this call did not
+	// chain. Both are empty on a chained call, and on an adapter or
+	// transport that cannot chain. ChainRefusalDetail is empty for a
+	// refusal whose reason needs no locator.
+	ChainRefusal       ChainRefusal `json:"chain_refusal,omitempty"`
+	ChainRefusalDetail string       `json:"chain_refusal_detail,omitempty"`
 }
 
 // Event is one streaming event from a model call.
