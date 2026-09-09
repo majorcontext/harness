@@ -358,13 +358,15 @@ func TestCodexIdleToleranceLive(t *testing.T) {
 //
 // Measured 2026-09-09, against a bare-pool life of 60-90s:
 //
-//   - Both modes chained successfully after a 7m gap. A reader alone is
-//     therefore enough: coder/websocket answers the server ping from inside
-//     Read, which is exactly what the reader-less pool never does.
-//   - One earlier read-pump run died at ~75s with a bare "failed to read
-//     frame header: EOF" and no close handshake. It did not reproduce. Treat
-//     a read pump as the keepalive mechanism, not as a guarantee: the path
-//     can still drop, which the pool must handle regardless.
+//   - Read pump alone, 7m gap: 4 of 5 runs chained successfully. A reader
+//     alone is therefore enough, and it is the mechanism: coder/websocket
+//     answers the server ping from inside Read, which is exactly what the
+//     reader-less pool never does.
+//   - The 1 failure died at ~75s with a bare "failed to read frame header:
+//     EOF" and no close handshake, which is a path drop rather than the
+//     server's "keepalive ping timeout". Treat a read pump as the keepalive
+//     mechanism, not a guarantee: the path can still drop, and the pool
+//     already handles that by invalidating and sending a full request.
 //   - Every client ping was answered on the 30s interval, so a client ping
 //     is available as belt-and-braces, but the measurement does not show it
 //     is required.
