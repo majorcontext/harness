@@ -7,27 +7,31 @@ import (
 	"testing"
 )
 
-// TestInFlightBusyStatusSurvivesAClientReconnect pins the two properties a
-// consumer needs to recover a RUNNING turn after it reconnects mid-turn at
-// the last seq it applied. Both were the loss surface behind the pending-
-// state failures reported for the removed session monitor: that page folded
-// turn-open state from live events alone and dropped the record whose seq
-// equalled its snapshot cursor, so a running turn rendered as a silent idle
-// one until the next status record — minutes, for a long turn.
+// TestBusyStatusReachesAClientConnectingMidTurn pins what a consumer needs
+// to recover a RUNNING turn when it connects after that turn started:
+// session.status is durable, so replay from a cursor below it still
+// delivers it.
 //
-//   - session.status is DURABLE. It carries a journal seq and replays to a
-//     client resuming from a cursor below it. GET /session/{id}/message
-//     cannot stand in for that: a status record is a journal record, not a
-//     message, so replay is the only way back to it. Published live-only, a
-//     client that connects after the turn started never learns it is running.
-//   - `from` is EXCLUSIVE. A client resumes at the seq it last applied, so
-//     the record AT the cursor must not be sent again; re-sending makes
-//     every resume double-apply its own boundary record.
+// This was the loss surface behind the pending-state failures reported for
+// the removed session monitor. That page folded turn-open state from live
+// events alone and dropped the record whose seq equalled its snapshot
+// cursor, so a running turn rendered as a silent idle one. No snapshot can
+// stand in for the record: GET /session/{id}/message returns messages, and
+// a status record is a journal record, not a message. Published live-only
+// it would be unrecoverable, and every consumer that connects mid-turn
+// (tools/hub, tools/inspector, an orchestrator resuming its tail) would
+// show the session as idle until the next status record — minutes, for a
+// long turn.
 //
-// The turn is released before the reads below so the terminal idle record
-// bounds them in both the passing and the failing case: a lost busy record
-// fails an assertion instead of hanging on a stream that never speaks again.
-func TestInFlightBusyStatusSurvivesAClientReconnect(t *testing.T) {
+// The exclusive `from` boundary that pairs with this is already pinned by
+// TestReplayFromSeq and TestLastEventIDHeader; this covers only the half
+// they do not, a client whose connection starts mid-turn.
+//
+// Both reads below are bounded by the journal tip, taken once the turn has
+// ended through the same wait seam production uses, so a regression that
+// loses the record fails an assertion instead of hanging on a stream that
+// never speaks again.
+func TestBusyStatusReachesAClientConnectingMidTurn(t *testing.T) {
 	prov := newBlockingProvider("test")
 	h := newHarness(t, prov)
 	id := h.createSession("")
@@ -54,43 +58,37 @@ func TestInFlightBusyStatusSurvivesAClientReconnect(t *testing.T) {
 	if resp.StatusCode != 202 {
 		t.Fatalf("prompt_async = %d: %s", resp.StatusCode, data)
 	}
-	<-prov.started // the turn is genuinely in flight, and its busy record is behind us
+	<-prov.started // the turn is in flight, and its busy record is already behind us
 
 	resumed := h.openSSE(fmt.Sprintf("?from=%d&session=%s", cursor, id), "")
+
 	prov.releaseAll()
+	h.waitIdle(id)
+	tip := readTip()
+	if tip <= cursor {
+		t.Fatalf("journal tip %d did not advance past the pre-turn cursor %d; the turn journaled nothing", tip, cursor)
+	}
 
 	var sawBusy bool
 	var busySeq int64
 	for {
 		ev := resumed.nextEvent(t)
-		if ev.Type != evtSessionStatus {
-			continue
+		if ev.Seq == 0 {
+			continue // a transient live event carries no journal seq
 		}
-		if ev.Status == "busy" && !sawBusy {
+		if ev.Type == evtSessionStatus && ev.Status == "busy" && !sawBusy {
 			sawBusy, busySeq = true, ev.Seq
-			continue
 		}
-		if ev.Status == "idle" {
+		// The turn's own terminal record, or anything at the tip: either way
+		// the journal window this client asked for has been delivered.
+		if ev.Seq >= tip || (ev.Type == evtSessionStatus && ev.Status == "idle") {
 			break
 		}
 	}
 	if !sawBusy {
-		t.Fatalf("resuming at cursor %d never delivered the in-flight turn's session.status busy: a client reconnecting mid-turn renders a running session as idle", cursor)
+		t.Fatalf("connecting at cursor %d never delivered the in-flight turn's session.status busy: a client that joins mid-turn renders a running session as idle", cursor)
 	}
 	if busySeq <= cursor {
-		t.Fatalf("replayed busy record seq = %d, want a durable seq above the client cursor %d", busySeq, cursor)
-	}
-
-	// Resuming AT that record: the client already applied it.
-	atBoundary := h.openSSE(fmt.Sprintf("?from=%d&session=%s", busySeq, id), "")
-	for {
-		ev := atBoundary.nextEvent(t)
-		if ev.Seq == 0 {
-			continue // a transient live event carries no journal seq
-		}
-		if ev.Seq <= busySeq {
-			t.Fatalf("resuming at seq %d re-delivered %s seq %d; from is exclusive, so a client must never be sent its own cursor record again", busySeq, ev.Type, ev.Seq)
-		}
-		break
+		t.Fatalf("busy record seq = %d, want a durable seq above the client cursor %d", busySeq, cursor)
 	}
 }
