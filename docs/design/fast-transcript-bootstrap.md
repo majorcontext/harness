@@ -401,29 +401,78 @@ watermark computation, fed a smaller slice" claim (§4.1) and
 `windowed` is true, the function skips `summaryCeiling` and
 `pendingCeilings` entirely — no cap fires, ever — and answers with
 `highest` alone: the greatest journaled seq among messages the window
-actually returned. This is sound, not merely convenient, because
-`coldWindowedBootstrap` only reaches this call after re-confirming
-non-residency (§4.3's own second `liveSessionObject` check): a cold
-session cannot be mid-compaction (§4.4's own argument), so no summary
-this call could ever see is excluded by a race. And because the window is
-always a "newest page" (`beforeSeq<=0`, so `page.LastSeq` equals the
-session's current total), the single highest-seq message across the
-**whole** session — the true tip `stream_from` must report — is *always*
-inside the window; `highest` alone already equals what a full read would
-compute, with nothing left for a ceiling to legitimately lower. The
-unwindowed path (`windowed == false`) is untouched: every existing
-sandwich, race, and pending-ceiling test still exercises the same code,
-unconditionally.
+actually returned.
+
+**The actual guarantee is a bound, not exact parity with the full path** —
+a second review pass found the first version of this section's own
+justification overclaimed in both directions. `highest` can be *lower*
+than the full path's own watermark (the common case: an excluded summary
+sits at a lower seq, the original bug's direction) and, for a session
+compacted more than once, it can *also* be lower than an excluded
+summary's own seq even though that summary now sits at an EARLIER ordinal
+than the window (a later compaction's summary is journaled live, in real
+chronological order, strictly after whatever it goes on to fold away —
+see the multi-compaction test below). Neither direction is a defect: what
+the fix actually guarantees is that `stream_from` (a) never exceeds the
+session's true tip — `highest` is computed only from messages the window
+itself returned, so it can never be inflated past what this process has
+genuinely observed for this session — and (b) never excludes a message
+still owed to a live consumer. Every message a windowed cap would have
+protected is, by construction, either backward-paging content (older than
+the window, recoverable via `before_seq`/`limit` exactly as always, never
+claimed as delivered by this response) or folded-away content (absent
+from every current fold, windowed or full, regardless of this parameter)
+— never a message a resumed SSE stream still needs to carry. This is
+sound because `coldWindowedBootstrap` only reaches this call after
+re-confirming non-residency (§4.3's own second `liveSessionObject`
+check): a cold session cannot be mid-compaction (§4.4's own argument), so
+nothing this call could ever exclude is a message its own caller still
+needs delivered live. The unwindowed path (`windowed == false`) is
+untouched: every existing sandwich, race, and pending-ceiling test still
+exercises the same code, unconditionally.
 
 See `TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal` and
 `TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow`
-(`server/transcript_bootstrap_window_test.go`) for the regression tests:
-both seed `s.journal` with an already-landed compaction summary (one via
-an explicit prior full read, the other via `Server.reconcile`'s startup
-replay of a pre-existing `SessionDir`), then assert the windowed path's
-`stream_from`/`live_from` exactly match the full path's — red-verified
-against the pre-fix code, which collapsed `stream_from` toward the
-session's start in both cases.
+(`server/transcript_bootstrap_window_test.go`) for the regression tests
+that pin the common (excluded-summary-below-the-window) direction: both
+seed `s.journal` with an already-landed, SINGLE compaction summary (one
+via an explicit prior full read, the other via `Server.reconcile`'s
+startup replay of a pre-existing `SessionDir`), then assert the windowed
+path's `stream_from`/`live_from` exactly match the full path's —
+red-verified against the pre-fix code, which collapsed `stream_from`
+toward the session's start in both cases. Because a single batch fold
+always journals a summary at the LOWEST seq of that batch (it sits at
+`history[0]`, iterated first), neither test can exercise the other
+direction.
+
+`TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip` covers
+that direction instead: a session compacted twice, so its CURRENT
+summary sits at the earliest ordinal yet was journaled live, last,
+chronologically — the shape where an excluded summary's true seq is
+*above* the window's own messages. Driving this end to end through two
+real `POST /compact` calls on the same session does not reach
+`coldWindowedBootstrap` at all: `Server.handleCreate` calls
+`s.sessMgr.AdoptRoot` for every root session, and a root is never reaped
+from `sessMgr` — confirmed directly, evicting the session from
+`s.sessions` (`MaxResident=1`) still leaves `Server.liveSessionObject`
+resolving it through `sessMgr`, so `coldWindowedBootstrap`'s own residency
+check bails every time. This is not merely a test-authoring obstacle: it
+means a process that has ever driven a session through a live compaction
+can never itself answer that session's bootstrap from the cold branch
+again, so the process-local `s.journal` state this direction needs — both
+compactions' records at their true, incrementally-assigned seqs — can
+never coexist with `coldWindowedBootstrap` actually running, in
+production either. The test instead builds the real on-disk session
+through two genuine `engine.Session.Compact` calls (so the folding,
+indexing, and windowed HTTP path are all unmodified production code), and
+seeds `s.journal` directly, via `emitDurableLocked`, with the exact
+record shape and chronological order a live two-compaction run would have
+produced — the same class of construction
+`TestTranscriptWatermarkLocked_CompactionSummarySandwich` already uses for
+a state with no HTTP-level trigger. Red-verified by temporarily forcing
+`coldWindowedBootstrap` to return `tip + 1`: the test fails on all three
+of its assertions (exceeds the true tip, skips the excluded summary, and
+the live SSE resume finds nothing to redeliver).
 
 ### 4.5 Resident sessions
 

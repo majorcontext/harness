@@ -1293,27 +1293,55 @@ func messageDurableOrdinals(history []message.Message) []int64 {
 // fast-transcript-bootstrap.md §4.4). s.journal, unlike history, is
 // per-process and cumulative: once ANYTHING journals a session's full
 // history (an earlier stream_from=1 read, or a turn this process itself
-// drove), a compaction summary from long before the window can sit in
-// s.journal forever, at some seq below every message the window returns.
-// The two ceiling mechanisms above cannot tell that apart from the live
-// sandwich race they exist for — both see "a compaction summary absent from
-// history" either way — but a windowed caller does not need them to: the
-// residency recheck coldWindowedBootstrap already performs (after its own
-// ReadMessagePage read, before calling transcriptCursorLocked) rules out an
-// ACTIVE compaction entirely, since compacting requires a resident session
-// (§4.4's own argument), and "newest page" windowing (beforeSeq<=0, hi ==
-// the session's current total) rules out anything EXCLUDED from history
-// that is not older than history's own oldest returned message — there is
-// no ordinal a live compaction could splice a summary into that this call
-// would ever miss. So for windowed==true, an excluded compaction summary is
-// always exactly what it looks like: older than the window, not a race,
-// and applying either ceiling would cap the watermark toward the session's
-// START instead of its tail — the false positive
-// TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal red-verifies
-// and this parameter exists to prevent. The unwindowed (windowed==false)
-// path is byte-for-byte unchanged: every existing
-// TestTranscriptStreamFrom_Compaction* and TestTranscriptWatermarkLocked_*
-// test still exercises it exactly as before.
+// drove, or Server.reconcile's own startup replay), a compaction summary
+// excluded from THIS window can sit in s.journal at essentially any seq —
+// below the window's own messages (the common case: one batch fold
+// journals the whole then-current history in array order, so an excluded
+// summary sits at the LOWEST seq of that batch), or, for a session that
+// has been through more than one compaction, ABOVE them (an earlier
+// summary folded away by a LATER one can have been journaled live, in real
+// chronological order, strictly after messages that now sit ahead of it in
+// the folded numbering — docs/design/fast-transcript-bootstrap.md §4.4a).
+// The two ceiling mechanisms above cannot tell any of this apart from the
+// live sandwich race they exist for — both see "a compaction summary
+// absent from history" regardless of why — but a windowed caller does not
+// need them to, and the guarantee this parameter provides is a BOUND, not
+// the exact parity an earlier version of this comment claimed:
+//
+//   - windowed==true never returns a seq above the session's true tip.
+//     highest (below) is computed only from messages actually present in
+//     the returned window, so it can never exceed whatever this process
+//     has genuinely observed for this session — there is nothing here
+//     that could inflate it.
+//   - Every message EXCLUDED from a windowed watermark by skipping the
+//     ceiling is either backward-paging content (older than the window,
+//     recoverable with before_seq/limit exactly as it always was, and
+//     never claimed as "delivered" by this response) or folded-away
+//     content (no longer exists in ANY current fold, windowed or full —
+//     nothing could ever hand it back regardless of this parameter). In
+//     neither case is it a live, currently-rendered message the SSE
+//     cursor must carry forward: the residency recheck
+//     coldWindowedBootstrap already performs (after its own
+//     ReadMessagePage read, before calling transcriptCursorLocked) rules
+//     out an ACTIVE compaction, since compacting requires a resident
+//     session (§4.4's own argument) — so nothing this call could ever
+//     return as "excluded" is a message this call's own caller still
+//     needs delivered live; applying either ceiling here would instead
+//     cap the watermark toward the session's START for no reason, the
+//     false positive TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal
+//     and TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow
+//     red-verify and this parameter exists to prevent.
+//     TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip red-
+//     verifies the OTHER direction this comment used to overclaim: even
+//     when an excluded summary's true seq is ABOVE the window's own
+//     messages (a multi-compaction session), the returned watermark still
+//     never exceeds the true tip, and every currently-rendered message is
+//     still either in the window or safely resumable above it.
+//
+// The unwindowed (windowed==false) path is byte-for-byte unchanged: every
+// existing TestTranscriptStreamFrom_Compaction* and
+// TestTranscriptWatermarkLocked_* test still exercises it exactly as
+// before.
 // Caller holds s.mu.
 func (s *Server) transcriptWatermarkLocked(sessionID string, history []message.Message, windowed bool) int64 {
 	inHistory := make(map[string]bool, len(history))

@@ -624,3 +624,267 @@ func TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow(t *test
 		t.Errorf("windowed live_from = %d, want %d (full-read oracle)", windowed.LiveFrom, full.LiveFrom)
 	}
 }
+
+// TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip is the guard
+// the reviewer asked for: a session with TWO compactions, so an earlier
+// compaction's own summary (summary1) is folded away by a second
+// compaction and replaced by a new summary (summary2) that sits at the
+// EARLIEST ordinal (1) in the current, folded numbering even though it
+// was created LAST, chronologically -- the shape where a windowed read
+// could, in principle, exclude the one record whose true seq is the
+// session's actual highest.
+//
+// # Why this cannot be driven end-to-end through live HTTP calls
+//
+// The natural way to get this state would be two REAL POST /compact
+// calls against a live session (server/compact_test.go's own flow), then
+// a windowed read on the SAME, now-idle session. That does not reach
+// coldWindowedBootstrap at all: Server.handleCreate calls
+// s.sessMgr.AdoptRoot(sess) for every root session (handlers.go:879), and
+// "a root is adopted into sessMgr and never reaped" (handlers.go:3467-
+// 3475) -- confirmed directly: after driving two live compactions on a
+// session, then evicting it from s.sessions with MaxResident=1 (a second
+// session's own prompt forces the LRU eviction), Server.residentSession
+// (which checks ONLY s.sessions) correctly reports it gone, but
+// Server.liveSessionObject -- the check coldWindowedBootstrap actually
+// gates on -- still returns the session, resolved through
+// s.sessMgr.Session instead. So a session THIS PROCESS has ever driven a
+// live turn or compaction for can never reach coldWindowedBootstrap's
+// cold branch again, for the rest of the process's life: the bail-out at
+// the top of coldWindowedBootstrap (server/handlers.go) fires every time.
+//
+// This is not merely a test-authoring obstacle -- it is the same
+// structural fact in production. The ONLY way a process's own s.journal
+// can hold BOTH compactions' evtMessage/evtHistoryCompacted records at
+// their true, incrementally-assigned (chronological) seqs is for that
+// process to have been resident and driving the session through both
+// live compactions -- and by the argument above, such a process can never
+// again answer that same session's bootstrap from the cold branch. Every
+// process that DOES reach the cold branch for this session only ever
+// learns of both compactions from the FINAL, already-doubly-folded
+// on-disk state, all at once (one full stream_from=1 read, or
+// Server.reconcile's own startup replay) -- which is exactly
+// TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal and
+// TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow's
+// own single-batch-fold shape, where the excluded summary always lands at
+// the LOWEST seq of that batch (history[0], journaled first in array
+// order) and so can only ever pull a windowed watermark DOWN, never up.
+//
+// # What this test does instead
+//
+// It builds the ACTUAL on-disk session through two REAL
+// engine.Session.Compact calls (so ReadMessagePage's tailPage/foldedPage
+// fold, SessionIndex, and the windowed HTTP path all run genuine,
+// unmodified production code against a real doubly-compacted journal),
+// then seeds THIS harness's own s.journal by calling emitDurableLocked
+// directly, in the exact chronological order and shape a live
+// two-compaction run would have produced -- summary1's own evtMessage,
+// then its evtHistoryCompacted, THEN (after the kept turn) summary2's own
+// evtMessage, then ITS evtHistoryCompacted -- so summary2 lands at a seq
+// higher than the kept turn's own messages, exactly the property a real
+// live run would have and the earlier two tests' setups cannot produce.
+// This is the same class of construction
+// TestTranscriptWatermarkLocked_CompactionSummarySandwich and
+// fabricateExcludedBacklog (transcript_live_from_test.go) already use for
+// a state "that has no HTTP-level trigger yet" -- here, provably no
+// HTTP-level trigger CAN exist, not merely none is wired up yet. The kept
+// turn's own two messages are marked seen (markSeenLocked) as part of the
+// injection so the real windowed HTTP call below does not re-journal them
+// itself and quietly overwrite the constructed ordering.
+//
+// # What it asserts
+//
+// Not exact parity with the full path (which does not hold in every
+// direction for an already-landed multi-compaction session -- see
+// docs/design/fast-transcript-bootstrap.md §4.4a). Instead, the two-part
+// safety bound the fix actually guarantees:
+//
+//  1. windowed.StreamFrom never exceeds the session's true tip
+//     (h.srv.currentSeq(), an unimpeachable upper bound sampled after
+//     every injected event and the windowed read itself).
+//  2. No message the full (unwindowed) path currently renders is
+//     skipped: every entry in full.Messages is either already present in
+//     windowed.Messages, or its own durably journaled seq is strictly
+//     ABOVE windowed.StreamFrom -- so a consumer resuming GET /event from
+//     windowed.StreamFrom is guaranteed to receive it. A live SSE resume
+//     from windowed.StreamFrom is then driven for real, confirming
+//     summary2 -- the specific excluded, high-seq record -- actually
+//     arrives over the wire, not merely in the journal's own bookkeeping.
+func TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip(t *testing.T) {
+	dir := t.TempDir()
+	// Harness FIRST, against an empty dir (reconcile finds nothing) --
+	// the seed session below is written to this same dir only afterward,
+	// out-of-process, exactly like
+	// TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal.
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 20}),
+		compactAsstTurn("three", provider.Usage{InputTokens: 30}),
+		compactAsstTurn("summary1", provider.Usage{InputTokens: 5}),
+		compactAsstTurn("four", provider.Usage{InputTokens: 40}),
+		compactAsstTurn("five", provider.Usage{InputTokens: 50}),
+		compactAsstTurn("summary2", provider.Usage{InputTokens: 5}),
+	}}
+	seed := engine.NewSession(engine.Config{
+		Providers:  provider.Registry{seedProv.name: seedProv},
+		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir: dir,
+		WorkDir:    dir,
+	})
+	for i, text := range []string{"go1", "go2", "go3"} {
+		if _, err := seed.Prompt(context.Background(), text); err != nil {
+			t.Fatalf("seed Prompt %d: %v", i, err)
+		}
+	}
+	compact1, err := seed.Compact(context.Background(), engine.CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("seed Compact #1: %v", err)
+	}
+	if compact1.Summary == nil {
+		t.Fatal("compact #1 produced no summary")
+	}
+	summary1ID := compact1.Summary.ID
+
+	for i, text := range []string{"go4", "go5"} {
+		if _, err := seed.Prompt(context.Background(), text); err != nil {
+			t.Fatalf("seed Prompt (post-compact1) %d: %v", i, err)
+		}
+	}
+	compact2, err := seed.Compact(context.Background(), engine.CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("seed Compact #2: %v", err)
+	}
+	if compact2.Summary == nil {
+		t.Fatal("compact #2 produced no summary")
+	}
+	summary2ID := compact2.Summary.ID
+	if err := seed.PersistErr(); err != nil {
+		t.Fatalf("seed PersistErr: %v", err)
+	}
+
+	finalHistory := seed.History()
+	if len(finalHistory) != 3 {
+		t.Fatalf("seed's final history has %d messages, want 3 (summary2 + kept turn5 user+assistant)", len(finalHistory))
+	}
+	if finalHistory[0].ID != summary2ID {
+		t.Fatalf("finalHistory[0].ID = %s, want summary2 %s", finalHistory[0].ID, summary2ID)
+	}
+	turn5User := finalHistory[1]
+	turn5Asst := finalHistory[2]
+
+	// Seed h.srv's own s.journal directly, in the chronological order and
+	// shape a live two-compaction run would have produced (see the doc
+	// comment above for why this cannot be driven through live HTTP calls
+	// instead). markSeenLocked for the kept turn's own two messages so the
+	// real windowed HTTP call below does not re-journal them itself.
+	h.srv.mu.Lock()
+	h.srv.markSeenLocked(seed.ID, turn5User.ID)
+	h.srv.emitDurableLocked(&Event{Type: evtMessage, SessionID: seed.ID, Message: &turn5User})
+	h.srv.markSeenLocked(seed.ID, turn5Asst.ID)
+	h.srv.emitDurableLocked(&Event{Type: evtMessage, SessionID: seed.ID, Message: &turn5Asst})
+	h.srv.emitDurableLocked(&Event{Type: evtMessage, SessionID: seed.ID, Message: compact1.Summary})
+	h.srv.emitDurableLocked(&Event{
+		Type: evtHistoryCompacted, SessionID: seed.ID,
+		CompactFirstID: compact1.FirstID, CompactLastID: compact1.LastID,
+		CompactTurnsFolded: compact1.TurnsFolded, CompactSummaryID: summary1ID,
+	})
+	h.srv.markSeenLocked(seed.ID, summary2ID)
+	h.srv.emitDurableLocked(&Event{Type: evtMessage, SessionID: seed.ID, Message: compact2.Summary})
+	h.srv.emitDurableLocked(&Event{
+		Type: evtHistoryCompacted, SessionID: seed.ID,
+		CompactFirstID: compact2.FirstID, CompactLastID: compact2.LastID,
+		CompactTurnsFolded: compact2.TurnsFolded, CompactSummaryID: summary2ID,
+	})
+	h.srv.mu.Unlock()
+
+	if h.srv.liveSessionObject(seed.ID) != nil {
+		t.Fatal("seed.ID unexpectedly resident -- test setup invariant broken")
+	}
+
+	// The windowed read: limit=2 of the 3-message post-compaction-#2
+	// history, excluding summary2 -- the record whose injected seq is the
+	// session's true highest.
+	resp, data := h.do("GET", "/session/"+seed.ID+"/message?stream_from=1&limit=2", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET windowed = %d: %s", resp.StatusCode, data)
+	}
+	var windowed transcriptResponse
+	if err := json.Unmarshal(data, &windowed); err != nil {
+		t.Fatalf("decode windowed: %v (%s)", err, data)
+	}
+	if len(windowed.Messages) != 2 {
+		t.Fatalf("got %d windowed messages, want 2 (turn5's user+assistant pair, excluding summary2)", len(windowed.Messages))
+	}
+	for _, m := range windowed.Messages {
+		if m.ID == summary2ID {
+			t.Fatalf("windowed messages unexpectedly include summary2 %s -- test setup invariant broken (limit=2 should exclude it)", summary2ID)
+		}
+	}
+	if h.srv.liveSessionObject(seed.ID) != nil {
+		t.Fatal("the windowed GET itself made the session resident -- coldWindowedBootstrap must never do that")
+	}
+
+	// Oracle: full.Messages is what the unwindowed path currently renders
+	// -- used ONLY for message-identity/seq membership below, never for
+	// its own StreamFrom (a different, pre-existing full-path computation
+	// this test does not exercise or claim anything about).
+	full, fullMeta := getTranscript(t, h, seed.ID)
+	if fullMeta.status != 200 {
+		t.Fatalf("GET full (oracle) = %d: %s", fullMeta.status, fullMeta.body)
+	}
+	if len(full.Messages) != 3 {
+		t.Fatalf("got %d full messages, want 3 (summary2 + turn5 user+assistant)", len(full.Messages))
+	}
+
+	// Assertion (a): never exceeds the session's true tip.
+	trueTip := h.srv.currentSeq()
+	if windowed.StreamFrom > trueTip {
+		t.Errorf("windowed stream_from = %d, want <= the session's true tip %d", windowed.StreamFrom, trueTip)
+	}
+	if windowed.LiveFrom > trueTip {
+		t.Errorf("windowed live_from = %d, want <= the session's true tip %d", windowed.LiveFrom, trueTip)
+	}
+
+	// Assertion (b): no message the full path currently renders is
+	// skipped -- either already in the window, or still resumable above
+	// windowed.StreamFrom.
+	inWindow := make(map[string]bool, len(windowed.Messages))
+	for _, m := range windowed.Messages {
+		inWindow[m.ID] = true
+	}
+	seqByID := journalSeqByMessageID(h.srv, seed.ID)
+	for _, m := range full.Messages {
+		if inWindow[m.ID] {
+			continue
+		}
+		seq, journaled := seqByID[m.ID]
+		if !journaled {
+			t.Errorf("message %s (currently rendered by the full path) was never journaled at all", m.ID)
+			continue
+		}
+		if seq <= windowed.StreamFrom {
+			t.Errorf("message %s (currently rendered, excluded from the window) has seq %d <= windowed stream_from %d -- a live resume from stream_from would never redeliver it (a gap)", m.ID, seq, windowed.StreamFrom)
+		}
+	}
+
+	// Empirical confirmation: a real SSE resume from windowed.StreamFrom
+	// actually redelivers summary2, the specific excluded, high-seq
+	// record this test constructs.
+	want := journalEventsAbove(h, seed.ID, windowed.StreamFrom)
+	if len(want) == 0 {
+		t.Fatalf("no durable events above windowed stream_from %d for session %s; expected at least summary2's own record", windowed.StreamFrom, seed.ID)
+	}
+	sse := h.openSSE("?from="+itoa64(windowed.StreamFrom)+"&session="+seed.ID, "")
+	sawSummary2 := false
+	for i := 0; i < len(want); i++ {
+		ev := sse.nextEvent(t)
+		if ev.Type == evtMessage && ev.Message != nil && ev.Message.ID == summary2ID {
+			sawSummary2 = true
+		}
+	}
+	if !sawSummary2 {
+		t.Errorf("resuming SSE from windowed stream_from %d never redelivered summary2 %s, which the window excluded", windowed.StreamFrom, summary2ID)
+	}
+}
