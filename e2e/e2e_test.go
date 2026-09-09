@@ -501,6 +501,15 @@ func (p *serveProc) eventReplay() []apiEvent {
 		p.t.Fatalf("GET /event: %v", err)
 	}
 	defer resp.Body.Close()
+	// Checked before reading a frame, so a rejected or failed request is
+	// reported as itself. A non-200 answer carries no SSE frames at all, and
+	// the incompleteness check below would otherwise blame the journal for it
+	// ("got 0 events ... want through tip 7") — see eventTip's own identical
+	// check.
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		p.t.Fatalf("GET /event: status %d body %s", resp.StatusCode, body)
+	}
 	var events []apiEvent
 	var highest int64
 	dec := newSSEScanner(resp.Body)
