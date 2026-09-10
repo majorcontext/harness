@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1708,6 +1709,7 @@ func serveCmd(args []string) error {
 			}
 			return cfg.EventSink.BatchMaxBytes
 		}(),
+		EventSinkIncludeTypes: eventSinkIncludeTypes(cfg),
 	})
 	if err != nil {
 		return err
@@ -1936,6 +1938,17 @@ func agentDefsDirs(cfg *config.Config, flagDirs []string, workDir string) []stri
 		}
 	}
 	return out
+}
+
+// eventSinkIncludeTypes is the selector list server.Options carries to the
+// pump. It copies the config slice so a later config edit cannot change a
+// running filter, and reports nil for an absent or empty list, which the pump
+// reads as unfiltered.
+func eventSinkIncludeTypes(cfg *config.Config) []string {
+	if cfg.EventSink == nil || len(cfg.EventSink.IncludeTypes) == 0 {
+		return nil
+	}
+	return slices.Clone(cfg.EventSink.IncludeTypes)
 }
 
 // appendSystemSegments returns config segments followed by the per-run flag.

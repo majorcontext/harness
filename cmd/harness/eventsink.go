@@ -50,6 +50,7 @@ type sinkBody struct {
 	Generation string         `json:"generation,omitempty"`
 	FromSeq    int64          `json:"from_seq"`
 	ToSeq      int64          `json:"to_seq"`
+	Filtered   bool           `json:"filtered,omitempty"`
 	Records    []server.Event `json:"records"`
 }
 
@@ -58,11 +59,19 @@ type sinkReply struct {
 }
 
 func (h *httpEventSink) Deliver(ctx context.Context, batch server.EventBatch) (int64, error) {
+	// A filtered checkpoint carries no records, and it must still encode
+	// "records":[]. A null would make every receiver special-case the one
+	// request that exists only to advance its cursor.
+	records := batch.Records
+	if records == nil {
+		records = []server.Event{}
+	}
 	body, err := json.Marshal(sinkBody{
 		Generation: h.generation,
 		FromSeq:    batch.FromSeq,
 		ToSeq:      batch.ToSeq,
-		Records:    batch.Records,
+		Filtered:   batch.Filtered,
+		Records:    records,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("event sink: marshal batch: %w", err)

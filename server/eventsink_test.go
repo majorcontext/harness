@@ -426,3 +426,365 @@ func TestEventSinkShipsARestoredJournalWithNoNewRecord(t *testing.T) {
 
 	f.waitForRecord(t, want)
 }
+
+// batchSnapshot copies the batches delivered so far, including the empty
+// filtered checkpoints that delivered() cannot show.
+func (f *fakeSink) batchSnapshot() []EventBatch {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]EventBatch(nil), f.batches...)
+}
+
+// seqsOf lists a batch's record sequence numbers, oldest first.
+func seqsOf(b EventBatch) []int64 {
+	var out []int64
+	for _, r := range b.Records {
+		out = append(out, r.Seq)
+	}
+	return out
+}
+
+// filteredSinkServer builds a pump whose selector is the exact type list a
+// user writes in the event-sink configuration.
+func filteredSinkServer(t *testing.T, dir string, f *fakeSink, types ...string) *Server {
+	t.Helper()
+	return newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+		o.EventSink = f
+		o.EventSinkFlush = time.Millisecond
+		o.EventSinkIncludeTypes = types
+	})
+}
+
+// The type strings below are the caller-facing selector values, quoted the
+// way a configuration file writes them, so these tests never restate a
+// server-local constant back to itself.
+const (
+	sinkTypeMessage     = "message"
+	sinkTypePromptQueue = "prompt.queued"
+	sinkTypeTurnEnd     = "turn.end"
+)
+
+// Journal: 1 message, 2 prompt.queued, 3 message, 4 turn.end. The selector
+// takes prompt.queued and turn.end. A dense pump ships all four records; the
+// filtered pump must ship seq 2 and 4 only, and must still report the whole
+// range it scanned (1..4) so the receiver's cursor clears the omitted
+// records.
+func TestEventSinkFilterShipsSelectedRecordsWithTheScannedRange(t *testing.T) {
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: 1 << 20},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypePromptQueue, sinkTypeTurnEnd}),
+		journal: []Event{
+			{Type: sinkTypeMessage, SessionID: "ses_f", Seq: 1},
+			{Type: sinkTypePromptQueue, SessionID: "ses_f", Seq: 2},
+			{Type: sinkTypeMessage, SessionID: "ses_f", Seq: 3},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_f", Seq: 4},
+		},
+		seq: 4,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no batch for a journal with two selected records")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 4 || !batch.Filtered {
+		t.Errorf("batch range = from %d to %d filtered %t, want from 1 to 4 filtered true", batch.FromSeq, batch.ToSeq, batch.Filtered)
+	}
+	if got := seqsOf(batch); len(got) != 2 || got[0] != 2 || got[1] != 4 {
+		t.Errorf("record seqs = %v, want [2 4]", got)
+	}
+}
+
+// A selector that matches nothing must still ship a checkpoint. Without one
+// the pump reports "no work" for a journal it has fully scanned, so the
+// receiver's cursor stalls at 0 for the whole life of an unselected run.
+func TestEventSinkFilterShipsAnEmptyCheckpointForTheScannedRange(t *testing.T) {
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: 1 << 20},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal: []Event{
+			{Type: sinkTypeMessage, SessionID: "ses_e", Seq: 1},
+			{Type: sinkTypeMessage, SessionID: "ses_e", Seq: 2},
+			{Type: sinkTypeMessage, SessionID: "ses_e", Seq: 3},
+		},
+		seq: 3,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch reported no work for three scanned records; the cursor can never advance")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 3 || !batch.Filtered {
+		t.Errorf("checkpoint = from %d to %d filtered %t, want from 1 to 3 filtered true", batch.FromSeq, batch.ToSeq, batch.Filtered)
+	}
+	if len(batch.Records) != 0 {
+		t.Errorf("checkpoint carries %d records, want 0", len(batch.Records))
+	}
+}
+
+// EventSinkMaxRecords bounds the JOURNAL window, not the selected count. A
+// pump that counted only selected records would scan past seq 2 looking for
+// a second match and ship turn.end at seq 3 in the first batch.
+func TestEventSinkFilterScanWindowCountsOmittedRecords(t *testing.T) {
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 2, EventSinkMaxBytes: 1 << 20},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal: []Event{
+			{Type: sinkTypeMessage, SessionID: "ses_w", Seq: 1},
+			{Type: sinkTypeMessage, SessionID: "ses_w", Seq: 2},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_w", Seq: 3},
+		},
+		seq: 3,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch reported no work for the first two scanned records")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 2 || len(batch.Records) != 0 {
+		t.Fatalf("first batch = from %d to %d seqs %v, want from 1 to 2 with no records", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+
+	s.sinkCursor = batch.ToSeq
+	batch, ok = s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch reported no work with turn.end still unsent")
+	}
+	if batch.FromSeq != 3 || batch.ToSeq != 3 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 3 {
+		t.Fatalf("second batch = from %d to %d seqs %v, want from 3 to 3 seqs [3]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+}
+
+// An omitted record is never sent, so it must not charge the byte budget.
+// The limit here fits both selected records exactly; if the two large
+// omitted message records were charged, the batch would stop at seq 2 and
+// leave turn.end at seq 4 for a later pass.
+func TestEventSinkFilterOmittedRecordsDoNotConsumeMaxBytes(t *testing.T) {
+	bulk := strings.Repeat("m", 4096)
+	journal := []Event{
+		{Type: sinkTypeMessage, SessionID: "ses_c", Seq: 1, Text: bulk},
+		{Type: sinkTypeTurnEnd, SessionID: "ses_c", Seq: 2, Outcome: "completed"},
+		{Type: sinkTypeMessage, SessionID: "ses_c", Seq: 3, Text: bulk},
+		{Type: sinkTypeTurnEnd, SessionID: "ses_c", Seq: 4, Outcome: "completed"},
+	}
+	var selected int
+	for _, i := range []int{1, 3} {
+		encoded, err := json.Marshal(journal[i])
+		if err != nil {
+			t.Fatalf("marshal selected record %d: %v", journal[i].Seq, err)
+		}
+		selected += len(encoded)
+	}
+
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: selected},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal:   journal,
+		seq:       4,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no batch")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 4 {
+		t.Errorf("batch range = from %d to %d, want from 1 to 4", batch.FromSeq, batch.ToSeq)
+	}
+	if got := seqsOf(batch); len(got) != 2 || got[0] != 2 || got[1] != 4 {
+		t.Errorf("record seqs = %v, want [2 4]; an omitted record charged the byte budget", got)
+	}
+}
+
+// The first-record byte exemption must survive an omitted prefix. With a
+// one-byte budget the selected record at seq 2 still ships alone, and the
+// next oversized selection ships in its own batch rather than disappearing.
+func TestEventSinkFilterShipsAnOversizedSelectedRecordAlone(t *testing.T) {
+	bulk := strings.Repeat("t", 4096)
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: 1},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal: []Event{
+			{Type: sinkTypeMessage, SessionID: "ses_o", Seq: 1, Text: bulk},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_o", Seq: 2, Error: bulk},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_o", Seq: 3, Error: bulk},
+		},
+		seq: 3,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch dropped an oversized selected record")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 2 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 2 {
+		t.Fatalf("first batch = from %d to %d seqs %v, want from 1 to 2 seqs [2]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+
+	s.sinkCursor = batch.ToSeq
+	batch, ok = s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch dropped the second oversized selected record")
+	}
+	if batch.FromSeq != 3 || batch.ToSeq != 3 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 3 {
+		t.Fatalf("second batch = from %d to %d seqs %v, want from 3 to 3 seqs [3]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+}
+
+// An empty selector leaves every batch dense and unmarked, so a receiver
+// cannot tell an unfiltered batch from a filtered one that happened to
+// select everything.
+func TestEventSinkFilterDisabledKeepsDenseUnmarkedBatches(t *testing.T) {
+	s := &Server{
+		opts: Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: 1 << 20},
+		journal: []Event{
+			{Type: sinkTypeMessage, SessionID: "ses_d", Seq: 1},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_d", Seq: 2},
+		},
+		seq: 2,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no batch")
+	}
+	if batch.Filtered {
+		t.Error("batch is marked filtered without a selector")
+	}
+	if got := seqsOf(batch); len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Errorf("record seqs = %v, want [1 2]", got)
+	}
+
+	s.sinkCursor = 2
+	if batch, ok := s.nextEventBatch(); ok {
+		t.Errorf("nextEventBatch = %+v, ok=true past the journal end; an unfiltered pump must report no work", batch)
+	}
+}
+
+// A receiver that answers 0 commands a re-bootstrap. The rescan must stay
+// filtered: it re-ships the selected record and must not smuggle the
+// omitted message record in behind it.
+func TestEventSinkFilterRewindToZeroRescansFiltered(t *testing.T) {
+	f := newFakeSink()
+	s := filteredSinkServer(t, t.TempDir(), f, sinkTypeTurnEnd)
+
+	first := s.emitDurable(Event{Type: sinkTypeTurnEnd, SessionID: "ses_r", Outcome: "completed"})
+	f.waitForSeq(t, first)
+
+	f.mu.Lock()
+	f.appliedOverride = 0
+	f.overrideSet = true
+	f.batches = nil
+	f.mu.Unlock()
+
+	// The emit wakes the pump; the rescan below is the assertion.
+	s.emitDurable(Event{Type: sinkTypeMessage, SessionID: "ses_r"})
+	f.waitForRecord(t, first)
+
+	for _, b := range f.batchSnapshot() {
+		if !b.Filtered {
+			t.Fatalf("batch %+v is not marked filtered after the rewind", b)
+		}
+		for _, r := range b.Records {
+			if r.Type != sinkTypeTurnEnd {
+				t.Fatalf("rescan shipped a %q record at seq %d; the selector was dropped on rewind", r.Type, r.Seq)
+			}
+		}
+	}
+}
+
+// loadJournal restores records without waking the pump, so the first flush
+// is the only chance to report them. When the selector matches none of them,
+// that flush must still ship an empty checkpoint: otherwise a restarted
+// process that goes idle never tells the receiver how far it has scanned.
+func TestEventSinkFilterRestoredJournalShipsACheckpointWithoutNewWork(t *testing.T) {
+	dir := t.TempDir()
+
+	first := newServer(t, dir, &scriptedProvider{name: "test"}, 4)
+	restored := first.emitDurable(Event{Type: sinkTypeMessage, SessionID: "ses_rs"})
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first server: %v", err)
+	}
+
+	f := newFakeSink()
+	filteredSinkServer(t, dir, f, sinkTypeTurnEnd)
+	f.waitForSeq(t, restored)
+
+	batches := f.batchSnapshot()
+	if len(batches) == 0 {
+		t.Fatal("no batch after restoring a journal with no selected record")
+	}
+	got := batches[0]
+	if got.FromSeq != 1 || got.ToSeq != restored || !got.Filtered || len(got.Records) != 0 {
+		t.Fatalf("first batch = from %d to %d filtered %t seqs %v, want from 1 to %d filtered true with no records",
+			got.FromSeq, got.ToSeq, got.Filtered, seqsOf(got), restored)
+	}
+}
+
+// Drain closes s.closing first and then waits for in-flight prompts, which
+// journal trailing records during that wait. When the selector matches none
+// of them, the final flush must still ship the scanned tail so the receiver
+// learns the shutdown point instead of stalling one batch short of it.
+func TestEventSinkFilterFinalDrainShipsTheScannedTail(t *testing.T) {
+	f := newFakeSink()
+	s := filteredSinkServer(t, t.TempDir(), f, sinkTypeTurnEnd)
+
+	s.mu.Lock()
+	s.closeOnce.Do(func() { close(s.closing) })
+	s.mu.Unlock()
+
+	late := s.emitDurable(Event{Type: sinkTypeMessage, SessionID: "ses_t"})
+	s.Drain(t.Context())
+
+	var reached bool
+	for _, b := range f.batchSnapshot() {
+		if b.ToSeq >= late {
+			reached = true
+		}
+		for _, r := range b.Records {
+			if r.Type != sinkTypeTurnEnd {
+				t.Fatalf("drain shipped a %q record at seq %d; the selector was dropped on the final flush", r.Type, r.Seq)
+			}
+		}
+	}
+	if !reached {
+		t.Fatalf("no batch scanned through seq %d; the unselected drain tail never checkpointed", late)
+	}
+}
+
+// The byte limit stops before the selected record that would exceed it, and
+// ToSeq must then name the last candidate SCANNED, not the last record sent.
+// Journal: 1 turn.end (fits), 2 message (omitted), 3 turn.end (does not
+// fit). A pump that reported ToSeq=1 would hand the already-scanned message
+// record back to the next pass.
+func TestEventSinkFilterByteLimitStopsAtTheLastScannedCandidate(t *testing.T) {
+	small := Event{Type: sinkTypeTurnEnd, SessionID: "ses_s", Seq: 1, Outcome: "completed"}
+	encoded, err := json.Marshal(small)
+	if err != nil {
+		t.Fatalf("marshal the selected record: %v", err)
+	}
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: len(encoded)},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal: []Event{
+			small,
+			{Type: sinkTypeMessage, SessionID: "ses_s", Seq: 2},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_s", Seq: 3, Error: strings.Repeat("e", 4096)},
+		},
+		seq: 3,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no batch")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 2 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 1 {
+		t.Fatalf("batch = from %d to %d seqs %v, want from 1 to 2 seqs [1]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+
+	s.sinkCursor = batch.ToSeq
+	batch, ok = s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch dropped the oversized record the byte limit deferred")
+	}
+	if batch.FromSeq != 3 || batch.ToSeq != 3 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 3 {
+		t.Fatalf("deferred batch = from %d to %d seqs %v, want from 3 to 3 seqs [3]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+}

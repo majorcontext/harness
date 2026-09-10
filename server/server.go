@@ -271,6 +271,9 @@ type Options struct {
 	// delivered alone.
 	EventSinkMaxRecords int
 	EventSinkMaxBytes   int
+	// EventSinkIncludeTypes selects durable event types by exact match. An
+	// empty list forwards every record.
+	EventSinkIncludeTypes []string
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
@@ -368,6 +371,11 @@ type Options struct {
 type Server struct {
 	opts Options
 	mux  *http.ServeMux
+
+	// sinkTypes is the event-sink selector, built once in New and never
+	// written again, so nextEventBatch reads it without holding mu. Nil
+	// means unfiltered.
+	sinkTypes map[string]struct{}
 
 	// now is the clock serveTimed measures with. Always time.Now in
 	// production; a test replaces it to make a duration exact.
@@ -871,6 +879,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts:              opts,
+		sinkTypes:         eventSinkTypeSet(opts.EventSinkIncludeTypes),
 		subs:              make(map[*subscriber]struct{}),
 		seen:              make(map[string]map[string]bool),
 		sessions:          make(map[string]*sessionState),

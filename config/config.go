@@ -409,6 +409,12 @@ type EventSinkSpec struct {
 	BatchMaxRecords int `json:"batch_max_records,omitempty"`
 	BatchMaxBytes   int `json:"batch_max_bytes,omitempty"`
 	TimeoutS        int `json:"timeout_s,omitempty"`
+	// IncludeTypes selects durable event types by exact match. An absent or
+	// empty list forwards every record. Each entry must be non-empty,
+	// unpadded, and unique; harness cannot check a name against the
+	// journal's type set, so those structural rules are the whole
+	// validation.
+	IncludeTypes []string `json:"include_types,omitempty"`
 }
 
 // PluginSpec configures one plugin process, loaded verbatim into a
@@ -1171,6 +1177,21 @@ func validateEventSink(s *EventSinkSpec) error {
 			return fmt.Errorf("event_sink.headers: header name is required (empty key)")
 		}
 	}
+	seen := make(map[string]bool, len(s.IncludeTypes))
+	for _, eventType := range s.IncludeTypes {
+		if eventType == "" {
+			return fmt.Errorf("event_sink.include_types: event type is required (empty string)")
+		}
+		// The pump matches the journal type exactly, so a padded entry
+		// selects nothing. Reject it here rather than forward zero records.
+		if strings.TrimSpace(eventType) != eventType {
+			return fmt.Errorf("event_sink.include_types: event type %q must not have leading or trailing whitespace", eventType)
+		}
+		if seen[eventType] {
+			return fmt.Errorf("event_sink.include_types: duplicate event type %q", eventType)
+		}
+		seen[eventType] = true
+	}
 	for _, f := range []struct {
 		name string
 		v    int
@@ -1436,6 +1457,9 @@ func merge(base, over *Config) *Config {
 			for name, value := range sink.Headers {
 				cloned.Headers[name] = value
 			}
+		}
+		if sink.IncludeTypes != nil {
+			cloned.IncludeTypes = slices.Clone(sink.IncludeTypes)
 		}
 		out.EventSink = &cloned
 	}

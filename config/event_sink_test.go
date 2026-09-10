@@ -27,7 +27,8 @@ func TestLoadAcceptsEventSink(t *testing.T) {
 	    "flush_ms": 250,
 	    "batch_max_records": 256,
 	    "batch_max_bytes": 4194304,
-	    "timeout_s": 30
+	    "timeout_s": 30,
+	    "include_types": ["prompt.queued", "prompt.dequeued", "turn.end"]
 	  }
 	}`)
 
@@ -51,6 +52,34 @@ func TestLoadAcceptsEventSink(t *testing.T) {
 		c.EventSink.BatchMaxBytes != 4194304 || c.EventSink.TimeoutS != 30 {
 		t.Errorf("numeric fields = %+v", c.EventSink)
 	}
+	wantTypes := []string{"prompt.queued", "prompt.dequeued", "turn.end"}
+	if !reflect.DeepEqual(c.EventSink.IncludeTypes, wantTypes) {
+		t.Errorf("IncludeTypes = %#v, want %#v", c.EventSink.IncludeTypes, wantTypes)
+	}
+}
+
+// TestLoadAcceptsEventSinkWithoutIncludeTypes pins the unfiltered default. An
+// absent list and an explicit empty list both mean "forward every record", so
+// neither may fail validation and neither may report a selection.
+func TestLoadAcceptsEventSinkWithoutIncludeTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"absent list", `{"event_sink":{"url":"https://h/x"}}`},
+		{"explicit empty list", `{"event_sink":{"url":"https://h/x","include_types":[]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(writeSinkConfig(t, tc.body))
+			if err != nil {
+				t.Fatalf("Load(%s): %v", tc.body, err)
+			}
+			if len(c.EventSink.IncludeTypes) != 0 {
+				t.Errorf("Load(%s): IncludeTypes = %#v, want an empty selection (unfiltered)", tc.body, c.EventSink.IncludeTypes)
+			}
+		})
+	}
 }
 
 func TestLoadProjectMergesEventSink(t *testing.T) {
@@ -66,7 +95,8 @@ func TestLoadProjectMergesEventSink(t *testing.T) {
 	    "flush_ms": 125,
 	    "batch_max_records": 64,
 	    "batch_max_bytes": 1048576,
-	    "timeout_s": 15
+	    "timeout_s": 15,
+	    "include_types": ["prompt.queued", "prompt.dequeued", "turn.end"]
 	  }
 	}`
 	if err := os.WriteFile(filepath.Join(projectDir, ".harness.json"), []byte(project), 0o600); err != nil {
@@ -88,6 +118,7 @@ func TestLoadProjectMergesEventSink(t *testing.T) {
 		BatchMaxRecords: 64,
 		BatchMaxBytes:   1048576,
 		TimeoutS:        15,
+		IncludeTypes:    []string{"prompt.queued", "prompt.dequeued", "turn.end"},
 	}
 	if !reflect.DeepEqual(*c.EventSink, want) {
 		t.Errorf("EventSink = %+v, want %+v", *c.EventSink, want)
@@ -172,6 +203,11 @@ func TestLoadRejectsBadEventSink(t *testing.T) {
 		{"negative bytes", `{"event_sink":{"url":"https://h/x","batch_max_bytes":-1}}`, "batch_max_bytes"},
 		{"negative timeout", `{"event_sink":{"url":"https://h/x","timeout_s":-1}}`, "timeout_s"},
 		{"empty header name", `{"event_sink":{"url":"https://h/x","headers":{"":"v"}}}`, "header name"},
+		{"empty include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end",""]}}`, "include_types"},
+		{"duplicate include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end","turn.end"]}}`, "duplicate"},
+		{"leading whitespace include type", `{"event_sink":{"url":"https://h/x","include_types":[" turn.end"]}}`, "whitespace"},
+		{"trailing whitespace include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end\n"]}}`, "whitespace"},
+		{"whitespace-only include type", `{"event_sink":{"url":"https://h/x","include_types":["  "]}}`, "whitespace"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,4 +220,58 @@ func TestLoadRejectsBadEventSink(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMergeEventSinkIncludeTypes pins the selector list through the user and
+// project merge. The pump reads only the merged slice: a merge that dropped it
+// would forward every record while the config asks for three types, and one
+// that aliased an input would let a later edit of that layer reach the running
+// pump.
+func TestMergeEventSinkIncludeTypes(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"absent list stays unfiltered", nil, nil},
+		{"explicit empty list stays unfiltered", []string{}, []string{}},
+		{"selector list survives", []string{"prompt.queued", "prompt.dequeued", "turn.end"}, []string{"prompt.queued", "prompt.dequeued", "turn.end"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			over := &Config{EventSink: &EventSinkSpec{
+				URL:          "https://project.test/journal",
+				IncludeTypes: tc.in,
+			}}
+			got := merge(&Config{}, over)
+			if got.EventSink == nil {
+				t.Fatal("EventSink is nil, want the project block")
+			}
+			if !reflect.DeepEqual(got.EventSink.IncludeTypes, tc.want) {
+				t.Fatalf("IncludeTypes = %#v, want %#v", got.EventSink.IncludeTypes, tc.want)
+			}
+			if len(tc.in) == 0 {
+				return
+			}
+			got.EventSink.IncludeTypes[0] = "changed"
+			if over.EventSink.IncludeTypes[0] != "prompt.queued" {
+				t.Fatal("merged EventSink.IncludeTypes aliases the project config")
+			}
+		})
+	}
+
+	t.Run("absent project block inherits the user list without aliasing", func(t *testing.T) {
+		base := &Config{EventSink: &EventSinkSpec{
+			URL:          "https://user.test/journal",
+			IncludeTypes: []string{"turn.end"},
+		}}
+		got := merge(base, &Config{})
+		if got.EventSink == nil || !reflect.DeepEqual(got.EventSink.IncludeTypes, []string{"turn.end"}) {
+			t.Fatalf("IncludeTypes = %#v, want the inherited user list", got.EventSink)
+		}
+		got.EventSink.IncludeTypes[0] = "changed"
+		if base.EventSink.IncludeTypes[0] != "turn.end" {
+			t.Fatal("merged EventSink.IncludeTypes aliases the user config")
+		}
+	})
 }

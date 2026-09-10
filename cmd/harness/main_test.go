@@ -21,6 +21,7 @@ import (
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
 	"github.com/majorcontext/harness/provider/openaicompat"
+	"github.com/majorcontext/harness/server"
 )
 
 func TestServeURLForAddr(t *testing.T) {
@@ -1214,5 +1215,42 @@ func TestBaseBehaviorGuidanceStaysUnderBudget(t *testing.T) {
 	}
 	if words := len(strings.Fields(block)); words > baseBehaviorGuidanceMaxWords {
 		t.Errorf("baseBehaviorGuidance = %d words, want at most %d", words, baseBehaviorGuidanceMaxWords)
+	}
+}
+
+// TestEventSinkIncludeTypesFromConfig pins what the serve composition hands the
+// pump. The pump filters on an exact-match set built from this slice, so
+// returning the config's own backing array would let a later config edit
+// change a running filter, and reporting a selection for an absent or empty
+// list would silently stop forwarding every other event type.
+func TestEventSinkIncludeTypesFromConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *config.Config
+		want []string
+	}{
+		{"no event_sink block", &config.Config{}, nil},
+		{"sink without a selector list", &config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x"}}, nil},
+		{"explicit empty list stays unfiltered", &config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x", IncludeTypes: []string{}}}, nil},
+		{
+			"selector list reaches the options",
+			&config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x", IncludeTypes: []string{"prompt.queued", "prompt.dequeued", "turn.end"}}},
+			[]string{"prompt.queued", "prompt.dequeued", "turn.end"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := server.Options{EventSinkIncludeTypes: eventSinkIncludeTypes(tc.cfg)}
+			if !reflect.DeepEqual(opts.EventSinkIncludeTypes, tc.want) {
+				t.Fatalf("EventSinkIncludeTypes = %#v, want %#v", opts.EventSinkIncludeTypes, tc.want)
+			}
+			if len(tc.want) == 0 {
+				return
+			}
+			opts.EventSinkIncludeTypes[0] = "changed"
+			if tc.cfg.EventSink.IncludeTypes[0] != "prompt.queued" {
+				t.Fatal("server options alias the config's IncludeTypes slice")
+			}
+		})
 	}
 }

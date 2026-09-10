@@ -13,12 +13,15 @@ outbound delivery of its own journal.
 
 ## 2. The contract
 
-A configured sink receives every durable record — the same records the
-journal keeps and `/event?from=` replays — in seq order, nothing projected
-or filtered. Live-only record types (`text.delta`, `reasoning.delta`,
-`tool.start`, `tool.end`) are never journaled in the first place (see
-`server/journal.go`), so they are out by construction, not by a filter this
-change adds.
+By default a configured sink receives every durable record — the same
+records the journal keeps and `/event?from=` replays — in seq order,
+nothing projected or filtered. Live-only record types (`text.delta`,
+`reasoning.delta`, `tool.start`, `tool.end`) are never journaled in the
+first place (see `server/journal.go`), so they are out by construction, not
+by a filter this change adds.
+
+`event_sink.include_types` narrows that record set. Section 10 gives the
+sparse-range semantics that the selector introduces.
 
 ## 3. The tap signals, it does not carry
 
@@ -93,6 +96,10 @@ in-memory integer, which is not itself durable across a restart — the
 receiver's own answer is the only source of truth for "how far did this
 replica get."
 
+**The receiver acknowledges through `to_seq`, not through the seq of the
+last record in `records`.** The two are the same integer only while the
+pump is unfiltered. Section 10 explains why a selector separates them.
+
 A rewind is nothing special: if the receiver answers a seq lower than what
 it previously reported (a rollback, a lost write, a fresh receiver that
 lost its own state), the cursor moves backward and the very next batch
@@ -166,3 +173,70 @@ value and gives it whatever meaning it needs (for example, disambiguating
 one box's journal from another box that reused the same session
 directory, or from the same box across a disk replacement). Nothing in
 this repository parses, validates, or branches on its contents.
+
+## 10. The selector makes a scanned range sparse
+
+`event_sink.include_types` is a list of durable event types. An absent or
+an empty list keeps the pump unfiltered. `eventSinkTypeSet`
+(`server/eventsink.go`) turns that list into a nil set, and a nil set is
+what tells `nextEventBatch` to stay on the dense path.
+
+An unfiltered request is byte-identical to what a receiver saw before the
+selector existed. The wire field is `filtered` with `omitempty` (`sinkBody`,
+`cmd/harness/eventsink.go`), so an unfiltered request omits the key. It
+does not send `"filtered":false`. A receiver that predates this change
+needs no update.
+
+A non-empty list turns the pump filtered. Then:
+
+- `from_seq` and `to_seq` bound the range the pump SCANNED, not the range
+  the request carries. `records` holds only the scanned records whose
+  `type` is in the list. It is sparse, and it can be empty.
+- `filtered` is `true` on every request that a filtered pump sends, even on
+  one whose selector matched every scanned record. The flag reports the
+  pump's mode. Its meaning does not change from request to request, so the
+  receiver can trust `to_seq` without inspecting `records`.
+- An empty `records` encodes as `[]`, never as `null`.
+- The receiver must acknowledge through `to_seq`. A receiver that answers
+  the seq of the last record in `records` re-receives the whole unselected
+  tail on every request. A receiver that answers `0` for an empty `records`
+  rewinds the cursor to the start of the journal (§6).
+
+An empty `records` is a checkpoint, not an error. This is a complete
+request and a complete reply:
+
+```json
+{"generation":"jrnl_test","from_seq":8,"to_seq":12,"filtered":true,"records":[]}
+```
+
+```json
+{"applied_through":12}
+```
+
+The checkpoint is how the cursor crosses a long run of unselected records.
+Without it, a session that produces nothing the selector wants would hold
+the cursor at the last selected record for the life of the process.
+
+A filtered pump therefore costs requests that an unfiltered pump does not.
+A busy session whose records are all unselected sends one empty checkpoint
+per flush window, and each one carries only a cursor. This is the accepted
+trade for the smaller record volume.
+
+## 11. Type matching is exact
+
+`eventSinkTypeSet` builds a map and `nextEventBatch` looks up the record's
+`type` in it. The match is exact, case-sensitive string equality. There is
+no prefix rule, no glob, and no namespace rule: `turn` does not select
+`turn.end`, and `Turn.End` selects nothing.
+
+**A misspelled type selects nothing, and harness reports no error.** The
+`config` package validates the structure of the list only. It rejects an
+empty string, leading or trailing whitespace, and a duplicate. It does not
+validate a name, because the journal owns the type set and this repository
+holds no closed enumeration of it to check against.
+
+The failure is therefore silent. A selector whose entries are all
+misspelled produces a stream of empty checkpoints that advance the cursor
+and deliver no record at all. Copy each type from a live `/event` stream,
+or from the `Publish` cases in `server/journal.go`, rather than typing it
+from memory.
