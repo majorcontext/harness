@@ -1190,7 +1190,7 @@ func TestSystemPromptCarriesBaseBehaviorGuidance(t *testing.T) {
 		"Persist until the task is fully resolved end to end",
 		"Fix the root cause, not a surface patch",
 		"Be bold on a greenfield task",
-		"Reference a file path instead of pasting a file you just wrote",
+		"Cite paths",
 		"send a brief note on what you are about to do and why",
 		"lead with the findings",
 		"avoid a generic templated look",
@@ -1218,7 +1218,7 @@ func TestBaseBehaviorGuidanceSetsAnAdaptiveBrevityDefault(t *testing.T) {
 			t.Errorf("base behavior guidance missing %q:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "relax") {
+	if !strings.Contains(got, "unless") {
 		t.Errorf("brevity ceiling has no stated exception, so it reads as an absolute cap:\n%s", got)
 	}
 	for _, unwanted := range []string{"4 lines", "four lines", "one-word", "single word"} {
@@ -1226,8 +1226,40 @@ func TestBaseBehaviorGuidanceSetsAnAdaptiveBrevityDefault(t *testing.T) {
 			t.Errorf("base behavior guidance carries a second, tighter brevity cap %q:\n%s", unwanted, got)
 		}
 	}
-	if !strings.Contains(got, "file path") {
-		t.Errorf("base behavior guidance lost the reference-a-path-instead-of-pasting rule:\n%s", got)
+	if !strings.Contains(got, "Cite paths") {
+		t.Errorf("base behavior guidance lost the cite-a-path-instead-of-pasting rule:\n%s", got)
+	}
+}
+
+// Input: a session with no project instructions. Wrong output: the base
+// prompt constrains user-visible prose but says nothing about comments or
+// docs, so a model narrates change history beside the code it writes.
+func TestBaseBehaviorGuidanceGovernsCommentsAndDocs(t *testing.T) {
+	got := baseBehaviorGuidance()
+
+	if !strings.Contains(got, "Do not add comments unless") {
+		t.Errorf("base behavior guidance does not prohibit comments by default:\n%s", got)
+	}
+	for _, want := range []string{"explicitly requested", "project instructions"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("comment prohibition missing its %q exception, so a repo cannot opt in:\n%s", want, got)
+		}
+	}
+	for _, want := range []string{"docs only when needed", "concise and current"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("base behavior guidance missing docs rule %q:\n%s", want, got)
+		}
+	}
+	for _, want := range []string{"change history", "incidents", "reviews", "commits", "issues"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("base behavior guidance does not route %q off the code surface:\n%s", want, got)
+		}
+	}
+
+	for _, want := range []string{"concise, direct, and friendly", "10 lines", "unless"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("base behavior guidance lost the adaptive response default %q:\n%s", want, got)
+		}
 	}
 }
 

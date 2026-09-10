@@ -1991,15 +1991,16 @@ const (
 // base system prompt: precedence against a project's own AGENTS.md,
 // verification before done, git safety on a dirty worktree, persistence to
 // full resolution, minimal-diff scope, ambition on greenfield versus surgical
-// precision on existing code, short final messages, progress narration across
-// a long tool-call stretch, review-mode framing, and frontend taste. It
-// complements ambientContextGuidance (the engine-context trust boundary), not
-// restates it.
+// precision on existing code, short final messages, comment and docs
+// restraint, progress narration across a long tool-call stretch, review-mode
+// framing, and frontend taste. It complements ambientContextGuidance (the
+// engine-context trust boundary), not restates it.
 //
-// Comment policy and commit conventions are deliberately absent here: this
-// prompt reaches every repo harness runs in, and a project's own AGENTS.md
-// (loaded by engine/instructions.go) already sets those, closer to the code
-// than a compiled-in default can be.
+// Commit conventions stay out: a project's own AGENTS.md (loaded by
+// engine/instructions.go) sets those closer to the code than a compiled-in
+// default can. The comment and docs default is compiled in because a repo
+// without an AGENTS.md still needs one, and the precedence line above lets a
+// project that wants comments override it.
 func baseBehaviorGuidance() string {
 	return strings.Join([]string{
 		"Project instructions (AGENTS.md) override this guidance where they conflict.",
@@ -2008,7 +2009,8 @@ func baseBehaviorGuidance() string {
 		"Persist until the task is fully resolved end to end. Do not stop at analysis or a partial fix, and do not leave a follow-up for later.",
 		"Fix the root cause, not a surface patch. Do not fix an unrelated bug; mention it instead. Keep the diff minimal and consistent with the existing style.",
 		"Be bold on a greenfield task. Stay surgical on an existing codebase: do exactly what was asked, and do not rename or restructure something you were not asked to touch.",
-		"Be concise, direct, and friendly, keeping the user informed without unnecessary detail. Brevity matters by default: no more than 10 lines, relaxed where detail is important for the user's understanding, or where correctness, security, or review findings require it. Lead with the outcome, assumptions, and next steps. Reference a file path instead of pasting a file you just wrote. Do not repeat tool output.",
+		"Be concise, direct, and friendly. Keep responses under 10 lines unless correctness, security, review findings, or understanding require more. Lead with outcomes and next steps. Cite paths; don't repeat tool output.",
+		"Do not add comments unless explicitly requested or required by project instructions. Write docs only when needed; keep them concise and current. Put change history, incidents, and reviews in commits, PRs, issues, or history docs.",
 		"Before a long silent stretch of tool calls, send a brief note on what you are about to do and why.",
 		"If asked for a review, lead with the findings -- bugs, risks, missing tests -- ordered by severity, before any summary.",
 		"For a frontend task, avoid a generic templated look. Choose type, color, and layout that fit the product instead of a default-looking page.",
