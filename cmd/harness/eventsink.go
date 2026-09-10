@@ -105,8 +105,11 @@ func (h *httpEventSink) Deliver(ctx context.Context, batch server.EventBatch) (i
 		}
 		// The status classifies the failure, not the diagnostic: a receiver
 		// that answers a permanent status with no body is still permanent.
+		// The sentinel is the only wrapped operand: the receiver text keeps
+		// its place at the front of the message, and the pump matches on
+		// one sentinel rather than on a tree of wrapped causes.
 		if eventSinkPermanentStatus(resp.StatusCode) {
-			return 0, fmt.Errorf("%w: %w", err, server.ErrEventSinkPermanent)
+			return 0, fmt.Errorf("%v: %w", err, server.ErrEventSinkPermanent)
 		}
 		return 0, err
 	}

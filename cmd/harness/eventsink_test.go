@@ -201,8 +201,15 @@ func TestHTTPEventSinkClassifiesPermanentReceiverRejections(t *testing.T) {
 			if got := errors.Is(err, server.ErrEventSinkPermanent); got != tc.permanent {
 				t.Errorf("errors.Is(err, ErrEventSinkPermanent) = %t for %d, want %t; err = %v", got, tc.status, tc.permanent, err)
 			}
-			if !strings.Contains(err.Error(), strconv.Itoa(tc.status)) {
-				t.Errorf("error %q does not name the status %d", err, tc.status)
+			// The message is the operator's whole record of the failure, so
+			// it is pinned exactly: the status, and for a permanent one the
+			// sentinel appended after it, with nothing else added.
+			want := "event sink: receiver returned " + strconv.Itoa(tc.status)
+			if tc.permanent {
+				want += ": " + server.ErrEventSinkPermanent.Error()
+			}
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err, want)
 			}
 		})
 	}
@@ -224,8 +231,18 @@ func TestHTTPEventSinkPermanentRejectionKeepsABoundedDiagnostic(t *testing.T) {
 	if !errors.Is(err, server.ErrEventSinkPermanent) {
 		t.Fatalf("error %v is not permanent, want a 403 to retire the pump", err)
 	}
-	if !strings.Contains(err.Error(), "generation_rejected") {
-		t.Errorf("error = %q, want the sanitized receiver code", err)
+	// Exact text: the receiver's own diagnostic keeps its place at the front
+	// and the sentinel is appended once. A second wrap verb, or a sentinel
+	// that swallowed the diagnostic, changes this string.
+	const want = "event sink: receiver returned 403 (generation_rejected): permanent receiver rejection"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	// One wrapped operand, and it is the sentinel. A second %w verb builds a
+	// multi-error whose Unwrap answers nil here, which hides the single
+	// cause the pump is written against.
+	if unwrapped := errors.Unwrap(err); unwrapped != server.ErrEventSinkPermanent {
+		t.Errorf("errors.Unwrap(err) = %v, want the sentinel itself", unwrapped)
 	}
 	for _, leak := range []string{"secret diagnostic detail", "secret_query", "secret_fragment"} {
 		if strings.Contains(err.Error(), leak) {
