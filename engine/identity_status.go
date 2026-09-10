@@ -2,7 +2,7 @@
 // engine/process.go's processStatusSegment (see that file's doc comment):
 // computed fresh every streamTurn call from Config fields set once at
 // session construction, appended only to the newest user message via the
-// shared withAmbientStatus, and never persisted to the session log.
+// shared withPinnedAmbient, and never persisted to the session log.
 //
 // Unlike the process/MCP/goal-parked segments, which report NOTABLE state
 // (something started, degraded, or parked) and are absent the rest of the

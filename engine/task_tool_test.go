@@ -328,7 +328,7 @@ func TestTaskDeliveryParentIdleTriggersResumeTurn(t *testing.T) {
 	}}
 	root := mgr.NewRoot(managedConfig("root", rootProv, scriptedTurns("child", doneTurn("the answer is 42"))))
 
-	// Establish real history so withAmbientStatus has a user message to
+	// Establish real history so the resume turn has a user message to
 	// attach the EngineContext part to, and so the root can go properly
 	// idle afterward.
 	if _, err := mgr.Send(context.Background(), root.ID, "start"); err != nil {

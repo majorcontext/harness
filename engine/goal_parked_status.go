@@ -2,7 +2,7 @@
 // engine/mcp_status.go's mcpStatusSegment and engine/process.go's
 // processStatusSegment (see either's doc comment): computed fresh from live
 // Session state on every streamTurn call, appended only to the newest user
-// message via the shared withAmbientStatus, and never persisted to the
+// message via the shared withPinnedAmbient, and never persisted to the
 // session log. It does not survive a process restart.
 package engine
 

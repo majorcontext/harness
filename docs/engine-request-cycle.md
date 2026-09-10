@@ -56,7 +56,7 @@ NOT a `Text` part. A bare `Text` block is byte-indistinguishable from
 user-typed or pasted text, so a payload a user pastes that contains
 `[engine: ...]` once inherited the same trust the engine's own block
 carries — a trust-spoofing surface. `EngineContext` is a distinct part-kind
-only `withAmbientStatus` (`engine/process.go`) produces, so a user- or
+only `withPinnedAmbient` (`engine/ambient_pin.go`) produces, so a user- or
 paste-authored part is always a `Text` and can never BE one, however its
 bytes are shaped. Every transcoder renders an `EngineContext` through
 `message.RenderEngineContext`, which wraps the block in the
@@ -598,16 +598,13 @@ The follow-up call carries the synthetic unexecuted-tool-call result (for
 any COMPLETE call the engine chose not to execute) plus a one-shot nudge —
 `s.pendingContinuationNudge`/`continuationNudgeSegment`. Unlike every other
 ambient status segment (process, MCP, goal-parked, identity, task
-notifications — see "Ambient engine context" above), this one is NOT glued
-onto an existing message via `withAmbientStatus`:
+notifications — see "Ambient engine context" above), this one is NOT pinned:
+it belongs to one continuation request, not to the conversation.
 `appendContinuationNudgeMessage` appends a genuine NEW `message.RoleUser`
 message, carrying the nudge as its own `*message.EngineContext` part, to the
-END of `streamTurn`'s own throwaway per-request message copy.
-`withAmbientStatus` scans backward for the newest EXISTING `RoleUser`
-message, which by the time a continuation request is built is an EARLIER
-message than the just-truncated assistant turn (and its synthetic tool
-result, if any) — leaving the canonical request ending in `RoleAssistant` or
-`RoleTool`. Anthropic serializes that as assistant PREFILL: some models
+END of `streamTurn`'s own throwaway per-request message copy. It must be
+trailing: a request left ending in `RoleAssistant` or
+`RoleTool` serializes as assistant PREFILL on Anthropic — some models
 reject it with a permanent 400, and even an accepting model sees a
 "continue" instruction that chronologically precedes the output it refers
 to. `appendContinuationNudgeMessage` never touches `s.history` — same as

@@ -83,7 +83,7 @@ representation.
   self-correcting as retries succeed; a Parked server's clause instead
   reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
   sharing its append-only-to-the-newest-message mechanism
-  (`withAmbientStatus`) with the managed-processes status block described in
+  (`withPinnedAmbient`) with the managed-processes status block described in
   `docs/session-storage-and-queue.md`.
 
   A built-in `mcp` session tool is registered in `newSession` whenever

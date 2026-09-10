@@ -14,7 +14,7 @@ import (
 
 // lastUserText returns the text of the last part of the last RoleUser
 // message in req.Messages, for asserting on the ambient status block. The
-// ambient block is a *message.EngineContext part (see withAmbientStatus), not
+// ambient block is a *message.EngineContext part (see withPinnedAmbient), not
 // a *message.Text — this helper reads either so the assertions below see the
 // block's text regardless of which part-kind carries it.
 func lastUserText(t *testing.T, req *provider.Request) string {
@@ -243,7 +243,7 @@ func waitForExit(t *testing.T, m *process.Manager, name string) {
 // (see message.EngineContext): a user- or paste-authored Text can never be
 // this part-kind, so the block is provably engine-originated.
 //
-// Red-verify: change withAmbientStatus back to appending a &message.Text and
+// Red-verify: change the pinned part to a &message.Text and
 // this test fails at the type assertion below.
 func TestAmbientBlockIsEngineContextPart(t *testing.T) {
 	dir := t.TempDir()

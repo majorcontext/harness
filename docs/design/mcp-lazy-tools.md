@@ -350,7 +350,7 @@ trailing line,
 A bounded listing keeps a pathological catalog from re-creating the very
 problem this design removes.
 
-An ambient `EngineContext` block (`withAmbientStatus`, `engine/process.go`)
+An ambient `EngineContext` block (`withPinnedAmbient`, `engine/ambient_pin.go`)
 was rejected for the listing. That mechanism rides the newest user message,
 outside the cached prefix, so the whole catalog would be re-sent uncached
 on every turn. The system segment sits inside the cached prefix and is
