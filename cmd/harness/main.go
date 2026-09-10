@@ -1991,15 +1991,16 @@ const (
 // base system prompt: precedence against a project's own AGENTS.md,
 // verification before done, git safety on a dirty worktree, persistence to
 // full resolution, minimal-diff scope, ambition on greenfield versus surgical
-// precision on existing code, short final messages, progress narration across
-// a long tool-call stretch, review-mode framing, and frontend taste. It
-// complements ambientContextGuidance (the engine-context trust boundary), not
-// restates it.
+// precision on existing code, short final messages, comment and docs
+// restraint, progress narration across a long tool-call stretch, review-mode
+// framing, and frontend taste. It complements ambientContextGuidance (the
+// engine-context trust boundary), not restates it.
 //
-// Comment policy and commit conventions are deliberately absent here: this
-// prompt reaches every repo harness runs in, and a project's own AGENTS.md
-// (loaded by engine/instructions.go) already sets those, closer to the code
-// than a compiled-in default can be.
+// Commit conventions stay out: a project's own AGENTS.md (loaded by
+// engine/instructions.go) sets those closer to the code than a compiled-in
+// default can. The comment and docs default is compiled in because a repo
+// without an AGENTS.md still needs one, and the precedence line above lets a
+// project that wants comments override it.
 func baseBehaviorGuidance() string {
 	return strings.Join([]string{
 		"Project instructions (AGENTS.md) override this guidance where they conflict.",
