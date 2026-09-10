@@ -91,7 +91,7 @@ func nodeStatusForOutcome(n taskNotification) SessionStatus {
 // (like any other message, once appended... except EngineContext is NOT
 // appended to durable history at all, see message.EngineContext's doc
 // comment — but it IS resent as part of the live request each time
-// withAmbientStatus runs against a rebuilt message set, so keeping it
+// withPinnedAmbient runs against a rebuilt message set, so keeping it
 // bounded still matters for the immediate request size).
 const taskNotificationResultCap = 4000
 
@@ -106,7 +106,7 @@ const taskNotificationResultCap = 4000
 // message that could confuse a transcript reader, and never a vehicle for
 // the notification's actual content, which rides the EngineContext part
 // this same turn's streamTurn call attaches to it (see
-// checkoutTaskNotificationsSegment and withAmbientStatus in process.go).
+// checkoutTaskNotificationsSegment and withPinnedAmbient in ambient_pin.go).
 const taskResumeTriggerText = "A background task you started has finished. See the engine context below for its result, and continue accordingly."
 
 // enqueueTaskNotification appends n to s's pending queue AND durably
@@ -349,9 +349,13 @@ func (s *Session) persistDeliveredTaskNotifications(ns []taskNotification) {
 // pending OR already checked out for the CURRENT in-flight turn attempt,
 // as one ambient status segment in the same shape
 // processStatusSegment/mcpStatusSegment/identityStatusSegment use
-// (engine/process.go's withAmbientStatus is the single producer that turns
-// this into a wire-level EngineContext part) — but, UNLIKE checking those
-// three out, this does NOT commit the notifications as delivered.
+// (engine/ambient_pin.go's withPinnedAmbient turns this into a wire-level
+// EngineContext part) — but, UNLIKE checking those three out, this does NOT
+// commit the notifications as delivered.
+//
+// The rendered block is pinned, so it keeps being replayed after
+// commitTaskNotifications clears the in-flight set; re-rendering the same
+// text pins nothing further, so a notification is shown exactly once.
 //
 // # Why checkout/commit/requeue, not a single destructive drain
 //

@@ -283,20 +283,24 @@ earlier message. Three things fall out of that:
    only in the local `messages` slice handed to `provider.Request`, which
    is discarded after the call. A resumed session (`LoadSession`) replays
    only what was actually appended — the block was never there.
-2. **Only the newest message changes, and it renders the same bytes
-   every time.** Every earlier message in the request is byte-identical to
-   a request built before any process was ever started, which is what
-   keeps a provider's prompt cache warm (the same reasoning
-   `provider/anthropic/transcode.go`'s cache-marker placement already
-   depends on). "Earlier" is not sufficient on its own: the newest user
-   message STAYS the newest one for every model call of a tool loop, so
-   the block sits inside the cached prefix from the second call onward.
-   Each token therefore names an absolute instant (`statusInstant`,
-   `engine/process.go`) rather than an elapsed duration. An elapsed
-   duration re-rendered a different string on each call, which cost the
-   Codex WebSocket input-suffix projection (`chain_refusal=prefix_changed`,
+2. **The block is append-only on the wire.** Each distinct rendering is
+   pinned as its own trailing `RoleUser` message carrying one
+   `EngineContext` part, frozen at the history position where it first
+   appeared and replayed byte-identically afterwards (`ambientPin`,
+   `engine/ambient_pin.go`). A state change appends a new trailing block
+   and never rewrites an existing item, so the request a provider already
+   cached stays a byte-identical prefix. Gluing the block onto the newest
+   user message cannot hold that: that message STAYS the newest one for
+   every model call of a tool loop, so any re-render rewrites an item
+   already inside the cached prefix and costs the Codex WebSocket
+   input-suffix projection (`chain_refusal=prefix_changed`,
    `docs/design/codex-websocket-chaining.md`) and the prompt cache with it.
-   `TestAmbientProcessStatusIsStableWhileNothingChanges` pins this.
+   The pins are runtime-only; a resumed session re-pins from live state.
+   Each token still names an absolute instant (`statusInstant`,
+   `engine/process.go`) rather than an elapsed duration, so an unchanged
+   process re-pins nothing.
+   `TestAmbientProcessStatusIsStableWhileNothingChanges` and
+   `TestAmbientProcessTransitionKeepsCodexPrefixStable` pin this.
 3. **The goal loop needs no special-casing.** `Session.PursueGoal`'s
    worker turns are ordinary `Prompt` calls; the injection point is inside
    `Prompt`'s own `streamTurn`, so a goal-driven worker turn sees the exact

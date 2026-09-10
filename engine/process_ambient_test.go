@@ -14,7 +14,7 @@ import (
 
 // lastUserText returns the text of the last part of the last RoleUser
 // message in req.Messages, for asserting on the ambient status block. The
-// ambient block is a *message.EngineContext part (see withAmbientStatus), not
+// ambient block is a *message.EngineContext part (see withPinnedAmbient), not
 // a *message.Text — this helper reads either so the assertions below see the
 // block's text regardless of which part-kind carries it.
 func lastUserText(t *testing.T, req *provider.Request) string {
@@ -237,14 +237,14 @@ func waitForExit(t *testing.T, m *process.Manager, name string) {
 }
 
 // TestAmbientBlockIsEngineContextPart drives the production Prompt entry
-// point and proves the ambient status the engine appends to the newest user
-// message is a structured *message.EngineContext part, NOT a bare
+// point and proves the ambient status the engine pins as its own message is
+// a structured *message.EngineContext part, NOT a bare
 // *message.Text. This is the canonical-layer half of the trust-spoofing fix
 // (see message.EngineContext): a user- or paste-authored Text can never be
 // this part-kind, so the block is provably engine-originated.
 //
-// Red-verify: change withAmbientStatus back to appending a &message.Text and
-// this test fails at the type assertion below.
+// Red-verify: change the pinned part to a &message.Text and this test
+// fails at the type assertion below.
 func TestAmbientBlockIsEngineContextPart(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
@@ -264,18 +264,24 @@ func TestAmbientBlockIsEngineContextPart(t *testing.T) {
 	if m.Role != message.RoleUser {
 		t.Fatalf("newest message role = %q, want user", m.Role)
 	}
-	last := m.Parts[len(m.Parts)-1]
-	ec, ok := last.(*message.EngineContext)
+	if len(m.Parts) != 1 {
+		t.Fatalf("pinned ambient message has %d parts, want exactly 1", len(m.Parts))
+	}
+	ec, ok := m.Parts[0].(*message.EngineContext)
 	if !ok {
-		t.Fatalf("newest user message's last part = %T, want *message.EngineContext (a forgeable Text is the spoof surface)", last)
+		t.Fatalf("pinned ambient part = %T, want *message.EngineContext (a forgeable Text is the spoof surface)", m.Parts[0])
 	}
 	if !strings.Contains(ec.Text, "9.9.9-test") {
 		t.Errorf("engine context part text = %q, want the engine identity block", ec.Text)
 	}
-	// The user's own prompt stays a plain Text part — only the appended
-	// ambient block is an EngineContext.
-	if _, ok := m.Parts[0].(*message.Text); !ok {
-		t.Errorf("user's own prompt part = %T, want *message.Text", m.Parts[0])
+	prompt := req.Messages[0]
+	if _, ok := prompt.Parts[0].(*message.Text); !ok {
+		t.Errorf("user's own prompt part = %T, want *message.Text", prompt.Parts[0])
+	}
+	for _, p := range prompt.Parts {
+		if _, ok := p.(*message.EngineContext); ok {
+			t.Errorf("ambient block was welded onto the user's own prompt message: %+v", prompt)
+		}
 	}
 }
 

@@ -235,7 +235,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	}
 	// Deliver any pending task notifications (a settled child's Done/Failed
 	// result) into THIS turn's input, mirroring the native loop's own
-	// checkout step (engine.go's streamTurn, via withAmbientStatus) — see
+	// checkout step (engine.go's streamTurn, via withPinnedAmbient) — see
 	// checkoutTaskNotificationsSegment's doc comment for the checkout/
 	// commit/requeue two-phase handoff this call is one leg of; the other
 	// two legs (commit on success, requeue on failure) live one layer up,
@@ -245,7 +245,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// There is no EngineContext wire concept for the stream-json CLI
 	// stdin protocol this file drives (unlike a native provider request,
 	// which carries the segment as its own trust-tagged part — see
-	// withAmbientStatus), so the rendered segment is spliced directly into
+	// withPinnedAmbient), so the rendered segment is spliced directly into
 	// the plain text the CLI receives instead, on its own blank-line-
 	// separated block. Deliberately NOT wrapped in RenderEngineContext's
 	// <harness-engine-context> sentinel: that sentinel's meaning is taught
@@ -263,7 +263,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// entry that reads as a second, forged notification — that protection
 	// is applied before this splice and does not depend on the sentinel.
 	// A no-op (text unchanged) when nothing is pending, matching
-	// withAmbientStatus's own no-op-on-empty-segment behavior.
+	// withPinnedAmbient's own no-op-on-empty-segment behavior.
 	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		text += "\n\n" + seg
 	}

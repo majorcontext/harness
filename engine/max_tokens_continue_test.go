@@ -16,24 +16,20 @@ import (
 // engineContextTexts returns the text of every *message.EngineContext part
 // on the newest RoleUser message in req.Messages, in order. Several ambient
 // segments (process/MCP/identity/task-notification/continuation-nudge) can
-// stack onto that one message (see withAmbientStatus), so a test asserting
-// on one of them must scan every part rather than assume it is the last —
-// unlike lastUserText (process_ambient_test.go), which is only safe when
-// the caller controls exactly which single segment is present.
+// arrive as their own messages, so a test asserting on one of them must
+// scan every message rather than assume it is the last — unlike
+// lastUserText (process_ambient_test.go), which is only safe when the
+// caller controls exactly which single segment is present.
 func engineContextTexts(req *provider.Request) []string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role != message.RoleUser {
-			continue
-		}
-		var texts []string
-		for _, p := range req.Messages[i].Parts {
+	var texts []string
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
 			if ec, ok := p.(*message.EngineContext); ok {
 				texts = append(texts, ec.Text)
 			}
 		}
-		return texts
 	}
-	return nil
+	return texts
 }
 
 func containsSubstring(texts []string, substr string) bool {
@@ -419,17 +415,16 @@ func (p *sequencedProvider) Stream(_ context.Context, req *provider.Request) (pr
 // arrive as a genuine NEW user-role message appended AFTER the truncated
 // assistant turn (and its synthetic tool result, if any) -- ending the
 // canonical request with RoleUser -- never glued onto an earlier existing
-// user message via withAmbientStatus. The old shape left the request
+// user message. That shape left the request
 // ending in RoleAssistant/RoleTool: Anthropic serializes that as assistant
 // PREFILL, which some models reject outright with a permanent 400, and even
 // an accepting model saw a "continue" instruction that chronologically
 // precedes the very output it refers to.
 //
-// Red-verify: against the pre-fix continuationNudgeSegment call site
-// (withAmbientStatus(messages, seg), scanning backward for the newest
-// EXISTING RoleUser message), the continuation request's trailing message
-// is the synthetic tool-role result, not a new RoleUser message -- the
-// first assertion below fails.
+// Red-verify: with the nudge glued onto the newest EXISTING RoleUser
+// message instead, the continuation request's trailing message is the
+// synthetic tool-role result, not a new RoleUser message -- the first
+// assertion below fails.
 func TestMaxTokensContinuationAppendsGenuineNewUserMessage(t *testing.T) {
 	tc := toolCall("tc1", "bash", `{"command":"echo hi"}`)
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{

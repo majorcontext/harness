@@ -77,13 +77,14 @@ representation.
   recoverable); a configured-but-unconnected server (still retrying, or
   parked) errors naming that state explicitly (recoverable — retrying may
   still self-heal, parked needs the `mcp` tool). While at least one
-  server is degraded, request assembly appends an ambient `[mcp:
-  unavailable — <name> (<reason>; retrying), ...]` block to the newest
-  user message only — computed fresh every turn, never persisted,
-  self-correcting as retries succeed; a Parked server's clause instead
+  server is degraded, request assembly pins an ambient `[mcp:
+  unavailable — <name> (<reason>; retrying), ...]` block as its own
+  message — computed fresh every turn, never persisted, and self-correcting
+  as retries succeed, which it states with a following recovery block since
+  a pinned block is never withdrawn; a Parked server's clause instead
   reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
-  sharing its append-only-to-the-newest-message mechanism
-  (`withAmbientStatus`) with the managed-processes status block described in
+  sharing its append-only pinned-message mechanism
+  (`withPinnedAmbient`) with the managed-processes status block described in
   `docs/session-storage-and-queue.md`.
 
   A built-in `mcp` session tool is registered in `newSession` whenever

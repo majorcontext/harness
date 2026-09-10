@@ -15,7 +15,7 @@ import (
 // engineContextCaptureProv records the concatenated text of every
 // *message.EngineContext part seen across every Stream call — see
 // message.EngineContext's own doc comment for why the ambient [tasks:]
-// notification segment (engine/process.go's withAmbientStatus,
+// notification segment (engine/ambient_pin.go's withPinnedAmbient,
 // engine/taskdelivery.go's renderTaskNotifications) is carried as this
 // distinct, typed part, never as plain *message.Text: a capture that only
 // concatenates *Text parts (like queue_test.go's orderCaptureProv) is

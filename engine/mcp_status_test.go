@@ -349,23 +349,33 @@ func TestAmbientMCPStatusOnlyOnNewestUserMessage(t *testing.T) {
 	}
 
 	last := prov.requests[1]
-	var sawUser int
-	for i, m := range last.Messages {
-		if m.Role != message.RoleUser {
+	// The block rides its own pinned message, never a message carrying real
+	// conversation content.
+	var carriers, prompts int
+	for _, m := range last.Messages {
+		if !strings.Contains(renderMsgText(m), "[mcp:") {
+			if txt := m.Parts.Text(); txt == "hello one" || txt == "hello two" {
+				prompts++
+			}
 			continue
 		}
-		sawUser++
-		isNewest := i == len(last.Messages)-1
-		has := strings.Contains(renderMsgText(m), "[mcp:")
-		if isNewest && !has {
-			t.Errorf("newest user message = %+v, want the ambient MCP status block", m)
+		carriers++
+		if m.Role != message.RoleUser {
+			t.Errorf("ambient carrier role = %q, want user", m.Role)
 		}
-		if !isNewest && has {
-			t.Errorf("ambient status block leaked onto a non-newest message: %+v", m)
+		if len(m.Parts) != 1 {
+			t.Errorf("ambient carrier has %d parts, want exactly 1: %+v", len(m.Parts), m)
+			continue
+		}
+		if _, ok := m.Parts[0].(*message.EngineContext); !ok {
+			t.Errorf("ambient carrier part = %T, want *message.EngineContext", m.Parts[0])
 		}
 	}
-	if sawUser < 2 {
-		t.Fatalf("second request carried %d user messages, want at least 2 (hello one, hello two)", sawUser)
+	if carriers != 1 {
+		t.Errorf("request carried the ambient MCP block on %d messages, want exactly 1", carriers)
+	}
+	if prompts != 2 {
+		t.Errorf("request carried %d untouched user prompts, want 2 (hello one, hello two)", prompts)
 	}
 }
 
@@ -407,14 +417,13 @@ func TestAmbientMCPStatusNeverPersisted(t *testing.T) {
 	}
 }
 
-// TestAmbientMCPStatusDisappearsAfterRecovery is invariant 6's
-// self-correcting assertion: a server degraded on turn 1's request is
-// healthy — no block at all — by turn 2's, once its background retry
-// commits a success in between. Uses a real HTTP handler (like
+// TestAmbientMCPStatusReportsRecovery is invariant 6's self-correcting
+// assertion: a server degraded on turn 1's request reports healthy by turn
+// 2's, once its background retry commits a success in between. Uses a real HTTP handler (like
 // TestMCPManagerCallServerToolRetryingThenRecovers) that fails the very
 // first request and succeeds every one after, with mcpTestRetryCommitted
 // as the synchronization point instead of a sleep or poll loop.
-func TestAmbientMCPStatusDisappearsAfterRecovery(t *testing.T) {
+func TestAmbientMCPStatusReportsRecovery(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -471,8 +480,13 @@ func TestAmbientMCPStatusDisappearsAfterRecovery(t *testing.T) {
 	if _, err := s.Prompt(context.Background(), "hello two"); err != nil {
 		t.Fatal(err)
 	}
+	// Pinned ambient status is append-only, so recovery is stated rather
+	// than shown by omission.
 	second := lastUserText(t, prov.requests[1])
-	if strings.Contains(second, "[mcp:") {
-		t.Fatalf("second request's ambient text = %q, want no block after recovery", second)
+	if strings.Contains(second, "unavailable") {
+		t.Fatalf("second request's ambient text = %q, want no degraded block after recovery", second)
+	}
+	if !strings.Contains(second, "connected again") {
+		t.Fatalf("second request's ambient text = %q, want an explicit recovery block", second)
 	}
 }

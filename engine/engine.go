@@ -1031,6 +1031,8 @@ type Session struct {
 	model       message.ModelRef
 	effort      message.Effort // reasoning-effort level; swap with SetEffort
 	serviceTier string         // Codex speed-tier value; swap with SetServiceTier
+	// ambientPins is runtime-only: never journaled, snapshotted, or in s.history.
+	ambientPins []ambientPin
 	history     []message.Message
 	usage       provider.Usage // cumulative, across every turn (see appendWithUsage)
 	createdAt   time.Time
@@ -3275,35 +3277,20 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	params := assembled.params
 	system := req.System
 	tools := req.Tools
-	// Ambient process-status, MCP-status, parked-goal-status, and
-	// engine-identity injection (see processStatusSegment,
-	// mcpStatusSegment, goalParkedSegment, identityStatusSegment):
-	// appended ONLY to this
-	// in-memory request copy — s.History() already returns a fresh slice
-	// (engine.go's append(nil, s.history...)), and withAmbientStatus
-	// clones (never mutates in place) the one message it touches, so the
-	// durable s.history — and the message/journal log it is persisted
-	// from — never sees this text. Each segment rides only the newest
-	// user message so every earlier message, and therefore the cached
-	// request prefix, is byte-identical to a request built with no
-	// process ever started and every MCP server healthy.
+	// Ambient status rides this in-memory request copy only: s.History()
+	// returns a fresh slice and withPinnedAmbient appends to it, so the
+	// durable s.history and the journal never see this text.
 	//
 	// The tool plan already ran above (see the numbered ordering note at the
 	// top of this function), so every segment below reads post-connect
 	// state and req.Tools is the plan's own slice, never a second
 	// computation.
 	messages := s.History()
-	if seg := processStatusSegment(s.cfg.Processes, s.cfg.WorkDir); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := mcpStatusSegment(s.cfg.MCP); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := goalParkedSegment(s); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
-		messages = withAmbientStatus(messages, seg)
+	segs := []ambientSegment{
+		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir), "[processes: none started.]"},
+		{ambientKindMCP, mcpStatusSegment(s.cfg.MCP), "[mcp: every configured server is connected again.]"},
+		{ambientKindGoal, goalParkedSegment(s), "[goal: no longer parked.]"},
+		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync), ""},
 	}
 	// Unlike the four segments above, this one CHECKS OUT pending
 	// notifications rather than idempotently recomputing a status string —
@@ -3311,17 +3298,14 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// as delivered (or requeuing them on failure) happens one layer up, in
 	// runAgenticLoop, once this WHOLE turn's outcome — including any
 	// retries streamTurnWithRetry runs — is known.
-	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
+	segs = append(segs, ambientSegment{ambientKindTask, s.checkoutTaskNotificationsSegment(), ""})
+	messages = s.withPinnedAmbient(messages, segs)
 	// The max_tokens auto-continuation nudge (see continuationNudgeSegment,
 	// maybeAutoContinueMaxTokens): present only on the follow-up call(s)
 	// runAgenticLoop issues right after a max_tokens stop it decided to
-	// continue, absent on every ordinary turn. Deliberately NOT
-	// withAmbientStatus, unlike every segment above: see
-	// appendContinuationNudgeMessage's doc comment for why this one needs a
-	// genuine new trailing user message instead of gluing onto an existing
-	// one.
+	// continue, absent on every ordinary turn. Deliberately NOT pinned,
+	// unlike every segment above: see appendContinuationNudgeMessage's doc
+	// comment.
 	if seg := s.continuationNudgeSegment(); seg != "" {
 		messages = appendContinuationNudgeMessage(messages, seg)
 	}
@@ -3715,22 +3699,13 @@ func (s *Session) continuationNudgeSegment() string {
 // nudge never touches the durable log: a session reload, or any later,
 // unrelated request built from the same durable history, never sees it.
 //
-// This does NOT reuse withAmbientStatus, unlike every other ambient
-// segment. withAmbientStatus glues its segment onto the NEWEST EXISTING
-// RoleUser message, scanning backward from the end of messages — for the
-// process/MCP/goal/identity/task-notification segments that message really
-// is the newest thing in the conversation. It is not here: by the time a
-// max_tokens continuation request is built, the newest messages are the
-// truncated assistant turn and (if it carried a tool call)
-// appendUnexecutedToolCallResults' synthetic tool-role result, so
-// withAmbientStatus's scan lands on an EARLIER user message, still ending
-// the canonical request with RoleAssistant or RoleTool. Anthropic
-// serializes a request shaped that way as assistant PREFILL: some models
-// reject it outright with a permanent 400, and even a model that accepts it
-// sees a "continue" instruction that precedes, chronologically, the very
-// output it refers to (an adversarial review finding on the PR that
-// introduced auto-continue). Appending a whole new trailing user message
-// instead makes the request end exactly where a real continuation turn
+// This is NOT pinned, unlike every other ambient segment: the nudge belongs
+// to one continuation request, not to the conversation. It must still be a
+// trailing user message. A request left ending in RoleAssistant or RoleTool
+// serializes as assistant PREFILL on Anthropic: some models reject it with a
+// permanent 400, and an accepting model sees a "continue" instruction that
+// chronologically precedes the output it refers to. A trailing user message
+// makes the request end exactly where a real continuation turn
 // should — genuinely after the truncated output — regardless of what
 // stands before it.
 func appendContinuationNudgeMessage(messages []message.Message, seg string) []message.Message {
