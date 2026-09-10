@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -152,5 +154,120 @@ func TestHTTPEventSinkEncodesAnEmptyFilteredCheckpoint(t *testing.T) {
 	}
 	if applied != 12 {
 		t.Errorf("appliedThrough = %d, want 12", applied)
+	}
+}
+
+// The receiver's status is the whole classifier. A 400, 401, 403, 404, 409,
+// 410, or 422 rejects this batch and every identical retry of it, so the pump
+// must stop; 408, 425, 429, and 5xx ask for the same batch later, and every
+// other status keeps the existing retry. Wrong output: a permanent status
+// that stays retryable and spins the two-second loop forever, or a retryable
+// status classified permanent, which retires the pump on a receiver restart.
+func TestHTTPEventSinkClassifiesPermanentReceiverRejections(t *testing.T) {
+	cases := []struct {
+		status    int
+		permanent bool
+	}{
+		{http.StatusBadRequest, true},
+		{http.StatusUnauthorized, true},
+		{http.StatusForbidden, true},
+		{http.StatusNotFound, true},
+		{http.StatusConflict, true},
+		{http.StatusGone, true},
+		{http.StatusUnprocessableEntity, true},
+		{http.StatusRequestTimeout, false},
+		{http.StatusTooEarly, false},
+		{http.StatusTooManyRequests, false},
+		{http.StatusInternalServerError, false},
+		{http.StatusBadGateway, false},
+		{http.StatusServiceUnavailable, false},
+		{http.StatusGatewayTimeout, false},
+		// An unlisted 4xx is not permanent. The set is fixed, not "every 4xx".
+		{http.StatusPaymentRequired, false},
+		{http.StatusTeapot, false},
+	}
+	for _, tc := range cases {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+			}))
+			t.Cleanup(ts.Close)
+
+			sink := newHTTPEventSink(&config.EventSinkSpec{URL: ts.URL})
+			_, err := sink.Deliver(context.Background(), server.EventBatch{FromSeq: 1, ToSeq: 1})
+			if err == nil {
+				t.Fatalf("Deliver succeeded on %d, want an error so the cursor does not advance", tc.status)
+			}
+			if got := errors.Is(err, server.ErrEventSinkPermanent); got != tc.permanent {
+				t.Errorf("errors.Is(err, ErrEventSinkPermanent) = %t for %d, want %t; err = %v", got, tc.status, tc.permanent, err)
+			}
+			// The message is the operator's whole record of the failure, so
+			// it is pinned exactly: the status, and for a permanent one the
+			// sentinel appended after it, with nothing else added.
+			want := "event sink: receiver returned " + strconv.Itoa(tc.status)
+			if tc.permanent {
+				want += ": " + server.ErrEventSinkPermanent.Error()
+			}
+			if err.Error() != want {
+				t.Errorf("error = %q, want %q", err, want)
+			}
+		})
+	}
+}
+
+// A permanent rejection is the last thing an operator sees from the pump, so
+// it must still carry the bounded diagnostic the retryable path carries.
+// Wrong output: an error that drops the receiver's machine code, or one that
+// copies the receiver's free text or the configured URL's secrets into a log.
+func TestHTTPEventSinkPermanentRejectionKeepsABoundedDiagnostic(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"generation_rejected","message":"secret diagnostic detail"}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	sink := newHTTPEventSink(&config.EventSinkSpec{URL: ts.URL + "/sink?token=secret_query#secret_fragment"})
+	_, err := sink.Deliver(context.Background(), server.EventBatch{FromSeq: 1, ToSeq: 1})
+	if !errors.Is(err, server.ErrEventSinkPermanent) {
+		t.Fatalf("error %v is not permanent, want a 403 to retire the pump", err)
+	}
+	// Exact text: the receiver's own diagnostic keeps its place at the front
+	// and the sentinel is appended once. A second wrap verb, or a sentinel
+	// that swallowed the diagnostic, changes this string.
+	const want = "event sink: receiver returned 403 (generation_rejected): permanent receiver rejection"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
+	}
+	// One wrapped operand, and it is the sentinel. A second %w verb builds a
+	// multi-error whose Unwrap answers nil here, which hides the single
+	// cause the pump is written against.
+	if unwrapped := errors.Unwrap(err); unwrapped != server.ErrEventSinkPermanent {
+		t.Errorf("errors.Unwrap(err) = %v, want the sentinel itself", unwrapped)
+	}
+	for _, leak := range []string{"secret diagnostic detail", "secret_query", "secret_fragment"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Errorf("error %q leaks %q", err, leak)
+		}
+	}
+}
+
+// A dial failure has no status to classify, and the receiver may well be
+// mid-restart. Wrong output: a transport failure that retires the pump, which
+// would make one refused connection cost every later record.
+func TestHTTPEventSinkTransportFailureIsNotPermanent(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := ts.URL + "/sink?token=secret_query"
+	ts.Close() // nothing listens on that port now
+
+	sink := newHTTPEventSink(&config.EventSinkSpec{URL: url})
+	_, err := sink.Deliver(context.Background(), server.EventBatch{FromSeq: 1, ToSeq: 1})
+	if err == nil {
+		t.Fatal("Deliver succeeded against a closed receiver")
+	}
+	if errors.Is(err, server.ErrEventSinkPermanent) {
+		t.Errorf("transport failure classified permanent: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret_query") {
+		t.Errorf("error includes configured URL secrets: %q", err)
 	}
 }

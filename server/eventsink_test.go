@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -964,4 +967,166 @@ func TestLegacyEventKeepsAZeroRecordedAtOnReload(t *testing.T) {
 	if !found {
 		t.Fatal("the sink never received the restored legacy record")
 	}
+}
+
+// sinkCall records one delivery: the batch the pump handed over and the
+// instant it arrived. The instant is read on the bubble's fake clock, so a
+// test can assert the retry interval exactly and never sleeps.
+type sinkCall struct {
+	batch EventBatch
+	at    time.Time
+}
+
+// scriptedSink answers errs[i] for call i and succeeds after the script runs
+// out.
+type scriptedSink struct {
+	mu    sync.Mutex
+	errs  []error
+	calls []sinkCall
+	got   chan struct{}
+}
+
+func newScriptedSink(errs ...error) *scriptedSink {
+	return &scriptedSink{errs: errs, got: make(chan struct{}, 64)}
+}
+
+func (s *scriptedSink) Deliver(_ context.Context, b EventBatch) (int64, error) {
+	s.mu.Lock()
+	n := len(s.calls)
+	s.calls = append(s.calls, sinkCall{batch: b, at: time.Now()})
+	var err error
+	if n < len(s.errs) {
+		err = s.errs[n]
+	}
+	s.mu.Unlock()
+	select {
+	case s.got <- struct{}{}:
+	default:
+	}
+	if err != nil {
+		return 0, err
+	}
+	return b.ToSeq, nil
+}
+
+func (s *scriptedSink) snapshot() []sinkCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]sinkCall(nil), s.calls...)
+}
+
+// waitCalls blocks on the sink's own notification channel until it has been
+// handed want deliveries.
+func (s *scriptedSink) waitCalls(t *testing.T, want int) []sinkCall {
+	t.Helper()
+	for {
+		if got := s.snapshot(); len(got) >= want {
+			return got
+		}
+		<-s.got
+	}
+}
+
+// warnLines returns every logged line carrying this msg.
+func warnLines(t *testing.T, logs *syncBuffer, msg string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(logs.String(), "\n") {
+		if strings.Contains(line, `msg="`+msg+`"`) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// A receiver that answers 400, 401, 403, 404, 409, 410, or 422 rejects the
+// batch itself, so every retry of the same bytes earns the same rejection.
+// Input: a sink whose first Deliver wraps ErrEventSinkPermanent, then a
+// second durable record. Wrong output: a second delivery attempt, a warning
+// logged per retry, or a pump that is still running — and Harness must stay
+// healthy, so a later record must still journal and Drain must still return.
+func TestEventSinkPermanentRejectionStopsThePumpWithoutStoppingHarness(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		logs := &syncBuffer{}
+		sink := newScriptedSink(fmt.Errorf("event sink: receiver returned 400 (bad_batch): %w", ErrEventSinkPermanent))
+		s := newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+			o.EventSink = sink
+			o.EventSinkFlush = time.Millisecond
+			o.Logger = slog.New(slog.NewTextHandler(logs, nil))
+		})
+
+		rejected := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_perm", Status: "busy"})
+		sink.waitCalls(t, 1)
+
+		// A later record must not restart delivery, and the two-second retry
+		// timer must never fire. The sleep is the bubble's fake clock: it
+		// moves past two retry windows without waiting for one.
+		later := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_perm", Status: "idle"})
+		time.Sleep(2 * eventSinkRetryDelay)
+		synctest.Wait()
+
+		select {
+		case <-s.sinkDone:
+		default:
+			t.Fatal("the pump is still running after a permanent rejection; it will re-send the rejected batch on every wake")
+		}
+
+		calls := sink.snapshot()
+		if len(calls) != 1 {
+			t.Fatalf("Deliver called %d times after a permanent rejection, want 1", len(calls))
+		}
+		if calls[0].batch.FromSeq != rejected || calls[0].batch.ToSeq != rejected {
+			t.Errorf("rejected batch = from %d to %d, want from %d to %d", calls[0].batch.FromSeq, calls[0].batch.ToSeq, rejected, rejected)
+		}
+
+		lines := warnLines(t, logs, eventSinkStoppedMsg)
+		if len(lines) != 1 {
+			t.Fatalf("%q logged %d times, want exactly 1; log:\n%s", eventSinkStoppedMsg, len(lines), logs.String())
+		}
+		for _, want := range []string{"from_seq=" + fmt.Sprint(rejected), "to_seq=" + fmt.Sprint(rejected), "bad_batch", "400"} {
+			if !strings.Contains(lines[0], want) {
+				t.Errorf("stop line %q does not carry %q", lines[0], want)
+			}
+		}
+
+		// Harness itself keeps running: the record above journaled, and a
+		// drain that waits on the retired pump still returns.
+		if got := s.currentSeq(); got != later {
+			t.Errorf("currentSeq = %d after the permanent rejection, want %d", got, later)
+		}
+		s.Drain(t.Context())
+	})
+}
+
+// 408, 425, 429, 5xx, and a transport failure are the receiver asking for the
+// same batch later, so the classification change must leave them on the
+// existing two-second retry. Input: a sink whose first Deliver returns a
+// plain error that wraps no sentinel. Wrong output: no second attempt, an
+// attempt at any interval other than eventSinkRetryDelay, or a second attempt
+// that carries a different range.
+func TestEventSinkRetryableFailureIsNotPermanent(t *testing.T) {
+	dir := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		logs := &syncBuffer{}
+		sink := newScriptedSink(errors.New("event sink: receiver returned 500 (receiver_unavailable)"))
+		s := newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+			o.EventSink = sink
+			o.EventSinkFlush = time.Millisecond
+			o.Logger = slog.New(slog.NewTextHandler(logs, nil))
+		})
+
+		seq := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_retry", Status: "busy"})
+		calls := sink.waitCalls(t, 2)
+		if gap := calls[1].at.Sub(calls[0].at); gap != eventSinkRetryDelay {
+			t.Errorf("retry gap = %v, want %v", gap, eventSinkRetryDelay)
+		}
+		if calls[1].batch.FromSeq != seq || calls[1].batch.ToSeq != seq {
+			t.Errorf("retried batch = from %d to %d, want the same range from %d to %d", calls[1].batch.FromSeq, calls[1].batch.ToSeq, seq, seq)
+		}
+		if lines := warnLines(t, logs, eventSinkStoppedMsg); len(lines) != 0 {
+			t.Errorf("a retryable failure logged the permanent stop: %v", lines)
+		}
+		s.Drain(t.Context())
+	})
 }

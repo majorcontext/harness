@@ -3,9 +3,18 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"time"
 )
+
+// ErrEventSinkPermanent marks a delivery failure that retrying cannot fix.
+// A transport wraps it when the receiver rejects the BATCH — a malformed
+// body, a refused credential, a route that holds no receiver — rather than
+// asking for the same batch later. The pump stops on it, because resending
+// identical bytes every eventSinkRetryDelay only earns the same rejection
+// for the life of the process.
+var ErrEventSinkPermanent = errors.New("permanent receiver rejection")
 
 // EventSink is the outbound transport for the durable journal. Deliver
 // returns the seq the receiver has applied through, which becomes the
@@ -48,6 +57,10 @@ const (
 	defaultEventSinkMaxBytes   = 4 << 20
 	eventSinkRetryDelay        = 2 * time.Second
 )
+
+// eventSinkStoppedMsg is the one warning a permanent rejection logs. The
+// pump exits after it, so an operator reads it once, not once per retry.
+const eventSinkStoppedMsg = "event sink stopped: receiver rejected the batch"
 
 // stopEventSink cancels an active delivery, then asks the pump to make one
 // final catch-up pass under finalCtx. Idempotent and safe without a pump.
@@ -98,7 +111,9 @@ func (s *Server) runEventSink() {
 	// pump for records this process did not itself emit. Without this first
 	// flush, a process that restarts and then goes idle replicates nothing
 	// until some unrelated record happens to arrive.
-	s.flushEventSink(s.sinkCtx)
+	if !s.flushEventSink(s.sinkCtx) {
+		return
+	}
 	for {
 		select {
 		case <-s.sinkStop:
@@ -115,7 +130,9 @@ func (s *Server) runEventSink() {
 			return
 		case <-t.C:
 		}
-		s.flushEventSink(s.sinkCtx)
+		if !s.flushEventSink(s.sinkCtx) {
+			return
+		}
 	}
 }
 
@@ -124,28 +141,39 @@ func (s *Server) runEventSink() {
 // no records remain, ctx is canceled, or a failed delivery observes sinkStop.
 // A successful final pass can drain the backlog after sinkStop closes. It never
 // holds s.mu across Deliver.
-func (s *Server) flushEventSink(ctx context.Context) {
+//
+// It reports whether the pump may keep running. Only ErrEventSinkPermanent
+// answers false: that batch cannot succeed on a retry, and neither can any
+// later batch built the same way, so the caller retires the pump. Harness
+// itself is unaffected — the journal, the sessions, and every other client
+// surface keep working without a replica.
+func (s *Server) flushEventSink(ctx context.Context) bool {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return true
 		default:
 		}
 		batch, ok := s.nextEventBatch()
 		if !ok {
-			return
+			return true
 		}
 		applied, err := s.opts.EventSink.Deliver(ctx, batch)
 		if err != nil {
+			if errors.Is(err, ErrEventSinkPermanent) {
+				// The transport already bounded and sanitized this text.
+				s.logWarn(eventSinkStoppedMsg, "from_seq", batch.FromSeq, "to_seq", batch.ToSeq, "error", err.Error())
+				return false
+			}
 			s.logWarn("event sink delivery failed", "from_seq", batch.FromSeq, "to_seq", batch.ToSeq, "error", err.Error())
 			t := time.NewTimer(eventSinkRetryDelay)
 			select {
 			case <-ctx.Done():
 				t.Stop()
-				return
+				return true
 			case <-s.sinkStop:
 				t.Stop()
-				return
+				return true
 			case <-t.C:
 			}
 			continue
@@ -153,7 +181,7 @@ func (s *Server) flushEventSink(ctx context.Context) {
 		if !s.advanceSinkCursor(applied) {
 			// The receiver did not move past this batch's start, so sending
 			// it again immediately would spin. Wait for the next wake.
-			return
+			return true
 		}
 	}
 }
