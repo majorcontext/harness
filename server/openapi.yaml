@@ -1677,6 +1677,20 @@ components:
         seq:
           type: integer
           description: Present on durable records only.
+        recorded_at:
+          type: string
+          format: date-time
+          description: >
+            The UTC instant the server assigned to the durable record,
+            immediately before it attempted the journal append. This is an
+            emission time, not proof of persistence: a failed append is
+            reported and never fatal, so the record still carries this stamp
+            and still reaches a subscriber and a sink. Present on durable
+            records only, and ABSENT (the key is missing, never present with
+            a zero value) on a live event and on a durable record written
+            before this field existed. A consumer that ages a replayed
+            record must treat an absent key as unknown age, not as the epoch
+            and not as now.
         parent_session_id:
           type: string
           description: >

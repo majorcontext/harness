@@ -377,8 +377,9 @@ type Server struct {
 	// means unfiltered.
 	sinkTypes map[string]struct{}
 
-	// now is the clock serveTimed measures with. Always time.Now in
-	// production; a test replaces it to make a duration exact.
+	// now is the server's clock: serveTimed measures a request with it and
+	// emitDurableLocked stamps Event.RecordedAt from it. Always time.Now in
+	// production; a test replaces it to make a duration or a stamp exact.
 	now func() time.Time
 
 	// wg tracks in-flight runPrompt goroutines. They are decoupled from their

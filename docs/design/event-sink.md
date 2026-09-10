@@ -181,11 +181,17 @@ an empty list keeps the pump unfiltered. `eventSinkTypeSet`
 (`server/eventsink.go`) turns that list into a nil set, and a nil set is
 what tells `nextEventBatch` to stay on the dense path.
 
-An unfiltered request is byte-identical to what a receiver saw before the
-selector existed. The wire field is `filtered` with `omitempty` (`sinkBody`,
+An unfiltered request keeps the envelope a receiver saw before the selector
+existed. The wire field is `filtered` with `omitempty` (`sinkBody`,
 `cmd/harness/eventsink.go`), so an unfiltered request omits the key. It
-does not send `"filtered":false`. A receiver that predates this change
-needs no update.
+does not send `"filtered":false`. A receiver that predates the selector
+needs no update for the selector.
+
+This is a statement about the envelope, not about the bytes of a record.
+Section 12 adds `recorded_at` to every newly emitted durable record, so an
+unfiltered request is no longer byte-identical to a pre-selector one. Both
+changes are additive: a receiver that ignores an unknown key reads either
+request unchanged.
 
 A non-empty list turns the pump filtered. Then:
 
@@ -240,3 +246,56 @@ misspelled produces a stream of empty checkpoints that advance the cursor
 and deliver no record at all. Copy each type from a live `/event` stream,
 or from the `Publish` cases in `server/journal.go`, rather than typing it
 from memory.
+
+## 12. Every new durable record carries its own instant
+
+A receiver that replays a journal needs the age of each record. `seq` orders
+records but dates none of them, and the delivery time is the wrong clock: a
+box that restarts and ships its whole restored journal delivers a month-old
+record and a fresh one in the same request. Boxes expires a replayed record
+by age, so the record has to carry that age itself.
+
+`emitDurableLocked` (`server/journal.go`) sets `Event.RecordedAt` from
+`Server.now`, converted to UTC, right after it assigns the seq — ahead of
+`writeJournalLocked` and ahead of any `nextEventBatch` copy. One record
+therefore carries one identical instant wherever it appears: in its journal
+line, on the SSE stream, and in a sink batch. A stamp added at delivery time
+instead would date the record from the pump, and a stamp added at load time
+would date it from the restart.
+
+The stamp is an emission time, not a persistence receipt. It is assigned
+immediately before the append is attempted, and `writeJournalLocked` reports
+a failed append through `s.lastErr` and `Options.OnError` without ever making
+it fatal. A record whose journal line never landed therefore still carries
+its stamp, still fans out to a subscriber, and still ships to the sink. A
+consumer reads the instant the server assigned the record, never proof that
+the line reached the disk.
+
+The stamp lands in the durable primitive only. A live-only event goes through
+`publishLive`, which never reaches `emitDurableLocked`, so `text.delta` and
+its peers carry no `recorded_at` — the same construction that keeps them out
+of the journal in the first place (§2). `emitDurableLocked` also leaves a
+non-zero `RecordedAt` alone, so a re-emitted record keeps its original age.
+
+The wire field is `recorded_at` with `omitzero`, not `omitempty`:
+`encoding/json` drops nothing for an `omitempty` struct field, so `omitempty`
+would ship an explicit `"0001-01-01T00:00:00Z"` on every record that has no
+stamp. `omitzero` omits the key, which is the shape the rest of `Event`
+already uses for an optional field.
+
+## 13. A record written before the stamp existed stays undated
+
+`loadJournal` appends what it parsed. A journal line written before
+`recorded_at` existed has no such key, decodes to the zero `time.Time`, and
+keeps it — `loadJournal` must never backfill the field. A backfill would date
+every historical record from the restart, so a month-old transcript would
+reach Boxes looking brand new and would never expire.
+
+The zero value is what Boxes reads as expired, which is the intended outcome
+for a record whose real age is unknown. `omitzero` (§12) also keeps the key
+off the wire for such a record, so a receiver can tell "undated" from
+"dated at the epoch" without a special case.
+
+`TestDurableEventStampsRecordedAtFromTheInjectedClock`,
+`TestLiveEventCarriesNoRecordedAt`, and
+`TestLegacyEventKeepsAZeroRecordedAtOnReload` pin these three rules.
