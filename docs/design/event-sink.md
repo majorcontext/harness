@@ -258,9 +258,18 @@ by age, so the record has to carry that age itself.
 `emitDurableLocked` (`server/journal.go`) sets `Event.RecordedAt` from
 `Server.now`, converted to UTC, right after it assigns the seq — ahead of
 `writeJournalLocked` and ahead of any `nextEventBatch` copy. One record
-therefore carries one identical instant on disk, on the SSE stream, and in a
-sink batch. A stamp added at delivery time instead would date the record from
-the pump, and a stamp added at load time would date it from the restart.
+therefore carries one identical instant wherever it appears: in its journal
+line, on the SSE stream, and in a sink batch. A stamp added at delivery time
+instead would date the record from the pump, and a stamp added at load time
+would date it from the restart.
+
+The stamp is an emission time, not a persistence receipt. It is assigned
+immediately before the append is attempted, and `writeJournalLocked` reports
+a failed append through `s.lastErr` and `Options.OnError` without ever making
+it fatal. A record whose journal line never landed therefore still carries
+its stamp, still fans out to a subscriber, and still ships to the sink. A
+consumer reads the instant the server assigned the record, never proof that
+the line reached the disk.
 
 The stamp lands in the durable primitive only. A live-only event goes through
 `publishLive`, which never reaches `emitDurableLocked`, so `text.delta` and
