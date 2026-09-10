@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +24,7 @@ import (
 	"github.com/majorcontext/harness/provider/anthropic"
 	"github.com/majorcontext/harness/provider/openai"
 	"github.com/majorcontext/harness/provider/openaicompat"
+	"github.com/majorcontext/harness/server"
 )
 
 func TestServeURLForAddr(t *testing.T) {
@@ -1214,5 +1218,88 @@ func TestBaseBehaviorGuidanceStaysUnderBudget(t *testing.T) {
 	}
 	if words := len(strings.Fields(block)); words > baseBehaviorGuidanceMaxWords {
 		t.Errorf("baseBehaviorGuidance = %d words, want at most %d", words, baseBehaviorGuidanceMaxWords)
+	}
+}
+
+// TestEventSinkIncludeTypesFromConfig pins what the serve composition hands the
+// pump. The pump filters on an exact-match set built from this slice, so
+// returning the config's own backing array would let a later config edit
+// change a running filter, and reporting a selection for an absent or empty
+// list would silently stop forwarding every other event type.
+func TestEventSinkIncludeTypesFromConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  *config.Config
+		want []string
+	}{
+		{"no event_sink block", &config.Config{}, nil},
+		{"sink without a selector list", &config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x"}}, nil},
+		{"explicit empty list stays unfiltered", &config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x", IncludeTypes: []string{}}}, nil},
+		{
+			"selector list reaches the options",
+			&config.Config{EventSink: &config.EventSinkSpec{URL: "https://h/x", IncludeTypes: []string{"prompt.queued", "prompt.dequeued", "turn.end"}}},
+			[]string{"prompt.queued", "prompt.dequeued", "turn.end"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := server.Options{EventSinkIncludeTypes: eventSinkIncludeTypes(tc.cfg)}
+			if !reflect.DeepEqual(opts.EventSinkIncludeTypes, tc.want) {
+				t.Fatalf("EventSinkIncludeTypes = %#v, want %#v", opts.EventSinkIncludeTypes, tc.want)
+			}
+			if len(tc.want) == 0 {
+				return
+			}
+			opts.EventSinkIncludeTypes[0] = "changed"
+			if tc.cfg.EventSink.IncludeTypes[0] != "prompt.queued" {
+				t.Fatal("server options alias the config's IncludeTypes slice")
+			}
+		})
+	}
+}
+
+// TestServeEventSinkIncludeTypesWiring proves the serve composition passes the
+// selector list into the server.Options literal it builds. The pump reads only
+// Options.EventSinkIncludeTypes: a config field that never reaches that literal
+// leaves a deployment forwarding every record while its config names three
+// types, and no test above can see that gap. runServe binds a listener and
+// blocks, so it exposes no in-process seam for the literal; this reads the
+// composition root itself.
+func TestServeEventSinkIncludeTypesWiring(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse main.go: %v", err)
+	}
+	var literals, wired int
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Options" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "server" {
+			return true
+		}
+		literals++
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "EventSinkIncludeTypes" {
+				wired++
+			}
+		}
+		return true
+	})
+	if literals == 0 {
+		t.Fatal("main.go builds no server.Options literal; this test no longer reads the serve composition")
+	}
+	if wired != literals {
+		t.Fatalf("%d of %d server.Options literals set EventSinkIncludeTypes; a configured include_types would never reach the pump", wired, literals)
 	}
 }

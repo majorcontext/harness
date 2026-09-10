@@ -271,6 +271,9 @@ type Options struct {
 	// delivered alone.
 	EventSinkMaxRecords int
 	EventSinkMaxBytes   int
+	// EventSinkIncludeTypes selects durable event types by exact match. An
+	// empty list forwards every record.
+	EventSinkIncludeTypes []string
 	// MCP is the MCP client integration shared by every session this server
 	// hosts (see engine.MCPRegistry): it is the same *engine.MCPManager the
 	// NewSession/LoadSession wrapper wires into each session's
