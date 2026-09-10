@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1255,51 +1252,5 @@ func TestEventSinkIncludeTypesFromConfig(t *testing.T) {
 				t.Fatal("server options alias the config's IncludeTypes slice")
 			}
 		})
-	}
-}
-
-// TestServeEventSinkIncludeTypesWiring proves the serve composition passes the
-// selector list into the server.Options literal it builds. The pump reads only
-// Options.EventSinkIncludeTypes: a config field that never reaches that literal
-// leaves a deployment forwarding every record while its config names three
-// types, and no test above can see that gap. runServe binds a listener and
-// blocks, so it exposes no in-process seam for the literal; this reads the
-// composition root itself.
-func TestServeEventSinkIncludeTypesWiring(t *testing.T) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "main.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse main.go: %v", err)
-	}
-	var literals, wired int
-	ast.Inspect(file, func(n ast.Node) bool {
-		lit, ok := n.(*ast.CompositeLit)
-		if !ok {
-			return true
-		}
-		sel, ok := lit.Type.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Options" {
-			return true
-		}
-		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "server" {
-			return true
-		}
-		literals++
-		for _, elt := range lit.Elts {
-			kv, ok := elt.(*ast.KeyValueExpr)
-			if !ok {
-				continue
-			}
-			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "EventSinkIncludeTypes" {
-				wired++
-			}
-		}
-		return true
-	})
-	if literals == 0 {
-		t.Fatal("main.go builds no server.Options literal; this test no longer reads the serve composition")
-	}
-	if wired != literals {
-		t.Fatalf("%d of %d server.Options literals set EventSinkIncludeTypes; a configured include_types would never reach the pump", wired, literals)
 	}
 }

@@ -410,9 +410,10 @@ type EventSinkSpec struct {
 	BatchMaxBytes   int `json:"batch_max_bytes,omitempty"`
 	TimeoutS        int `json:"timeout_s,omitempty"`
 	// IncludeTypes selects durable event types by exact match. An absent or
-	// empty list forwards every record. Each entry must be non-empty and
-	// unique; harness cannot check a name against the journal's type set,
-	// so those two structural rules are the whole validation.
+	// empty list forwards every record. Each entry must be non-empty,
+	// unpadded, and unique; harness cannot check a name against the
+	// journal's type set, so those structural rules are the whole
+	// validation.
 	IncludeTypes []string `json:"include_types,omitempty"`
 }
 
@@ -1180,6 +1181,11 @@ func validateEventSink(s *EventSinkSpec) error {
 	for _, eventType := range s.IncludeTypes {
 		if eventType == "" {
 			return fmt.Errorf("event_sink.include_types: event type is required (empty string)")
+		}
+		// The pump matches the journal type exactly, so a padded entry
+		// selects nothing. Reject it here rather than forward zero records.
+		if strings.TrimSpace(eventType) != eventType {
+			return fmt.Errorf("event_sink.include_types: event type %q must not have leading or trailing whitespace", eventType)
 		}
 		if seen[eventType] {
 			return fmt.Errorf("event_sink.include_types: duplicate event type %q", eventType)

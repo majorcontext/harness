@@ -62,17 +62,21 @@ func TestLoadAcceptsEventSink(t *testing.T) {
 // absent list and an explicit empty list both mean "forward every record", so
 // neither may fail validation and neither may report a selection.
 func TestLoadAcceptsEventSinkWithoutIncludeTypes(t *testing.T) {
-	for _, body := range []string{
-		`{"event_sink":{"url":"https://h/x"}}`,
-		`{"event_sink":{"url":"https://h/x","include_types":[]}}`,
-	} {
-		t.Run(body, func(t *testing.T) {
-			c, err := Load(writeSinkConfig(t, body))
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"absent list", `{"event_sink":{"url":"https://h/x"}}`},
+		{"explicit empty list", `{"event_sink":{"url":"https://h/x","include_types":[]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := Load(writeSinkConfig(t, tc.body))
 			if err != nil {
-				t.Fatalf("Load: %v", err)
+				t.Fatalf("Load(%s): %v", tc.body, err)
 			}
 			if len(c.EventSink.IncludeTypes) != 0 {
-				t.Errorf("IncludeTypes = %#v, want an empty selection (unfiltered)", c.EventSink.IncludeTypes)
+				t.Errorf("Load(%s): IncludeTypes = %#v, want an empty selection (unfiltered)", tc.body, c.EventSink.IncludeTypes)
 			}
 		})
 	}
@@ -201,6 +205,9 @@ func TestLoadRejectsBadEventSink(t *testing.T) {
 		{"empty header name", `{"event_sink":{"url":"https://h/x","headers":{"":"v"}}}`, "header name"},
 		{"empty include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end",""]}}`, "include_types"},
 		{"duplicate include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end","turn.end"]}}`, "duplicate"},
+		{"leading whitespace include type", `{"event_sink":{"url":"https://h/x","include_types":[" turn.end"]}}`, "whitespace"},
+		{"trailing whitespace include type", `{"event_sink":{"url":"https://h/x","include_types":["turn.end\n"]}}`, "whitespace"},
+		{"whitespace-only include type", `{"event_sink":{"url":"https://h/x","include_types":["  "]}}`, "whitespace"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
