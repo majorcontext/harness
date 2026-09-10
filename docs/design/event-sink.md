@@ -181,11 +181,17 @@ an empty list keeps the pump unfiltered. `eventSinkTypeSet`
 (`server/eventsink.go`) turns that list into a nil set, and a nil set is
 what tells `nextEventBatch` to stay on the dense path.
 
-An unfiltered request is byte-identical to what a receiver saw before the
-selector existed. The wire field is `filtered` with `omitempty` (`sinkBody`,
+An unfiltered request keeps the envelope a receiver saw before the selector
+existed. The wire field is `filtered` with `omitempty` (`sinkBody`,
 `cmd/harness/eventsink.go`), so an unfiltered request omits the key. It
-does not send `"filtered":false`. A receiver that predates this change
-needs no update.
+does not send `"filtered":false`. A receiver that predates the selector
+needs no update for the selector.
+
+This is a statement about the envelope, not about the bytes of a record.
+Section 12 adds `recorded_at` to every newly emitted durable record, so an
+unfiltered request is no longer byte-identical to a pre-selector one. Both
+changes are additive: a receiver that ignores an unknown key reads either
+request unchanged.
 
 A non-empty list turns the pump filtered. Then:
 

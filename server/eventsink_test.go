@@ -798,6 +798,19 @@ func TestEventSinkFilterByteLimitStopsAtTheLastScannedCandidate(t *testing.T) {
 // assertion is what separates the two.
 var recordedAtClock = time.Date(2026, 9, 10, 4, 5, 6, 0, time.FixedZone("test", 5*60*60))
 
+// setRecordedAtClock pins the server's clock to recordedAtClock. The store
+// happens under s.mu because emitDurableLocked reads s.now under that lock,
+// and New has already started the sink pump whenever a sink is configured.
+// An unsynchronized store is a real race the moment any pump-path code reads
+// the clock, and the race detector would then blame this setup rather than
+// the production change that added the read.
+func setRecordedAtClock(t *testing.T, s *Server) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.now = func() time.Time { return recordedAtClock }
+}
+
 // journalLineSeq returns the raw events.jsonl line whose record has this seq.
 // It reads the file production writes, so it proves what a restart will parse
 // rather than what memory happens to hold.
@@ -841,10 +854,7 @@ func TestDurableEventStampsRecordedAtFromTheInjectedClock(t *testing.T) {
 		o.EventSink = f
 		o.EventSinkFlush = time.Millisecond
 	})
-	// Replacing the clock on the built server mirrors newSlowServer
-	// (timing_test.go). Only emitDurableLocked and serveTimed read s.now, and
-	// neither runs on another goroutine here, so the pump cannot race this.
-	s.now = func() time.Time { return recordedAtClock }
+	setRecordedAtClock(t, s)
 
 	seq := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_stamp", Status: "busy"})
 
@@ -883,7 +893,7 @@ func TestDurableEventStampsRecordedAtFromTheInjectedClock(t *testing.T) {
 // recorded_at on a text.delta that no journal holds.
 func TestLiveEventCarriesNoRecordedAt(t *testing.T) {
 	s := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 4)
-	s.now = func() time.Time { return recordedAtClock }
+	setRecordedAtClock(t, s)
 
 	// Registered the way handleEvent registers a real SSE client, so the
 	// event travels the production fanout path.

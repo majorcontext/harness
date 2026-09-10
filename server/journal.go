@@ -1460,7 +1460,16 @@ func (s *Server) emitDurable(ev Event) int64 {
 // ahead of the journal write and the sink pump's copy, so one record carries
 // one instant on disk and on the wire. A caller that already set RecordedAt
 // keeps its value, which is what makes a re-emitted record keep its original
-// age instead of aging forward. It deliberately does no logging of its own
+// age instead of aging forward.
+//
+// s.now is the ONLY injected function this critical section calls, and it
+// must return promptly without blocking: no I/O, no network, no wait on
+// another lock. Production supplies time.Now. A clock that blocked would
+// wedge s.mu and take every handler and SSE fanout down with it, which is
+// the same hazard the no-logging rule below exists for — and the reason no
+// external I/O of any kind belongs under this lock.
+//
+// It deliberately does no logging of its own
 // (see emitDurable's doc comment above): every logging call site in this
 // file runs after its caller's s.mu section ends, never inside one, so a
 // slow Options.Logger sink can never block the mutex every handler and SSE
