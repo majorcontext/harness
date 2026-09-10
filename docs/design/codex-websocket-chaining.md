@@ -418,8 +418,8 @@ Group `chain_refusal` to rank causes, then group `chain_refusal_item` within
 one index points at one assembly site, and item `0` points at the head of
 the input. A high `prefix_changed` rate means
 request assembly rewrote history that the server already holds: ambient status
-must render the same bytes on every call of one tool loop (see
-`docs/design/managed-processes.md` section 4). A high `connection_idle` rate
+is append-only for this reason, and must never rewrite an item already in the
+prefix (see `docs/design/managed-processes.md` section 4). A high `connection_idle` rate
 means the fleet pays a full re-send after ordinary think time, which is a pool
 tuning question, not an assembly defect.
 

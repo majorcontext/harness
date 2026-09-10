@@ -1031,6 +1031,8 @@ type Session struct {
 	model       message.ModelRef
 	effort      message.Effort // reasoning-effort level; swap with SetEffort
 	serviceTier string         // Codex speed-tier value; swap with SetServiceTier
+	// ambientPins is runtime-only: never journaled, snapshotted, or in s.history.
+	ambientPins []ambientPin
 	history     []message.Message
 	usage       provider.Usage // cumulative, across every turn (see appendWithUsage)
 	createdAt   time.Time
@@ -3293,17 +3295,11 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// state and req.Tools is the plan's own slice, never a second
 	// computation.
 	messages := s.History()
-	if seg := processStatusSegment(s.cfg.Processes, s.cfg.WorkDir); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := mcpStatusSegment(s.cfg.MCP); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := goalParkedSegment(s); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
-	if seg := identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync); seg != "" {
-		messages = withAmbientStatus(messages, seg)
+	segs := []ambientSegment{
+		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir)},
+		{ambientKindMCP, mcpStatusSegment(s.cfg.MCP)},
+		{ambientKindGoal, goalParkedSegment(s)},
+		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync)},
 	}
 	// Unlike the four segments above, this one CHECKS OUT pending
 	// notifications rather than idempotently recomputing a status string —
@@ -3311,9 +3307,8 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// as delivered (or requeuing them on failure) happens one layer up, in
 	// runAgenticLoop, once this WHOLE turn's outcome — including any
 	// retries streamTurnWithRetry runs — is known.
-	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
-		messages = withAmbientStatus(messages, seg)
-	}
+	segs = append(segs, ambientSegment{ambientKindTask, s.checkoutTaskNotificationsSegment()})
+	messages = s.withPinnedAmbient(messages, segs)
 	// The max_tokens auto-continuation nudge (see continuationNudgeSegment,
 	// maybeAutoContinueMaxTokens): present only on the follow-up call(s)
 	// runAgenticLoop issues right after a max_tokens stop it decided to

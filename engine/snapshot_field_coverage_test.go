@@ -78,6 +78,7 @@ var snapshottedSessionFields = map[string]bool{
 // optimization). When in doubt, it belongs in snapshottedSessionFields
 // instead.
 var snapshotExcludedSessionFields = map[string]string{
+	"ambientPins":               "runtime-only ambient status log (see ambientPin): re-pinned from live state on the first call after a load, and a loaded session starts a fresh provider chain anyway, so nothing needs to round-trip",
 	"ID":                        "session identity, set directly by NewSession/LoadSession before any header/fold/restore runs",
 	"cfg":                       "Config value: header-derived subfields (WorkDir, ParentSession, TaskParentID, ...) are replayed unconditionally from the recSession header regardless of anchor; the rest is construction-time config (live callbacks, SessionDir, ...), not fold state",
 	"tools":                     "the registered tool set, (re)constructed by session setup from cfg and runtime capability checks, not a journal fold target",

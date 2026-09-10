@@ -376,10 +376,14 @@ func TestTaskDeliveryParentIdleTriggersResumeTurn(t *testing.T) {
 	// The resume turn's own newest user message must be the synthetic
 	// trigger, a REAL history entry — never silently invented text the
 	// transcript can't account for.
+	// A pinned ambient message follows it and carries no text of its own.
 	var lastUserText string
 	for i := len(resumeReq.Messages) - 1; i >= 0; i-- {
-		if resumeReq.Messages[i].Role == message.RoleUser {
-			lastUserText = resumeReq.Messages[i].Parts.Text()
+		if resumeReq.Messages[i].Role != message.RoleUser {
+			continue
+		}
+		if txt := resumeReq.Messages[i].Parts.Text(); txt != "" {
+			lastUserText = txt
 			break
 		}
 	}

@@ -349,23 +349,33 @@ func TestAmbientMCPStatusOnlyOnNewestUserMessage(t *testing.T) {
 	}
 
 	last := prov.requests[1]
-	var sawUser int
-	for i, m := range last.Messages {
-		if m.Role != message.RoleUser {
+	// The block rides its own pinned message, never a message carrying real
+	// conversation content.
+	var carriers, prompts int
+	for _, m := range last.Messages {
+		if !strings.Contains(renderMsgText(m), "[mcp:") {
+			if txt := m.Parts.Text(); txt == "hello one" || txt == "hello two" {
+				prompts++
+			}
 			continue
 		}
-		sawUser++
-		isNewest := i == len(last.Messages)-1
-		has := strings.Contains(renderMsgText(m), "[mcp:")
-		if isNewest && !has {
-			t.Errorf("newest user message = %+v, want the ambient MCP status block", m)
+		carriers++
+		if m.Role != message.RoleUser {
+			t.Errorf("ambient carrier role = %q, want user", m.Role)
 		}
-		if !isNewest && has {
-			t.Errorf("ambient status block leaked onto a non-newest message: %+v", m)
+		if len(m.Parts) != 1 {
+			t.Errorf("ambient carrier has %d parts, want exactly 1: %+v", len(m.Parts), m)
+			continue
+		}
+		if _, ok := m.Parts[0].(*message.EngineContext); !ok {
+			t.Errorf("ambient carrier part = %T, want *message.EngineContext", m.Parts[0])
 		}
 	}
-	if sawUser < 2 {
-		t.Fatalf("second request carried %d user messages, want at least 2 (hello one, hello two)", sawUser)
+	if carriers != 1 {
+		t.Errorf("request carried the ambient MCP block on %d messages, want exactly 1", carriers)
+	}
+	if prompts != 2 {
+		t.Errorf("request carried %d untouched user prompts, want 2 (hello one, hello two)", prompts)
 	}
 }
 
