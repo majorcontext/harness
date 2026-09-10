@@ -323,11 +323,11 @@ func jsonResult(v any) (message.Parts, error) {
 }
 
 // processStatusSegment renders the ambient status block request assembly
-// appends to the newest user message (see streamTurn): one token per
-// declared process that has EVER been started (never-started entries are
-// omitted, and the whole block is empty — never appended — until at least
-// one has), each naming its state, a coarse elapsed time, and its log
-// path relativized against workDir when possible.
+// pins as its own message (see streamTurn): one token per declared process
+// that has EVER been started (never-started entries are omitted, and the
+// whole block is empty until at least one has), each naming its state, the
+// absolute instant it reached that state (statusInstant), and its log path
+// relativized against workDir when possible.
 //
 // This is computed fresh on every call (cheap: an in-memory map read plus
 // string formatting) so it always reflects LIVE state; nothing here is

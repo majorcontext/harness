@@ -3287,7 +3287,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// computation.
 	messages := s.History()
 	segs := []ambientSegment{
-		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir), "[processes: none declared.]"},
+		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir), "[processes: none started.]"},
 		{ambientKindMCP, mcpStatusSegment(s.cfg.MCP), "[mcp: every configured server is connected again.]"},
 		{ambientKindGoal, goalParkedSegment(s), "[goal: no longer parked.]"},
 		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync), ""},
