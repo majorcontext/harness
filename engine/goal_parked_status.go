@@ -1,15 +1,14 @@
 // Ambient parked-goal status segment. Structurally mirrors
 // engine/mcp_status.go's mcpStatusSegment and engine/process.go's
 // processStatusSegment (see either's doc comment): computed fresh from live
-// Session state on every streamTurn call, appended only to the newest user
-// message via the shared withPinnedAmbient, and never persisted to the
-// session log. It does not survive a process restart.
+// Session state on every streamTurn call, pinned as its own message via the
+// shared withPinnedAmbient, and never persisted to the session log. It does not survive a process restart.
 package engine
 
 import "fmt"
 
 // goalParkedSegment renders the ambient status block request assembly
-// appends to the newest user message (see streamTurn) while a worker-turn
+// pins (see streamTurn) while a worker-turn
 // exhaustion has left the session's goal parked. The goal stays active after
 // worker retry exhaustion.
 //

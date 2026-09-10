@@ -82,7 +82,7 @@ representation.
   user message only — computed fresh every turn, never persisted,
   self-correcting as retries succeed; a Parked server's clause instead
   reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
-  sharing its append-only-to-the-newest-message mechanism
+  sharing its append-only pinned-message mechanism
   (`withPinnedAmbient`) with the managed-processes status block described in
   `docs/session-storage-and-queue.md`.
 

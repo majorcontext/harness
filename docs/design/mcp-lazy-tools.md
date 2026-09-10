@@ -351,10 +351,10 @@ A bounded listing keeps a pathological catalog from re-creating the very
 problem this design removes.
 
 An ambient `EngineContext` block (`withPinnedAmbient`, `engine/ambient_pin.go`)
-was rejected for the listing. That mechanism rides the newest user message,
-outside the cached prefix, so the whole catalog would be re-sent uncached
-on every turn. The system segment sits inside the cached prefix and is
-re-read, not re-written, while the catalog holds still. The degraded-server
+was rejected for the listing. That mechanism appends: a catalog that changed
+would pin a whole new copy beside the old one, growing the input every time.
+The system segment is rewritten in place and sits inside the cached prefix,
+re-read rather than re-sent, while the catalog holds still. The degraded-server
 block (`mcpStatusSegment`) stays where it is: it is live status, it is
 small, and it must correct itself the instant a retry commits.
 

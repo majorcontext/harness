@@ -21,19 +21,15 @@ import (
 // lastUserText (process_ambient_test.go), which is only safe when the
 // caller controls exactly which single segment is present.
 func engineContextTexts(req *provider.Request) []string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		if req.Messages[i].Role != message.RoleUser {
-			continue
-		}
-		var texts []string
-		for _, p := range req.Messages[i].Parts {
+	var texts []string
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
 			if ec, ok := p.(*message.EngineContext); ok {
 				texts = append(texts, ec.Text)
 			}
 		}
-		return texts
 	}
-	return nil
+	return texts
 }
 
 func containsSubstring(texts []string, substr string) bool {
