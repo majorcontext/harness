@@ -300,3 +300,43 @@ func TestChildInheritsSharedProcessRegistryWithoutBreakingItsChain(t *testing.T)
 			second.RequestMode, second.SentInputItems, second.CompleteInputItems)
 	}
 }
+
+// Input: compaction shrinks history under existing pins, then a new segment
+// pins and history grows again. Wrong output: replay skips a pin whose slot
+// sorts before an earlier one, silently dropping ambient status.
+func TestAmbientPinsSurviveHistoryShrinkingUnderThem(t *testing.T) {
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	s.pinAmbient(ambientKindProcess, "[processes: app-dev ready]", 50)
+	s.pinAmbient(ambientKindProcess, "[processes: app-dev stopped]", 3)
+
+	s.mu.Lock()
+	pins := append([]ambientPin(nil), s.ambientPins...)
+	s.mu.Unlock()
+	if len(pins) != 2 {
+		t.Fatalf("pins = %d, want 2", len(pins))
+	}
+
+	history := make([]message.Message, 10)
+	for i := range history {
+		history[i] = message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "h"}}}
+	}
+	out := replayAmbientPins(history, pins)
+	if len(out) != len(history)+len(pins) {
+		t.Fatalf("replayed %d messages, want %d: a pin was dropped", len(out), len(history)+len(pins))
+	}
+
+	var seen []string
+	for _, m := range out {
+		if len(m.Parts) == 1 {
+			if ec, ok := m.Parts[0].(*message.EngineContext); ok {
+				seen = append(seen, ec.Text)
+			}
+		}
+	}
+	if len(seen) != 2 || seen[0] != pins[0].text || seen[1] != pins[1].text {
+		t.Errorf("replayed pins %q, want them in pin order %q", seen, []string{pins[0].text, pins[1].text})
+	}
+}

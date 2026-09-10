@@ -23,8 +23,9 @@ type ambientSegment struct {
 
 type ambientPin struct {
 	kind string
-	// at is len(history) when this pin was first rendered; replay restores
-	// it to that slot.
+	// at is len(history) when this pin was first rendered, never less than
+	// the previous pin's. replayAmbientPins needs that order to insert every
+	// pin in one pass, and compaction can shrink history under a pin.
 	at int
 	// msg is frozen at pin time so replay is byte-identical by construction.
 	msg  message.Message
@@ -50,6 +51,9 @@ func (s *Session) pinAmbient(kind, seg string, at int) {
 		}
 		break
 	}
+	if n := len(s.ambientPins); n > 0 && s.ambientPins[n-1].at > at {
+		at = s.ambientPins[n-1].at
+	}
 	s.ambientPins = append(s.ambientPins, ambientPin{
 		kind: kind,
 		at:   at,
@@ -70,8 +74,8 @@ func (s *Session) pinAmbient(kind, seg string, at int) {
 // lands at the current end. The Codex input-suffix projection requires that
 // (docs/design/codex-websocket-chaining.md).
 //
-// Only compaction shortens history; a pin past the new end is clamped to it
-// rather than dropped, since that turn has no chain left to preserve.
+// A pin past the end of a compacted history is clamped to the end rather
+// than dropped; that turn has no chain left to preserve.
 func replayAmbientPins(history []message.Message, pins []ambientPin) []message.Message {
 	if len(pins) == 0 {
 		return history
