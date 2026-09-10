@@ -748,3 +748,43 @@ func TestEventSinkFilterFinalDrainShipsTheScannedTail(t *testing.T) {
 		t.Fatalf("no batch scanned through seq %d; the unselected drain tail never checkpointed", late)
 	}
 }
+
+// The byte limit stops before the selected record that would exceed it, and
+// ToSeq must then name the last candidate SCANNED, not the last record sent.
+// Journal: 1 turn.end (fits), 2 message (omitted), 3 turn.end (does not
+// fit). A pump that reported ToSeq=1 would hand the already-scanned message
+// record back to the next pass.
+func TestEventSinkFilterByteLimitStopsAtTheLastScannedCandidate(t *testing.T) {
+	small := Event{Type: sinkTypeTurnEnd, SessionID: "ses_s", Seq: 1, Outcome: "completed"}
+	encoded, err := json.Marshal(small)
+	if err != nil {
+		t.Fatalf("marshal the selected record: %v", err)
+	}
+	s := &Server{
+		opts:      Options{EventSinkMaxRecords: 10, EventSinkMaxBytes: len(encoded)},
+		sinkTypes: eventSinkTypeSet([]string{sinkTypeTurnEnd}),
+		journal: []Event{
+			small,
+			{Type: sinkTypeMessage, SessionID: "ses_s", Seq: 2},
+			{Type: sinkTypeTurnEnd, SessionID: "ses_s", Seq: 3, Error: strings.Repeat("e", 4096)},
+		},
+		seq: 3,
+	}
+
+	batch, ok := s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch returned no batch")
+	}
+	if batch.FromSeq != 1 || batch.ToSeq != 2 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 1 {
+		t.Fatalf("batch = from %d to %d seqs %v, want from 1 to 2 seqs [1]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+
+	s.sinkCursor = batch.ToSeq
+	batch, ok = s.nextEventBatch()
+	if !ok {
+		t.Fatal("nextEventBatch dropped the oversized record the byte limit deferred")
+	}
+	if batch.FromSeq != 3 || batch.ToSeq != 3 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 3 {
+		t.Fatalf("deferred batch = from %d to %d seqs %v, want from 3 to 3 seqs [3]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+}
