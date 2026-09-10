@@ -3287,10 +3287,10 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// computation.
 	messages := s.History()
 	segs := []ambientSegment{
-		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir)},
-		{ambientKindMCP, mcpStatusSegment(s.cfg.MCP)},
-		{ambientKindGoal, goalParkedSegment(s)},
-		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync)},
+		{ambientKindProcess, processStatusSegment(s.cfg.Processes, s.cfg.WorkDir), "[processes: none declared.]"},
+		{ambientKindMCP, mcpStatusSegment(s.cfg.MCP), "[mcp: every configured server is connected again.]"},
+		{ambientKindGoal, goalParkedSegment(s), "[goal: no longer parked.]"},
+		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync), ""},
 	}
 	// Unlike the four segments above, this one CHECKS OUT pending
 	// notifications rather than idempotently recomputing a status string —
@@ -3298,7 +3298,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// as delivered (or requeuing them on failure) happens one layer up, in
 	// runAgenticLoop, once this WHOLE turn's outcome — including any
 	// retries streamTurnWithRetry runs — is known.
-	segs = append(segs, ambientSegment{ambientKindTask, s.checkoutTaskNotificationsSegment()})
+	segs = append(segs, ambientSegment{ambientKindTask, s.checkoutTaskNotificationsSegment(), ""})
 	messages = s.withPinnedAmbient(messages, segs)
 	// The max_tokens auto-continuation nudge (see continuationNudgeSegment,
 	// maybeAutoContinueMaxTokens): present only on the follow-up call(s)

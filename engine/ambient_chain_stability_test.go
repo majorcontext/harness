@@ -333,8 +333,8 @@ func TestAmbientPinStaysPutAfterCompactionShrinksHistory(t *testing.T) {
 		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
 	})
-	segs := []ambientSegment{{ambientKindProcess, "[processes: app-dev ready]"}}
-	s.pinAmbient(ambientKindProcess, segs[0].text, 50)
+	segs := []ambientSegment{{ambientKindProcess, "[processes: app-dev ready]", ""}}
+	s.pinAmbient(segs[0], 50)
 
 	first := renderSeq(s.withPinnedAmbient(numberedHistory(3), segs))
 	second := renderSeq(s.withPinnedAmbient(numberedHistory(7), segs))
@@ -356,8 +356,8 @@ func TestAmbientPinsSurviveHistoryShrinkingUnderThem(t *testing.T) {
 		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
 	})
-	s.pinAmbient(ambientKindProcess, "[processes: app-dev ready]", 50)
-	s.pinAmbient(ambientKindProcess, "[processes: app-dev stopped]", 3)
+	s.pinAmbient(ambientSegment{ambientKindProcess, "[processes: app-dev ready]", ""}, 50)
+	s.pinAmbient(ambientSegment{ambientKindProcess, "[processes: app-dev stopped]", ""}, 3)
 
 	s.mu.Lock()
 	pins := append([]ambientPin(nil), s.ambientPins...)
@@ -385,5 +385,41 @@ func TestAmbientPinsSurviveHistoryShrinkingUnderThem(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0] != pins[0].text || seen[1] != pins[1].text {
 		t.Errorf("replayed pins %q, want them in pin order %q", seen, []string{pins[0].text, pins[1].text})
+	}
+}
+
+// Input: a segment that reports a problem, then recovers so its renderer
+// returns "". Wrong output: nothing is pinned for the recovery, so the
+// stale "unavailable" block is replayed in every later request.
+func TestAmbientPinPublishesASegmentClearing(t *testing.T) {
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	degraded := ambientSegment{ambientKindMCP, "[mcp: unavailable — linear]", "[mcp: connected again]"}
+	recovered := ambientSegment{ambientKindMCP, "", degraded.cleared}
+
+	s.pinAmbient(degraded, 0)
+	s.pinAmbient(recovered, 1)
+
+	s.mu.Lock()
+	pins := append([]ambientPin(nil), s.ambientPins...)
+	s.mu.Unlock()
+	if len(pins) != 2 {
+		t.Fatalf("pins = %d, want 2 (degraded then cleared)", len(pins))
+	}
+	if pins[1].text != degraded.cleared {
+		t.Errorf("second pin = %q, want the clearing block %q", pins[1].text, degraded.cleared)
+	}
+
+	// Staying recovered pins nothing further, and a kind that never went
+	// non-empty pins nothing at all.
+	s.pinAmbient(recovered, 2)
+	s.pinAmbient(ambientSegment{ambientKindGoal, "", "[goal: no longer parked]"}, 2)
+	s.mu.Lock()
+	after := len(s.ambientPins)
+	s.mu.Unlock()
+	if after != 2 {
+		t.Errorf("pins = %d after a repeat clear and an never-set kind, want 2", after)
 	}
 }

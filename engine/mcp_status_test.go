@@ -417,14 +417,13 @@ func TestAmbientMCPStatusNeverPersisted(t *testing.T) {
 	}
 }
 
-// TestAmbientMCPStatusDisappearsAfterRecovery is invariant 6's
-// self-correcting assertion: a server degraded on turn 1's request is
-// healthy — no block at all — by turn 2's, once its background retry
-// commits a success in between. Uses a real HTTP handler (like
+// TestAmbientMCPStatusReportsRecovery is invariant 6's self-correcting
+// assertion: a server degraded on turn 1's request reports healthy by turn
+// 2's, once its background retry commits a success in between. Uses a real HTTP handler (like
 // TestMCPManagerCallServerToolRetryingThenRecovers) that fails the very
 // first request and succeeds every one after, with mcpTestRetryCommitted
 // as the synchronization point instead of a sleep or poll loop.
-func TestAmbientMCPStatusDisappearsAfterRecovery(t *testing.T) {
+func TestAmbientMCPStatusReportsRecovery(t *testing.T) {
 	var mu sync.Mutex
 	requestCount := 0
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -481,8 +480,13 @@ func TestAmbientMCPStatusDisappearsAfterRecovery(t *testing.T) {
 	if _, err := s.Prompt(context.Background(), "hello two"); err != nil {
 		t.Fatal(err)
 	}
+	// Pinned ambient status is append-only, so recovery is stated rather
+	// than shown by omission.
 	second := lastUserText(t, prov.requests[1])
-	if strings.Contains(second, "[mcp:") {
-		t.Fatalf("second request's ambient text = %q, want no block after recovery", second)
+	if strings.Contains(second, "unavailable") {
+		t.Fatalf("second request's ambient text = %q, want no degraded block after recovery", second)
+	}
+	if !strings.Contains(second, "connected again") {
+		t.Fatalf("second request's ambient text = %q, want an explicit recovery block", second)
 	}
 }

@@ -19,6 +19,10 @@ const (
 type ambientSegment struct {
 	kind string
 	text string
+	// cleared is pinned when text goes empty after a non-empty pin. Empty
+	// for a kind whose absence says nothing (identity, one-shot notices):
+	// history is append-only, so absence cannot be shown by omission.
+	cleared string
 }
 
 type ambientPin struct {
@@ -33,35 +37,41 @@ type ambientPin struct {
 }
 
 // pinAmbient appends a pin when seg differs from the newest pin of its kind.
-// Comparing against that pin is what keeps the non-idempotent task-
-// notification segment safe: a retried turn, or one that requeued its
-// notifications, re-renders the same text and adds no second pin.
-func (s *Session) pinAmbient(kind, seg string, at int) {
-	if seg == "" {
-		return
-	}
+// Comparing against that pin keeps the non-idempotent task-notification
+// segment safe: a retried or requeued turn re-renders the same text and adds
+// no second pin.
+func (s *Session) pinAmbient(seg ambientSegment, at int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var last string
 	for i := len(s.ambientPins) - 1; i >= 0; i-- {
-		if s.ambientPins[i].kind != kind {
-			continue
+		if s.ambientPins[i].kind == seg.kind {
+			last = s.ambientPins[i].text
+			break
 		}
-		if s.ambientPins[i].text == seg {
+	}
+	text := seg.text
+	if text == "" {
+		if last == "" || seg.cleared == "" {
 			return
 		}
-		break
+		text = seg.cleared
 	}
+	if text == last {
+		return
+	}
+	kind := seg.kind
 	if n := len(s.ambientPins); n > 0 && s.ambientPins[n-1].at > at {
 		at = s.ambientPins[n-1].at
 	}
 	s.ambientPins = append(s.ambientPins, ambientPin{
 		kind: kind,
 		at:   at,
-		text: seg,
+		text: text,
 		msg: message.Message{
 			ID:        newID("msg"),
 			Role:      message.RoleUser,
-			Parts:     message.Parts{&message.EngineContext{Text: seg}},
+			Parts:     message.Parts{&message.EngineContext{Text: text}},
 			CreatedAt: time.Now().UTC(),
 		},
 	})
@@ -94,7 +104,7 @@ func replayAmbientPins(history []message.Message, pins []ambientPin) []message.M
 func (s *Session) withPinnedAmbient(history []message.Message, segs []ambientSegment) []message.Message {
 	s.clampAmbientPins(len(history))
 	for _, seg := range segs {
-		s.pinAmbient(seg.kind, seg.text, len(history))
+		s.pinAmbient(seg, len(history))
 	}
 	s.mu.Lock()
 	pins := append([]ambientPin(nil), s.ambientPins...)
