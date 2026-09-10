@@ -1204,6 +1204,33 @@ func TestSystemPromptCarriesBaseBehaviorGuidance(t *testing.T) {
 	}
 }
 
+// Input: a session with no project instructions. Wrong output: the base
+// prompt asks only for a "short" final message, so user-visible answer length
+// falls back to model default.
+func TestBaseBehaviorGuidanceSetsAnAdaptiveBrevityDefault(t *testing.T) {
+	got := baseBehaviorGuidance()
+
+	for _, want := range []string{
+		"concise, direct, and friendly",
+		"10 lines",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("base behavior guidance missing %q:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(got, "relax") {
+		t.Errorf("brevity ceiling has no stated exception, so it reads as an absolute cap:\n%s", got)
+	}
+	for _, unwanted := range []string{"4 lines", "four lines", "one-word", "single word"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("base behavior guidance carries a second, tighter brevity cap %q:\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "file path") {
+		t.Errorf("base behavior guidance lost the reference-a-path-instead-of-pasting rule:\n%s", got)
+	}
+}
+
 // TestBaseBehaviorGuidanceStaysUnderBudget pins the line/word ceiling Andy set
 // for the addition ("the prose is minimal and not too crazy long") so a later
 // clause-by-clause addition cannot silently balloon it back into a
