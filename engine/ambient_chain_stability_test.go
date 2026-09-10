@@ -301,6 +301,53 @@ func TestChildInheritsSharedProcessRegistryWithoutBreakingItsChain(t *testing.T)
 	}
 }
 
+func numberedHistory(n int) []message.Message {
+	out := make([]message.Message, n)
+	for i := range out {
+		out[i] = message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "h" + strconv.Itoa(i)}}}
+	}
+	return out
+}
+
+func renderSeq(messages []message.Message) []string {
+	out := make([]string, len(messages))
+	for i, m := range messages {
+		for _, p := range m.Parts {
+			switch v := p.(type) {
+			case *message.Text:
+				out[i] = "text:" + v.Text
+			case *message.EngineContext:
+				out[i] = "engine:" + v.Text
+			}
+		}
+	}
+	return out
+}
+
+// Input: compaction shrinks history under a pin, then history grows again
+// with the pinned segment unchanged. Wrong output: the pin is only clamped at
+// replay, so it floats to whatever the current end is and the previous
+// request stops being a prefix of the next one.
+func TestAmbientPinStaysPutAfterCompactionShrinksHistory(t *testing.T) {
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	segs := []ambientSegment{{ambientKindProcess, "[processes: app-dev ready]"}}
+	s.pinAmbient(ambientKindProcess, segs[0].text, 50)
+
+	first := renderSeq(s.withPinnedAmbient(numberedHistory(3), segs))
+	second := renderSeq(s.withPinnedAmbient(numberedHistory(7), segs))
+	if len(second) < len(first) {
+		t.Fatalf("second request shrank: %v then %v", first, second)
+	}
+	for i, want := range first {
+		if second[i] != want {
+			t.Fatalf("item %d moved after history grew: %q then %q\n first  = %v\n second = %v", i, want, second[i], first, second)
+		}
+	}
+}
+
 // Input: compaction shrinks history under existing pins, then a new segment
 // pins and history grows again. Wrong output: replay skips a pin whose slot
 // sorts before an earlier one, silently dropping ambient status.

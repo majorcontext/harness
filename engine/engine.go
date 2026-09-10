@@ -3277,18 +3277,9 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	params := assembled.params
 	system := req.System
 	tools := req.Tools
-	// Ambient process-status, MCP-status, parked-goal-status, and
-	// engine-identity injection (see processStatusSegment,
-	// mcpStatusSegment, goalParkedSegment, identityStatusSegment):
-	// appended ONLY to this
-	// in-memory request copy — s.History() already returns a fresh slice
-	// (engine.go's append(nil, s.history...)), and withAmbientStatus
-	// clones (never mutates in place) the one message it touches, so the
-	// durable s.history — and the message/journal log it is persisted
-	// from — never sees this text. Each segment rides only the newest
-	// user message so every earlier message, and therefore the cached
-	// request prefix, is byte-identical to a request built with no
-	// process ever started and every MCP server healthy.
+	// Ambient status rides this in-memory request copy only: s.History()
+	// returns a fresh slice and withPinnedAmbient appends to it, so the
+	// durable s.history and the journal never see this text.
 	//
 	// The tool plan already ran above (see the numbered ordering note at the
 	// top of this function), so every segment below reads post-connect
