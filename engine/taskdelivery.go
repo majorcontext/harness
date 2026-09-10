@@ -349,9 +349,13 @@ func (s *Session) persistDeliveredTaskNotifications(ns []taskNotification) {
 // pending OR already checked out for the CURRENT in-flight turn attempt,
 // as one ambient status segment in the same shape
 // processStatusSegment/mcpStatusSegment/identityStatusSegment use
-// (engine/ambient_pin.go's withPinnedAmbient is the single producer that turns
-// this into a wire-level EngineContext part) — but, UNLIKE checking those
-// three out, this does NOT commit the notifications as delivered.
+// (engine/ambient_pin.go's withPinnedAmbient turns this into a wire-level
+// EngineContext part) — but, UNLIKE checking those three out, this does NOT
+// commit the notifications as delivered.
+//
+// The rendered block is pinned, so it keeps being replayed after
+// commitTaskNotifications clears the in-flight set; re-rendering the same
+// text pins nothing further, so a notification is shown exactly once.
 //
 // # Why checkout/commit/requeue, not a single destructive drain
 //

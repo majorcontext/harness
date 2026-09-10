@@ -56,7 +56,8 @@ NOT a `Text` part. A bare `Text` block is byte-indistinguishable from
 user-typed or pasted text, so a payload a user pastes that contains
 `[engine: ...]` once inherited the same trust the engine's own block
 carries — a trust-spoofing surface. `EngineContext` is a distinct part-kind
-only `withPinnedAmbient` (`engine/ambient_pin.go`) produces, so a user- or
+only engine code produces (`withPinnedAmbient`, `engine/ambient_pin.go`, and
+`appendContinuationNudgeMessage`, `engine/engine.go`), so a user- or
 paste-authored part is always a `Text` and can never BE one, however its
 bytes are shaped. Every transcoder renders an `EngineContext` through
 `message.RenderEngineContext`, which wraps the block in the

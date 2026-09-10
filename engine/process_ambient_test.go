@@ -237,14 +237,14 @@ func waitForExit(t *testing.T, m *process.Manager, name string) {
 }
 
 // TestAmbientBlockIsEngineContextPart drives the production Prompt entry
-// point and proves the ambient status the engine appends to the newest user
-// message is a structured *message.EngineContext part, NOT a bare
+// point and proves the ambient status the engine pins as its own message is
+// a structured *message.EngineContext part, NOT a bare
 // *message.Text. This is the canonical-layer half of the trust-spoofing fix
 // (see message.EngineContext): a user- or paste-authored Text can never be
 // this part-kind, so the block is provably engine-originated.
 //
-// Red-verify: change the pinned part to a &message.Text and
-// this test fails at the type assertion below.
+// Red-verify: change the pinned part to a &message.Text and this test
+// fails at the type assertion below.
 func TestAmbientBlockIsEngineContextPart(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
