@@ -240,3 +240,47 @@ misspelled produces a stream of empty checkpoints that advance the cursor
 and deliver no record at all. Copy each type from a live `/event` stream,
 or from the `Publish` cases in `server/journal.go`, rather than typing it
 from memory.
+
+## 12. Every new durable record carries its own instant
+
+A receiver that replays a journal needs the age of each record. `seq` orders
+records but dates none of them, and the delivery time is the wrong clock: a
+box that restarts and ships its whole restored journal delivers a month-old
+record and a fresh one in the same request. Boxes expires a replayed record
+by age, so the record has to carry that age itself.
+
+`emitDurableLocked` (`server/journal.go`) sets `Event.RecordedAt` from
+`Server.now`, converted to UTC, right after it assigns the seq — ahead of
+`writeJournalLocked` and ahead of any `nextEventBatch` copy. One record
+therefore carries one identical instant on disk, on the SSE stream, and in a
+sink batch. A stamp added at delivery time instead would date the record from
+the pump, and a stamp added at load time would date it from the restart.
+
+The stamp lands in the durable primitive only. A live-only event goes through
+`publishLive`, which never reaches `emitDurableLocked`, so `text.delta` and
+its peers carry no `recorded_at` — the same construction that keeps them out
+of the journal in the first place (§2). `emitDurableLocked` also leaves a
+non-zero `RecordedAt` alone, so a re-emitted record keeps its original age.
+
+The wire field is `recorded_at` with `omitzero`, not `omitempty`:
+`encoding/json` drops nothing for an `omitempty` struct field, so `omitempty`
+would ship an explicit `"0001-01-01T00:00:00Z"` on every record that has no
+stamp. `omitzero` omits the key, which is the shape the rest of `Event`
+already uses for an optional field.
+
+## 13. A record written before the stamp existed stays undated
+
+`loadJournal` appends what it parsed. A journal line written before
+`recorded_at` existed has no such key, decodes to the zero `time.Time`, and
+keeps it — `loadJournal` must never backfill the field. A backfill would date
+every historical record from the restart, so a month-old transcript would
+reach Boxes looking brand new and would never expire.
+
+The zero value is what Boxes reads as expired, which is the intended outcome
+for a record whose real age is unknown. `omitzero` (§12) also keeps the key
+off the wire for such a record, so a receiver can tell "undated" from
+"dated at the epoch" without a special case.
+
+`TestDurableEventStampsRecordedAtFromTheInjectedClock`,
+`TestLiveEventCarriesNoRecordedAt`, and
+`TestLegacyEventKeepsAZeroRecordedAtOnReload` pin these three rules.

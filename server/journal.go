@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -23,12 +24,21 @@ import (
 // records carry a non-zero Seq and are journaled and replayable; live events
 // have no Seq and stream only while connected.
 type Event struct {
-	Type      string           `json:"type"`
-	SessionID string           `json:"session_id"`
-	Seq       int64            `json:"seq,omitempty"`
-	Status    string           `json:"status,omitempty"`
-	Message   *message.Message `json:"message,omitempty"`
-	Model     message.ModelRef `json:"model,omitzero"`
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Seq       int64  `json:"seq,omitempty"`
+	// RecordedAt is the UTC instant emitDurableLocked assigned the record,
+	// and it is the only age a consumer of a replayed journal can read: the
+	// seq orders records but dates none of them. It is omitzero, not
+	// omitempty, because encoding/json drops nothing for an omitempty
+	// struct — a legacy record would then ship an explicit
+	// "0001-01-01T00:00:00Z" instead of no key. A record written before this
+	// field existed stays zero on reload; loadJournal must never backfill
+	// it, or an old transcript would date from the restart.
+	RecordedAt time.Time        `json:"recorded_at,omitzero"`
+	Status     string           `json:"status,omitempty"`
+	Message    *message.Message `json:"message,omitempty"`
+	Model      message.ModelRef `json:"model,omitzero"`
 	// Effort is a *message.Effort, not a bare message.Effort with omitempty,
 	// for the same reason QueueLen below is a *int: an "effort" record must
 	// tell "cleared to the provider default" (EffortUnset, an explicit
@@ -1445,8 +1455,12 @@ func (s *Server) emitDurable(ev Event) int64 {
 }
 
 // emitDurableLocked is emitDurable's critical section: assigns the next
-// sequence number, journals the event, fans it out, and wakes waiters — all
-// under s.mu, and nothing else. It deliberately does no logging of its own
+// sequence number and the RecordedAt stamp, journals the event, fans it out,
+// and wakes waiters — all under s.mu, and nothing else. The stamp lands here,
+// ahead of the journal write and the sink pump's copy, so one record carries
+// one instant on disk and on the wire. A caller that already set RecordedAt
+// keeps its value, which is what makes a re-emitted record keep its original
+// age instead of aging forward. It deliberately does no logging of its own
 // (see emitDurable's doc comment above): every logging call site in this
 // file runs after its caller's s.mu section ends, never inside one, so a
 // slow Options.Logger sink can never block the mutex every handler and SSE
@@ -1454,6 +1468,9 @@ func (s *Server) emitDurable(ev Event) int64 {
 func (s *Server) emitDurableLocked(ev *Event) {
 	s.seq++
 	ev.Seq = s.seq
+	if ev.RecordedAt.IsZero() {
+		ev.RecordedAt = s.now().UTC()
+	}
 	s.writeJournalLocked(*ev)
 	s.journal = append(s.journal, *ev)
 	s.fanoutLocked(*ev)

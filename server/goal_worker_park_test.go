@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -199,7 +200,9 @@ func TestGoalTrackerPauseViewPrecedence(t *testing.T) {
 // TestGoalWorkerParkPauseSurvivesRestartAsRestartReason for that end-to-end
 // precedence proof).
 func TestGoalParkedFoldLockstepBetweenLiveAndReplay(t *testing.T) {
-	liveSrv := &Server{goalState: map[string]*goalTracker{"s1": {active: true}}}
+	// now is what emitDurableLocked stamps Event.RecordedAt from. New always
+	// supplies it; a Server literal that reaches the durable primitive must.
+	liveSrv := &Server{now: time.Now, goalState: map[string]*goalTracker{"s1": {active: true}}}
 	ev := engine.Event{
 		Type:          engine.EventGoalParked,
 		SessionID:     "s1",
@@ -234,7 +237,7 @@ func TestGoalParkedFoldLockstepBetweenLiveAndReplay(t *testing.T) {
 		t.Errorf("journaled goal.parked event GoalPaused/GoalPauseReason = %v/%q, want true/%q", wire.GoalPaused, wire.GoalPauseReason, pauseReasonWorkerFailure)
 	}
 
-	replaySrv := &Server{goalState: map[string]*goalTracker{"s1": {active: true}}}
+	replaySrv := &Server{now: time.Now, goalState: map[string]*goalTracker{"s1": {active: true}}}
 	replaySrv.foldGoalRecordLocked(wire)
 	replay := replaySrv.goalState["s1"]
 	if replay == nil {
@@ -249,7 +252,7 @@ func TestGoalParkedFoldLockstepBetweenLiveAndReplay(t *testing.T) {
 // Publish's routing allowlist (not silently dropped, the failure mode a new
 // event type risks if the switch in Publish is forgotten).
 func TestGoalParkedRoutedThroughPublish(t *testing.T) {
-	srv := &Server{goalState: map[string]*goalTracker{}}
+	srv := &Server{now: time.Now, goalState: map[string]*goalTracker{}}
 	srv.Publish(engine.Event{
 		Type:         engine.EventGoalParked,
 		SessionID:    "s1",

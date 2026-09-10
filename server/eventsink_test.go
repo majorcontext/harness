@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -786,5 +789,169 @@ func TestEventSinkFilterByteLimitStopsAtTheLastScannedCandidate(t *testing.T) {
 	}
 	if batch.FromSeq != 3 || batch.ToSeq != 3 || len(seqsOf(batch)) != 1 || seqsOf(batch)[0] != 3 {
 		t.Fatalf("deferred batch = from %d to %d seqs %v, want from 3 to 3 seqs [3]", batch.FromSeq, batch.ToSeq, seqsOf(batch))
+	}
+}
+
+// recordedAtClock is the exact instant the tests below inject. Its zone is
+// deliberately not UTC: a stamp that copied the clock's own location, rather
+// than converting, would still report the same instant, so the location
+// assertion is what separates the two.
+var recordedAtClock = time.Date(2026, 9, 10, 4, 5, 6, 0, time.FixedZone("test", 5*60*60))
+
+// journalLineSeq returns the raw events.jsonl line whose record has this seq.
+// It reads the file production writes, so it proves what a restart will parse
+// rather than what memory happens to hold.
+func journalLineSeq(t *testing.T, dir string, seq int64) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, journalName))
+	if err != nil {
+		t.Fatalf("read journal: %v", err)
+	}
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var probe struct {
+			Seq int64 `json:"seq"`
+		}
+		if err := json.Unmarshal(line, &probe); err != nil {
+			t.Fatalf("journal line does not parse: %v", err)
+		}
+		if probe.Seq == seq {
+			return line
+		}
+	}
+	t.Fatalf("journal holds no record with seq %d", seq)
+	return nil
+}
+
+// A durable record must carry the emitting instant, because Boxes expires a
+// replayed record by age and has no other clock for one. The stamp has to
+// land in the single durable emission primitive, before the journal write and
+// before the sink pump can copy the struct: a record stamped later would date
+// from the reload or the delivery, not from the emission.
+//
+// Failure without the stamp: emitDurable writes a record whose recorded_at is
+// absent on disk and zero in the delivered batch, so Boxes reads every fresh
+// record as infinitely old.
+func TestDurableEventStampsRecordedAtFromTheInjectedClock(t *testing.T) {
+	dir := t.TempDir()
+	f := newFakeSink()
+	s := newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+		o.EventSink = f
+		o.EventSinkFlush = time.Millisecond
+	})
+	// Replacing the clock on the built server mirrors newSlowServer
+	// (timing_test.go). Only emitDurableLocked and serveTimed read s.now, and
+	// neither runs on another goroutine here, so the pump cannot race this.
+	s.now = func() time.Time { return recordedAtClock }
+
+	seq := s.emitDurable(Event{Type: evtSessionStatus, SessionID: "ses_stamp", Status: "busy"})
+
+	var onDisk Event
+	if err := json.Unmarshal(journalLineSeq(t, dir, seq), &onDisk); err != nil {
+		t.Fatalf("journal record does not parse: %v", err)
+	}
+	if !onDisk.RecordedAt.Equal(recordedAtClock) {
+		t.Fatalf("journal record recorded_at = %v, want %v", onDisk.RecordedAt, recordedAtClock)
+	}
+	if loc := onDisk.RecordedAt.Location(); loc != time.UTC {
+		t.Fatalf("journal record recorded_at location = %v, want UTC", loc)
+	}
+
+	f.waitForRecord(t, seq)
+	for _, rec := range f.delivered() {
+		if rec.Seq != seq {
+			continue
+		}
+		if !rec.RecordedAt.Equal(recordedAtClock) {
+			t.Fatalf("delivered record recorded_at = %v, want %v", rec.RecordedAt, recordedAtClock)
+		}
+		if loc := rec.RecordedAt.Location(); loc != time.UTC {
+			t.Fatalf("delivered record recorded_at location = %v, want UTC", loc)
+		}
+		return
+	}
+	t.Fatalf("the sink never received the record with seq %d", seq)
+}
+
+// A live-only event is never journaled, so it must not gain a stamp either:
+// publishLive fans the event out without touching the durable primitive, and
+// a stamp there would advertise a durability the record does not have.
+//
+// Failure if the stamp moved into fanoutLocked or Publish: a subscriber sees
+// recorded_at on a text.delta that no journal holds.
+func TestLiveEventCarriesNoRecordedAt(t *testing.T) {
+	s := newServer(t, t.TempDir(), &scriptedProvider{name: "test"}, 4)
+	s.now = func() time.Time { return recordedAtClock }
+
+	// Registered the way handleEvent registers a real SSE client, so the
+	// event travels the production fanout path.
+	sub := &subscriber{ch: make(chan Event, 1), session: "ses_live"}
+	s.mu.Lock()
+	s.subs[sub] = struct{}{}
+	s.mu.Unlock()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		delete(s.subs, sub)
+		s.mu.Unlock()
+	})
+
+	s.publishLive(Event{Type: "text.delta", SessionID: "ses_live", Text: "hi"})
+
+	got := <-sub.ch
+	if !got.RecordedAt.IsZero() {
+		t.Fatalf("live event recorded_at = %v, want the zero time", got.RecordedAt)
+	}
+}
+
+// A journal written before recorded_at existed has no such field. Reload must
+// leave those records zero, because Boxes treats a zero stamp as expired: a
+// backfill at load time would re-date every historical record to the restart
+// and make an old transcript look brand new. The stamp therefore belongs in
+// emitDurableLocked only, and loadJournal must append what it parsed.
+//
+// Failure with a backfill in loadJournal: the restored record reaches the sink
+// carrying the restart instant instead of the zero time.
+func TestLegacyEventKeepsAZeroRecordedAtOnReload(t *testing.T) {
+	dir := t.TempDir()
+	// One events.jsonl line exactly as a harness without recorded_at wrote it.
+	const legacy = `{"type":"session.status","session_id":"ses_old","seq":1,"status":"idle"}`
+	if err := os.WriteFile(filepath.Join(dir, journalName), []byte(legacy+"\n"), 0o600); err != nil {
+		t.Fatalf("seed legacy journal: %v", err)
+	}
+
+	f := newFakeSink()
+	// The clock is deliberately left alone: loadJournal runs inside New, so a
+	// backfill there could only read the production clock, and the assertion
+	// below rejects any non-zero instant.
+	newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
+		o.EventSink = f
+		o.EventSinkFlush = time.Millisecond
+	})
+
+	f.waitForRecord(t, 1)
+	var found bool
+	for _, rec := range f.delivered() {
+		if rec.Seq != 1 {
+			continue
+		}
+		found = true
+		if !rec.RecordedAt.IsZero() {
+			t.Fatalf("restored legacy record recorded_at = %v, want the zero time", rec.RecordedAt)
+		}
+		// The receiver reads presence, not just value: a zero stamp must
+		// leave the key off the wire, the way every other optional record
+		// field does.
+		encoded, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatalf("marshal restored record: %v", err)
+		}
+		if bytes.Contains(encoded, []byte("recorded_at")) {
+			t.Fatalf("restored legacy record encodes recorded_at: %s", encoded)
+		}
+	}
+	if !found {
+		t.Fatal("the sink never received the restored legacy record")
 	}
 }
