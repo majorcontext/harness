@@ -16,11 +16,30 @@ type EventSink interface {
 	Deliver(ctx context.Context, batch EventBatch) (appliedThrough int64, err error)
 }
 
-// EventBatch is one contiguous run of durable records, oldest first.
+// EventBatch is one scanned run of durable records, oldest first. FromSeq
+// and ToSeq bound the range the pump SCANNED, not the range it carries:
+// when Filtered is true a selector dropped some of that range, so Records
+// is sparse and may be empty. An empty filtered batch is a checkpoint — it
+// is how the receiver's cursor clears a long unselected run.
 type EventBatch struct {
-	FromSeq int64
-	ToSeq   int64
-	Records []Event
+	FromSeq  int64
+	ToSeq    int64
+	Filtered bool
+	Records  []Event
+}
+
+// eventSinkTypeSet builds the exact-match selector for Options.
+// EventSinkIncludeTypes. It returns nil for an empty list, and a nil set is
+// what tells the pump to stay unfiltered.
+func eventSinkTypeSet(types []string) map[string]struct{} {
+	if len(types) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(types))
+	for _, t := range types {
+		set[t] = struct{}{}
+	}
+	return set
 }
 
 const (
@@ -139,8 +158,11 @@ func (s *Server) flushEventSink(ctx context.Context) {
 	}
 }
 
-// nextEventBatch slices the journal above the cursor. ok is false when
-// there is nothing to send.
+// nextEventBatch scans a bounded contiguous window of the journal above the
+// cursor. Without a selector the batch is that window verbatim. With one it
+// carries only the matching records, while FromSeq and ToSeq still report
+// the whole window, so a delivery clears the omitted records too. ok is
+// false only when the window is empty.
 func (s *Server) nextEventBatch() (EventBatch, bool) {
 	maxRecords := s.opts.EventSinkMaxRecords
 	if maxRecords <= 0 {
@@ -169,9 +191,19 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 	candidates := append([]Event(nil), s.journal[i:end]...)
 	s.mu.Unlock()
 
-	batch := EventBatch{FromSeq: candidates[0].Seq}
+	batch := EventBatch{FromSeq: candidates[0].Seq, Filtered: s.sinkTypes != nil}
 	var bytes int
 	for _, rec := range candidates {
+		if batch.Filtered {
+			if _, want := s.sinkTypes[rec.Type]; !want {
+				// An omitted record spends a record-window slot but no
+				// bytes: it is never encoded and never sent, so charging
+				// the byte budget for it would stall the cursor behind a
+				// long unselected run.
+				batch.ToSeq = rec.Seq
+				continue
+			}
+		}
 		encoded, err := json.Marshal(rec)
 		if err != nil {
 			// Isolate a poison record. Records before it can advance; when it is
@@ -193,6 +225,12 @@ func (s *Server) nextEventBatch() (EventBatch, bool) {
 		if err != nil {
 			break
 		}
+	}
+	if batch.Filtered {
+		// A filtered batch ships even with no records. It is a checkpoint:
+		// ToSeq is how far the pump scanned, which is what the receiver
+		// answers with and what advances the cursor.
+		return batch, batch.ToSeq >= batch.FromSeq
 	}
 	return batch, len(batch.Records) > 0
 }

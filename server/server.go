@@ -372,6 +372,11 @@ type Server struct {
 	opts Options
 	mux  *http.ServeMux
 
+	// sinkTypes is the event-sink selector, built once in New and never
+	// written again, so nextEventBatch reads it without holding mu. Nil
+	// means unfiltered.
+	sinkTypes map[string]struct{}
+
 	// now is the clock serveTimed measures with. Always time.Now in
 	// production; a test replaces it to make a duration exact.
 	now func() time.Time
@@ -874,6 +879,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts:              opts,
+		sinkTypes:         eventSinkTypeSet(opts.EventSinkIncludeTypes),
 		subs:              make(map[*subscriber]struct{}),
 		seen:              make(map[string]map[string]bool),
 		sessions:          make(map[string]*sessionState),
