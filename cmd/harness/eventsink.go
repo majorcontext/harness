@@ -97,13 +97,18 @@ func (h *httpEventSink) Deliver(ctx context.Context, batch server.EventBatch) (i
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, eventSinkReplyMaxBytes+1))
+		err := fmt.Errorf("event sink: receiver returned %d", resp.StatusCode)
 		if readErr != nil {
-			return 0, fmt.Errorf("event sink: receiver returned %d; read diagnostic: %w", resp.StatusCode, readErr)
+			err = fmt.Errorf("event sink: receiver returned %d; read diagnostic: %w", resp.StatusCode, readErr)
+		} else if code := eventSinkDiagnosticCode(body); code != "" {
+			err = fmt.Errorf("event sink: receiver returned %d (%s)", resp.StatusCode, code)
 		}
-		if code := eventSinkDiagnosticCode(body); code != "" {
-			return 0, fmt.Errorf("event sink: receiver returned %d (%s)", resp.StatusCode, code)
+		// The status classifies the failure, not the diagnostic: a receiver
+		// that answers a permanent status with no body is still permanent.
+		if eventSinkPermanentStatus(resp.StatusCode) {
+			return 0, fmt.Errorf("%w: %w", err, server.ErrEventSinkPermanent)
 		}
-		return 0, fmt.Errorf("event sink: receiver returned %d", resp.StatusCode)
+		return 0, err
 	}
 	var reply sinkReply
 	// A reply that does not parse is an error, not a zero cursor: treating
@@ -113,6 +118,30 @@ func (h *httpEventSink) Deliver(ctx context.Context, batch server.EventBatch) (i
 		return 0, fmt.Errorf("event sink: decode reply: %w", err)
 	}
 	return reply.AppliedThrough, nil
+}
+
+// eventSinkPermanentStatus reports whether this status rejects the batch
+// itself, so that retrying identical bytes cannot succeed. The set is fixed
+// and small: a malformed body (400, 422), a refused credential (401, 403), a
+// route that holds no receiver (404, 410), and a receiver that says the batch
+// contradicts what it already applied (409).
+//
+// Every other status keeps the retry, including an unlisted 4xx. 408, 425,
+// and 429 ask for the same batch later, and a 5xx is a receiver that a
+// restart can fix, so treating either as permanent would cost every later
+// record for one transient failure.
+func eventSinkPermanentStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusConflict,
+		http.StatusGone,
+		http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 // eventSinkDiagnosticCode extracts only a bounded machine code from an error

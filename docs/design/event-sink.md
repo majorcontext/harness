@@ -67,24 +67,26 @@ this change; nothing about the current implementation does it, and nothing
 about the current design doc should be read as promising it will keep
 working unmodified if eviction is added later.
 
-## 5. Failure does not give up
+## 5. A retryable failure does not give up
 
-`flushEventSink`'s delivery loop, on a `Deliver` error, logs a warning and
-retries the SAME batch after `eventSinkRetryDelay` (2 seconds) — it does
-not advance past the failure, drop the batch, or wait for a new record to
-arrive before trying again. It keeps retrying, at that fixed interval,
-until `Deliver` succeeds or the pump is retired (`sinkStop`, closed after
-the prompt drain — see §7), at which point the goroutine exits without
+`flushEventSink`'s delivery loop, on a retryable `Deliver` error, logs a
+warning and retries the SAME batch after `eventSinkRetryDelay` (2 seconds) —
+it does not advance past the failure, drop the batch, or wait for a new
+record to arrive before trying again. It keeps retrying, at that fixed
+interval, until `Deliver` succeeds or the pump is retired (`sinkStop`, closed
+after the prompt drain — see §7), at which point the goroutine exits without
 another attempt.
 
-The consequence: a receiver that is down, or answering errors, does not
-lose any records. It delays them. A permanently unreachable receiver
-leaves the pump retrying every `eventSinkRetryDelay` for the rest of the
-process's life — this is intended, not a bug to fix later, because the
-journal (§4) is already the buffer holding everything the pump has not
-yet managed to deliver. There is nothing else for the pump to spool to,
-and nothing is lost by continuing to retry against something the journal
-already holds.
+The consequence: a receiver that is down, or answering a retryable error,
+does not lose any records. It delays them. An unreachable receiver leaves
+the pump retrying every `eventSinkRetryDelay` for the rest of the process's
+life — this is intended, not a bug to fix later, because the journal (§4) is
+already the buffer holding everything the pump has not yet managed to
+deliver. There is nothing else for the pump to spool to, and nothing is lost
+by continuing to retry against something the journal already holds.
+
+Section 14 gives the one class of failure this does not cover: a receiver
+that rejects the batch itself.
 
 ## 6. The receiver owns the cursor
 
@@ -299,3 +301,53 @@ off the wire for such a record, so a receiver can tell "undated" from
 `TestDurableEventStampsRecordedAtFromTheInjectedClock`,
 `TestLiveEventCarriesNoRecordedAt`, and
 `TestLegacyEventKeepsAZeroRecordedAtOnReload` pin these three rules.
+
+## 14. A permanent rejection retires the pump
+
+A retry is a bet that the same bytes can succeed later (§5). Some receiver
+answers say they cannot. A receiver that rejects the batch itself — a body
+it cannot parse, a credential it refuses, a route that holds no receiver —
+answers the identical rejection to the identical retry, every two seconds,
+for the life of the process. That loop delivers nothing, and it logs a
+warning on every pass, which buries every other line an operator reads.
+
+`server.ErrEventSinkPermanent` (`server/eventsink.go`) is the sentinel for
+that class. A transport wraps it; `flushEventSink` detects it with
+`errors.Is`, logs one bounded warning, and returns false, which retires
+`runEventSink`. The pump goroutine exits and `sinkDone` closes.
+
+**Harness does not stop.** The sentinel retires the replica, nothing else:
+sessions run, records still journal and still reach `/event`, and `Drain`
+still returns (it waits on a `sinkDone` that is already closed). The
+deployment loses forwarding, not the box.
+`TestEventSinkPermanentRejectionStopsThePumpWithoutStoppingHarness` pins the
+stop, the single warning, and the still-healthy server.
+`TestEventSinkRetryableFailureIsNotPermanent` pins the two-second retry that
+a retryable error still gets.
+
+`httpEventSink` classifies by status alone (`eventSinkPermanentStatus`,
+`cmd/harness/eventsink.go`):
+
+| Status | Class | Why |
+|---|---|---|
+| 400, 422 | permanent | The receiver cannot parse or accept this body. |
+| 401, 403 | permanent | The credential is refused, not throttled. |
+| 404, 410 | permanent | The URL names no receiver. |
+| 409 | permanent | The batch contradicts what the receiver applied. |
+| 408, 425, 429 | retryable | The receiver asks for the same batch later. |
+| 5xx | retryable | A receiver a restart or a failover fixes. |
+| any other status | retryable | The set is fixed, not "every 4xx". |
+| transport failure | retryable | A dial or a timeout carries no verdict. |
+
+The status is the whole classifier. A permanent status with no body is still
+permanent, and a retryable status that carries a diagnostic is still
+retryable. The diagnostic itself is unchanged: `eventSinkDiagnosticCode`
+still extracts only the bounded `code` field, so the pump logs the status
+and that machine code, never the receiver's free text and never the
+configured URL. `TestHTTPEventSinkClassifiesPermanentReceiverRejections`,
+`TestHTTPEventSinkPermanentRejectionKeepsABoundedDiagnostic`, and
+`TestHTTPEventSinkTransportFailureIsNotPermanent` pin the table above.
+
+A permanent rejection is a configuration report, not a data loss. The
+journal keeps every record, so fixing the receiver and restarting harness
+resumes forwarding from whatever cursor the receiver answers next (§6).
