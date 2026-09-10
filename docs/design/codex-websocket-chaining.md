@@ -304,12 +304,27 @@ A retry can use lineage only when the prior attempt completed cleanly. A failed
 attempt cannot update lineage. Partial model output and partial tool intent do
 not enter the next incremental baseline.
 
-The adapter classifies a Codex "conversation gone" rejection as a chain miss:
-the documented `previous_response_not_found` code, or the plain HTTP-status
-vocabulary (`404`, `not_found`) the same condition has also been observed to
-carry. Recovery is intentionally narrower than an ordinary "before visible
-output" check. Only a miss in the immediate first response frame can recover,
-and only once per turn.
+The adapter classifies a Codex "conversation gone" rejection as a chain miss.
+The same condition arrives in three vocabularies:
+
+- The documented `previous_response_not_found` error code.
+- The plain HTTP-status vocabulary, `404` or `not_found`.
+- No error code at all: an `invalid_request_error` whose message names
+  `previous_response_id`. The live ChatGPT Codex backend sends this form,
+  measured on 2026-09-09:
+
+```json
+{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid `previous_response_id`."}}
+```
+
+The third form is matched on the `previous_response_id` field name in the
+message, never on `invalid_request_error`, which describes every malformed
+request. A false positive costs one complete re-send on a fresh connection,
+which is what an unusable reference needs anyway.
+
+Recovery is intentionally narrower than an ordinary "before visible output"
+check. Only a miss in the immediate first response frame can recover, and only
+once per turn.
 
 A chain miss can also occur on a request that carried no `previous_response_id`
 of its own. A reused pooled connection can carry the server's own implicit
@@ -408,6 +423,34 @@ must render the same bytes on every call of one tool loop (see
 means the fleet pays a full re-send after ordinary think time, which is a pool
 tuning question, not an assembly defect.
 
+#### `connection_idle` undercounts idle loss
+
+**A low `connection_idle` count does not mean idle loss is rare.** The reason
+is only computed on a call that reaches the WebSocket path, and most idle loss
+never gets there.
+
+`provider/openai/ws_redial_live_test.go` measures the pooled connection's real
+idle life at 60 to 90 seconds, because the server closes an unread connection
+with `keepalive ping timeout` and this pool leaves an idle connection with no
+reader. `wsDefaultIdleTimeout` is 5 minutes. A gap between those two bounds is
+therefore the common case, and the pool treats that connection as reusable:
+
+1. `stream` computes `reuse` as true, so `chain_refusal` is `none`.
+2. It builds an incremental request and sends it. The write succeeds.
+3. `readFirstFrame` gets the close frame instead of a first event.
+4. `handleTransportError` records the failure and returns false.
+5. The call falls back to HTTP with the complete body.
+
+An HTTP call reports no `RequestMetadata`, so it emits **no `request_mode` and
+no `chain_refusal` at all**. The re-send is real and the lineage is gone, but
+the metric that exists to size that loss records nothing. `connection_idle`
+fires only for a gap past the full 5 minutes, which is the rarest case.
+
+Read the two together. A rise in Codex `turn_metrics` rows that carry no
+`request_mode` is the missing idle signal, and it is a pool defect rather
+than an assembly one. Do not conclude from a low `connection_idle` rate that
+the reuse window is well tuned.
+
 A `generate:false` prewarm is not a model inference, user turn, assistant
 message, or `turn_metrics` record. The engine emits separate `startup_prewarm`
 records through `Config.OnStartupPrewarmMetrics` or structured stderr. The
@@ -471,6 +514,8 @@ Implementation follows test-driven development.
 - A chain-miss code (`previous_response_not_found`, `404`, or `not_found`) on
   the first frame causes one full-request recovery on a freshly dialed
   connection.
+- A codeless `invalid_request_error` naming `previous_response_id` recovers
+  the same way; an `invalid_request_error` naming any other field does not.
 - A first-frame chain miss on a request that was already complete (not
   chained) also recovers when it arrived on a reused connection, and does not
   recover on a freshly dialed one.
@@ -535,7 +580,8 @@ Validate behavior and the shipped metrics before broad rollout:
 Use `startup_prewarm.status` to compare eligibility, readiness, and first-turn
 consumption. Use `turn_metrics.chain_recovered` to monitor chain misses without
 exposing response IDs. Group `turn_metrics.chain_refusal` to rank why full
-requests happen.
+requests happen, alongside the count of Codex rows carrying no `request_mode`
+(see "`connection_idle` undercounts idle loss").
 
 Rollback disables Responses WebSocket transport or reverts the adapter change.
 Canonical history and journals require no migration or repair.

@@ -741,6 +741,72 @@ func TestNotFoundHTTPStatusCodeRecoversLikeChainMiss(t *testing.T) {
 	}
 }
 
+// invalidPreviousResponseIDFrame is the rejection the LIVE ChatGPT Codex
+// backend sends for an unusable previous_response_id, captured verbatim by
+// provider/openai/ws_redial_live_test.go on 2026-09-09. It carries no
+// "code" field at all: the reason lives in "error.type" plus a top-level
+// "status", which the documented previous_response_not_found vocabulary and
+// the plain 404/not_found vocabulary both miss.
+func invalidPreviousResponseIDFrame() string {
+	return `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid ` + "`previous_response_id`" + `."}}`
+}
+
+// TestInvalidPreviousResponseIDRecoversLikeChainMiss pins the live
+// vocabulary above. Without it isNotFoundErrorCode sees an empty code,
+// isPreviousResponseNotFoundFrame reports false, and wsPool.stream's
+// once-per-turn recovery never runs: the chained turn dies with a plain
+// non-retryable "openai: Invalid `previous_response_id`." instead of
+// re-sending the complete request that would have worked.
+func TestInvalidPreviousResponseIDRecoversLikeChainMiss(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "invalid-previous-recovery")
+	server.scripts <- wsLineageScript{beforeWait: []string{invalidPreviousResponseIDFrame()}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("invalid-previous-recovery", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	incremental := decodeResponseCreate(t, <-server.frames)
+	fullRetry := decodeResponseCreate(t, <-server.frames)
+	if incremental.PreviousResponseID != "resp_secret_lineage" {
+		t.Fatalf("initial request previous_response_id = %q, want resp_secret_lineage", incremental.PreviousResponseID)
+	}
+	if fullRetry.PreviousResponseID != "" || len(fullRetry.Input) != 3 {
+		t.Fatalf("recovery request = previous %q, %d items; want complete request without lineage", fullRetry.PreviousResponseID, len(fullRetry.Input))
+	}
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("terminal event = %+v, want a recovered EventDone", terminal)
+	}
+}
+
+// TestUnrelatedInvalidRequestDoesNotRecover states the surplus half of the
+// message match above: an invalid_request_error that does NOT name
+// previous_response_id is an ordinary permanent rejection. Recovering it
+// would re-send the whole history for a request the server will refuse
+// again for the same reason.
+func TestUnrelatedInvalidRequestDoesNotRecover(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "unrelated-invalid")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Invalid value for ` + "`tools`" + `."}}`,
+	}}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("unrelated-invalid", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	_, streamErr := drainLineageStream(stream)
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "Invalid value for `tools`") {
+		t.Fatalf("stream error = %v, want the unrelated invalid_request_error to escape unchanged", streamErr)
+	}
+	<-server.frames // the one chained request
+	if got := len(server.frames); got != 0 {
+		t.Fatalf("extra websocket frames = %d, want no recovery re-send for an unrelated rejection", got)
+	}
+}
+
 func TestChainMissRecoveryDialsFreshConnection(t *testing.T) {
 	server := newWSLineageServer(t)
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
