@@ -113,6 +113,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"skillsLoaded":              "lazy discovery cache gate, same pattern as instrLoaded",
 	"skillsSeg":                 "lazy discovery cache payload, same pattern as instrLoaded",
 	"skillsErr":                 "lazy discovery cache error, same pattern as instrLoaded",
+	"ambientMCPSources":         "per-Prompt ambient MCP snapshots; live ambient pins remain the append-only request representation",
 	"goalGen":                   "explicitly documented \"Deliberately runtime-only: never persisted ... never restored on LoadSession\"",
 	"goalParked":                "explicitly documented \"Deliberately runtime-only: never persisted, never folded by LoadSession\"",
 	"goalParkedReason":          "same explicit exclusion as goalParked, same doc comment",
