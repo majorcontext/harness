@@ -84,6 +84,17 @@ func mcpToolLoadingByServer(servers map[string]config.MCPServerSpec) map[string]
 	return out
 }
 
+func ambientMCPSources(sources map[string]config.AmbientMCPSourceSpec) map[string]engine.AmbientMCPSource {
+	if len(sources) == 0 {
+		return nil
+	}
+	out := make(map[string]engine.AmbientMCPSource, len(sources))
+	for key, source := range sources {
+		out[key] = engine.AmbientMCPSource{Server: source.Server, Tool: source.Tool, Label: source.Label}
+	}
+	return out
+}
+
 // mcpRegistry adapts a possibly-nil *engine.MCPManager to engine.MCPRegistry,
 // the same typed-nil guard pluginHooks applies to *plugin.Host: assigning a
 // typed-nil *engine.MCPManager directly to an engine.MCPRegistry-typed

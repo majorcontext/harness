@@ -267,6 +267,10 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		text += "\n\n" + seg
 	}
+	s.refreshAmbientMCPSources(ctx)
+	for _, seg := range s.delegatedAmbientMCPSourceSegments() {
+		text += "\n\n" + seg
+	}
 
 	cfg := s.cfg.ClaudeCode
 	binary := cfg.BinaryPath
