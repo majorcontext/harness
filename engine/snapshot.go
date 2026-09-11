@@ -58,7 +58,7 @@ import (
 // field added to the schema needs no migration path: bump this and every
 // stored snapshot falls back to a full replay on its next load and is
 // rewritten from the next trigger.
-const sessionSnapshotVersion = 2
+const sessionSnapshotVersion = 4
 
 // sessionSnapshotSuffix names a session's snapshot file. Like the metadata
 // index's own suffix it deliberately does not end in ".jsonl", so no
@@ -188,8 +188,9 @@ type sessionSnapshot struct {
 	ClaudeCodeCLISessionID     string `json:"claude_code_cli_session_id,omitempty"`
 	ClaudeCodeHistoryWatermark int    `json:"claude_code_history_watermark,omitempty"`
 
-	ClaudeCodeSessionCostUSD float64 `json:"claude_code_session_cost_usd,omitempty"`
-	HaveClaudeCodeCost       bool    `json:"have_claude_code_cost,omitempty"`
+	ClaudeCodeSessionCostUSD        float64           `json:"claude_code_session_cost_usd,omitempty"`
+	HaveClaudeCodeCost              bool              `json:"have_claude_code_cost,omitempty"`
+	DelegatedAmbientMCPSourceHashes map[string]string `json:"delegated_ambient_mcp_source_hashes,omitempty"`
 }
 
 // sessionSnapshotFile is the on-disk wrapper: the snapshot bytes plus a
@@ -483,6 +484,12 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		ClaudeCodeSessionCostUSD: s.claudeCodeSessionCostUSD,
 		HaveClaudeCodeCost:       s.haveClaudeCodeCost,
 	}
+	if len(s.delegatedAmbientMCPSourceHashes) > 0 {
+		snap.DelegatedAmbientMCPSourceHashes = make(map[string]string, len(s.delegatedAmbientMCPSourceHashes))
+		for key, hash := range s.delegatedAmbientMCPSourceHashes {
+			snap.DelegatedAmbientMCPSourceHashes[key] = hash
+		}
+	}
 	if len(s.toolResults) > 0 {
 		snap.ToolResults = make(map[string]toolResultMeta, len(s.toolResults))
 		for k, v := range s.toolResults {
@@ -572,6 +579,10 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	// or a session never delegated) restores to exactly the zero value a
 	// full replay would also leave.
 	s.claudeCodeCLISessionID = snap.ClaudeCodeCLISessionID
+	s.delegatedAmbientMCPSourceHashes = make(map[string]string, len(snap.DelegatedAmbientMCPSourceHashes))
+	for key, hash := range snap.DelegatedAmbientMCPSourceHashes {
+		s.delegatedAmbientMCPSourceHashes[key] = hash
+	}
 	s.claudeCodeHistoryWatermark = snap.ClaudeCodeHistoryWatermark
 	s.claudeCodeSessionCostUSD = snap.ClaudeCodeSessionCostUSD
 	s.haveClaudeCodeCost = snap.HaveClaudeCodeCost

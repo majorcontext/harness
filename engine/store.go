@@ -204,7 +204,8 @@ const (
 	// fold into lastUsage on replay, unlike recCompact — see
 	// applyClaudeCodeUsage's doc comment for why that divergence is safe
 	// here.
-	recClaudeCodeUsage = "claude_code.usage"
+	recClaudeCodeUsage               = "claude_code.usage"
+	recClaudeCodeAmbientMCPDelivered = "claude_code.ambient_mcp_delivered"
 )
 
 // record is one line of a session log file.
@@ -335,7 +336,8 @@ type record struct {
 	// watermark of 0, which is harmless — persistClaudeCodeHistoryWatermark
 	// is never called with 0 in practice (a delegated turn always appends
 	// at least the pending trigger message before this is recorded).
-	ClaudeCodeHistoryWatermark int `json:"claude_code_history_watermark,omitempty"`
+	ClaudeCodeHistoryWatermark    int               `json:"claude_code_history_watermark,omitempty"`
+	ClaudeCodeAmbientMCPDelivered map[string]string `json:"claude_code_ambient_mcp_delivered,omitempty"`
 	// ClaudeCodeCostUSD carries a recClaudeCodeUsage record's own
 	// per-turn total_cost_usd (see Session.applyClaudeCodeUsage and
 	// message.SubscriptionUsage.SessionCostUSD's own doc comment) — a
@@ -734,17 +736,14 @@ func (s *Session) persistServiceTier(tier string) {
 // persistClaudeCodeSessionID appends a claude_code.session_id record to the
 // session log. It mirrors persistModel/persistEffort exactly: a no-op
 // until the log exists (lazy creation), caller holds s.mu.
-func (s *Session) persistClaudeCodeSessionID(id string) {
+func (s *Session) persistClaudeCodeSessionID(id string) error {
 	if s.cfg.SessionDir == "" || !s.logStarted {
-		return
+		return fmt.Errorf("session journal is not active")
 	}
 	if err := s.ensureLog(); err != nil {
-		s.lastPersistErr = err
-		return
+		return err
 	}
-	if err := s.writeRecord(record{Type: recClaudeCodeSessionID, ClaudeCodeSessionID: id}); err != nil {
-		s.lastPersistErr = err
-	}
+	return s.writeRecord(record{Type: recClaudeCodeSessionID, ClaudeCodeSessionID: id})
 }
 
 // persistClaudeCodeHistoryWatermark appends a
@@ -762,6 +761,20 @@ func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
 	if err := s.writeRecord(record{Type: recClaudeCodeHistoryWatermark, ClaudeCodeHistoryWatermark: n}); err != nil {
 		s.lastPersistErr = err
 	}
+}
+
+func (s *Session) persistClaudeCodeAmbientMCPDelivered(hashes map[string]string) error {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return nil
+	}
+	if err := s.ensureLog(); err != nil {
+		return err
+	}
+	copy := make(map[string]string, len(hashes))
+	for key, hash := range hashes {
+		copy[key] = hash
+	}
+	return s.writeRecord(record{Type: recClaudeCodeAmbientMCPDelivered, ClaudeCodeAmbientMCPDelivered: copy})
 }
 
 // persistClaudeCodeUsage appends a claude_code.usage record to the session
@@ -1620,6 +1633,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.claudeCodeCLISessionID = rec.ClaudeCodeSessionID
 		case recClaudeCodeHistoryWatermark:
 			s.claudeCodeHistoryWatermark = rec.ClaudeCodeHistoryWatermark
+		case recClaudeCodeAmbientMCPDelivered:
+			s.delegatedAmbientMCPSourceHashes = make(map[string]string, len(rec.ClaudeCodeAmbientMCPDelivered))
+			for key, hash := range rec.ClaudeCodeAmbientMCPDelivered {
+				s.delegatedAmbientMCPSourceHashes[key] = hash
+			}
 		case recClaudeCodeUsage:
 			// See Session.applyClaudeCodeUsage's own doc comment for why
 			// this folds into BOTH cumulative usage and lastUsage, unlike

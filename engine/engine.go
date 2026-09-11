@@ -682,6 +682,10 @@ type Config struct {
 	// with no separate config flag, unlike GoalTool below.
 	MCP MCPRegistry
 
+	// AmbientMCPSources declares MCP catalogs injected as trusted ambient
+	// context. The key identifies one independent append-only catalog stream.
+	AmbientMCPSources map[string]AmbientMCPSource
+
 	// MCPToolLoading selects when this session defers MCP tool SCHEMAS
 	// instead of registering every one of them on every request (see
 	// mcp_lazy.go and docs/design/mcp-lazy-tools.md). The zero value is
@@ -1342,6 +1346,11 @@ type Session struct {
 	skillsLoaded bool
 	skillsSeg    string
 	skillsErr    error
+
+	// ambientMCPSources is each source's current per-run snapshot. The
+	// rendered text reaches the request only through append-only ambient pins.
+	ambientMCPSources               map[string]ambientMCPSourceSnapshot
+	delegatedAmbientMCPSourceHashes map[string]string
 
 	// Goal-loop state (see goal.go). goalActive is set while a goal is set but
 	// neither achieved nor cleared; goalCondition holds the current goal's
@@ -3275,6 +3284,9 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	prov := assembled.provider
 	req := assembled.request
 	params := assembled.params
+	// Provider resolution above is pure and must precede live ambient MCP
+	// discovery, which can connect or spawn a configured MCP server.
+	s.refreshAmbientMCPSources(ctx)
 	system := req.System
 	tools := req.Tools
 	// Ambient status rides this in-memory request copy only: s.History()
@@ -3292,6 +3304,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 		{ambientKindGoal, goalParkedSegment(s), "[goal: no longer parked.]"},
 		{ambientKindIdentity, identityStatusSegment(s.cfg.EngineVersion, s.cfg.StartedAt, s.cfg.SessionSync), ""},
 	}
+	segs = append(segs, s.ambientMCPSourceSegments()...)
 	// Unlike the four segments above, this one CHECKS OUT pending
 	// notifications rather than idempotently recomputing a status string —
 	// see checkoutTaskNotificationsSegment's doc comment. Committing them

@@ -239,6 +239,23 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+## Adopted personal skills from MCP
+
+`ambient_mcp_sources` maps a source key to its MCP `server`, discovery `tool`,
+and optional display `label`. Before each run, Harness calls each source tool
+with `{}` under a five-second deadline. A valid result is the version-1 catalog
+envelope with a hash and entries carrying `id` and `revision_id`.
+
+Harness renders the catalog as runtime `EngineContext`, never as a system
+segment. Each source has its own append-only ambient pin. The source's existing
+MCP `load_skill` tool loads an exact advertised revision; Harness does not add
+another tool. An unavailable, malformed, or oversized catalog renders an
+explicit unavailable notice and the run continues with repository skills.
+
+Claude Code delegated turns do not receive ambient MCP catalogs. They bypass the
+native request assembly and must remain disabled behind the Boxes release gate
+until the CLI path supports the same pinning contract.
+
 ## Tool-batching guidance
 
 The engine executes one assistant message's tool calls concurrently

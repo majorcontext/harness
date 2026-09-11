@@ -29,8 +29,9 @@ func TestClaudeCodeAppendSystemPromptArgv(t *testing.T) {
 	}
 	argv := readInvocations(t, logPath)[0]
 	got, ok := argvValueAfter(argv, "--append-system-prompt")
-	if !ok || got != " first \n\ngateway → --append-system-prompt" {
-		t.Errorf("append arg = %q, %v; argv=%v", got, ok, argv)
+	want := claudeCodeAmbientContextGuidance + "\n\n first \n\ngateway → --append-system-prompt"
+	if !ok || got != want {
+		t.Errorf("append arg = %q, %v; want %q; argv=%v", got, ok, want, argv)
 	}
 	var count int
 	for _, arg := range argv {

@@ -113,6 +113,9 @@ type Config struct {
 	// make field-by-field merging (as Provider gets) more confusing than
 	// useful here.
 	MCPServers map[string]MCPServerSpec `json:"mcp_servers,omitempty"`
+	// AmbientMCPSources declares MCP catalogs injected as trusted runtime
+	// context. A project can add keys but cannot replace a user source.
+	AmbientMCPSources map[string]AmbientMCPSourceSpec `json:"ambient_mcp_sources,omitempty"`
 	// Processes declares named dev/support processes the engine can
 	// manage (start/stop/restart/status/logs) via the "process" session
 	// tool and the server's /process endpoints (see package engine's
@@ -346,6 +349,14 @@ type ProcessSpec struct {
 	// ReadyTimeoutS bounds Start's blocking wait for whichever ready gate
 	// is configured, in seconds; <= 0 means the engine's default (60s).
 	ReadyTimeoutS int `json:"ready_timeout_s,omitempty"`
+}
+
+// AmbientMCPSourceSpec identifies one configured MCP tool that supplies an
+// ambient catalog. Server and Tool are required. Label defaults to the map key.
+type AmbientMCPSourceSpec struct {
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	Label  string `json:"label,omitempty"`
 }
 
 // MCPServerSpec configures one MCP server (package mcp's client, wired by
@@ -1120,6 +1131,18 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 	return nil
 }
 
+func validateAmbientMCPSources(sources map[string]AmbientMCPSourceSpec, servers map[string]MCPServerSpec) error {
+	for key, source := range sources {
+		if key == "" || source.Server == "" || source.Tool == "" {
+			return fmt.Errorf("ambient_mcp_sources.%s requires server and tool", key)
+		}
+		if _, ok := servers[source.Server]; !ok {
+			return fmt.Errorf("ambient_mcp_sources.%s references unknown mcp server %q", key, source.Server)
+		}
+	}
+	return nil
+}
+
 // validateProcesses fails loudly on a process entry that cannot possibly be
 // wired: the map key naming it must be non-empty (it is the identity a
 // caller uses to start/stop/restart/status/logs it — same "cannot possibly
@@ -1349,6 +1372,9 @@ func mergeAndValidate(base, over *Config) (*Config, error) {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if err := validateAppendSystemPromptArgs(out); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := validateAmbientMCPSources(out.AmbientMCPSources, out.MCPServers); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	return out, nil
@@ -1637,8 +1663,27 @@ func merge(base, over *Config) *Config {
 			m[k] = copyMCPServerSpec(v)
 		}
 		out.MCPServers = m
+		for _, source := range base.AmbientMCPSources {
+			if server, ok := base.MCPServers[source.Server]; ok {
+				m[source.Server] = copyMCPServerSpec(server)
+			}
+		}
 	} else {
 		out.MCPServers = nil
+	}
+	if n := len(base.AmbientMCPSources) + len(over.AmbientMCPSources); n > 0 {
+		m := make(map[string]AmbientMCPSourceSpec, n)
+		for k, v := range base.AmbientMCPSources {
+			m[k] = v
+		}
+		for k, v := range over.AmbientMCPSources {
+			if _, exists := m[k]; !exists {
+				m[k] = v
+			}
+		}
+		out.AmbientMCPSources = m
+	} else {
+		out.AmbientMCPSources = nil
 	}
 	if n := len(base.Processes) + len(over.Processes); n > 0 {
 		m := make(map[string]ProcessSpec, n)
