@@ -239,6 +239,23 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+## Adopted personal skills from MCP
+
+`Config.AmbientSkills` can supply adopted personal skills outside the workspace.
+`MCPAmbientSkillSource` adapts an MCP server that provides
+`list_adopted_skills` and `load_skill`. Before each native `Prompt`, the engine
+calls `list_adopted_skills` once and pins its catalog for every model and tool
+round in that run. The system segment advertises each exact `id` and `revision`.
+The built-in `load_skill` tool rejects any pair that was not advertised by that
+pinned catalog before it calls the source. The catalog is runtime-only and is
+not stored in session history.
+
+This is available to native providers and delegated Claude Code. Native requests
+receive a built-in `load_skill` tool. Delegated Claude Code uses the source MCP
+server's namespaced `load_skill` tool and adds a catalog only when it changes to
+the current CLI user input. It never changes `append_system_prompt` or the CLI
+tool definitions. Discovery failure rejects the turn before the CLI starts.
+
 ## Tool-batching guidance
 
 The engine executes one assistant message's tool calls concurrently

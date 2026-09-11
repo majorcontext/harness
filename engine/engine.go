@@ -682,6 +682,12 @@ type Config struct {
 	// with no separate config flag, unlike GoalTool below.
 	MCP MCPRegistry
 
+	// AmbientSkills exposes a live catalog of adopted personal skills. The
+	// engine snapshots it once for each native Prompt run and only loads the
+	// exact id and revision advertised by that snapshot. Nil disables this
+	// optional source. See ambient_mcp.go.
+	AmbientSkills AmbientSkillSource
+
 	// MCPToolLoading selects when this session defers MCP tool SCHEMAS
 	// instead of registering every one of them on every request (see
 	// mcp_lazy.go and docs/design/mcp-lazy-tools.md). The zero value is
@@ -1343,6 +1349,15 @@ type Session struct {
 	skillsSeg    string
 	skillsErr    error
 
+	// ambientSkills is the current native Prompt run's remote catalog. It is
+	// replaced before each new Prompt and remains fixed through that run's
+	// tool rounds, so load_skill can only request an advertised revision.
+	ambientSkills    []AmbientSkill
+	ambientSkillsSeg string
+	// delegatedAmbientSkills is the last catalog sent to the resumed Claude
+	// Code session. A change becomes a suffix of the next user input.
+	delegatedAmbientSkills []AmbientSkill
+
 	// Goal-loop state (see goal.go). goalActive is set while a goal is set but
 	// neither achieved nor cleared; goalCondition holds the current goal's
 	// completion condition. Restored on LoadSession from the goal.* records in
@@ -1714,6 +1729,9 @@ func newSession(cfg Config) *Session {
 		// nothing to act on. Policy is fixed for the session's life, so
 		// the def stays byte-stable across requests.
 		s.tools[mcpSessionToolName] = mcpTool(s.mcpPolicyCanDefer())
+	}
+	if cfg.AmbientSkills != nil {
+		s.tools[loadSkillToolName] = loadSkillTool()
 	}
 	// task is registered here unconditionally whenever a SessionManager is
 	// present; SessionManager itself withholds it post-construction for a
@@ -2854,6 +2872,10 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 		s.emitSessionError(err)
 		return nil, err
 	}
+	if err := s.refreshAmbientSkills(ctx); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	// Automatic compaction check (docs/design/context-compaction.md §1):
 	// runs on every call, bare or goal-loop-driven alike, since PursueGoal
 	// drives everything through Prompt. Deliberately BEFORE the incoming
@@ -3204,6 +3226,9 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 		system = append(system, seg)
 	}
 	if seg := s.skillsSegment(); seg != "" {
+		system = append(system, seg)
+	}
+	if seg := s.ambientSkillsSegment(); seg != "" {
 		system = append(system, seg)
 	}
 	if mcpCatalog != "" {

@@ -267,6 +267,14 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if seg := s.checkoutTaskNotificationsSegment(); seg != "" {
 		text += "\n\n" + seg
 	}
+	if err := s.refreshAmbientSkills(ctx); err != nil {
+		return nil, err
+	}
+	if seg, err := s.delegatedAmbientSkillsSegment(); err != nil {
+		return nil, err
+	} else if seg != "" {
+		text += "\n\n" + seg
+	}
 
 	cfg := s.cfg.ClaudeCode
 	binary := cfg.BinaryPath
