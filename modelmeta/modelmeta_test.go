@@ -15,9 +15,18 @@ func TestContextWindowAnthropic(t *testing.T) {
 }
 
 func TestContextWindowOpenAI(t *testing.T) {
-	tokens, ok := ContextWindow(message.ModelRef{Provider: "openai", Model: "gpt-5"})
-	if !ok || tokens != 400_000 {
-		t.Fatalf("ContextWindow(openai/gpt-5) = %d, %v; want 400000, true", tokens, ok)
+	cases := []struct {
+		model string
+		want  int
+	}{
+		{"gpt-5", 400_000},
+		{"gpt-6-astra", 1_050_000},
+	}
+	for _, c := range cases {
+		tokens, ok := ContextWindow(message.ModelRef{Provider: "openai", Model: c.model})
+		if !ok || tokens != c.want {
+			t.Errorf("ContextWindow(openai/%s) = %d, %v; want %d, true", c.model, tokens, ok, c.want)
+		}
 	}
 }
 
@@ -25,13 +34,22 @@ func TestContextWindowOpenAI(t *testing.T) {
 // form for a ChatGPT Codex backend model — see
 // meetneptune/boxes internal/api/codex_models.go, which mints refs like
 // "codex/gpt-5.6-sol") resolves from the SAME openaiContextWindows table the
-// "openai" provider case already uses: gpt-5.6-sol is served over two
-// different transports (openai/gpt-5.6-sol and codex/gpt-5.6-sol) but names
-// one model, so it must report one context window.
+// "openai" provider case already uses: each model is served over two
+// different transports (openai/<model> and codex/<model>) but names one
+// model, so it must report one context window.
 func TestContextWindowCodex(t *testing.T) {
-	tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-5.6-sol"})
-	if !ok || tokens != 1_050_000 {
-		t.Fatalf("ContextWindow(codex/gpt-5.6-sol) = %d, %v; want 1050000, true", tokens, ok)
+	cases := []struct {
+		model string
+		want  int
+	}{
+		{"gpt-5.6-sol", 1_050_000},
+		{"gpt-6-astra", 1_050_000},
+	}
+	for _, c := range cases {
+		tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: c.model})
+		if !ok || tokens != c.want {
+			t.Errorf("ContextWindow(codex/%s) = %d, %v; want %d, true", c.model, tokens, ok, c.want)
+		}
 	}
 }
 
