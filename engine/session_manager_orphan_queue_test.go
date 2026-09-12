@@ -113,6 +113,73 @@ func TestReapDrainsPreexistingOrphanedQueue(t *testing.T) {
 	}
 }
 
+// TestReapDrainsWarmOrphanQueue covers a terminal WARM ORPHAN: a node
+// with depth > 0 but parentID == "" (adoptReloadedLocked's "true depth
+// is unrecoverable" branch — the true parent is untracked, so only
+// depth, restored from the child's own durable TaskDepth, survives; see
+// TestReloadedChildWithUnknownParentUsesDurableTaskDepth). Neither
+// existing drain site reaches it: finalizeTurnFrom's drain needs a new
+// in-package turn, which an already-terminal reload never gets, and
+// Reap's own eligibility loop used to `continue` past it before ever
+// considering its queue, since parentID == "" && !pendingForget skips
+// deletion. Before Reap also drained it independent of deletion, its
+// queue resurrected on every reload, forever.
+func TestReapDrainsWarmOrphanQueue(t *testing.T) {
+	dir := t.TempDir()
+	cfg := managedConfig("root", scriptedTurns("root", nil), scriptedTurns("child", doneTurn("done")))
+	cfg.SessionDir = dir
+	mgr1 := NewSessionManager(context.Background(), 0, 0)
+	root := mgr1.NewRoot(cfg)
+
+	childID, err := mgr1.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	waitForStatus(t, mgr1, childID, StatusDone, time.Second)
+	child, ok := mgr1.Session(childID)
+	if !ok {
+		t.Fatal("Session: child not found")
+	}
+
+	// A brand-new SessionManager has never heard of childID's true
+	// parent (root) — AdoptReloaded's recover=true path restores n.depth
+	// from child's own durable TaskDepth but leaves n.parentID empty,
+	// the warm-orphan shape.
+	mgr2 := NewSessionManager(context.Background(), 0, 0)
+	if err := mgr2.AdoptReloaded(child); err != nil {
+		t.Fatalf("AdoptReloaded: %v", err)
+	}
+	info, ok := mgr2.Info(childID)
+	if !ok {
+		t.Fatal("Info: child not adopted")
+	}
+	if info.ParentID != "" || info.Depth == 0 || info.Status != StatusDone {
+		t.Fatalf("info = %+v, want ParentID empty, Depth > 0, Status done (test setup invalid, not a terminal warm orphan)", info)
+	}
+
+	// Bypasses SessionManager entirely, exactly like
+	// TestReapDrainsPreexistingOrphanedQueue's own bypass.
+	if _, _, err := child.EnqueuePrompt("too late", "", PromptProvenance{}); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+	if pending := child.QueuedPrompts(); len(pending) != 1 {
+		t.Fatalf("QueuedPrompts before Reap = %+v, want 1 (test setup)", pending)
+	}
+
+	mgr2.Reap()
+
+	if pending := child.QueuedPrompts(); len(pending) != 0 {
+		t.Fatalf("QueuedPrompts after Reap = %+v, want empty: a terminal warm orphan's queue must be drained even though its node is never deleted", pending)
+	}
+	reloaded, err := LoadSession(Config{SessionDir: dir}, childID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if pending := reloaded.QueuedPrompts(); len(pending) != 0 {
+		t.Fatalf("QueuedPrompts after reload = %+v, want empty: Reap's warm-orphan drain must be durable", pending)
+	}
+}
+
 // TestFinalizeTurnRootQueueSurvivesOrphanCleanup is the regression guard:
 // a root (depth 0) never settles terminal and its queue drives its own
 // future idle dispatch, so this cleanup must never touch it.

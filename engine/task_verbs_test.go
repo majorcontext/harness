@@ -349,11 +349,13 @@ type twoStageBlockingProvider struct {
 	secondCall chan struct{}
 	once       sync.Once
 	call       int
+	requests   []*provider.Request
 }
 
 func (p *twoStageBlockingProvider) Name() string { return p.name }
 
-func (p *twoStageBlockingProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
+func (p *twoStageBlockingProvider) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
+	p.requests = append(p.requests, req)
 	p.call++
 	if p.call == 1 {
 		return &blockingStream{ctx: ctx, release: p.release1}, nil
@@ -391,8 +393,15 @@ func (s *ctxOnlyBlockingStream) Close() error { return nil }
 func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	release1 := make(chan struct{})
 	childProv := &twoStageBlockingProvider{name: "child", release1: release1, secondCall: make(chan struct{})}
+	cfg := managedConfig("root", scriptedTurns("root", nil), childProv)
+	var dequeues []Event
+	cfg.OnEvent = func(ev Event) {
+		if ev.Type == EventPromptDequeued {
+			dequeues = append(dequeues, ev)
+		}
+	}
 	mgr := NewSessionManager(context.Background(), 0, 0)
-	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), childProv))
+	root := mgr.NewRoot(cfg)
 
 	childID, err := mgr.Spawn(SpawnOptions{ParentID: root.ID, Prompt: "go", Model: modelFor("child"), AgentType: AgentGeneralPurpose})
 	if err != nil {
@@ -439,6 +448,38 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	pending := child.QueuedPrompts()
 	if len(pending) != 0 {
 		t.Fatalf("QueuedPrompts after cancel-mid-drain settled = %+v, want empty: message B was never delivered, but a terminal subagent's queue is orphaned forever and must be drained", pending)
+	}
+
+	// The queue-length check above passes whether message B was left
+	// alone for finalizeTurnFrom's own drain OR wrongly consumed and
+	// journaled "delivered" by drainQueueAndPrompt's own loop — both
+	// leave QueuedPrompts empty. Pin the actual mechanism: find B's own
+	// prompt.dequeued event and require its reason to be "orphaned".
+	var reasonB string
+	var sawB bool
+	for _, ev := range dequeues {
+		if ev.QueueText == "message B" {
+			reasonB, sawB = ev.QueueReason, true
+		}
+	}
+	if !sawB {
+		t.Fatalf("no prompt.dequeued event recorded for message B; want one with reason %q", "orphaned")
+	}
+	if reasonB != "orphaned" {
+		t.Fatalf("message B dequeued reason = %q, want %q: drainQueueAndPrompt must never itself dequeue it", reasonB, "orphaned")
+	}
+
+	// Corroborate with the provider itself: a THIRD Stream call would be
+	// message B's own re-driven turn. drainQueueAndPrompt only ever
+	// reached calls 1 (message A's original turn) and 2 (the re-driven
+	// turn for message A that this test cancels), so B's text must never
+	// appear in any recorded request.
+	for _, req := range childProv.requests {
+		for _, m := range req.Messages {
+			if strings.Contains(m.Parts.Text(), "message B") {
+				t.Fatalf("provider received a request carrying message B's text: %+v, want it never streamed", req)
+			}
+		}
 	}
 }
 

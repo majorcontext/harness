@@ -580,8 +580,10 @@ func (m *SessionManager) deferQueueRecordFlush(s *Session) {
 // session, journaling each dequeued("orphaned") so a reload nets the
 // queue to zero instead of resurrecting a record nothing will ever
 // deliver. Parks records via queueRecordDeferredLocked, matching the
-// re-drive branch above — no synchronous disk write under m.mu. Caller
-// holds m.mu.
+// re-drive branch above — no synchronous disk write under m.mu. The WARN
+// is queued behind the flush thunk (deferPersist is FIFO), not fired
+// here, so it never claims durability the write has not landed yet.
+// Caller holds m.mu.
 func (m *SessionManager) drainOrphanedQueueLocked(n *sessionNode) {
 	s := n.session
 	s.mu.Lock()
@@ -600,7 +602,8 @@ func (m *SessionManager) drainOrphanedQueueLocked(n *sessionNode) {
 		return
 	}
 	m.deferQueueRecordFlush(s)
-	logOrphanedQueueDrain(n.id, drained)
+	id := n.id
+	m.deferPersist(func() { logOrphanedQueueDrain(id, drained) })
 }
 
 // logOrphanedQueueDrain is the one WARN both drain sites use, so a
@@ -2649,6 +2652,21 @@ func (m *SessionManager) Reap() int {
 		// doc comment for both cases in full. A live review finding:
 		// without this exception, either case leaked the node forever.
 		if n.parentID == "" && !n.pendingForget {
+			// A WARM ORPHAN (adoptReloadedLocked's "true depth is
+			// unrecoverable" branch: depth > 0, but the true parent
+			// is untracked so n.parentID is left empty) is
+			// root-shaped and so never deleted here, but its own
+			// queue is still orphaned exactly like a deleted child's
+			// — nothing ever drives another turn on it either. Drain
+			// it without touching deletion, which stays out of scope.
+			if n.depth > 0 && n.finalized {
+				switch n.status {
+				case StatusDone, StatusFailed, StatusCanceled:
+					if drained := n.session.DequeueAllPrompts("orphaned"); len(drained) > 0 {
+						logOrphanedQueueDrain(id, drained)
+					}
+				}
+			}
 			continue
 		}
 		// !n.finalized excludes a StatusCanceled leaf whose own
@@ -2672,9 +2690,13 @@ func (m *SessionManager) Reap() int {
 		n := m.nodes[id]
 		// Belt-and-suspenders for finalizeTurnFrom's own drain: a node
 		// adopted mid-terminal from disk never passed through that, so
-		// any surviving queue would otherwise vanish, unjournaled, the
-		// instant this loop deletes it. Self-locking persist is fine on
-		// this cold GC path, unlike finalizeTurnFrom's hot one.
+		// its queue needs its own drain here too, before this loop
+		// deletes the node — DequeueAllPrompts drives a full server
+		// durable-journal write and event fanout, synchronously, under
+		// m.mu, which is fine on this cold GC path, unlike
+		// finalizeTurnFrom's hot one. Not only a delete-time cleanup:
+		// the warm-orphan branch above calls this same drain for a
+		// parentID=="" node this loop will never delete at all.
 		if drained := n.session.DequeueAllPrompts("orphaned"); len(drained) > 0 {
 			logOrphanedQueueDrain(id, drained)
 		}
