@@ -383,11 +383,11 @@ func (s *ctxOnlyBlockingStream) Close() error { return nil }
 // turn is still blocked; the first turn completes, drainQueueAndPrompt
 // dequeues "message A" and starts a second turn (which blocks on ctx
 // only); the child is canceled while that second turn is genuinely in
-// flight. "message B" must be left exactly where it was — still queued,
-// never dequeued or discarded by drainQueueAndPrompt itself — matching
-// cancellation's existing "stop, full stop" semantics elsewhere in this
-// package (a canceled node's queue is never looked at again by anyone;
-// see drainQueueAndPrompt's own doc comment).
+// flight. "message B" must not be dequeued or discarded by
+// drainQueueAndPrompt itself, exactly like message A's own turn was
+// never touched by it either — only finalizeTurnFrom's own terminal
+// settle, once the canceled turn's goroutine actually returns, drains a
+// depth>0 node's leftover queue, journaled dequeued("orphaned").
 func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	release1 := make(chan struct{})
 	childProv := &twoStageBlockingProvider{name: "child", release1: release1, secondCall: make(chan struct{})}
@@ -437,8 +437,8 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	waitForReap(t, mgr, 1, time.Second, "canceled child never became reapable, so drainQueueAndPrompt never returned")
 
 	pending := child.QueuedPrompts()
-	if len(pending) != 1 || pending[0].Text != "message B" {
-		t.Fatalf("QueuedPrompts after cancel-mid-drain = %+v, want exactly one entry left untouched: message B", pending)
+	if len(pending) != 0 {
+		t.Fatalf("QueuedPrompts after cancel-mid-drain settled = %+v, want empty: message B was never delivered, but a terminal subagent's queue is orphaned forever and must be drained", pending)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
+	"log/slog"
 	"os"
 )
 
@@ -573,6 +574,43 @@ func (m *SessionManager) deferQueueRecordFlush(s *Session) {
 		s.flushQueueRecordsLocked()
 		s.mu.Unlock()
 	})
+}
+
+// drainOrphanedQueueLocked discards every prompt still queued on n's
+// session, journaling each dequeued("orphaned") so a reload nets the
+// queue to zero instead of resurrecting a record nothing will ever
+// deliver. Parks records via queueRecordDeferredLocked, matching the
+// re-drive branch above — no synchronous disk write under m.mu. Caller
+// holds m.mu.
+func (m *SessionManager) drainOrphanedQueueLocked(n *sessionNode) {
+	s := n.session
+	s.mu.Lock()
+	var drained []QueuedPrompt
+	for {
+		p, ok := s.dequeueMemoryOnlyLocked()
+		if !ok {
+			break
+		}
+		s.queueRecordDeferredLocked(recPromptDequeued, promptRecord{ID: p.ID, Text: p.Text, Reason: "orphaned"},
+			Event{Type: EventPromptDequeued, QueueID: p.ID, QueueText: p.Text, QueueReason: "orphaned", QueueLen: len(s.promptQueue)})
+		drained = append(drained, p)
+	}
+	s.mu.Unlock()
+	if len(drained) == 0 {
+		return
+	}
+	m.deferQueueRecordFlush(s)
+	logOrphanedQueueDrain(n.id, drained)
+}
+
+// logOrphanedQueueDrain is the one WARN both drain sites use, so a
+// discarded prompt is never dropped with no trace in the logs.
+func logOrphanedQueueDrain(sessionID string, drained []QueuedPrompt) {
+	ids := make([]int64, len(drained))
+	for i, p := range drained {
+		ids[i] = p.ID
+	}
+	slog.Warn("engine: discarding a terminal subagent's orphaned prompt queue", "session", sessionID, "count", len(drained), "prompt_ids", ids)
 }
 
 // unlockAndFlushPersist is the m.mu.Unlock() every SessionManager entry
@@ -2632,6 +2670,14 @@ func (m *SessionManager) Reap() int {
 
 	for _, id := range eligible {
 		n := m.nodes[id]
+		// Belt-and-suspenders for finalizeTurnFrom's own drain: a node
+		// adopted mid-terminal from disk never passed through that, so
+		// any surviving queue would otherwise vanish, unjournaled, the
+		// instant this loop deletes it. Self-locking persist is fine on
+		// this cold GC path, unlike finalizeTurnFrom's hot one.
+		if drained := n.session.DequeueAllPrompts("orphaned"); len(drained) > 0 {
+			logOrphanedQueueDrain(id, drained)
+		}
 		// A canceled node already had its context canceled by
 		// cancelSubtreeLocked; a naturally done/failed node never has —
 		// nothing in that path calls n.cancel(). Every child ctx is
@@ -3108,10 +3154,11 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // being StatusCanceled, precisely so a canceled child's queue is never
 // looked at again by anyone — see its own doc comment, and
 // runTaskSend's queued-path note in task_tool.go, which already
-// documents this same outcome from the model-facing side). A canceled
-// child's leftover queue simply sits inert until the node itself is
-// eventually Reaped — "stays queued," not "discarded" by any explicit
-// step.
+// documents this same outcome from the model-facing side). This loop
+// never discards anything itself — finalizeTurnFrom's own terminal
+// settle is what drains a canceled child's leftover queue, journaling
+// it dequeued("orphaned") rather than silently leaving it queued
+// forever.
 //
 // msgID and blobs are the FIRST call's own — a caller that already
 // resolved a client message id or attachments for text (SendOrQueue) —
@@ -4528,6 +4575,17 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 			n.result = msg.Parts.Text()
 		}
 		notify = &taskNotification{ChildID: n.id, Agent: n.agentType, Status: StatusDone, Result: n.result, Usage: n.session.Usage()}
+	}
+	// !external, matching the re-drive gate's own guard: an externally
+	// scheduled turn's queue is the caller's own to drain (its
+	// maybeDispatchQueued tail — see TestReportTurnEndDoesNotReDriveQueuedPrompt),
+	// so this must never touch it. Reaching here for an in-package child
+	// means the re-drive gate above did not claim the queue — a subagent
+	// never idles for another turn, so anything still queued is orphaned
+	// for good. Drain it now instead of leaving an undelivered
+	// prompt.queued record for promptQueueFold to resurrect on reload.
+	if !external && n.depth > 0 {
+		m.drainOrphanedQueueLocked(n)
 	}
 	// ChildTurnObserver fires for exactly the same node ChildTurnStart
 	// Observer already fired for — n.depth > 0, the SAME predicate
