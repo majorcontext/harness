@@ -86,3 +86,7 @@ An unrecognized `type`, an `openai-compat` or `openai` entry missing
 `base_url`, or a `responses_path` on an entry that builds neither Responses
 adapter, fails config loading loudly rather than silently registering
 nothing.
+
+## License
+
+Harness is licensed under the [MIT License](LICENSE).
