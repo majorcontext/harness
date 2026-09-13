@@ -69,7 +69,7 @@ jobs:
           cache: true
 
       - name: Restore fuzz corpus cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Go's fuzzing engine persists interesting inputs it discovers
           # under GOCACHE/fuzz, separate from the committed seed corpus in
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload failing corpus entries
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           # A fuzzing failure writes the minimized failing input under
           # testdata/fuzz/<Target>/ in the repo tree (this is distinct from
