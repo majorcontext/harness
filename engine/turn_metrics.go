@@ -122,7 +122,10 @@ func defaultTurnMetricsLog(m TurnMetrics) {
 		"cache_write_tokens", m.CacheWriteTokens,
 		"system_len", m.SystemLen,
 		"tools_count", m.ToolsCount,
-		"retry", m.Attempt,
+		// m.Attempt is 1-indexed (1 == no retry), but this key is named
+		// "retry": a query expects 0 for a turn that needed none. Subtract 1
+		// so the wire value matches the wire name.
+		"retry", m.Attempt - 1,
 	}
 	if m.RequestMode != "" {
 		args = append(args,

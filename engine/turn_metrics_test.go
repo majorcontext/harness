@@ -272,6 +272,35 @@ func TestTurnMetricsRecordsRetryAttempt(t *testing.T) {
 	})
 }
 
+// TestDefaultTurnMetricsLogRetryFieldIsZeroBased pins the wire "retry"
+// field's meaning against the exact production incident it caused: a fleet
+// operator read 25 consecutive turn_metrics lines, all "retry":1 and none
+// "retry":0, as a 100% retry rate. TurnMetrics.Attempt is documented and
+// tested (TestTurnMetricsRecordsRetryAttempt) as 1-indexed — 1 means "no
+// retry, succeeded first try" — but defaultTurnMetricsLog wrote that same
+// 1-indexed number under the key literally named "retry", so every
+// never-retried turn logged "retry":1 and a genuinely retried turn logged
+// "retry":2, and no turn could ever log "retry":0. The wire field must
+// count retries, zero-based, matching its own name: 0 for a first-try
+// success, 1 after exactly one retry.
+func TestDefaultTurnMetricsLogRetryFieldIsZeroBased(t *testing.T) {
+	var log bytes.Buffer
+	oldLogger := defaultTurnMetricsStderr
+	defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(&log, nil))
+	t.Cleanup(func() { defaultTurnMetricsStderr = oldLogger })
+
+	defaultTurnMetricsLog(TurnMetrics{Attempt: 1})
+	if !strings.Contains(log.String(), `"retry":0`) {
+		t.Errorf("turn_metrics record for a first-try success %q does not contain \"retry\":0", log.String())
+	}
+
+	log.Reset()
+	defaultTurnMetricsLog(TurnMetrics{Attempt: 2})
+	if !strings.Contains(log.String(), `"retry":1`) {
+		t.Errorf("turn_metrics record for one retry %q does not contain \"retry\":1", log.String())
+	}
+}
+
 // TestDefaultTurnMetricsLogDoesNotPanic is a minimal smoke test for
 // Config.OnTurnMetrics's default (see emitTurnMetrics/defaultTurnMetricsLog,
 // turn_metrics.go): a session built with no OnTurnMetrics callback must
