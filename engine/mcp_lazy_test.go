@@ -258,6 +258,47 @@ func TestSessionCanDeferBothDirections(t *testing.T) {
 	}
 }
 
+// TestHardCapOverridesEagerPolicy pins the bug behind the Gemini
+// INVALID_ARGUMENT: tools[0].function_declarations error. A session that
+// never configures MCPToolLoading (the default, and every fleet config
+// checked so far) resolves every server to eager, so with no hard cap a
+// catalog past 512 tools rode into the request raw and broke the first
+// provider -- Gemini, through bifrost's OpenAI-compatible endpoint -- with
+// a hard per-request function-declaration limit. mcpHardToolCap must force
+// deferral even though no server's policy asked for it.
+func TestHardCapOverridesEagerPolicy(t *testing.T) {
+	s, _ := lazySession(t, Config{}, map[string]int{"big": mcpHardToolCap + 1})
+
+	plan := s.planMCPTools(context.Background())
+	if got := len(mcpDefNames(plan.defs)); got != 0 {
+		t.Fatalf("registered %d MCP defs eagerly past the hard cap of %d, want 0", got, mcpHardToolCap)
+	}
+	if plan.catalog == "" {
+		t.Fatal("plan carries no deferred-tool catalog past the hard cap")
+	}
+}
+
+// TestHardCapKeepsSelectedToolsLoaded proves the cap does not take away a
+// tool the model is already using: a name in the selected set stays in defs
+// even though its server has no configured policy asking for deferral and
+// the catalog is past mcpHardToolCap.
+func TestHardCapKeepsSelectedToolsLoaded(t *testing.T) {
+	s, _ := lazySession(t, Config{}, map[string]int{"big": mcpHardToolCap + 1})
+	name := mcpToolName("big", "tool00")
+	s.markMCPToolsSelected(name)
+
+	plan := s.planMCPTools(context.Background())
+	found := false
+	for _, d := range plan.defs {
+		if d.Name == name {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("selected tool %q dropped from defs past the hard cap", name)
+	}
+}
+
 // # The tools array
 
 // TestDeferredServerContributesZeroDefs asserts the surplus direction too:

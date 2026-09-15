@@ -93,6 +93,19 @@ const mcpCatalogEllipsis = "..."
 // pathological catalog would re-create the very cost this file removes.
 const mcpCatalogListingMax = 200
 
+// mcpHardToolCap is an absolute ceiling on the tool defs one request may
+// carry, independent of MCPToolLoading policy. Gemini's GenerateContentRequest
+// proto, reached through bifrost's OpenAI-compatible endpoint, rejects any
+// request whose tools[0].function_declarations holds more than 512 entries
+// (INVALID_ARGUMENT). Nothing upstream of the wire adapters bounded the
+// count before this cap existed, so a session that never opts into
+// MCPToolLoadingAuto or MCPToolLoadingLazy -- the default, and every fleet
+// this engine ships to today -- sent a large catalog raw and broke the
+// first provider with a hard limit low enough to hit. The cap overrides
+// even a per-server MCPToolLoadingEager pin: a pin is a preference for
+// which tools stay loaded, not a guarantee the request can still be sent.
+const mcpHardToolCap = 512
+
 // mcpCatalogHeader introduces the deferred catalog and states the contract:
 // a deferred tool is not callable until the model loads it. It names the
 // exact call shape because that is the only in-band documentation the model
@@ -263,6 +276,18 @@ func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
 	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx), renderCatalogSegment)
 }
 
+// nonMCPToolCount is how many tool defs toolDefsWithCatalog (engine.go)
+// places in a request OUTSIDE the MCP plan: built-in plus hook tools.
+// planMCPToolsFrom needs it to judge mcpHardToolCap against the request's
+// real total, not just the MCP catalog in isolation.
+func (s *Session) nonMCPToolCount() int {
+	n := len(s.tools)
+	if s.cfg.Hooks != nil {
+		n += len(s.cfg.Hooks.Tools())
+	}
+	return n
+}
+
 // catalogRender selects whether planMCPToolsFrom renders the stage-1
 // segment. A caller that only needs the DEFS -- the mcp tool's search
 // action, computing which tools are loaded -- would otherwise re-render up
@@ -284,8 +309,9 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 		return mcpToolPlan{}
 	}
 
-	deferring := s.sessionCanDefer()
-	if !deferring {
+	_, canSelect := s.tools[mcpSessionToolName]
+	overCap := canSelect && s.nonMCPToolCount()+len(all) > mcpHardToolCap
+	if !s.sessionCanDefer() && !overCap {
 		return mcpToolPlan{defs: all}
 	}
 
@@ -303,7 +329,7 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 			defs = append(defs, d)
 			continue
 		}
-		if s.resolveMCPLoading(server, overThreshold) != MCPToolLoadingLazy {
+		if s.resolveMCPLoading(server, overThreshold, overCap) != MCPToolLoadingLazy {
 			defs = append(defs, d)
 			continue
 		}
@@ -329,7 +355,14 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 // prompt like any other, so they are part of the pressure the threshold
 // measures: a pin says "always keep these loaded", never "ignore their
 // cost".
-func (s *Session) resolveMCPLoading(server string, overThreshold bool) MCPToolLoading {
+//
+// overCap overrides every other input: past mcpHardToolCap, a server keeps
+// its pin only through the tools it has already selected (the loop's own
+// selected[d.Name] check), never through the pin itself.
+func (s *Session) resolveMCPLoading(server string, overThreshold, overCap bool) MCPToolLoading {
+	if overCap {
+		return MCPToolLoadingLazy
+	}
 	switch s.mcpPolicyMode(server) {
 	case MCPToolLoadingLazy:
 		return MCPToolLoadingLazy
