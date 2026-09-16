@@ -236,6 +236,12 @@ per the existing sentinel rule.
 The notification carries: child session id, agent type, status
 (done/failed), the child's final message text, and usage totals.
 
+**Oversized final result.** When a done child's final text exceeds the
+notification preview budget and tool-result retention is enabled, the
+parent retains it into its own tool-result store and the `[tasks:]` line
+carries a bounded preview plus `read_tool_result(handle=trh_N)` instead
+of a bare truncation. See `docs/plans/2026-08-19-tool-result-handles.md`.
+
 **Grandchild delivery — reparent to the nearest live ancestor.** A
 child's own "parent" for delivery purposes is not always its immediate
 spawner: a child that spawned its own grandchild typically finishes ITS

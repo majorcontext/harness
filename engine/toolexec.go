@@ -252,6 +252,11 @@ func (s *Session) toolIsSerial(name string) bool {
 	return ok && t.Serial
 }
 
+func (s *Session) hasTool(name string) bool {
+	_, ok := s.tools[name]
+	return ok
+}
+
 // toolKey computes name's resource key for one call's args, or "" if the
 // tool has no Key func. See the Tool struct's Key field doc comment.
 func (s *Session) toolKey(name string, args json.RawMessage) (key string) {

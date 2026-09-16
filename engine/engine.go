@@ -1613,6 +1613,11 @@ type Session struct {
 	// to a retried or discarded attempt. Guarded by mu.
 	taskNotificationsInFlight []taskNotification
 
+	// retainedTaskResults memoizes an oversized done notification's retention
+	// outcome (taskResultKey) so a retry reuses the one handle. Memory-only; a
+	// reload starts empty and re-retains. Guarded by mu.
+	retainedTaskResults map[taskResultKey]retainedTaskResult
+
 	// agentDefsLoaded/agentDefs/agentDefsErr cache AgentDefs' discovery
 	// (agentdef.go), on the SAME load-once-cache-error pattern instrLoaded/
 	// instrSeg/instrErr and skillsLoaded/skillsSeg/skillsErr already use —

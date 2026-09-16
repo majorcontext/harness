@@ -318,6 +318,9 @@ func (s *Session) drainAllTaskNotifications() []taskNotification {
 	all := append(s.taskNotificationsInFlight, s.taskNotifications...) //nolint:gocritic // deliberately combining, not appending in place — both are cleared immediately below
 	s.taskNotifications = nil
 	s.taskNotificationsInFlight = nil
+	for _, n := range all {
+		delete(s.retainedTaskResults, taskResultKey{n.ChildID, n.Result})
+	}
 	return all
 }
 
@@ -390,14 +393,57 @@ func (s *Session) persistDeliveredTaskNotifications(ns []taskNotification) {
 // it is simply sitting in the queue (pending or in-flight) the next time
 // this function runs.
 func (s *Session) checkoutTaskNotificationsSegment() string {
+	budget, retentionOn := s.taskResultRetentionBudget()
+
 	s.mu.Lock()
 	if len(s.taskNotifications) > 0 {
 		s.taskNotificationsInFlight = append(s.taskNotificationsInFlight, s.taskNotifications...)
 		s.taskNotifications = nil
 	}
 	inFlight := append([]taskNotification(nil), s.taskNotificationsInFlight...)
+	var toRetain []taskNotification
+	if retentionOn {
+		queued := map[taskResultKey]bool{}
+		for _, n := range inFlight {
+			if n.Status != StatusDone || len(n.Result) <= budget {
+				continue
+			}
+			key := taskResultKey{n.ChildID, n.Result}
+			if _, done := s.retainedTaskResults[key]; done || queued[key] {
+				continue
+			}
+			queued[key] = true
+			toRetain = append(toRetain, n)
+		}
+	}
 	s.mu.Unlock()
-	return renderTaskNotifications(inFlight)
+
+	// Retention writes a sidecar file, so it runs off s.mu; memoize per result
+	// so a retried or requeued turn reuses the one handle.
+	for _, n := range toRetain {
+		key := taskResultKey{n.ChildID, n.Result}
+		r := s.retainTaskResult(n.Result, budget)
+		s.mu.Lock()
+		if s.retainedTaskResults == nil {
+			s.retainedTaskResults = make(map[taskResultKey]retainedTaskResult)
+		}
+		if _, done := s.retainedTaskResults[key]; !done {
+			s.retainedTaskResults[key] = r
+		}
+		s.mu.Unlock()
+	}
+
+	retained := make(map[taskResultKey]retainedTaskResult)
+	s.mu.Lock()
+	for _, n := range inFlight {
+		key := taskResultKey{n.ChildID, n.Result}
+		if r, ok := s.retainedTaskResults[key]; ok {
+			retained[key] = r
+		}
+	}
+	s.mu.Unlock()
+
+	return renderTaskNotifications(inFlight, retained, retentionOn)
 }
 
 // commitTaskNotifications clears the in-flight set: call once the turn
@@ -415,6 +461,7 @@ func (s *Session) commitTaskNotifications() {
 	// same as any other persist call, never blocks the in-memory commit).
 	for _, n := range s.taskNotificationsInFlight {
 		s.persistTaskNotifyLocked(recTaskNotifyDelivered, n)
+		delete(s.retainedTaskResults, taskResultKey{n.ChildID, n.Result}) // delivered is terminal; drop its memo
 	}
 	s.taskNotificationsInFlight = nil
 	s.mu.Unlock()
@@ -457,7 +504,7 @@ func (s *Session) requeueTaskNotifications() {
 // function. It does not, and is not meant to, stop a child from writing
 // misleading prose on its own single line — that residual risk is exactly
 // what the design doc's "distrust it" rule already accepts.
-func renderTaskNotifications(pending []taskNotification) string {
+func renderTaskNotifications(pending []taskNotification, retained map[taskResultKey]retainedTaskResult, retentionActive bool) string {
 	if len(pending) == 0 {
 		return ""
 	}
@@ -467,8 +514,9 @@ func renderTaskNotifications(pending []taskNotification) string {
 		b.WriteString("\n- ")
 		switch n.Status {
 		case StatusDone:
+			body := taskResultBody(n, retained, retentionActive)
 			fmt.Fprintf(&b, "%s (agent=%s) done: %s (usage: %d in / %d out)",
-				n.ChildID, n.Agent, neutralizeNotificationText(truncateTaskResult(n.Result)), n.Usage.InputTokens, n.Usage.OutputTokens)
+				n.ChildID, n.Agent, body, n.Usage.InputTokens, n.Usage.OutputTokens)
 		case StatusFailed:
 			fmt.Fprintf(&b, "%s (agent=%s) failed: %s (usage: %d in / %d out)%s",
 				n.ChildID, n.Agent, neutralizeNotificationText(n.FailReason), n.Usage.InputTokens, n.Usage.OutputTokens,
@@ -477,6 +525,28 @@ func renderTaskNotifications(pending []taskNotification) string {
 	}
 	b.WriteString("\n]")
 	return b.String()
+}
+
+// taskResultKey keys a retained result by child id and exact content: a re-run
+// child can emit several results, and an exact key (not a hash) stops two
+// distinct results ever sharing a handle.
+type taskResultKey struct {
+	ChildID string
+	Result  string
+}
+
+func taskResultBody(n taskNotification, retained map[taskResultKey]retainedTaskResult, retentionActive bool) string {
+	if r, ok := retained[taskResultKey{n.ChildID, n.Result}]; ok {
+		body := neutralizeNotificationText(r.Preview)
+		if r.Handle != "" {
+			body += taskResultHandleClause(r.Handle)
+		}
+		return body
+	}
+	if retentionActive {
+		return neutralizeNotificationText(n.Result)
+	}
+	return neutralizeNotificationText(truncateTaskResult(n.Result))
 }
 
 // taskFailureGuidance is the actionable half of a failed child's
@@ -531,4 +601,73 @@ func neutralizeNotificationText(s string) string {
 func truncateTaskResult(s string) string {
 	text, _ := capRunes(s, taskNotificationResultCap)
 	return text
+}
+
+// taskNotificationPreviewBytes bounds the inline preview: the [tasks:] line is
+// re-pinned into every later parent request.
+const taskNotificationPreviewBytes = 4096
+
+// taskResultUnrecoverableMarker ends a truncated preview with no handle behind
+// it, so the parent does not read the prefix as the whole result.
+const taskResultUnrecoverableMarker = "… [truncated; full result unavailable]"
+
+const taskResultRetentionTool = "task"
+
+// retainedTaskResult is one notification's retention outcome; an empty Handle
+// means retention was declined.
+type retainedTaskResult struct {
+	Handle  string
+	Preview string
+}
+
+func (s *Session) taskResultRetentionBudget() (budget int, enabled bool) {
+	limit := s.toolResultInlineLimit()
+	if limit <= 0 {
+		return 0, false
+	}
+	budget = taskNotificationPreviewBytes
+	if limit < budget {
+		budget = limit
+	}
+	return budget, true
+}
+
+// retainTaskResult chooses how an oversized child result reaches the parent.
+// The preview is always masked, so a secret never leaks even on a no-handle
+// path.
+func (s *Session) retainTaskResult(text string, budget int) retainedTaskResult {
+	masked := maskSecrets(text)
+	if len(masked) <= budget {
+		return retainedTaskResult{Preview: masked}
+	}
+	cut := func() retainedTaskResult {
+		return retainedTaskResult{Preview: truncateUTF8(masked, budget) + taskResultUnrecoverableMarker}
+	}
+	// A delegated Claude Code turn has read_tool_result in its registry but
+	// never dispatches it, so a handle would be unrecoverable.
+	if !s.hasTool(readToolResultToolName) || s.claudeCodeDelegated() {
+		return cut()
+	}
+	if cap := s.toolResultRetainedLimit(); cap > 0 {
+		s.mu.Lock()
+		over := s.toolResultBytes+len(masked) > cap
+		s.mu.Unlock()
+		if over {
+			return cut()
+		}
+	}
+	handle, err := s.writeRetainedToolResult(taskResultRetentionTool, masked)
+	if err != nil {
+		s.mu.Lock()
+		s.lastPersistErr = err
+		s.mu.Unlock()
+		return cut()
+	}
+	return retainedTaskResult{Handle: handle, Preview: truncateUTF8(masked, budget)}
+}
+
+// taskResultHandleClause names the read_tool_result call, single-line per
+// renderTaskNotifications' forgery defense.
+func taskResultHandleClause(handle string) string {
+	return fmt.Sprintf(" … [full result retained — read the rest with read_tool_result(handle=%q)]", handle)
 }

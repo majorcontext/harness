@@ -260,7 +260,7 @@ func TestExhaustionReasonStatesTheTimeOnce(t *testing.T) {
 	line := renderTaskNotifications([]taskNotification{{
 		ChildID: "ses_x", Agent: "explore", Status: StatusFailed,
 		FailReason: fail.Reason, FailKind: fail.Kind, RecoverHint: fail.RecoverHint,
-	}})
+	}}, nil, false)
 	// Once in the provider's own quoted message, once in the guidance.
 	if got := strings.Count(line, "2026-09-01"); got != 2 {
 		t.Errorf("rendered line states 2026-09-01 %d times, want 2 (the provider's sentence and one guidance clause):\n%s", got, line)

@@ -834,7 +834,7 @@ func TestReportTurnStartAdoptsUnknownSession(t *testing.T) {
 
 func TestNeutralizeAndReparentTogether(t *testing.T) {
 	// Sanity: renderTaskNotifications never panics on an empty Agent/Result.
-	seg := renderTaskNotifications([]taskNotification{{ChildID: "x", Status: StatusDone}})
+	seg := renderTaskNotifications([]taskNotification{{ChildID: "x", Status: StatusDone}}, nil, false)
 	if !strings.Contains(seg, "x") {
 		t.Errorf("segment missing id: %q", seg)
 	}

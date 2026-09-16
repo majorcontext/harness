@@ -128,6 +128,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"claudeCodeQueueWake":       "atomic.Pointer wake channel for a currently-running turn's stdin pump; nil after any load, never persisted",
 	"readHashes":                "explicitly documented \"Deliberately in-memory and per-live-Session only: never persisted, never folded by LoadSession\"",
 	"taskNotificationsInFlight": "in-turn checkout state; nil after ANY load (a full replay never populates it either, since checkout only happens during a live turn) — the snapshot's own TaskNotifications field already carries these entries back into the plain taskNotifications queue on restore",
+	"retainedTaskResults":       "in-turn retention memo (child id -> trh_N) for oversized done notifications; memory-only, re-retained under a fresh handle on the next checkout after a load",
 	"agentDefsLoaded":           "lazy discovery cache (triggered by the task tool's first call), same load-once pattern as instrLoaded/skillsLoaded",
 	"agentDefs":                 "lazy discovery cache payload, same pattern as agentDefsLoaded",
 	"agentDefsErr":              "lazy discovery cache error, same pattern as agentDefsLoaded",
