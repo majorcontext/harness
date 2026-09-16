@@ -347,7 +347,7 @@ func TestSelectionIsInertWhenReloadedEager(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs, catalog := loaded.toolDefsWithCatalog(context.Background())
+	defs, catalog, _ := loaded.toolDefsWithCatalog(context.Background())
 	if catalog != "" {
 		t.Fatalf("an eager reload rendered a catalog:\n%s", catalog)
 	}

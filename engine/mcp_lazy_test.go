@@ -378,7 +378,7 @@ func TestToolDefsByteStableUnderDeferral(t *testing.T) {
 func TestPlanCallsRegistryToolsOnce(t *testing.T) {
 	s, reg := lazySession(t, Config{MCPToolLoading: MCPToolLoadingLazy}, map[string]int{"a": 3})
 	reg.calls = 0
-	if _, catalog := s.toolDefsWithCatalog(context.Background()); catalog == "" {
+	if _, catalog, _ := s.toolDefsWithCatalog(context.Background()); catalog == "" {
 		t.Fatal("expected a catalog for a lazy session")
 	}
 	if reg.calls != 1 {
@@ -503,7 +503,7 @@ func TestCatalogSegmentEmptyWhenNothingDeferred(t *testing.T) {
 		t.Fatalf("segment = %q, want empty", got)
 	}
 	s, _ := lazySession(t, Config{}, map[string]int{"a": 50})
-	if _, catalog := s.toolDefsWithCatalog(context.Background()); catalog != "" {
+	if _, catalog, _ := s.toolDefsWithCatalog(context.Background()); catalog != "" {
 		t.Fatalf("an eager session rendered a catalog:\n%s", catalog)
 	}
 }

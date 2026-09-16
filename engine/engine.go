@@ -371,7 +371,7 @@ type Config struct {
 	// must be byte-stable for the life of a session: they sit at the front of
 	// the prompt-cache prefix on both lanes, so a value that varies between
 	// turns silently re-processes the whole conversation uncached. See
-	// config.Config.AppendSystemPrompt and withAmbientStatus for where
+	// config.Config.AppendSystemPrompt and withPinnedAmbient for where
 	// changing text belongs instead.
 	AppendSystemPrompt []string
 
@@ -3216,7 +3216,8 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 	if err != nil {
 		return nil, err
 	}
-	tools, mcpCatalog := s.toolDefsWithCatalog(ctx)
+	tools, mcpCatalog, mcpServers := s.toolDefsWithCatalog(ctx)
+	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers)
 
 	system := append([]string(nil), s.cfg.System...)
 	system = append(system, s.cfg.AppendSystemPrompt...)
@@ -3229,8 +3230,8 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 	if seg := s.skillsSegment(); seg != "" {
 		system = append(system, seg)
 	}
-	if seg := s.mcpInstructionsSegment(); seg != "" {
-		system = append(system, seg)
+	if instrSeg != "" {
+		system = append(system, instrSeg)
 	}
 	if mcpCatalog != "" {
 		system = append(system, mcpCatalog)
@@ -3298,6 +3299,11 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	if err != nil {
 		return nil, "", provider.Usage{}, err
 	}
+	prov := assembled.provider
+	req := assembled.request
+	params := assembled.params
+	system := req.System
+	tools := req.Tools
 	//
 	// The tool plan already ran above (see the numbered ordering note at the
 	// top of this function), so every segment below reads post-connect
@@ -3938,7 +3944,7 @@ func (e *emptyTurnError) Error() string {
 // deliberately gathers tool names before its own Lock, and streamTurn builds
 // the whole request before its s.mu section.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
-	defs, _ := s.toolDefsWithCatalog(ctx)
+	defs, _, _ := s.toolDefsWithCatalog(ctx)
 	return defs
 }
 
@@ -3951,7 +3957,7 @@ func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 //
 // The catalog is "" whenever nothing is deferred, which includes every
 // session that did not opt into deferral at all.
-func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string) {
+func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
 	for _, t := range s.tools {
 		defs = append(defs, t.Def)
@@ -3968,7 +3974,7 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 			})
 		}
 	}
-	return defs, plan.catalog
+	return defs, plan.catalog, plan.servers
 }
 
 // runToolCalls executes every tool call in an assistant message and returns

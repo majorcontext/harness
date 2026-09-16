@@ -236,6 +236,11 @@ type mcpToolPlan struct {
 	// defs are the MCP tool defs that belong in this request's tools array,
 	// in the registry's own (server, then tool) order.
 	defs []provider.ToolDef
+	// servers is every server present in the registry read that produced
+	// defs and deferred — the snapshot the instructions segment must render
+	// from, so it advertises neither more nor fewer servers than the plan
+	// saw.
+	servers map[string]bool
 	// catalog is the stage-1 system segment, or "" when nothing is
 	// deferred.
 	catalog string
@@ -257,10 +262,30 @@ type mcpToolPlan struct {
 // builds the request before its own s.mu section (engine.go). A session that
 // cannot defer returns above without ever reaching the lock.
 func (s *Session) planMCPTools(ctx context.Context) mcpToolPlan {
+	return s.planMCPToolsFrom(s.liveMCPTools(ctx), renderCatalogSegment)
+}
+
+// liveMCPTools is the registry read a request's tool plan uses.
+func (s *Session) liveMCPTools(ctx context.Context) []provider.ToolDef {
 	if s.cfg.MCP == nil {
-		return mcpToolPlan{}
+		return nil
 	}
-	return s.planMCPToolsFrom(s.cfg.MCP.Tools(ctx), renderCatalogSegment)
+	return s.cfg.MCP.Tools(ctx)
+}
+
+// liveMCPToolServers returns the server set of one registry read, for the
+// legacy mcpInstructionsSegment caller outside request assembly.
+func (s *Session) liveMCPToolServers() map[string]bool {
+	if s.cfg.MCP == nil {
+		return nil
+	}
+	servers := map[string]bool{}
+	for _, d := range s.cfg.MCP.Tools(context.Background()) {
+		if server, _, ok := splitMCPToolName(d.Name); ok {
+			servers[server] = true
+		}
+	}
+	return servers
 }
 
 // catalogRender selects whether planMCPToolsFrom renders the stage-1
@@ -286,7 +311,13 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 
 	deferring := s.sessionCanDefer()
 	if !deferring {
-		return mcpToolPlan{defs: all}
+		servers := map[string]bool{}
+		for _, d := range all {
+			if server, _, ok := splitMCPToolName(d.Name); ok {
+				servers[server] = true
+			}
+		}
+		return mcpToolPlan{defs: all, servers: servers}
 	}
 
 	selected := s.reapMCPSelections(all)
@@ -294,8 +325,12 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 
 	defs := make([]provider.ToolDef, 0, len(all))
 	var deferred []provider.ToolDef
+	servers := map[string]bool{}
 	for _, d := range all {
 		server, _, ok := splitMCPToolName(d.Name)
+		if ok {
+			servers[server] = true
+		}
 		if !ok {
 			// A name this session cannot attribute to a server cannot be
 			// selected either (select rejects the same shape), so it stays
@@ -314,9 +349,9 @@ func (s *Session) planMCPToolsFrom(all []provider.ToolDef, render catalogRender)
 		deferred = append(deferred, d)
 	}
 	if !render {
-		return mcpToolPlan{defs: defs}
+		return mcpToolPlan{defs: defs, servers: servers}
 	}
-	return mcpToolPlan{defs: defs, catalog: mcpCatalogSegment(deferred)}
+	return mcpToolPlan{defs: defs, servers: servers, catalog: mcpCatalogSegment(deferred)}
 }
 
 // resolveMCPLoading reports one server's EFFECTIVE mode for this request:

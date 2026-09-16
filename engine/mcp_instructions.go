@@ -17,7 +17,15 @@
 package engine
 
 import (
+	"context"
+	"encoding/json"
+
+	"github.com/majorcontext/harness/provider"
+
+	"github.com/majorcontext/harness/message"
+
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -85,6 +93,63 @@ const mcpInstructionsPerServerCap = 4000
 // sibling <server> element attributed to a name it does not own. This is
 // the same defense renderTaskNotifications applies to a child's Result text
 // (see neutralizeNotificationText), for the same reason.
+// mcpRegistryFromServers narrows a registry to the server set its caller's
+// tool plan already read — including deferred servers, whose tools sit in
+// the catalog rather than the request's tools array. The frozen segment then
+// advertises neither more nor fewer servers than the plan saw, so a retry
+// committing between two registry reads cannot desynchronize them.
+func mcpRegistryFromServers(reg MCPRegistry, servers map[string]bool) MCPRegistry {
+	if reg == nil {
+		return nil
+	}
+	// An empty set means no server held tools on the plan's read: render
+	// nothing, never a live unfiltered read — a retry committing between
+	// the plan and this render must not leak a server the plan never saw.
+	if len(servers) == 0 {
+		return nil
+	}
+	return mcpToolsSnapshotRegistry{byServer: servers, inner: reg}
+}
+
+// mcpToolsSnapshotRegistry answers Instructions() filtered to the servers
+// present in the shared tool snapshot; everything else delegates to the
+// owning manager.
+type mcpToolsSnapshotRegistry struct {
+	byServer map[string]bool
+	inner    MCPRegistry
+}
+
+func (r mcpToolsSnapshotRegistry) Instructions() []MCPServerInstructions {
+	reader, ok := r.inner.(mcpInstructionsReader)
+	if !ok {
+		return nil
+	}
+	entries := reader.Instructions()
+	out := make([]MCPServerInstructions, 0, len(entries))
+	for _, e := range entries {
+		if !r.byServer[e.Name] {
+			continue
+		}
+		out = append(out, e)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (r mcpToolsSnapshotRegistry) Tools(ctx context.Context) []provider.ToolDef {
+	return r.inner.Tools(ctx)
+}
+
+func (r mcpToolsSnapshotRegistry) CallTool(ctx context.Context, name string, args json.RawMessage) (message.Parts, bool, error) {
+	return r.inner.CallTool(ctx, name, args)
+}
+
+func (r mcpToolsSnapshotRegistry) CallServerTool(ctx context.Context, server, name string, args json.RawMessage) (message.Parts, bool, error) {
+	return r.inner.CallServerTool(ctx, server, name, args)
+}
+
 func renderMCPInstructions(reg MCPRegistry) string {
 	if reg == nil {
 		return ""
@@ -133,8 +198,35 @@ func renderMCPInstructions(reg MCPRegistry) string {
 			for i, t := range tools {
 				tools[i] = neutralizeMCPAttr(t)
 			}
+			// The catalog already bounds a deferred listing at 200 tools;
+			// this cached system segment must not exceed it, so an oversized
+			// server degrades to one attribute carrying the count and the
+			// first 200 names, never two tools attributes.
+			const maxTools = 200
+			const maxToolsBytes = 2048
+			truncated := ""
+			if len(tools) > maxTools {
+				truncated = " " + strconv.Itoa(len(tools)) + " tools: first " + strconv.Itoa(maxTools) + " listed"
+				tools = tools[:maxTools]
+			}
+			var sb strings.Builder
+			for i, t := range tools {
+				need := len(t)
+				if i > 0 {
+					need += 2
+				}
+				if sb.Len()+need > maxToolsBytes {
+					truncated = " names truncated at byte budget"
+					break
+				}
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(t)
+			}
+			joined := sb.String() + truncated
 			b.WriteString(" tools=\"")
-			b.WriteString(strings.Join(tools, ", "))
+			b.WriteString(joined)
 			b.WriteString("\"")
 		}
 		b.WriteString(">\n")
@@ -187,12 +279,20 @@ func neutralizeMCPAttr(s string) string {
 // mcpStatusSegment still tells the model that server exists and is now
 // healthy. Revisit only with a cache-cost measurement in hand.
 func (s *Session) mcpInstructionsSegment() string {
+	return s.mcpInstructionsSegmentFrom(s.liveMCPToolServers())
+}
+
+// mcpInstructionsSegmentFrom renders the frozen segment from the SAME tool
+// snapshot the request's plan read, so a retry committing between two
+// registry reads cannot cache instructions advertising tools the request
+// does not carry.
+func (s *Session) mcpInstructionsSegmentFrom(servers map[string]bool) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mcpInstrLoaded {
 		return s.mcpInstrSeg
 	}
-	s.mcpInstrSeg = renderMCPInstructions(s.cfg.MCP)
+	s.mcpInstrSeg = renderMCPInstructions(mcpRegistryFromServers(s.cfg.MCP, servers))
 	s.mcpInstrLoaded = true
 	return s.mcpInstrSeg
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 // so a test can simulate a server connecting (or degrading) mid-session.
 type fakeInstructionsRegistry struct {
 	entries []MCPServerInstructions
+	tools   []provider.ToolDef
 	calls   int
 }
 
@@ -23,7 +25,11 @@ func (f *fakeInstructionsRegistry) Instructions() []MCPServerInstructions {
 	return f.entries
 }
 
-func (f *fakeInstructionsRegistry) Tools(context.Context) []provider.ToolDef { return nil }
+func (f *fakeInstructionsRegistry) Tools(context.Context) []provider.ToolDef { return f.tools }
+
+func (f *fakeInstructionsRegistry) ConfiguredNames() []string {
+	return []string{"boxes-orchestration"}
+}
 
 func (f *fakeInstructionsRegistry) CallTool(context.Context, string, json.RawMessage) (message.Parts, bool, error) {
 	return nil, false, nil
@@ -140,9 +146,10 @@ func TestRenderMCPInstructionsNeutralizesServerText(t *testing.T) {
 // later never rewrites the cached system prefix mid-session. This is the
 // property the whole placement decision rests on.
 func TestSessionMCPInstructionsSegmentFrozenAfterFirstRender(t *testing.T) {
-	reg := &fakeInstructionsRegistry{entries: []MCPServerInstructions{
-		{Name: "parcels", Text: "Hand files to other boxes."},
-	}}
+	reg := &fakeInstructionsRegistry{
+		entries: []MCPServerInstructions{{Name: "parcels", Text: "Hand files to other boxes."}},
+		tools:   []provider.ToolDef{{Name: "mcp__parcels__hand_off"}},
+	}
 	s := NewSession(Config{SessionDir: t.TempDir(), MCP: reg})
 
 	first := s.mcpInstructionsSegment()
@@ -165,7 +172,7 @@ func TestSessionMCPInstructionsSegmentFrozenAfterFirstRender(t *testing.T) {
 // TestSessionMCPInstructionsSegmentCachesEmpty: a session with nothing to
 // report caches that too, rather than re-asking the registry every turn.
 func TestSessionMCPInstructionsSegmentCachesEmpty(t *testing.T) {
-	reg := &fakeInstructionsRegistry{}
+	reg := &fakeInstructionsRegistry{tools: []provider.ToolDef{{Name: "mcp__parcels__hand_off"}}}
 	s := NewSession(Config{SessionDir: t.TempDir(), MCP: reg})
 
 	if got := s.mcpInstructionsSegment(); got != "" {
@@ -256,15 +263,19 @@ func TestMCPInstructionsInSystemArrayStableAcrossTurns(t *testing.T) {
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "one"}),
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "two"}),
 	}}
-	reg := &fakeInstructionsRegistry{entries: []MCPServerInstructions{
-		{Name: "boxes-orchestration", Text: "Fleet orchestration over every box.", Tools: []string{"mcp__boxes-orchestration__spawn_box"}},
-	}}
+	reg := &fakeInstructionsRegistry{
+		entries: []MCPServerInstructions{
+			{Name: "boxes-orchestration", Text: "Fleet orchestration over every box.", Tools: []string{"mcp__boxes-orchestration__spawn_box"}},
+		},
+		tools: []provider.ToolDef{{Name: "mcp__boxes-orchestration__spawn_box"}},
+	}
 	s := NewSession(Config{
-		Providers:  provider.Registry{"test": prov},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		System:     []string{"base system"},
-		SessionDir: t.TempDir(),
-		MCP:        reg,
+		Providers:      provider.Registry{"test": prov},
+		Model:          message.ModelRef{Provider: "test", Model: "m1"},
+		System:         []string{"base system"},
+		SessionDir:     t.TempDir(),
+		MCP:            reg,
+		MCPToolLoading: MCPToolLoadingLazy,
 	})
 
 	if _, err := s.Prompt(context.Background(), "first"); err != nil {
@@ -304,6 +315,21 @@ func TestMCPInstructionsInSystemArrayStableAcrossTurns(t *testing.T) {
 	if !strings.Contains(first[i], "Fleet orchestration over every box.") {
 		t.Errorf("segment missing server text: %q", first[i])
 	}
+	// Ordering vs the deferred catalog: the instructions segment is the
+	// STABLE half, so it must sit before the catalog the lazy path emits.
+	cat := -1
+	for k, seg := range first {
+		if strings.HasPrefix(seg, mcpCatalogHeader) {
+			cat = k
+			break
+		}
+	}
+	if cat < 0 {
+		t.Fatalf("no deferred-catalog segment in system array: %q", first)
+	}
+	if i > cat {
+		t.Errorf("instructions segment at %d, after deferred catalog at %d; want before", i, cat)
+	}
 }
 
 // TestRenderMCPInstructionsCapsServerText: a server's instructions text is
@@ -339,5 +365,40 @@ func TestRenderMCPInstructionsCapsServerText(t *testing.T) {
 	if g := renderMCPInstructions(short); !strings.Contains(g, "Use the tool.") ||
 		strings.Contains(g, taskLogTruncationMarker) {
 		t.Errorf("short text was altered:\n%s", g)
+	}
+}
+
+// An oversized tools list renders ONE tools attribute: the count marker and
+// the first 200 names joined inside it, never two attributes, and the joined
+// names stay inside a byte budget so huge names cannot bloat the segment.
+func TestRenderMCPInstructionsOversizedToolsSingleAttribute(t *testing.T) {
+	many := make([]string, 201)
+	for i := range many {
+		many[i] = "t" + strconv.Itoa(i)
+	}
+	reg := &fakeInstructionsRegistry{entries: []MCPServerInstructions{{Name: "big", Text: "x", Tools: many}}}
+	got := renderMCPInstructions(reg)
+	if n := strings.Count(got, "tools=\""); n != 1 {
+		t.Fatalf("tools attribute count = %d, want 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "201 tools: first 200 listed") {
+		t.Fatalf("missing count marker:\n%s", got[:200])
+	}
+}
+
+// Names past the byte budget stop the listing with a visible marker even
+// when the tool count is under 200.
+func TestRenderMCPInstructionsToolsByteBudget(t *testing.T) {
+	huge := make([]string, 3)
+	for i := range huge {
+		huge[i] = strings.Repeat("n", 1500)
+	}
+	reg := &fakeInstructionsRegistry{entries: []MCPServerInstructions{{Name: "big", Text: "x", Tools: huge}}}
+	got := renderMCPInstructions(reg)
+	if !strings.Contains(got, "names truncated at byte budget") {
+		t.Fatalf("byte-budget marker missing:\\n%s", got[:300])
+	}
+	if n := strings.Count(got, "tools=\""); n != 1 {
+		t.Fatalf("tools attribute count = %d, want 1", n)
 	}
 }

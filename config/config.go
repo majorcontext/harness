@@ -76,7 +76,7 @@ type Config struct {
 	// varies per turn or per process start (a timestamp, a pod name, a live
 	// status) re-processes the whole conversation uncached on every request,
 	// with no error to notice. Put anything that changes in the ambient
-	// status channel instead (engine/process.go's withAmbientStatus).
+	// status channel instead (engine/process.go's withPinnedAmbient).
 	//
 	// Merge is additive: base segments come first, then project segments.
 	// This rule differs from every other slice field. In box deployments, the
