@@ -40,6 +40,11 @@ const (
 	// Config.RequireContextWindow turns into a hard refusal, while this is
 	// a stated choice that never refuses. See resolveContextWindow.
 	contextWindowSourceOptOut = "disabled-by-config"
+	// contextWindowSourceModelsDev: modelmeta missed, the session's models.dev
+	// source is on (Config.ContextWindowFromModelsDev plus a snapshot URL),
+	// and the process-wide snapshot (modelsdev.go) hit and cleared the same
+	// sanity floor the model-derived path uses.
+	contextWindowSourceModelsDev = "models.dev"
 )
 
 // ErrUnknownContextWindow marks a model ref the context-window registry
@@ -84,11 +89,14 @@ const minAutoContextWindowTokens = 16_000
 var modelContextWindowLookup = modelmeta.ContextWindow
 
 // resolveContextWindow implements Config.ContextWindowTokens's precedence:
-// explicit config > model-derived > disabled. explicitTokens is
-// Config.ContextWindowTokens exactly as the operator set it (0 when unset —
-// never the already-resolved value from a previous call); model is the ref
-// to derive from when explicitTokens is 0. Returns the effective window (0
-// when disabled) and which source produced it.
+// explicit config > model-derived > models.dev snapshot (opt-in) >
+// disabled. explicitTokens is Config.ContextWindowTokens exactly as the
+// operator set it (0 when unset — never the already-resolved value from a
+// previous call); model is the ref to derive from when explicitTokens is 0.
+// fromModelsDev is Config.modelsDevEnabled: only when true, a modelmeta
+// miss consults the process-wide models.dev snapshot (modelsdev.go) before
+// giving up. Returns the effective window (0 when disabled) and which
+// source produced it.
 // A registry MISS is reported through miss (wrapping
 // ErrUnknownContextWindow) INSTEAD of being folded into a silent
 // "disabled" answer. resolveContextWindow does not decide what to do about
@@ -96,9 +104,10 @@ var modelContextWindowLookup = modelmeta.ContextWindow
 // of a miss lives in exactly one place and the policy lives with the
 // session that has to honor it. miss is nil for every legitimate way to
 // end up without a window — an explicit operator window, an explicit
-// opt-out, no model at all, or a model the registry knows whose window is
-// simply below the auto-arm floor.
-func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens int, source string, miss error) {
+// opt-out, no model at all, a models.dev fallback hit (whether above or
+// below the floor), or a model the registry knows whose window is simply
+// below the auto-arm floor.
+func resolveContextWindow(explicitTokens int, model message.ModelRef, fromModelsDev bool) (tokens int, source string, miss error) {
 	if explicitTokens > 0 {
 		return explicitTokens, contextWindowSourceConfig, nil
 	}
@@ -115,6 +124,16 @@ func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens in
 	}
 	got, ok := modelContextWindowLookup(model)
 	if !ok {
+		if fromModelsDev {
+			if fromDev, ok := modelsDevContextWindowLookup(model); ok {
+				if fromDev < minAutoContextWindowTokens {
+					slog.Info("engine: models.dev context window below auto-compaction floor; compaction disabled",
+						"model", model.String(), "tokens", fromDev, "floor", minAutoContextWindowTokens)
+					return 0, contextWindowSourceDisabled, nil
+				}
+				return fromDev, contextWindowSourceModelsDev, nil
+			}
+		}
 		return 0, contextWindowSourceDisabled, unknownContextWindowError(model)
 	}
 	if got < minAutoContextWindowTokens {

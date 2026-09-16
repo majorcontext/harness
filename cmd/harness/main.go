@@ -661,6 +661,10 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if cfg.ContextWindowFromModelsDevValue() {
+		engine.SetModelsDevRefreshSource(ctx, cfg.ContextWindowModelsDevURLValue())
+	}
+
 	// mcpMgr's defer is declared before the plugin host's below, so (defers
 	// unwind LIFO) it closes MCP server connections only after the plugin
 	// host has closed — a plugin's client/mcp.call has nowhere left to route
@@ -715,32 +719,34 @@ func runCmd(args []string) error {
 		Model:     model,
 		System:    systemPrompt(workDir, ""),
 		// Config comes first; the per-run flag is the final refinement.
-		AppendSystemPrompt:      appendSystemSegments(cfg, opts.system),
-		MaxTokens:               opts.maxTokens,
-		WorkDir:                 workDir,
-		SessionDir:              sesDir,
-		SessionSync:             cfg.SessionSync,
-		EngineVersion:           version,
-		StartedAt:               startedAt,
-		OnEvent:                 onEvent,
-		OnStorePhase:            slowStorePhaseLogger(logger),
-		Instructions:            instructionsConfig(cfg, opts.noInstructions),
-		SkillsDirs:              skillsDirs(cfg, opts.skillsDirs, workDir),
-		AgentDefsDirs:           agentDefsDirs(cfg, opts.agentDefsDirs, workDir),
-		Hooks:                   pluginHooks(host),
-		MCP:                     mcpRegistry(mcpMgr),
-		MCPToolLoading:          mcpToolLoading(cfg.MCPToolLoading),
-		MCPToolLoadingThreshold: cfg.MCPToolLoadingThreshold,
-		MCPToolLoadingByServer:  mcpToolLoadingByServer(cfg.MCPServers),
-		Processes:               processRegistry(procMgr),
-		ContextWindowTokens:     cfg.ContextWindowTokens,
-		RequireContextWindow:    cfg.ContextWindowRequiredValue(),
-		StreamIdleTimeout:       time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
-		PromptRetries:           cfg.PromptRetriesValue(),
-		MaxTokensContinuations:  cfg.MaxTokensContinuationsValue(),
-		SnapshotEveryRecords:    cfg.SnapshotEveryRecordsValue(),
-		CompactionThreshold:     cfg.CompactionThreshold,
-		CompactionKeepTurns:     cfg.CompactionKeepTurns,
+		AppendSystemPrompt:         appendSystemSegments(cfg, opts.system),
+		MaxTokens:                  opts.maxTokens,
+		WorkDir:                    workDir,
+		SessionDir:                 sesDir,
+		SessionSync:                cfg.SessionSync,
+		EngineVersion:              version,
+		StartedAt:                  startedAt,
+		OnEvent:                    onEvent,
+		OnStorePhase:               slowStorePhaseLogger(logger),
+		Instructions:               instructionsConfig(cfg, opts.noInstructions),
+		SkillsDirs:                 skillsDirs(cfg, opts.skillsDirs, workDir),
+		AgentDefsDirs:              agentDefsDirs(cfg, opts.agentDefsDirs, workDir),
+		Hooks:                      pluginHooks(host),
+		MCP:                        mcpRegistry(mcpMgr),
+		MCPToolLoading:             mcpToolLoading(cfg.MCPToolLoading),
+		MCPToolLoadingThreshold:    cfg.MCPToolLoadingThreshold,
+		MCPToolLoadingByServer:     mcpToolLoadingByServer(cfg.MCPServers),
+		Processes:                  processRegistry(procMgr),
+		ContextWindowTokens:        cfg.ContextWindowTokens,
+		RequireContextWindow:       cfg.ContextWindowRequiredValue(),
+		ContextWindowFromModelsDev: cfg.ContextWindowFromModelsDevValue(),
+		ContextWindowModelsDevURL:  cfg.ContextWindowModelsDevURLValue(),
+		StreamIdleTimeout:          time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
+		PromptRetries:              cfg.PromptRetriesValue(),
+		MaxTokensContinuations:     cfg.MaxTokensContinuationsValue(),
+		SnapshotEveryRecords:       cfg.SnapshotEveryRecordsValue(),
+		CompactionThreshold:        cfg.CompactionThreshold,
+		CompactionKeepTurns:        cfg.CompactionKeepTurns,
 		// Tool-result retention (config keys tool_result_inline_bytes /
 		// tool_result_retained_bytes, product defaults 16384 / 4194304 —
 		// see config.ToolResultInlineBytesValue). An explicit <= 0 inline
@@ -1472,6 +1478,16 @@ func serveCmd(args []string) error {
 	defer stopGCWatch()
 	go gcWatch.run(gcCtx)
 
+	// The models.dev snapshot refresher keeps the process-wide context-window
+	// table fresh without ever running on a request path. Same lifecycle as
+	// the watchdog above: a dedicated cancelable context, cancelled the
+	// moment serveCmd returns by any path. An empty URL is a no-op.
+	modelsDevCtx, stopModelsDevRefresh := context.WithCancel(context.Background())
+	defer stopModelsDevRefresh()
+	if cfg.ContextWindowFromModelsDevValue() {
+		engine.SetModelsDevRefreshSource(modelsDevCtx, cfg.ContextWindowModelsDevURLValue())
+	}
+
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
 	// host is built just below, once srv exists (its ClientAPI is
@@ -1564,26 +1580,28 @@ func serveCmd(args []string) error {
 			// created via handleCreate is a registered SessionManager node
 			// (see handleSessionSend's doc comment for the residency/reload
 			// edge this does not yet fully close).
-			SessionManager:          sessMgr,
-			OnStorePhase:            storePhase,
-			OnStorePhaseStart:       watchdog.startStorePhase,
-			Instructions:            instructionsConfig(cfg, noInstructions),
-			SkillsDirs:              skillsDirs(cfg, skillDirs, workDir),
-			AgentDefsDirs:           agentDefsDirs(cfg, agentDefDirs, workDir),
-			Hooks:                   pluginHooks(pluginHost),
-			MCP:                     mcpRegistry(mcpMgr),
-			MCPToolLoading:          mcpToolLoading(cfg.MCPToolLoading),
-			MCPToolLoadingThreshold: cfg.MCPToolLoadingThreshold,
-			MCPToolLoadingByServer:  mcpToolLoadingByServer(cfg.MCPServers),
-			Processes:               processRegistry(procMgr),
-			ContextWindowTokens:     cfg.ContextWindowTokens,
-			RequireContextWindow:    cfg.ContextWindowRequiredValue(),
-			StreamIdleTimeout:       time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
-			PromptRetries:           cfg.PromptRetriesValue(),
-			MaxTokensContinuations:  cfg.MaxTokensContinuationsValue(),
-			SnapshotEveryRecords:    cfg.SnapshotEveryRecordsValue(),
-			CompactionThreshold:     cfg.CompactionThreshold,
-			CompactionKeepTurns:     cfg.CompactionKeepTurns,
+			SessionManager:             sessMgr,
+			OnStorePhase:               storePhase,
+			OnStorePhaseStart:          watchdog.startStorePhase,
+			Instructions:               instructionsConfig(cfg, noInstructions),
+			SkillsDirs:                 skillsDirs(cfg, skillDirs, workDir),
+			AgentDefsDirs:              agentDefsDirs(cfg, agentDefDirs, workDir),
+			Hooks:                      pluginHooks(pluginHost),
+			MCP:                        mcpRegistry(mcpMgr),
+			MCPToolLoading:             mcpToolLoading(cfg.MCPToolLoading),
+			MCPToolLoadingThreshold:    cfg.MCPToolLoadingThreshold,
+			MCPToolLoadingByServer:     mcpToolLoadingByServer(cfg.MCPServers),
+			Processes:                  processRegistry(procMgr),
+			ContextWindowTokens:        cfg.ContextWindowTokens,
+			RequireContextWindow:       cfg.ContextWindowRequiredValue(),
+			ContextWindowFromModelsDev: cfg.ContextWindowFromModelsDevValue(),
+			ContextWindowModelsDevURL:  cfg.ContextWindowModelsDevURLValue(),
+			StreamIdleTimeout:          time.Duration(cfg.StreamIdleTimeoutS) * time.Second,
+			PromptRetries:              cfg.PromptRetriesValue(),
+			MaxTokensContinuations:     cfg.MaxTokensContinuationsValue(),
+			SnapshotEveryRecords:       cfg.SnapshotEveryRecordsValue(),
+			CompactionThreshold:        cfg.CompactionThreshold,
+			CompactionKeepTurns:        cfg.CompactionKeepTurns,
 			// Tool-result retention, same keys and defaults as runCmd
 			// above (config.ToolResultInlineBytesValue). Every served box
 			// gets it unless an operator sets a non-positive inline value.
