@@ -264,11 +264,13 @@ type stream struct {
 
 	id   string
 	text bytes.Buffer
-	// reasoningText accumulates reasoning_content deltas into a Reasoning
-	// part. Compat endpoints carry no signed/opaque reasoning payload the
-	// way Anthropic's thinking blocks or OpenAI Responses' encrypted
-	// reasoning items do, so this part never gets a ProviderData entry —
-	// there is no reasoning replay on this wire, ever.
+	// reasoningText accumulates reasoning deltas into a Reasoning part,
+	// from whichever encoding a chunk carries: reasoning_details
+	// (structured), reasoning_content, or reasoning. Compat endpoints carry
+	// no signed/opaque reasoning payload the way Anthropic's thinking
+	// blocks or OpenAI Responses' encrypted reasoning items do, so this
+	// part never gets a ProviderData entry — there is no reasoning replay
+	// on this wire, ever.
 	reasoningText bytes.Buffer
 	haveReasoning bool
 	haveText      bool
@@ -467,11 +469,30 @@ func (s *stream) handle(data []byte) error {
 	}
 	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
 	// reasoning (OpenRouter), and Gemini via Bifrost delivers structured
-	// reasoning_details. Surface whichever is present as a Reasoning part.
-	// reasoning_content and reasoning are alternative spellings for the same
-	// field (else-if) to avoid double-counting if a proxy echoes both.
-	// reasoning_details is parsed independently.
-	if rc := choice.Delta.ReasoningContent; rc != "" {
+	// reasoning_details. One encoding per chunk: kimi-k3 via Fireworks/Bifrost
+	// echoes the SAME text in reasoning_content and reasoning_details at once,
+	// so the three shapes are alternatives, never additive, or that route
+	// doubles every character.
+	hasDetailText := false
+	detailJoined := ""
+	for _, rd := range choice.Delta.ReasoningDetails {
+		if rd.Text != "" {
+			hasDetailText = true
+			s.haveReasoning = true
+			s.reasoningText.WriteString(rd.Text)
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
+			detailJoined += rd.Text
+		}
+	}
+	// Structured text wins only when it repeats the alias verbatim (the
+	// kimi-k3 echo shape); distinct texts from both encodings are additive.
+	alias := choice.Delta.ReasoningContent
+	if alias == "" {
+		alias = choice.Delta.Reasoning
+	}
+	if hasDetailText && alias == detailJoined {
+		// nothing else: the structured text repeated the alias verbatim
+	} else if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
@@ -479,13 +500,6 @@ func (s *stream) handle(data []byte) error {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
-	}
-	for _, rd := range choice.Delta.ReasoningDetails {
-		if rd.Text != "" {
-			s.haveReasoning = true
-			s.reasoningText.WriteString(rd.Text)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
-		}
 	}
 	for _, tc := range choice.Delta.ToolCalls {
 		if s.toolCalls == nil {
