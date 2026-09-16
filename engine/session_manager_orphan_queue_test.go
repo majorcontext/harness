@@ -24,6 +24,12 @@ import (
 // durable, not memory-only: promptQueueFold must net a fresh LoadSession's
 // queue to zero, or a cold reload resurrects the very record this fix
 // exists to stop resurrecting.
+//
+// The durable half cannot key off the settled status: finalizeTurn fires
+// markChangedLocked (what waitForFinalized returns on) strictly BEFORE
+// unlockAndFlushPersist journals the orphaned dequeue, so a LoadSession
+// right after races the flush and flakes (recovery_harness_test.go rule 2).
+// flushSignal+loadUntil re-reads until the dequeued record has landed.
 func TestFinalizeTurnDrainsOrphanedQueueOnExplicitCancel(t *testing.T) {
 	dir := t.TempDir()
 	release := make(chan struct{})
@@ -49,6 +55,10 @@ func TestFinalizeTurnDrainsOrphanedQueueOnExplicitCancel(t *testing.T) {
 		t.Fatal("Session: child not found")
 	}
 
+	// Armed before CancelDescendant so the flush carrying the orphaned
+	// dequeue is never missed; earlier flushes just cost one extra reload.
+	flushed := newFlushSignal(t, mgr)
+
 	if _, err := mgr.CancelDescendant(root.ID, childID); err != nil {
 		t.Fatalf("CancelDescendant: %v", err)
 	}
@@ -58,13 +68,9 @@ func TestFinalizeTurnDrainsOrphanedQueueOnExplicitCancel(t *testing.T) {
 		t.Fatalf("QueuedPrompts after a canceled child settled = %+v, want empty: a terminal subagent's queue is orphaned forever", pending)
 	}
 
-	reloaded, err := LoadSession(Config{SessionDir: dir}, childID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	if pending := reloaded.QueuedPrompts(); len(pending) != 0 {
-		t.Fatalf("QueuedPrompts after reload = %+v, want empty: the dequeue must be journaled, not memory-only", pending)
-	}
+	flushed.loadUntil(t, Config{SessionDir: dir}, childID, "after the canceled child's orphaned-queue drain", func(reloaded *Session) bool {
+		return len(reloaded.QueuedPrompts()) == 0
+	})
 }
 
 // TestReapDrainsPreexistingOrphanedQueue covers Site 2: a queue that
