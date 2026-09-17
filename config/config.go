@@ -165,6 +165,26 @@ type Config struct {
 	// project-config merge, like PromptRetries' *int. Resolve it with
 	// ContextWindowRequiredValue.
 	ContextWindowRequired *bool `json:"context_window_required,omitempty"`
+	// ContextWindowFromModelsDev opts a session into the models.dev
+	// context-window source: when the model-derived lookup above misses,
+	// the engine reads the process-wide snapshot the control plane serves at
+	// ContextWindowModelsDevURL (below) and uses its window for the ref's
+	// bare model ID. A nil value (the field omitted) leaves the product
+	// default of FALSE in place — no models.dev lookup; an explicit false
+	// lets a project config override a user true. The source runs only when
+	// BOTH this resolves true AND ContextWindowModelsDevURL is non-empty.
+	// Resolve it with ContextWindowFromModelsDevValue.
+	ContextWindowFromModelsDev *bool `json:"context_window_models_dev,omitempty"`
+	// ContextWindowModelsDevURL is the URL of the control plane's
+	// pre-flattened models.dev snapshot: a JSON object mapping a bare model
+	// ID to its context window in tokens, e.g.
+	// `{"gemini-3.8-flash": 1048576}`. The box control plane builds it from
+	// models.dev; the engine never parses models.dev's api.json. Empty (the
+	// default) turns the source off even when ContextWindowFromModelsDev is
+	// true — no URL, no source. Set together, they enable a background
+	// refresh goroutine (engine/modelsdev.go) that never runs on a request
+	// path.
+	ContextWindowModelsDevURL *string `json:"context_window_models_dev_url,omitempty"`
 	// PromptRetries sets engine.Config.PromptRetries: how many ADDITIONAL
 	// attempts the base interactive Prompt loop makes when a model call fails
 	// with a transient, retryable provider error (an HTTP 5xx/429/529 or a
@@ -1432,6 +1452,12 @@ func merge(base, over *Config) *Config {
 	if over.ContextWindowRequired != nil {
 		out.ContextWindowRequired = over.ContextWindowRequired
 	}
+	if over.ContextWindowFromModelsDev != nil {
+		out.ContextWindowFromModelsDev = over.ContextWindowFromModelsDev
+	}
+	if over.ContextWindowModelsDevURL != nil {
+		out.ContextWindowModelsDevURL = over.ContextWindowModelsDevURL
+	}
 	if over.PromptRetries != nil {
 		out.PromptRetries = over.PromptRetries
 	}
@@ -1750,6 +1776,28 @@ func (c *Config) ContextWindowRequiredValue() bool {
 		return true
 	}
 	return *c.ContextWindowRequired
+}
+
+// ContextWindowFromModelsDevValue reports whether the models.dev
+// context-window source is opted in. The default is FALSE: only an explicit
+// `context_window_models_dev: true` turns it on, and even then an empty
+// ContextWindowModelsDevURL leaves the source off. A nil receiver (no
+// config) uses the default too.
+func (c *Config) ContextWindowFromModelsDevValue() bool {
+	if c == nil || c.ContextWindowFromModelsDev == nil {
+		return false
+	}
+	return *c.ContextWindowFromModelsDev
+}
+
+// ContextWindowModelsDevURLValue resolves the URL to a plain string: empty
+// when unset, the set value otherwise (a project-level "" disables a
+// user-level URL by presence). A nil receiver (no config) is empty too.
+func (c *Config) ContextWindowModelsDevURLValue() string {
+	if c == nil || c.ContextWindowModelsDevURL == nil {
+		return ""
+	}
+	return *c.ContextWindowModelsDevURL
 }
 
 // defaultMaxTokensContinuations is the product default for how many

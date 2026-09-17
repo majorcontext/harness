@@ -1844,3 +1844,92 @@ func TestContextWindowRequired(t *testing.T) {
 		}
 	})
 }
+
+// TestContextWindowModelsDev covers the context_window_models_dev and
+// context_window_models_dev_url fields: an opt-in *bool (default off) plus
+// a snapshot URL. The feature is on only when BOTH resolve true and the URL
+// is non-empty, so an explicit project false must override a user true and
+// an empty URL must turn the source off.
+func TestContextWindowModelsDev(t *testing.T) {
+	t.Run("unset is off", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"model": "anthropic/claude-fable-5"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ContextWindowFromModelsDev != nil {
+			t.Errorf("ContextWindowFromModelsDev = %v, want nil (unset)", c.ContextWindowFromModelsDev)
+		}
+		if c.ContextWindowFromModelsDevValue() {
+			t.Error("ContextWindowFromModelsDevValue = true, want false (default off)")
+		}
+		if c.ContextWindowModelsDevURLValue() != "" {
+			t.Errorf("ContextWindowModelsDevURL = %q, want empty", c.ContextWindowModelsDevURLValue())
+		}
+	})
+	t.Run("explicit true and false are distinct", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"context_window_models_dev": false}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ContextWindowFromModelsDev == nil || *c.ContextWindowFromModelsDev {
+			t.Fatalf("ContextWindowFromModelsDev = %v, want explicit false", c.ContextWindowFromModelsDev)
+		}
+		if c.ContextWindowFromModelsDevValue() {
+			t.Error("ContextWindowFromModelsDevValue = true, want false (explicitly off)")
+		}
+	})
+	t.Run("url loads", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "config.json")
+		writeFile(t, p, `{"context_window_models_dev_url": "https://control.example/models-windows"}`)
+		c, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if c.ContextWindowModelsDevURLValue() != "https://control.example/models-windows" {
+			t.Errorf("ContextWindowModelsDevURL = %q, want the configured URL", c.ContextWindowModelsDevURLValue())
+		}
+	})
+	t.Run("nil receiver is empty", func(t *testing.T) {
+		var c *Config
+		if got := c.ContextWindowModelsDevURLValue(); got != "" {
+			t.Errorf("nil ContextWindowModelsDevURLValue = %q, want empty", got)
+		}
+	})
+	t.Run("project false overrides user true", func(t *testing.T) {
+		yes := true
+		no := false
+		base := &Config{ContextWindowFromModelsDev: &yes}
+		merged := merge(base, &Config{ContextWindowFromModelsDev: &no})
+		if merged.ContextWindowFromModelsDev == nil || *merged.ContextWindowFromModelsDev {
+			t.Errorf("merged = %v, want project override false", merged.ContextWindowFromModelsDev)
+		}
+	})
+	t.Run("unset project inherits user true", func(t *testing.T) {
+		yes := true
+		base := &Config{ContextWindowFromModelsDev: &yes}
+		merged := merge(base, &Config{})
+		if merged.ContextWindowFromModelsDev == nil || !*merged.ContextWindowFromModelsDev {
+			t.Errorf("merged = %v, want inherited true", merged.ContextWindowFromModelsDev)
+		}
+	})
+	t.Run("project url overrides user url", func(t *testing.T) {
+		base := &Config{ContextWindowModelsDevURL: strPtrConfig("https://user.example/windows")}
+		merged := merge(base, &Config{ContextWindowModelsDevURL: strPtrConfig("https://project.example/windows")})
+		if merged.ContextWindowModelsDevURLValue() != "https://project.example/windows" {
+			t.Errorf("merged URL = %q, want project override", merged.ContextWindowModelsDevURLValue())
+		}
+	})
+	t.Run("project empty url disables user url", func(t *testing.T) {
+		base := &Config{ContextWindowModelsDevURL: strPtrConfig("https://user.example/windows")}
+		merged := merge(base, &Config{ContextWindowModelsDevURL: strPtrConfig("")})
+		if merged.ContextWindowModelsDevURLValue() != "" {
+			t.Errorf("merged URL = %q, want the project-level empty to disable it", merged.ContextWindowModelsDevURLValue())
+		}
+	})
+}
+
+func strPtrConfig(s string) *string { return &s }

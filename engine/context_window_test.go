@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -46,27 +47,27 @@ func testContextWindowTable() map[message.ModelRef]int {
 func TestResolveContextWindowExplicitConfigWinsOverModel(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(50_000, modelKnownBig)
+	tokens, source, _ := resolveContextWindow(50_000, modelKnownBig, false, false)
 	if tokens != 50_000 || source != contextWindowSourceConfig {
-		t.Fatalf("resolveContextWindow(50000, big) = %d, %q; want 50000, %q", tokens, source, contextWindowSourceConfig)
+		t.Fatalf("resolveContextWindow(50000, big, false) = %d, %q; want 50000, %q", tokens, source, contextWindowSourceConfig)
 	}
 }
 
 func TestResolveContextWindowModelDerivedWhenUnset(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelKnownBig)
+	tokens, source, _ := resolveContextWindow(0, modelKnownBig, false, false)
 	if tokens != 500_000 || source != contextWindowSourceModelDerived {
-		t.Fatalf("resolveContextWindow(0, big) = %d, %q; want 500000, %q", tokens, source, contextWindowSourceModelDerived)
+		t.Fatalf("resolveContextWindow(0, big, false) = %d, %q; want 500000, %q", tokens, source, contextWindowSourceModelDerived)
 	}
 }
 
 func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelUnknown)
+	tokens, source, _ := resolveContextWindow(0, modelUnknown, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
-		t.Fatalf("resolveContextWindow(0, unknown) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
+		t.Fatalf("resolveContextWindow(0, unknown, false) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
 }
 
@@ -79,9 +80,9 @@ func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 func TestResolveContextWindowFloorRejectsBogusValue(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelBogusTiny)
+	tokens, source, _ := resolveContextWindow(0, modelBogusTiny, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
-		t.Fatalf("resolveContextWindow(0, bogus-tiny) = %d, %q; want 0, %q (floor must reject it)", tokens, source, contextWindowSourceDisabled)
+		t.Fatalf("resolveContextWindow(0, bogus-tiny, false) = %d, %q; want 0, %q (floor must reject it)", tokens, source, contextWindowSourceDisabled)
 	}
 }
 
@@ -89,18 +90,18 @@ func TestResolveContextWindowFloorBoundary(t *testing.T) {
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens, // exactly at the floor
 	})
-	tokens, source, _ := resolveContextWindow(0, modelKnownSmall)
+	tokens, source, _ := resolveContextWindow(0, modelKnownSmall, false, false)
 	if tokens != minAutoContextWindowTokens || source != contextWindowSourceModelDerived {
-		t.Fatalf("resolveContextWindow(0, exactly-floor) = %d, %q; want %d, %q (floor is inclusive)",
+		t.Fatalf("resolveContextWindow(0, exactly-floor, false) = %d, %q; want %d, %q (floor is inclusive)",
 			tokens, source, minAutoContextWindowTokens, contextWindowSourceModelDerived)
 	}
 
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens - 1,
 	})
-	tokens, source, _ = resolveContextWindow(0, modelKnownSmall)
+	tokens, source, _ = resolveContextWindow(0, modelKnownSmall, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
-		t.Fatalf("resolveContextWindow(0, one-under-floor) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
+		t.Fatalf("resolveContextWindow(0, one-under-floor, false) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
 }
 
@@ -407,5 +408,93 @@ func TestLoadSessionExplicitConfigSurvivesModelSwitch(t *testing.T) {
 	}
 	if loaded.contextWindowSource != contextWindowSourceConfig {
 		t.Fatalf("loaded contextWindowSource = %q, want %q", loaded.contextWindowSource, contextWindowSourceConfig)
+	}
+}
+
+// --- resolveContextWindow: opt-in models.dev fallback -----------------------
+
+// stubModelsDevLookup replaces modelsDevContextWindowLookup with a fixed
+// table for the duration of t, restoring the real fetch-backed lookup on
+// cleanup. Mirrors stubContextWindowLookup's shape for modelmeta.
+func stubModelsDevLookup(t *testing.T, table map[message.ModelRef]int) {
+	t.Helper()
+	orig := modelsDevContextWindowLookup
+	modelsDevContextWindowLookup = func(ref message.ModelRef) (int, bool) {
+		tokens, ok := table[ref]
+		return tokens, ok
+	}
+	t.Cleanup(func() { modelsDevContextWindowLookup = orig })
+}
+
+// TestResolveContextWindowModelsDevFallbackHit is the feature's core case: a
+// modelmeta miss, the flag on, and a models.dev hit must resolve with the
+// dedicated source and the fetched token count.
+func TestResolveContextWindowModelsDevFallbackHit(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	stubModelsDevLookup(t, map[message.ModelRef]int{modelUnknown: 1_000_000})
+
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
+	if err != nil {
+		t.Fatalf("resolveContextWindow with models.dev hit reported a miss: %v", err)
+	}
+	if tokens != 1_000_000 || source != contextWindowSourceModelsDev {
+		t.Fatalf("resolveContextWindow(0, unknown, true) = %d, %q; want 1000000, %q", tokens, source, contextWindowSourceModelsDev)
+	}
+}
+
+// TestResolveContextWindowModelsDevFallbackBelowFloor proves the fallback
+// obeys the SAME sanity floor the model-derived path uses: a below-floor
+// models.dev value must disable compaction, not report a miss.
+func TestResolveContextWindowModelsDevFallbackBelowFloor(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	stubModelsDevLookup(t, map[message.ModelRef]int{modelUnknown: minAutoContextWindowTokens - 1})
+
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
+	if err != nil {
+		t.Fatalf("below-floor models.dev value reported a miss: %v", err)
+	}
+	if tokens != 0 || source != contextWindowSourceDisabled {
+		t.Fatalf("resolveContextWindow(0, unknown, true) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
+	}
+}
+
+// TestResolveContextWindowModelsDevFallbackOff proves the flag gates the
+// fallback entirely: with it off, a modelmeta miss must resolve exactly as
+// it did before this feature existed, even when models.dev would have hit.
+func TestResolveContextWindowModelsDevFallbackOff(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	consulted := false
+	orig := modelsDevContextWindowLookup
+	modelsDevContextWindowLookup = func(ref message.ModelRef) (int, bool) {
+		consulted = true
+		return 1_000_000, true
+	}
+	t.Cleanup(func() { modelsDevContextWindowLookup = orig })
+
+	tokens, source, err := resolveContextWindow(0, modelUnknown, false, false)
+	if consulted {
+		t.Fatal("modelsDevContextWindowLookup was consulted with the flag off")
+	}
+	if tokens != 0 || source != contextWindowSourceDisabled {
+		t.Fatalf("resolveContextWindow(0, unknown, false) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
+	}
+	if !errors.Is(err, ErrUnknownContextWindow) {
+		t.Errorf("error = %v, want it to wrap ErrUnknownContextWindow unchanged", err)
+	}
+}
+
+// TestResolveContextWindowModelsDevFallbackMiss proves a models.dev miss (or
+// error, indistinguishable at this layer) falls through UNCHANGED to the
+// existing miss behavior, still reporting ErrUnknownContextWindow.
+func TestResolveContextWindowModelsDevFallbackMiss(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	stubModelsDevLookup(t, map[message.ModelRef]int{}) // always misses
+
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
+	if tokens != 0 || source != contextWindowSourceDisabled {
+		t.Fatalf("resolveContextWindow(0, unknown, true) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
+	}
+	if !errors.Is(err, ErrUnknownContextWindow) {
+		t.Errorf("error = %v, want it to wrap ErrUnknownContextWindow", err)
 	}
 }

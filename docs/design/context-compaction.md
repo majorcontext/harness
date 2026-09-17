@@ -44,9 +44,9 @@ with a raw `context exhausted` provider error instead of ever compacting.
 `newSession` (`engine/context_window.go`, `resolveContextWindow`) now
 derives it itself when the embedder leaves it zero: package `modelmeta`
 holds a curated table of `provider/model` -> context-window tokens, sourced
-from models.dev's `limit.context` field (bifrost's own `/v1/models` was
-investigated and ruled out — it returns the bare OpenAI listing shape with
-no context-length field at all). Precedence is explicit config >
+from models.dev's `limit.context` field (bifrost's own `/v1/models`, which
+was investigated and ruled out — it returns the bare OpenAI listing shape
+with no context-length field at all). Precedence is explicit config >
 model-derived > disabled, and a model-derived value below
 `minAutoContextWindowTokens` (16k) leaves compaction disabled rather than
 arming a nonsense threshold — logged at INFO, not WARN, because the table
@@ -57,9 +57,50 @@ explicit config, so a mid-session model switch keeps the window (and
 therefore whether compaction is armed at all) matched to whichever model is
 actually running. One INFO log line at session start (and again on any
 switch that changes the effective window) names the resolved window and its
-source (`config`/`model-derived`/`disabled`) — the operator signal that
+source (`config`/`model-derived`/`models.dev`/`disabled`) — the operator signal that
 would have made jumpy-pizza's disarmed compaction visible well before the
 box died.
+
+**Control-plane-served snapshot for a model that `modelmeta` has not curated.** A
+model family with no static entry — a Gemini/Vertex ref, for example —
+normally still resolves to a registry miss. Setting
+`context_window_models_dev: true` plus `context_window_models_dev_url`
+(`Config.ContextWindowFromModelsDev` and `Config.ContextWindowModelsDevURL`)
+adds a second lookup after that miss against a process-wide snapshot
+(`engine/modelsdev.go`) the box control plane serves as a bare model ID ->
+context-window-token map, e.g. `{"gemini-3.8-flash": 1048576}`. The box
+control plane is the only component that talks to models.dev; the engine
+never parses `models.dev/api.json`. A background goroutine starts when both
+keys are set and refreshes the snapshot once at startup and then hourly,
+the initial fetch and each tick sequential in one goroutine so refreshes
+are single-flight, outside any session lock; a fetch failure keeps the
+last-good snapshot and
+retries on the next tick. Resetting the source with
+`SetModelsDevRefreshSource` — a new URL or an empty one — cancels the
+previous refresher first and clears the snapshot, so the last-good guarantee
+never serves one source's entries under another, and a fetch whose context
+outlived the reset never publishes. The session path
+(`resolveContextWindow`) reads
+only the in-memory snapshot and performs no network I/O; `SetModel` and
+`CheckModel` run under the session lock and take a not-yet-populated
+snapshot as an ordinary miss, so they never block on the control plane.
+Lookups key on `modelmeta.CanonicalModelKey`, so a decorated Bifrost or
+Bedrock ref resolves its bare ID exactly as modelmeta's own tables do.
+Only session construction (`NewSession` and `LoadSession`'s re-derive)
+waits once for the initial fetch to finish, bounded by the fetch timeout,
+so an opted-in models.dev-only model can start on the first session —
+every later lookup returns without waiting, and a source swap during the
+wait re-targets it to the new source's fetch rather than letting the
+retired source's early close answer. A
+hit reports source
+`models.dev` and passes through the same `minAutoContextWindowTokens` floor
+the model-derived path uses; a miss (including an empty or not-yet-populated
+snapshot) falls through unchanged to the existing registry-miss handling.
+Conflict resolution across provider duplicates moved to the control plane,
+which serves a pre-flattened map. Off by default, so no session touches the
+network unless an operator opts in. `harness serve` starts the refresher
+before constructing the server, because the server's reconcile loads every
+persisted session and those loads must see the live source.
 
 **Explicit: `POST /session/{id}/compact`.** Always available regardless of
 threshold — pre-emptive compaction ahead of a known-large tool result,

@@ -906,6 +906,27 @@ type Config struct {
 	// registry knows whose window is below the auto-arm floor is a known
 	// model, not a gap.
 	RequireContextWindow bool
+	// ContextWindowFromModelsDev opts a session into the models.dev
+	// context-window source when modelmeta misses: read the process-wide
+	// snapshot at ContextWindowModelsDevURL (below) and use its window for
+	// the ref's bare model ID. It runs only after modelmeta misses. A hit is
+	// reported with source contextWindowSourceModelsDev through the same
+	// minAutoContextWindowTokens floor the model-derived path uses; a miss
+	// falls through unchanged to the registry-miss handling
+	// RequireContextWindow governs.
+	//
+	// False — the zero value — disables the source, so every existing
+	// embedder and test in this package is unaffected. The config/CLI layer
+	// supplies the resolved opt-in (config key `context_window_models_dev`,
+	// default false); the source is on only when this AND
+	// ContextWindowModelsDevURL are both set (see modelsDevEnabled).
+	ContextWindowFromModelsDev bool
+	// ContextWindowModelsDevURL is the control plane's pre-flattened
+	// models.dev snapshot URL (a bare model ID -> context window token map).
+	// Empty disables the source even when ContextWindowFromModelsDev is
+	// true. It is served by the box control plane; the engine never parses
+	// models.dev's api.json. Config key `context_window_models_dev_url`.
+	ContextWindowModelsDevURL string
 	// CompactionThreshold is the fraction of ContextWindowTokens at which
 	// automatic compaction triggers. Zero defaults to 0.8, mirroring
 	// newSession's existing zero-fills-a-default pattern for BashTimeout.
@@ -1699,7 +1720,7 @@ func newSession(cfg Config) *Session {
 	contextWindowExplicit := cfg.ContextWindowTokens > 0
 	var contextWindowSource string
 	var contextWindowMiss error
-	cfg.ContextWindowTokens, contextWindowSource, contextWindowMiss = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model)
+	cfg.ContextWindowTokens, contextWindowSource, contextWindowMiss = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model, cfg.modelsDevEnabled(), true)
 	contextWindowErr := requiredContextWindowErr(cfg, cfg.Model, contextWindowMiss, "session_start")
 	s := &Session{
 		cfg:                   cfg,
@@ -1816,7 +1837,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 		s.forceCompactionCheck = false
 	}
 	if !s.contextWindowExplicit {
-		nextTokens, nextSource, miss := resolveContextWindow(0, ref)
+		nextTokens, nextSource, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled(), false)
 		// Re-derived, so it REPLACES whatever the previous model left:
 		// switching to a model the registry knows clears an earlier
 		// refusal, and switching away to one it does not arms a new one.
@@ -1872,7 +1893,7 @@ func (s *Session) CheckModel(ref message.ModelRef) error {
 	if s.contextWindowExplicit {
 		return nil
 	}
-	_, _, miss := resolveContextWindow(0, ref)
+	_, _, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled(), false)
 	return requiredContextWindowErr(s.cfg, ref, miss, "model_check")
 }
 

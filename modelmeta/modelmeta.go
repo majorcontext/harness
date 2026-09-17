@@ -131,7 +131,7 @@ var bedrockAnthropicContextWindows = map[string]int{
 // stripping that segment first, EVERY box ref misses this table and
 // automatic compaction does not arm for those refs.
 func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
-	model := lastPathSegment(ref.Model)
+	key, bedrockServed := canonicalModelKey(ref)
 	switch ref.Provider {
 	case "anthropic":
 		// A bedrock/mantle-routed ref's namespace-stripped model still
@@ -147,26 +147,21 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// limit and re-creates the overflow this package exists to
 		// prevent.
 		//
-		// stripBedrockAnthropicPrefix (not a bare CutPrefix) so a region
-		// segment ("us."/"eu."/"global.") is tolerated symmetrically with
-		// the amazon-bedrock branch below. Bedrock-served refs consult the
-		// bedrock table EXCLUSIVELY — no first-party fallback: a dotted
-		// family the bedrock snapshot doesn't key resolves as unknown
-		// (compaction stays disabled, the fail-safe direction) rather than
-		// borrowing the first-party window, which would silently un-do the
-		// divergence for any form not keyed exactly (e.g. the undated
+		// Bedrock-served refs consult the bedrock table EXCLUSIVELY — no
+		// first-party fallback: a dotted family the bedrock snapshot
+		// doesn't key resolves as unknown (compaction stays disabled, the
+		// fail-safe direction) rather than borrowing the first-party
+		// window, which would silently un-do the divergence for any form
+		// not keyed exactly (e.g. the undated
 		// "anthropic.claude-sonnet-4-5" borrowing 1M where Bedrock's real
 		// window is 200k).
-		if suffix, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
-			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
+		if bedrockServed {
+			tokens, ok = bedrockAnthropicContextWindows[key]
 			return tokens, ok
 		}
-		tokens, ok = anthropicContextWindows[stripBedrockVersionSuffix(model)]
+		tokens, ok = anthropicContextWindows[key]
 	case "openai":
-		if suffix, ok2 := strings.CutPrefix(model, "openai."); ok2 {
-			model = stripBedrockVersionSuffix(suffix)
-		}
-		tokens, ok = openaiContextWindows[model]
+		tokens, ok = openaiContextWindows[key]
 	case codexProvider:
 		// A ref routed through the ChatGPT Codex backend (see
 		// meetneptune/boxes internal/api/codex_models.go, which mints refs
@@ -180,10 +175,10 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// fail-loud refusal (see engine/context_window.go) stays armed for
 		// a genuinely unknown model instead of a boxes-side override
 		// disabling it globally.
-		tokens, ok = openaiContextWindows[model]
+		tokens, ok = openaiContextWindows[key]
 	case "amazon-bedrock":
-		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
-			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
+		if bedrockServed {
+			tokens, ok = bedrockAnthropicContextWindows[key]
 		}
 	case claudeCodeProvider:
 		// A turn delegated to the Claude Code CLI (see
@@ -203,6 +198,47 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		tokens, ok = claudeCodeContextWindow, true
 	}
 	return tokens, ok
+}
+
+// canonicalModelKey normalizes ref to the bare model ID the provider
+// tables key on, and reports whether that ID is bedrock-served (a dotted
+// "anthropic." family or region prefix was stripped). stripBedrockAnthropicPrefix
+// rather than a bare CutPrefix so a region segment ("us."/"eu."/"global.")
+// is tolerated symmetrically across the anthropic and amazon-bedrock
+// providers.
+func canonicalModelKey(ref message.ModelRef) (key string, bedrockServed bool) {
+	model := lastPathSegment(ref.Model)
+	switch ref.Provider {
+	case "anthropic":
+		if suffix, isBedrockStyle := stripBedrockAnthropicPrefix(model); isBedrockStyle {
+			return stripBedrockVersionSuffix(suffix), true
+		}
+		return stripBedrockVersionSuffix(model), false
+	case "openai":
+		if suffix, ok := strings.CutPrefix(model, "openai."); ok {
+			return stripBedrockVersionSuffix(suffix), false
+		}
+		return model, false
+	case "amazon-bedrock":
+		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
+			return stripBedrockVersionSuffix(suffix), true
+		}
+		return model, false
+	default:
+		return model, false
+	}
+}
+
+// CanonicalModelKey returns the bare model ID ContextWindow's tables key
+// on for ref: the model's last path segment with the provider's Bedrock
+// decorations stripped (the dotted family or region prefix and a trailing
+// "-vN[:M]" version suffix). Engine's models.dev snapshot lookup uses the
+// same key, so a decorated ref resolves identically against either table.
+// It normalizes spelling only; it does not validate the ID against any
+// table.
+func CanonicalModelKey(ref message.ModelRef) string {
+	key, _ := canonicalModelKey(ref)
+	return key
 }
 
 // claudeCodeProvider is the message.ModelRef.Provider value that selects
