@@ -1646,6 +1646,18 @@ func serveCmd(args []string) error {
 	}
 	defer func() { _ = sesLock.Close() }()
 
+	// The models.dev snapshot refresher keeps the process-wide context-window
+	// table fresh without ever running on a request path. Started before
+	// server.New because reconcile loads every persisted session during New:
+	// a models.dev-only model must wait for the initial fetch there, not
+	// refuse before the source is live. Dedicated cancelable context,
+	// cancelled the moment serveCmd returns by any path.
+	modelsDevCtx, stopModelsDevRefresh := context.WithCancel(context.Background())
+	defer stopModelsDevRefresh()
+	if cfg.ContextWindowFromModelsDevValue() {
+		engine.SetModelsDevRefreshSource(modelsDevCtx, cfg.ContextWindowModelsDevURLValue())
+	}
+
 	srv, err = server.New(server.Options{
 		SessionDir:    sesDir,
 		RunToken:      token,
@@ -1727,17 +1739,6 @@ func serveCmd(args []string) error {
 	defer srv.Close()
 
 	lateAPI.Bind(srv.ClientAPI())
-
-	// The models.dev snapshot refresher keeps the process-wide context-window
-	// table fresh without ever running on a request path. Started only after
-	// setup has succeeded, so a serve that fails during construction never
-	// fetches. Same lifecycle as the watchdog: a dedicated cancelable
-	// context, cancelled the moment serveCmd returns by any path.
-	modelsDevCtx, stopModelsDevRefresh := context.WithCancel(context.Background())
-	defer stopModelsDevRefresh()
-	if cfg.ContextWindowFromModelsDevValue() {
-		engine.SetModelsDevRefreshSource(modelsDevCtx, cfg.ContextWindowModelsDevURLValue())
-	}
 
 	httpSrv := &http.Server{Addr: addr, Handler: srv}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

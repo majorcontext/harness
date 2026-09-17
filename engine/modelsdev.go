@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/modelmeta"
 )
 
 const modelsDevRefreshTTL = time.Hour
@@ -41,14 +42,16 @@ type modelsDevWindows struct {
 // resolveContextWindow; the session path therefore performs no network I/O.
 var modelsDevSnapshot atomic.Pointer[modelsDevWindows]
 
-// modelsDevWindowLookup resolves ref from the snapshot. A nil snapshot or a
-// missing bare ID is a miss.
+// modelsDevWindowLookup resolves ref from the snapshot, keyed by
+// modelmeta.CanonicalModelKey so a decorated Bifrost or Bedrock ref matches
+// its bare ID exactly as modelmeta's own tables do. A nil snapshot or a
+// missing key is a miss.
 func modelsDevWindowLookup(ref message.ModelRef) (int, bool) {
 	snap := modelsDevSnapshot.Load()
 	if snap == nil {
 		return 0, false
 	}
-	tokens, ok := snap.windows[modelsDevModelKey(ref.Model)]
+	tokens, ok := snap.windows[modelmeta.CanonicalModelKey(ref)]
 	return tokens, ok
 }
 
@@ -202,13 +205,4 @@ func fetchModelsDevWindows(ctx context.Context, url string) (map[string]int, err
 		windows[k] = *v
 	}
 	return windows, nil
-}
-
-// modelsDevModelKey mirrors modelmeta's last-path-segment normalization so a
-// Bifrost-routed ref matches the snapshot's bare model IDs.
-func modelsDevModelKey(model string) string {
-	if idx := strings.LastIndexByte(model, '/'); idx >= 0 {
-		return model[idx+1:]
-	}
-	return model
 }

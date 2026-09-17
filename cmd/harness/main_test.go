@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -850,6 +853,61 @@ func TestRegistryOpenAICompatHitsConfiguredBaseURL(t *testing.T) {
 	}
 	if gotReferer != "https://harness.example" {
 		t.Errorf("HTTP-Referer = %q, want https://harness.example", gotReferer)
+	}
+}
+
+// serve must start the models.dev refresher before server.New: reconcile
+// loads every persisted session during New, so a models.dev-only model has
+// to resolve against the live source there, not record a refusal before
+// the fetch can help. The pre-bound listener ends serveCmd right after
+// server.New, so the reconcile load is the only thing under observation.
+func TestServeCmdStartsModelsDevBeforeReconcile(t *testing.T) {
+	snap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"m1": 500000}`))
+	}))
+	t.Cleanup(snap.Close)
+
+	sesDir := t.TempDir()
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	body := fmt.Sprintf(`{"session_dir": %q, "context_window_models_dev": true, "context_window_models_dev_url": %q}`, sesDir, snap.URL)
+	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARNESS_CONFIG", cfgPath)
+	t.Setenv("HARNESS_RUN_TOKEN", "")
+	t.Setenv("HARNESS_UNAUTHENTICATED", "")
+
+	orig := engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:      t.TempDir(),
+		SessionDir:   sesDir,
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+	})
+	if err := orig.Persist(); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	if err := serveCmd([]string{"-addr", ln.Addr().String()}); err == nil {
+		t.Fatal("serveCmd returned nil, want the listener-conflict error")
+	}
+	out := logs.String()
+	if strings.Contains(out, "no known context window") {
+		t.Fatal("reconcile load refused a models.dev-only model before the refresher was started")
+	}
+	if !strings.Contains(out, `"source":"models.dev"`) {
+		t.Fatal("reconcile load did not resolve the model from the models.dev snapshot")
 	}
 }
 

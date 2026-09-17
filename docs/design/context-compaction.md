@@ -82,7 +82,9 @@ never serves one source's entries under another, and a fetch whose context
 outlived the reset never publishes. The session path
 (`resolveContextWindow`) reads
 only the in-memory snapshot and never performs network I/O, so a slow
-control plane cannot stall `SetModel` or `CheckModel`; the FIRST lookup for
+control plane cannot stall `SetModel` or `CheckModel`; lookups key on
+`modelmeta.CanonicalModelKey`, so a decorated Bifrost or Bedrock ref
+resolves its bare ID exactly as modelmeta's own tables do; the FIRST lookup for
 a model both tables miss waits once for the initial fetch to finish,
 bounded by the fetch timeout, so an opted-in models.dev-only model can
 start on the first session — every later lookup returns without waiting,
@@ -94,7 +96,9 @@ the model-derived path uses; a miss (including an empty or not-yet-populated
 snapshot) falls through unchanged to the existing registry-miss handling.
 Conflict resolution across provider duplicates moved to the control plane,
 which serves a pre-flattened map. Off by default, so no session touches the
-network unless an operator opts in.
+network unless an operator opts in. `harness serve` starts the refresher
+before constructing the server, because the server's reconcile loads every
+persisted session and those loads must see the live source.
 
 **Explicit: `POST /session/{id}/compact`.** Always available regardless of
 threshold — pre-emptive compaction ahead of a known-large tool result,

@@ -487,6 +487,36 @@ func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
 	})
 }
 
+// The snapshot lookup must key on modelmeta's full canonicalization, not
+// just the last path segment: a Bifrost bedrock-mantle ref carries the
+// dotted family (and possibly region) prefix and a bedrock version suffix
+// ahead of the bare ID the snapshot keys on.
+func TestModelsDevWindowLookupCanonicalKey(t *testing.T) {
+	resetModelsDevSnapshot(t)
+	modelsDevSnapshot.Store(&modelsDevWindows{windows: map[string]int{
+		"claude-opus-5":    500_000,
+		"gemini-3.8-flash": 1_000_000,
+	}})
+	cases := []struct {
+		ref  message.ModelRef
+		want int
+	}{
+		{message.ModelRef{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-opus-5-v1:0"}, 500_000},
+		{message.ModelRef{Provider: "anthropic", Model: "bedrock_mantle/us.anthropic.claude-opus-5-v1:0"}, 500_000},
+		{message.ModelRef{Provider: "amazon-bedrock", Model: "anthropic.claude-opus-5-v1:0"}, 500_000},
+		{message.ModelRef{Provider: "anthropic", Model: "anthropic/claude-opus-5-v1"}, 500_000},
+		{message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"}, 1_000_000},
+	}
+	for _, tc := range cases {
+		if tokens, ok := modelsDevWindowLookup(tc.ref); !ok || tokens != tc.want {
+			t.Errorf("modelsDevWindowLookup(%s) = %d, %v; want %d, true", tc.ref, tokens, ok, tc.want)
+		}
+	}
+	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-opus-4-8"}); ok {
+		t.Error("unkeyed bedrock ref resolved, want a miss")
+	}
+}
+
 func TestModelsDevErrTextStripsURL(t *testing.T) {
 	const src = "https://control.example/windows?token=abc"
 	err := &url.Error{Op: "Get", URL: src, Err: errors.New("boom")}
