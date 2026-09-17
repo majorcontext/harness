@@ -88,6 +88,17 @@ const minAutoContextWindowTokens = 16_000
 // can substitute a fake table without depending on the real one.
 var modelContextWindowLookup = modelmeta.ContextWindow
 
+// modelsDevWindowResult applies the sanity floor the model-derived path
+// uses to a models.dev hit.
+func modelsDevWindowResult(model message.ModelRef, fromDev int) (int, string, error) {
+	if fromDev < minAutoContextWindowTokens {
+		slog.Info("engine: models.dev context window below auto-compaction floor; compaction disabled",
+			"model", model.String(), "tokens", fromDev, "floor", minAutoContextWindowTokens)
+		return 0, contextWindowSourceDisabled, nil
+	}
+	return fromDev, contextWindowSourceModelsDev, nil
+}
+
 // resolveContextWindow implements Config.ContextWindowTokens's precedence:
 // explicit config > model-derived > models.dev snapshot (opt-in) >
 // disabled. explicitTokens is Config.ContextWindowTokens exactly as the
@@ -126,12 +137,14 @@ func resolveContextWindow(explicitTokens int, model message.ModelRef, fromModels
 	if !ok {
 		if fromModelsDev {
 			if fromDev, ok := modelsDevContextWindowLookup(model); ok {
-				if fromDev < minAutoContextWindowTokens {
-					slog.Info("engine: models.dev context window below auto-compaction floor; compaction disabled",
-						"model", model.String(), "tokens", fromDev, "floor", minAutoContextWindowTokens)
-					return 0, contextWindowSourceDisabled, nil
+				return modelsDevWindowResult(model, fromDev)
+			}
+			// The first lookup can race the refresher's initial fetch;
+			// wait once for it before refusing a models.dev-only model.
+			if awaitModelsDevInitialFetch() {
+				if fromDev, ok := modelsDevContextWindowLookup(model); ok {
+					return modelsDevWindowResult(model, fromDev)
 				}
-				return fromDev, contextWindowSourceModelsDev, nil
 			}
 		}
 		return 0, contextWindowSourceDisabled, unknownContextWindowError(model)

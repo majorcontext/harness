@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -52,6 +54,24 @@ func (p *parkedFetchTransport) RoundTrip(req *http.Request) (*http.Response, err
 	p.fetchCtx <- req.Context()
 	<-p.release
 	return nil, http.ErrHandlerTimeout
+}
+
+// parkedSuccessTransport parks each request until released, then answers
+// with a fixed body.
+type parkedSuccessTransport struct {
+	arrived chan struct{}
+	release chan struct{}
+	body    string
+}
+
+func (p *parkedSuccessTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	p.arrived <- struct{}{}
+	<-p.release
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(p.body)),
+		Header:     make(http.Header),
+	}, nil
 }
 
 func TestModelsDevRefreshPopulatesSnapshot(t *testing.T) {
@@ -180,9 +200,10 @@ func startModelsDevRefreshForTest(t *testing.T, ctx context.Context, url string)
 	startModelsDevRefresh(ctx, url)
 }
 
-// The converged contract: the request path NEVER waits — a lookup against a
+// The converged contract: the bare lookup NEVER waits — a lookup against a
 // not-yet-populated snapshot is an ordinary miss, and the background
-// refresher populates it off the request path.
+// refresher populates it off the lookup path. (resolveContextWindow's
+// bounded wait for the initial fetch is pinned separately, above.)
 func TestModelsDevLookupNeverWaitsForFirstFetch(t *testing.T) {
 	resetModelsDevSnapshot(t)
 	fetch := &parkedFetchTransport{
@@ -287,6 +308,88 @@ func TestSetModelsDevRefreshSourceEmptyCancelsRefresher(t *testing.T) {
 		t.Fatal("empty URL did not cancel the previous refresher")
 	}
 	close(fetch.release)
+}
+
+// The first unknown-model lookup must not refuse while the initial fetch is
+// still in flight: it waits for that fetch once, then resolves from the
+// snapshot the fetch published.
+func TestResolveContextWindowWaitsForInitialFetch(t *testing.T) {
+	resetModelsDevSnapshot(t)
+	stubContextWindowLookup(t, testContextWindowTable())
+
+	fetch := &parkedSuccessTransport{
+		arrived: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		body:    `{"unknown-to-table":1000000}`,
+	}
+	swapModelsDevClient(t, fetch)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startModelsDevRefreshForTest(t, ctx, "http://models.dev.invalid/windows")
+
+	<-fetch.arrived // the initial fetch is parked mid-flight
+
+	type outcome struct {
+		tokens int
+		source string
+		err    error
+	}
+	res := make(chan outcome, 1)
+	go func() {
+		tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+		res <- outcome{tokens, source, err}
+	}()
+
+	select {
+	case got := <-res:
+		t.Fatalf("resolve returned before the initial fetch completed: %+v", got)
+	default:
+	}
+	close(fetch.release)
+	got := <-res
+	if got.err != nil {
+		t.Fatalf("resolve after the initial fetch reported a miss: %v", got.err)
+	}
+	if got.tokens != 1_000_000 || got.source != contextWindowSourceModelsDev {
+		t.Fatalf("resolve after the initial fetch = %d, %q; want 1000000, %q", got.tokens, got.source, contextWindowSourceModelsDev)
+	}
+}
+
+// The refresher is single-flight: the hourly ticker must not issue a second
+// GET while the initial fetch is still in flight. Runs in a synctest bubble
+// so passing the tick is deterministic fake time.
+func TestModelsDevTickerWaitsForInitialFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		resetModelsDevSnapshot(t)
+		fetch := &parkedSuccessTransport{
+			arrived: make(chan struct{}, 4),
+			release: make(chan struct{}),
+			body:    `{"gemini-3.8-flash":1048576}`,
+		}
+		swapModelsDevClient(t, fetch)
+		ctx, cancel := context.WithCancel(context.Background())
+		startModelsDevRefreshForTest(t, ctx, "http://models.dev.invalid/windows")
+
+		<-fetch.arrived // the initial fetch is parked mid-flight
+		synctest.Wait()
+		time.Sleep(2 * modelsDevRefreshTTL) // fake clock passes the first tick
+		synctest.Wait()
+
+		secondGET := false
+		select {
+		case <-fetch.arrived:
+			secondGET = true
+		default:
+		}
+
+		close(fetch.release)
+		synctest.Wait() // the fetch completes and the loop starts
+		cancel()
+		synctest.Wait() // the loop exits
+		if secondGET {
+			t.Fatal("ticker issued a second GET while the initial fetch was in flight")
+		}
+	})
 }
 
 func TestModelsDevErrTextStripsURL(t *testing.T) {

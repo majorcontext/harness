@@ -19,7 +19,12 @@ const modelsDevRefreshTTL = time.Hour
 
 const modelsDevMaxBodyBytes = 32 << 20
 
-var modelsDevHTTPClient = &http.Client{Timeout: 5 * time.Second}
+// modelsDevTimeout bounds both one fetch and the first unknown-model
+// lookup's wait for that fetch, so a transport that ignores cancellation
+// cannot stall a session forever.
+const modelsDevTimeout = 5 * time.Second
+
+var modelsDevHTTPClient = &http.Client{Timeout: modelsDevTimeout}
 
 func (c Config) modelsDevEnabled() bool {
 	return c.ContextWindowFromModelsDev && c.ContextWindowModelsDevURL != ""
@@ -53,6 +58,11 @@ var modelsDevContextWindowLookup = modelsDevWindowLookup
 
 var modelsDevRefreshMu sync.Mutex
 
+// modelsDevInitialReady holds the active refresher's initial-fetch done
+// channel, nil when no refresher runs. resolveContextWindow loads it
+// lock-free and waits on it at most once per source generation.
+var modelsDevInitialReady atomic.Pointer[chan struct{}]
+
 // SetModelsDevRefreshSource names the snapshot URL and launches the
 // background refresher. Call it at wiring time; the caller performs no I/O
 // and waits for nothing — the first fetch runs inside the goroutine.
@@ -67,6 +77,7 @@ func SetModelsDevRefreshSource(ctx context.Context, url string) {
 		modelsDevRefreshCancel = nil
 	}
 	modelsDevSnapshot.Store(nil)
+	modelsDevInitialReady.Store(nil)
 	if url == "" {
 		return
 	}
@@ -78,17 +89,39 @@ func SetModelsDevRefreshSource(ctx context.Context, url string) {
 var modelsDevRefreshCancel context.CancelFunc
 
 // startModelsDevRefresh launches the one background refresher bound to its
-// own source: an immediate fetch inside the goroutine, then the hourly
-// ticker. Launched at wiring time, so the request path never launches,
-// waits on, or performs I/O — a lookup reads the current snapshot and a
-// not-yet-populated one is an ordinary miss.
+// own source: the initial fetch, then the hourly ticker, sequential in one
+// goroutine so a slow fetch cannot overlap a tick. Launched at wiring time,
+// so the request path never launches or performs I/O. The initial fetch's
+// completion closes the readiness channel resolveContextWindow waits on.
 func startModelsDevRefresh(ctx context.Context, url string) {
+	done := make(chan struct{})
+	modelsDevInitialReady.Store(&done)
 	go func() {
 		if err := refreshModelsDevWindows(ctx, url); err != nil {
 			slog.Warn("engine: models.dev: initial snapshot fetch failed", "error", modelsDevErrText(err, url))
 		}
+		close(done)
+		refreshModelsDevLoop(ctx, url)
 	}()
-	go refreshModelsDevLoop(ctx, url)
+}
+
+// awaitModelsDevInitialFetch blocks until the active refresher's initial
+// fetch attempt completes. The channel is closed after the attempt whatever
+// its outcome, so every later lookup returns without waiting; no refresher
+// means nothing to wait for.
+func awaitModelsDevInitialFetch() bool {
+	ch := modelsDevInitialReady.Load()
+	if ch == nil {
+		return false
+	}
+	timer := time.NewTimer(modelsDevTimeout)
+	defer timer.Stop()
+	select {
+	case <-*ch:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 // modelsDevErrText strips the fetch URL from the error text: *url.Error

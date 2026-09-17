@@ -87,8 +87,10 @@ line fires once per miss however it was reached.
 With `context_window_models_dev` set (plus `context_window_models_dev_url`),
 a registry miss is not the end: the engine consults a control-plane-served
 snapshot of bare model ID -> context window (`docs/design/context-compaction.md`,
-"Control-plane-served snapshot"), refreshed hourly by a background goroutine
-and never read on a path that holds a session lock. Only when that source is
+"Control-plane-served snapshot"), refreshed hourly by a background goroutine.
+The lookup is a lock-free read with no network I/O; the first lookup for a
+model both tables miss waits once, bounded by the fetch timeout, for the
+initial fetch. Only when that source is
 off, unset, or also misses does the miss refuse.
 
 Only a REGISTRY MISS refuses. Four ways to have no window stay legitimate and

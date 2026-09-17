@@ -72,7 +72,9 @@ context-window-token map, e.g. `{"gemini-3.8-flash": 1048576}`. The box
 control plane is the only component that talks to models.dev; the engine
 never parses `models.dev/api.json`. A background goroutine starts when both
 keys are set and refreshes the snapshot once at startup and then hourly,
-outside any session lock; a fetch failure keeps the last-good snapshot and
+the initial fetch and each tick sequential in one goroutine so refreshes
+are single-flight, outside any session lock; a fetch failure keeps the
+last-good snapshot and
 retries on the next tick. Resetting the source with
 `SetModelsDevRefreshSource` — a new URL or an empty one — cancels the
 previous refresher first and clears the snapshot, so the last-good guarantee
@@ -80,7 +82,11 @@ never serves one source's entries under another, and a fetch whose context
 outlived the reset never publishes. The session path
 (`resolveContextWindow`) reads
 only the in-memory snapshot and never performs network I/O, so a slow
-control plane cannot stall `SetModel` or `CheckModel`. A hit reports source
+control plane cannot stall `SetModel` or `CheckModel`; the FIRST lookup for
+a model both tables miss waits once for the initial fetch to finish,
+bounded by the fetch timeout, so an opted-in models.dev-only model can
+start on the first session — every later lookup returns without waiting. A
+hit reports source
 `models.dev` and passes through the same `minAutoContextWindowTokens` floor
 the model-derived path uses; a miss (including an empty or not-yet-populated
 snapshot) falls through unchanged to the existing registry-miss handling.
