@@ -24,10 +24,10 @@ var (
 // running an unknown model with no context management is how a session
 // dies with "context exhausted" instead of compacting.
 func TestResolveContextWindowReportsRegistryMiss(t *testing.T) {
-	if _, _, err := resolveContextWindow(0, knownRef, false); err != nil {
+	if _, _, err := resolveContextWindow(0, knownRef, false, false); err != nil {
 		t.Errorf("known model %s reported a miss: %v", knownRef, err)
 	}
-	tokens, source, err := resolveContextWindow(0, unknownRef, false)
+	tokens, source, err := resolveContextWindow(0, unknownRef, false, false)
 	if err == nil {
 		t.Fatalf("unknown model %s resolved silently to %d/%q, want a reported miss", unknownRef, tokens, source)
 	}
@@ -43,7 +43,7 @@ func TestResolveContextWindowReportsRegistryMiss(t *testing.T) {
 // allowed. Only a registry miss on a real model ref is a failure.
 func TestResolveContextWindowLegitimateDisabledCases(t *testing.T) {
 	t.Run("explicit operator window wins over an unknown model", func(t *testing.T) {
-		tokens, source, err := resolveContextWindow(400_000, unknownRef, false)
+		tokens, source, err := resolveContextWindow(400_000, unknownRef, false, false)
 		if err != nil {
 			t.Errorf("explicit window still reported a miss: %v", err)
 		}
@@ -52,7 +52,7 @@ func TestResolveContextWindowLegitimateDisabledCases(t *testing.T) {
 		}
 	})
 	t.Run("explicit negative is an opt-out", func(t *testing.T) {
-		tokens, source, err := resolveContextWindow(-1, unknownRef, false)
+		tokens, source, err := resolveContextWindow(-1, unknownRef, false, false)
 		if err != nil {
 			t.Errorf("explicit opt-out reported a miss: %v", err)
 		}
@@ -61,13 +61,13 @@ func TestResolveContextWindowLegitimateDisabledCases(t *testing.T) {
 		}
 	})
 	t.Run("no model at all is nothing to look up", func(t *testing.T) {
-		if _, _, err := resolveContextWindow(0, message.ModelRef{}, false); err != nil {
+		if _, _, err := resolveContextWindow(0, message.ModelRef{}, false, false); err != nil {
 			t.Errorf("zero model ref reported a miss: %v", err)
 		}
 	})
 	t.Run("a known model below the auto floor stays allowed", func(t *testing.T) {
 		stubContextWindowLookup(t, testContextWindowTable())
-		tokens, source, err := resolveContextWindow(0, modelBogusTiny, false)
+		tokens, source, err := resolveContextWindow(0, modelBogusTiny, false, false)
 		if err != nil {
 			t.Errorf("a known-but-small model reported a miss: %v", err)
 		}

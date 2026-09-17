@@ -1720,7 +1720,7 @@ func newSession(cfg Config) *Session {
 	contextWindowExplicit := cfg.ContextWindowTokens > 0
 	var contextWindowSource string
 	var contextWindowMiss error
-	cfg.ContextWindowTokens, contextWindowSource, contextWindowMiss = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model, cfg.modelsDevEnabled())
+	cfg.ContextWindowTokens, contextWindowSource, contextWindowMiss = resolveContextWindow(cfg.ContextWindowTokens, cfg.Model, cfg.modelsDevEnabled(), true)
 	contextWindowErr := requiredContextWindowErr(cfg, cfg.Model, contextWindowMiss, "session_start")
 	s := &Session{
 		cfg:                   cfg,
@@ -1837,7 +1837,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 		s.forceCompactionCheck = false
 	}
 	if !s.contextWindowExplicit {
-		nextTokens, nextSource, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled())
+		nextTokens, nextSource, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled(), false)
 		// Re-derived, so it REPLACES whatever the previous model left:
 		// switching to a model the registry knows clears an earlier
 		// refusal, and switching away to one it does not arms a new one.
@@ -1893,7 +1893,7 @@ func (s *Session) CheckModel(ref message.ModelRef) error {
 	if s.contextWindowExplicit {
 		return nil
 	}
-	_, _, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled())
+	_, _, miss := resolveContextWindow(0, ref, s.cfg.modelsDevEnabled(), false)
 	return requiredContextWindowErr(s.cfg, ref, miss, "model_check")
 }
 

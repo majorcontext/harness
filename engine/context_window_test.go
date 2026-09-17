@@ -47,7 +47,7 @@ func testContextWindowTable() map[message.ModelRef]int {
 func TestResolveContextWindowExplicitConfigWinsOverModel(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(50_000, modelKnownBig, false)
+	tokens, source, _ := resolveContextWindow(50_000, modelKnownBig, false, false)
 	if tokens != 50_000 || source != contextWindowSourceConfig {
 		t.Fatalf("resolveContextWindow(50000, big, false) = %d, %q; want 50000, %q", tokens, source, contextWindowSourceConfig)
 	}
@@ -56,7 +56,7 @@ func TestResolveContextWindowExplicitConfigWinsOverModel(t *testing.T) {
 func TestResolveContextWindowModelDerivedWhenUnset(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelKnownBig, false)
+	tokens, source, _ := resolveContextWindow(0, modelKnownBig, false, false)
 	if tokens != 500_000 || source != contextWindowSourceModelDerived {
 		t.Fatalf("resolveContextWindow(0, big, false) = %d, %q; want 500000, %q", tokens, source, contextWindowSourceModelDerived)
 	}
@@ -65,7 +65,7 @@ func TestResolveContextWindowModelDerivedWhenUnset(t *testing.T) {
 func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelUnknown, false)
+	tokens, source, _ := resolveContextWindow(0, modelUnknown, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, unknown, false) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
@@ -80,7 +80,7 @@ func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 func TestResolveContextWindowFloorRejectsBogusValue(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 
-	tokens, source, _ := resolveContextWindow(0, modelBogusTiny, false)
+	tokens, source, _ := resolveContextWindow(0, modelBogusTiny, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, bogus-tiny, false) = %d, %q; want 0, %q (floor must reject it)", tokens, source, contextWindowSourceDisabled)
 	}
@@ -90,7 +90,7 @@ func TestResolveContextWindowFloorBoundary(t *testing.T) {
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens, // exactly at the floor
 	})
-	tokens, source, _ := resolveContextWindow(0, modelKnownSmall, false)
+	tokens, source, _ := resolveContextWindow(0, modelKnownSmall, false, false)
 	if tokens != minAutoContextWindowTokens || source != contextWindowSourceModelDerived {
 		t.Fatalf("resolveContextWindow(0, exactly-floor, false) = %d, %q; want %d, %q (floor is inclusive)",
 			tokens, source, minAutoContextWindowTokens, contextWindowSourceModelDerived)
@@ -99,7 +99,7 @@ func TestResolveContextWindowFloorBoundary(t *testing.T) {
 	stubContextWindowLookup(t, map[message.ModelRef]int{
 		modelKnownSmall: minAutoContextWindowTokens - 1,
 	})
-	tokens, source, _ = resolveContextWindow(0, modelKnownSmall, false)
+	tokens, source, _ = resolveContextWindow(0, modelKnownSmall, false, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, one-under-floor, false) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}
@@ -433,7 +433,7 @@ func TestResolveContextWindowModelsDevFallbackHit(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 	stubModelsDevLookup(t, map[message.ModelRef]int{modelUnknown: 1_000_000})
 
-	tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
 	if err != nil {
 		t.Fatalf("resolveContextWindow with models.dev hit reported a miss: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestResolveContextWindowModelsDevFallbackBelowFloor(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 	stubModelsDevLookup(t, map[message.ModelRef]int{modelUnknown: minAutoContextWindowTokens - 1})
 
-	tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
 	if err != nil {
 		t.Fatalf("below-floor models.dev value reported a miss: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestResolveContextWindowModelsDevFallbackOff(t *testing.T) {
 	}
 	t.Cleanup(func() { modelsDevContextWindowLookup = orig })
 
-	tokens, source, err := resolveContextWindow(0, modelUnknown, false)
+	tokens, source, err := resolveContextWindow(0, modelUnknown, false, false)
 	if consulted {
 		t.Fatal("modelsDevContextWindowLookup was consulted with the flag off")
 	}
@@ -490,7 +490,7 @@ func TestResolveContextWindowModelsDevFallbackMiss(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 	stubModelsDevLookup(t, map[message.ModelRef]int{}) // always misses
 
-	tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+	tokens, source, err := resolveContextWindow(0, modelUnknown, true, false)
 	if tokens != 0 || source != contextWindowSourceDisabled {
 		t.Fatalf("resolveContextWindow(0, unknown, true) = %d, %q; want 0, %q", tokens, source, contextWindowSourceDisabled)
 	}

@@ -374,7 +374,7 @@ func TestResolveContextWindowWaitsForInitialFetch(t *testing.T) {
 
 	res := make(chan resolveOutcome, 1)
 	go func() {
-		tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+		tokens, source, err := resolveContextWindow(0, modelUnknown, true, true)
 		res <- resolveOutcome{tokens, source, err}
 	}()
 
@@ -433,10 +433,9 @@ func TestModelsDevTickerWaitsForInitialFetch(t *testing.T) {
 // A lookup that started waiting on one generation must not let that
 // generation's early close — a source swap cancelling it — answer for the
 // replacement source: the wait re-targets the new generation's fetch.
-// Runs in a synctest bubble; each sleep is shorter than the waiter's 5s
-// deadline and advances the fake clock only once every goroutine is
-// parked, which settles "the waiter loaded generation A's channel" before
-// the swap without racing goroutine startup.
+// Runs in a synctest bubble; synctest.Wait settles each goroutine's parked
+// state before the next transition, so "the waiter loaded generation A's
+// channel" holds before the swap without racing goroutine startup.
 func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		resetModelsDevSnapshot(t)
@@ -450,17 +449,17 @@ func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
 
 		res := make(chan resolveOutcome, 1)
 		go func() {
-			tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+			tokens, source, err := resolveContextWindow(0, modelUnknown, true, true)
 			res <- resolveOutcome{tokens, source, err}
 		}()
-		time.Sleep(time.Second) // the waiter is now parked on A's channel
+		synctest.Wait() // the waiter is now parked on A's channel
 
 		ctxB, cancelB := context.WithCancel(context.Background())
 		fetches.setBody(`{"unknown-to-table":1000000}`)
 		SetModelsDevRefreshSource(ctxB, "http://b.invalid/windows")
 		b := <-fetches.arrived // B's initial fetch parked
 		close(a.release)       // A's cancelled fetch returns; A's channel closes
-		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
 
 		bad := ""
 		select {
@@ -470,7 +469,7 @@ func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
 		}
 
 		close(b.release)
-		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
 		if bad == "" {
 			got := <-res
 			if got.err != nil {
@@ -480,7 +479,7 @@ func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
 			}
 		}
 		cancelB()
-		time.Sleep(100 * time.Millisecond) // B's refresher loop exits
+		synctest.Wait() // B's refresher loop exits
 		if bad != "" {
 			t.Fatal(bad)
 		}
@@ -515,6 +514,57 @@ func TestModelsDevWindowLookupCanonicalKey(t *testing.T) {
 	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-opus-4-8"}); ok {
 		t.Error("unkeyed bedrock ref resolved, want a miss")
 	}
+}
+
+// Model checks and switches run under the session lock, so they must take
+// a not-yet-populated snapshot as an ordinary miss: the bounded readiness
+// wait belongs to session construction only. Runs in a synctest bubble so
+// the no-wait assertion is exact — a waiting check can return only by
+// burning the whole fetch deadline.
+func TestModelCheckDoesNotWaitForInitialFetch(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		resetModelsDevSnapshot(t)
+		stubContextWindowLookup(t, testContextWindowTable())
+		fetch := &parkedSuccessTransport{
+			arrived: make(chan struct{}, 1),
+			release: make(chan struct{}),
+			body:    `{"switched":1000000}`,
+		}
+		swapModelsDevClient(t, fetch)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		startModelsDevRefreshForTest(t, ctx, "http://models.dev.invalid/windows")
+
+		<-fetch.arrived // the initial fetch is parked mid-flight
+
+		cfg := requireCfg(&scriptedProvider{name: "test"}, modelKnownBig)
+		cfg.ContextWindowFromModelsDev = true
+		cfg.ContextWindowModelsDevURL = "http://models.dev.invalid/windows"
+		cfg.Instructions = &InstructionsConfig{Disabled: true}
+		s := NewSession(cfg)
+		if err := s.ContextWindowErr(); err != nil {
+			t.Fatalf("known model reported a context-window error: %v", err)
+		}
+		switched := message.ModelRef{Provider: "test", Model: "switched"}
+
+		start := time.Now()
+		checkErr := s.CheckModel(switched)
+		s.SetModel(switched)
+		switchErr := s.ContextWindowErr()
+		elapsed := time.Since(start)
+		close(fetch.release)
+		cancel()
+		synctest.Wait() // the refresher completes and its loop exits
+		if !errors.Is(checkErr, ErrUnknownContextWindow) {
+			t.Fatalf("CheckModel(switched) = %v, want the unknown-model refusal", checkErr)
+		}
+		if !errors.Is(switchErr, ErrUnknownContextWindow) {
+			t.Fatalf("after SetModel, ContextWindowErr = %v, want the unknown-model refusal", switchErr)
+		}
+		if elapsed != 0 {
+			t.Fatalf("model check/switch waited %v for the models.dev fetch; both must take the miss without waiting", elapsed)
+		}
+	})
 }
 
 func TestModelsDevErrTextStripsURL(t *testing.T) {

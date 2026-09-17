@@ -1941,7 +1941,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// sanity-floor warning for the unchanged case.
 	if !s.contextWindowExplicit && s.model != cfg.Model {
 		var miss error
-		s.cfg.ContextWindowTokens, s.contextWindowSource, miss = resolveContextWindow(0, s.model, s.cfg.modelsDevEnabled())
+		s.cfg.ContextWindowTokens, s.contextWindowSource, miss = resolveContextWindow(0, s.model, s.cfg.modelsDevEnabled(), true)
 		// A resume must not be FATAL for an unrecognized model: a session
 		// that cannot load cannot be listed, read, or exported either, and
 		// the operator would lose the transcript along with the ability to

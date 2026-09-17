@@ -81,15 +81,17 @@ previous refresher first and clears the snapshot, so the last-good guarantee
 never serves one source's entries under another, and a fetch whose context
 outlived the reset never publishes. The session path
 (`resolveContextWindow`) reads
-only the in-memory snapshot and never performs network I/O, so a slow
-control plane cannot stall `SetModel` or `CheckModel`; lookups key on
-`modelmeta.CanonicalModelKey`, so a decorated Bifrost or Bedrock ref
-resolves its bare ID exactly as modelmeta's own tables do; the FIRST lookup for
-a model both tables miss waits once for the initial fetch to finish,
-bounded by the fetch timeout, so an opted-in models.dev-only model can
-start on the first session — every later lookup returns without waiting,
-and a source swap during the wait re-targets it to the new source's fetch
-rather than letting the retired source's early close answer. A
+only the in-memory snapshot and performs no network I/O; `SetModel` and
+`CheckModel` run under the session lock and take a not-yet-populated
+snapshot as an ordinary miss, so they never block on the control plane.
+Lookups key on `modelmeta.CanonicalModelKey`, so a decorated Bifrost or
+Bedrock ref resolves its bare ID exactly as modelmeta's own tables do.
+Only session construction (`NewSession` and `LoadSession`'s re-derive)
+waits once for the initial fetch to finish, bounded by the fetch timeout,
+so an opted-in models.dev-only model can start on the first session —
+every later lookup returns without waiting, and a source swap during the
+wait re-targets it to the new source's fetch rather than letting the
+retired source's early close answer. A
 hit reports source
 `models.dev` and passes through the same `minAutoContextWindowTokens` floor
 the model-derived path uses; a miss (including an empty or not-yet-populated
