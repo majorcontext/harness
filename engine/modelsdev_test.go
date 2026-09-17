@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -72,6 +74,47 @@ func (p *parkedSuccessTransport) RoundTrip(*http.Request) (*http.Response, error
 		Body:       io.NopCloser(strings.NewReader(p.body)),
 		Header:     make(http.Header),
 	}, nil
+}
+
+// parkedRequest is one in-flight GET held by parkedRequestTransport.
+type parkedRequest struct {
+	release chan struct{}
+	body    string
+}
+
+// parkedRequestTransport parks each request until that request's release
+// channel closes, then answers with the body current when the request
+// arrived. The body is swappable so one transport can serve two sources.
+type parkedRequestTransport struct {
+	mu      sync.Mutex
+	body    string
+	arrived chan *parkedRequest
+}
+
+func (p *parkedRequestTransport) setBody(body string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.body = body
+}
+
+func (p *parkedRequestTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	body := p.body
+	p.mu.Unlock()
+	r := &parkedRequest{release: make(chan struct{}), body: body}
+	p.arrived <- r
+	<-r.release
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(r.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+type resolveOutcome struct {
+	tokens int
+	source string
+	err    error
 }
 
 func TestModelsDevRefreshPopulatesSnapshot(t *testing.T) {
@@ -329,15 +372,10 @@ func TestResolveContextWindowWaitsForInitialFetch(t *testing.T) {
 
 	<-fetch.arrived // the initial fetch is parked mid-flight
 
-	type outcome struct {
-		tokens int
-		source string
-		err    error
-	}
-	res := make(chan outcome, 1)
+	res := make(chan resolveOutcome, 1)
 	go func() {
 		tokens, source, err := resolveContextWindow(0, modelUnknown, true)
-		res <- outcome{tokens, source, err}
+		res <- resolveOutcome{tokens, source, err}
 	}()
 
 	select {
@@ -388,6 +426,63 @@ func TestModelsDevTickerWaitsForInitialFetch(t *testing.T) {
 		synctest.Wait() // the loop exits
 		if secondGET {
 			t.Fatal("ticker issued a second GET while the initial fetch was in flight")
+		}
+	})
+}
+
+// A lookup that started waiting on one generation must not let that
+// generation's early close — a source swap cancelling it — answer for the
+// replacement source: the wait re-targets the new generation's fetch.
+// Runs in a synctest bubble; each sleep is shorter than the waiter's 5s
+// deadline and advances the fake clock only once every goroutine is
+// parked, which settles "the waiter loaded generation A's channel" before
+// the swap without racing goroutine startup.
+func TestResolveContextWindowWaitsForSwappedSource(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		resetModelsDevSnapshot(t)
+		stubContextWindowLookup(t, testContextWindowTable())
+		fetches := &parkedRequestTransport{arrived: make(chan *parkedRequest, 2)}
+		fetches.setBody(`{"other-model":1000}`) // source A must not answer
+		swapModelsDevClient(t, fetches)
+
+		SetModelsDevRefreshSource(context.Background(), "http://a.invalid/windows")
+		a := <-fetches.arrived // A's initial fetch parked
+
+		res := make(chan resolveOutcome, 1)
+		go func() {
+			tokens, source, err := resolveContextWindow(0, modelUnknown, true)
+			res <- resolveOutcome{tokens, source, err}
+		}()
+		time.Sleep(time.Second) // the waiter is now parked on A's channel
+
+		ctxB, cancelB := context.WithCancel(context.Background())
+		fetches.setBody(`{"unknown-to-table":1000000}`)
+		SetModelsDevRefreshSource(ctxB, "http://b.invalid/windows")
+		b := <-fetches.arrived // B's initial fetch parked
+		close(a.release)       // A's cancelled fetch returns; A's channel closes
+		time.Sleep(100 * time.Millisecond)
+
+		bad := ""
+		select {
+		case got := <-res:
+			bad = fmt.Sprintf("resolve answered from the retired source's channel: %+v", got)
+		default:
+		}
+
+		close(b.release)
+		time.Sleep(100 * time.Millisecond)
+		if bad == "" {
+			got := <-res
+			if got.err != nil {
+				bad = fmt.Sprintf("resolve after source B's fetch reported a miss: %v", got.err)
+			} else if got.tokens != 1_000_000 || got.source != contextWindowSourceModelsDev {
+				bad = fmt.Sprintf("resolve after source B's fetch = %d, %q; want 1000000, %q", got.tokens, got.source, contextWindowSourceModelsDev)
+			}
+		}
+		cancelB()
+		time.Sleep(100 * time.Millisecond) // B's refresher loop exits
+		if bad != "" {
+			t.Fatal(bad)
 		}
 	})
 }

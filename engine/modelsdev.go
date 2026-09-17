@@ -108,19 +108,25 @@ func startModelsDevRefresh(ctx context.Context, url string) {
 // awaitModelsDevInitialFetch blocks until the active refresher's initial
 // fetch attempt completes. The channel is closed after the attempt whatever
 // its outcome, so every later lookup returns without waiting; no refresher
-// means nothing to wait for.
+// means nothing to wait for. A source swap mid-wait retires the loaded
+// channel — its early close must not answer for the new generation — so
+// the wait reloads and continues under one overall deadline.
 func awaitModelsDevInitialFetch() bool {
-	ch := modelsDevInitialReady.Load()
-	if ch == nil {
-		return false
-	}
-	timer := time.NewTimer(modelsDevTimeout)
-	defer timer.Stop()
-	select {
-	case <-*ch:
-		return true
-	case <-timer.C:
-		return false
+	deadline := time.NewTimer(modelsDevTimeout)
+	defer deadline.Stop()
+	for {
+		ch := modelsDevInitialReady.Load()
+		if ch == nil {
+			return false
+		}
+		select {
+		case <-*ch:
+			if modelsDevInitialReady.Load() == ch {
+				return true
+			}
+		case <-deadline.C:
+			return false
+		}
 	}
 }
 

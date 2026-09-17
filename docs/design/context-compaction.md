@@ -85,7 +85,9 @@ only the in-memory snapshot and never performs network I/O, so a slow
 control plane cannot stall `SetModel` or `CheckModel`; the FIRST lookup for
 a model both tables miss waits once for the initial fetch to finish,
 bounded by the fetch timeout, so an opted-in models.dev-only model can
-start on the first session — every later lookup returns without waiting. A
+start on the first session — every later lookup returns without waiting,
+and a source swap during the wait re-targets it to the new source's fetch
+rather than letting the retired source's early close answer. A
 hit reports source
 `models.dev` and passes through the same `minAutoContextWindowTokens` floor
 the model-derived path uses; a miss (including an empty or not-yet-populated
