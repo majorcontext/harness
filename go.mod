@@ -1,6 +1,6 @@
 module github.com/majorcontext/harness
 
-go 1.25.5
+go 1.27.1
 
 require pgregory.net/rapid v1.3.0
 
