@@ -1853,6 +1853,47 @@ func TestClaudeCodeRetryableClassification(t *testing.T) {
 	})
 }
 
+// TestClaudeCodeCredentialResolutionNotRetryable proves a "result" whose
+// text names a credential-resolution failure is classified permanent (fail
+// fast, one attempt), never retryable weather, under both subtypes the CLI
+// can report it, while a genuine transient 5xx stays retryable.
+func TestClaudeCodeCredentialResolutionNotRetryable(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      string
+		wantClass provider.RetryableClass
+	}{
+		{name: "error_during_execution subtype is permanent", mode: "credential_error_execution"},
+		{name: "success subtype is permanent", mode: "credential_error_success"},
+		{name: "a genuine transient 5xx stays retryable", mode: "transient_server_error", wantClass: provider.RetryableServerError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := claudeCodeTestSession(t, tt.mode)
+			_, err := s.Prompt(context.Background(), "do something")
+			if err == nil {
+				t.Fatal("Prompt returned no error for an is_error result")
+			}
+			class, retryable := provider.AsRetryable(err)
+			if tt.wantClass != "" {
+				if !retryable {
+					t.Fatalf("provider.AsRetryable(%v) = false, want %q", err, tt.wantClass)
+				}
+				if class != tt.wantClass {
+					t.Errorf("class = %q, want %q", class, tt.wantClass)
+				}
+				return
+			}
+			if retryable {
+				t.Fatalf("provider.AsRetryable(%v) = %q, want a non-retryable classification", err, class)
+			}
+			if !provider.AsPermanent(err) {
+				t.Errorf("provider.AsPermanent(%v) = false, want a permanent classification", err)
+			}
+		})
+	}
+}
+
 // TestClaudeCodeChildCrashWithoutResultIsRetryable proves a child that
 // emitted at least one "system" event (so a session genuinely started) and
 // THEN exits nonzero WITHOUT ever emitting a clean "result" event (a

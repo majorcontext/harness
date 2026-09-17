@@ -462,6 +462,42 @@ func main() {
 			},
 		})
 		return
+	case "credential_error_execution":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_during_execution",
+			"is_error": true,
+			"result":   "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.",
+			"usage": map[string]any{
+				"input_tokens":  0,
+				"output_tokens": 0,
+			},
+		})
+		return
+	case "credential_error_success":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": true,
+			"result":   "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment.",
+			"usage": map[string]any{
+				"input_tokens":  0,
+				"output_tokens": 0,
+			},
+		})
+		return
+	case "transient_server_error":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "error_during_execution",
+			"is_error": true,
+			"result":   "API Error: 500 internal server error",
+			"usage": map[string]any{
+				"input_tokens":  0,
+				"output_tokens": 0,
+			},
+		})
+		return
 	case "thinking":
 		emit(map[string]any{
 			"type": "assistant",

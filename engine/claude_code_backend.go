@@ -1346,8 +1346,11 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			})
 			if env.IsError {
 				turnErr = fmt.Errorf("engine: claude-code: turn ended in error (subtype %q): %s", env.Subtype, env.Result)
-				if class, ok := claudeCodeRetryableClass(env.Subtype, env.Result); ok {
+				class, retryable, permanent := claudeCodeRetryableClass(env.Subtype, env.Result)
+				if retryable {
 					turnErr = provider.MarkRetryable(turnErr, class)
+				} else if permanent {
+					turnErr = provider.MarkPermanent(turnErr)
 				}
 			}
 			// TotalCostUSD was already folded into the session's
@@ -1865,31 +1868,28 @@ func claudeCodeThinkingDisplayArg(arg string) bool {
 		strings.HasPrefix(arg, "--thinking-display=")
 }
 
-// claudeCodeRetryableClass classifies a "result" event's own reported
-// failure — subtype plus the human-readable result text — as provider-
-// weather retryable, mirroring how a native adapter classifies an HTTP
-// status or inline API-error event (see provider.RetryableClass). This is
-// deliberately NOT "every is_error result is retryable": a genuine
-// deterministic outcome (max turns reached, a refusal) must still fail
-// fast so goal.go's promptTurnWithRetry does not burn its retry budget on
-// a request that will fail identically every time — only a signal this
-// file can actually name as transient provider weather gets wrapped.
-func claudeCodeRetryableClass(subtype, result string) (provider.RetryableClass, bool) {
+// claudeCodeRetryableClass classifies a "result" event's reported failure
+// — subtype plus result text — as retryable provider weather, permanent
+// (fail-fast), or neither (a plain deterministic outcome). It deliberately
+// avoids "every is_error result is retryable": only a signal this file can
+// name as transient weather is retryable. A credential-resolution failure
+// is deterministic — the exchange is refused, not busy — so it is
+// permanent and fails fast on one attempt; the match targets the CLI's
+// "credential resolution failed" text, not a generic 502, so transient 5xx
+// stays retryable.
+func claudeCodeRetryableClass(subtype, result string) (class provider.RetryableClass, retryable, permanent bool) {
 	hay := strings.ToLower(subtype + " " + result)
 	switch {
+	case strings.Contains(hay, "credential resolution failed"):
+		return "", false, true
 	case strings.Contains(hay, "rate_limit") || strings.Contains(hay, "rate limit"):
-		return provider.RetryableRateLimited, true
+		return provider.RetryableRateLimited, true, false
 	case strings.Contains(hay, "overloaded"):
-		return provider.RetryableOverloaded, true
+		return provider.RetryableOverloaded, true, false
 	case subtype == "error_during_execution":
-		// The CLI's own catch-all subtype for an infrastructure-side
-		// hiccup during its turn (e.g. a transient API error surfaced
-		// mid-execution, not a deterministic domain failure) — mirrors
-		// provider/anthropic's inline "error" SSE event mapping to
-		// RetryableServerError.
-		return provider.RetryableServerError, true
+		return provider.RetryableServerError, true, false
 	default:
-		return "", false
+		return "", false, false
 	}
 }
 
