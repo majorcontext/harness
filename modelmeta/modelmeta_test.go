@@ -229,6 +229,10 @@ func TestContextWindowUnknown(t *testing.T) {
 		// here would over-report 5x and re-create the overflow class this
 		// package prevents.
 		{Provider: "anthropic", Model: "bedrock_mantle/anthropic.claude-sonnet-4-5"},
+		// A bifrost near miss must fail closed rather than match a
+		// neighboring table entry by accident.
+		{Provider: "bifrost", Model: "vertex/gemini-3.1-pro"},
+		{Provider: "bifrost", Model: "fireworks/accounts/fireworks/models/kimi-k3x"},
 		{},
 	}
 	for _, ref := range cases {
