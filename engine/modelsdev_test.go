@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -15,6 +18,40 @@ func resetModelsDevSnapshot(t *testing.T) {
 	t.Helper()
 	modelsDevSnapshot.Store(nil)
 	t.Cleanup(func() { modelsDevSnapshot.Store(nil) })
+}
+
+func swapModelsDevClient(t *testing.T, rt http.RoundTripper) {
+	t.Helper()
+	orig := modelsDevHTTPClient
+	modelsDevHTTPClient = &http.Client{Transport: rt}
+	t.Cleanup(func() { modelsDevHTTPClient = orig })
+}
+
+// staticTransport answers every request with a fixed body and ignores the
+// request context.
+type staticTransport struct {
+	body string
+}
+
+func (s staticTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(s.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+// parkedFetchTransport reports the in-flight request's context and parks
+// until released, holding the fetch open mid-flight.
+type parkedFetchTransport struct {
+	fetchCtx chan context.Context
+	release  chan struct{}
+}
+
+func (p *parkedFetchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	p.fetchCtx <- req.Context()
+	<-p.release
+	return nil, http.ErrHandlerTimeout
 }
 
 func TestModelsDevRefreshPopulatesSnapshot(t *testing.T) {
@@ -75,10 +112,8 @@ func (c *countingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) 
 // call, a hit still resolves and a miss still returns without touching it.
 func TestModelsDevWindowLookupDoesNoIO(t *testing.T) {
 	resetModelsDevSnapshot(t)
-	orig := modelsDevHTTPClient
 	rt := &countingRoundTripper{}
-	modelsDevHTTPClient = &http.Client{Transport: rt}
-	t.Cleanup(func() { modelsDevHTTPClient = orig })
+	swapModelsDevClient(t, rt)
 
 	modelsDevSnapshot.Store(&modelsDevWindows{windows: map[string]int{"gemini-3-flash": 1_000_000}})
 	if tokens, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3-flash"}); !ok || tokens != 1_000_000 {
@@ -149,52 +184,90 @@ func startModelsDevRefreshForTest(t *testing.T, ctx context.Context, url string)
 // not-yet-populated snapshot is an ordinary miss, and the background
 // refresher populates it off the request path.
 func TestModelsDevLookupNeverWaitsForFirstFetch(t *testing.T) {
-	release := make(chan struct{})
-	fetchDone := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		<-release
-		w.Write([]byte(`{"gemini-3.8-flash":1048576}`))
-		close(fetchDone)
-	}))
-	t.Cleanup(srv.Close)
+	resetModelsDevSnapshot(t)
+	fetch := &parkedFetchTransport{
+		fetchCtx: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+	swapModelsDevClient(t, fetch)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	startModelsDevRefreshForTest(t, ctx, srv.URL)
+	startModelsDevRefreshForTest(t, ctx, "http://models.dev.invalid/windows")
 
-	// A lookup racing the in-flight initial fetch returns a miss at once
-	// (bounded by the test's own patience, not the handler's hold).
-	done := make(chan bool, 1)
-	go func() {
-		_, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"})
-		done <- !ok
-	}()
-	select {
-	case missed := <-done:
-		if !missed {
-			t.Fatal("lookup returned a hit against a snapshot the held-up fetch never populated")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("lookup blocked on the in-flight fetch; the request path must never wait")
+	<-fetch.fetchCtx // the initial fetch is parked mid-flight
+
+	// Called on the test goroutine: a lookup that waited on the in-flight
+	// fetch would block here, before release.
+	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"}); ok {
+		t.Fatal("lookup returned a hit against a snapshot the held-up fetch never populated")
 	}
-	close(release)
-	<-fetchDone
+	close(fetch.release)
+}
+
+// A fetch that outlived its source must not publish: the transport returns
+// a complete response even though the context is already cancelled.
+func TestModelsDevRefreshDoesNotStoreAfterCancel(t *testing.T) {
+	resetModelsDevSnapshot(t)
+	swapModelsDevClient(t, staticTransport{body: `{"gemini-3.8-flash":1048576}`})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := refreshModelsDevWindows(ctx, "http://models.dev.invalid/windows"); err == nil {
+		t.Fatal("refresh with a cancelled context succeeded")
+	}
+	if modelsDevSnapshot.Load() != nil {
+		t.Fatal("refresh with a cancelled context published a snapshot")
+	}
 }
 
 // Setting an empty URL disables the source: the previous refresher is
 // cancelled and the snapshot cleared.
 func TestSetModelsDevRefreshSourceEmptyDisables(t *testing.T) {
+	resetModelsDevSnapshot(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(`{"gemini-3.8-flash":1048576}`))
 	}))
 	t.Cleanup(srv.Close)
+	if err := refreshModelsDevWindows(context.Background(), srv.URL); err != nil {
+		t.Fatalf("populate snapshot: %v", err)
+	}
+	SetModelsDevRefreshSource(context.Background(), "")
+	if modelsDevSnapshot.Load() != nil {
+		t.Fatal("empty URL did not clear the snapshot")
+	}
+	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"}); ok {
+		t.Fatal("lookup resolved a window after the source was disabled")
+	}
+}
+
+func TestSetModelsDevRefreshSourceEmptyCancelsRefresher(t *testing.T) {
+	resetModelsDevSnapshot(t)
+	fetch := &parkedFetchTransport{
+		fetchCtx: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+	swapModelsDevClient(t, fetch)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	SetModelsDevRefreshSource(ctx, srv.URL)
-	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"}); ok {
-		t.Log("snapshot populated (timing-dependent); the disable assertion below is the point")
+	SetModelsDevRefreshSource(ctx, "http://models.dev.invalid/windows")
+
+	fetchCtx := <-fetch.fetchCtx // the initial fetch is parked mid-flight
+	SetModelsDevRefreshSource(context.Background(), "")
+	select {
+	case <-fetchCtx.Done():
+	default:
+		t.Fatal("empty URL did not cancel the previous refresher")
 	}
-	SetModelsDevRefreshSource(ctx, "")
-	if modelsDevSnapshot.Load() != nil {
-		t.Error("snapshot not cleared on disable")
+	close(fetch.release)
+}
+
+func TestModelsDevErrTextStripsURL(t *testing.T) {
+	const src = "https://control.example/windows?token=abc"
+	err := &url.Error{Op: "Get", URL: src, Err: errors.New("boom")}
+	text := modelsDevErrText(err, src)
+	if strings.Contains(text, "token=abc") {
+		t.Fatalf("error text leaked the URL query: %s", text)
+	}
+	if !strings.Contains(text, "boom") {
+		t.Fatalf("error text lost the cause: %s", text)
 	}
 }

@@ -73,7 +73,11 @@ control plane is the only component that talks to models.dev; the engine
 never parses `models.dev/api.json`. A background goroutine starts when both
 keys are set and refreshes the snapshot once at startup and then hourly,
 outside any session lock; a fetch failure keeps the last-good snapshot and
-retries on the next tick. The session path (`resolveContextWindow`) reads
+retries on the next tick. Resetting the source with
+`SetModelsDevRefreshSource` — a new URL or an empty one — cancels the
+previous refresher first; an empty URL also clears the snapshot, and a fetch
+whose context outlived the reset never publishes. The session path
+(`resolveContextWindow`) reads
 only the in-memory snapshot and never performs network I/O, so a slow
 control plane cannot stall `SetModel` or `CheckModel`. A hit reports source
 `models.dev` and passes through the same `minAutoContextWindowTokens` floor

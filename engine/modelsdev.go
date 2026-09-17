@@ -57,15 +57,18 @@ var modelsDevRefreshMu sync.Mutex
 // background refresher. Call it at wiring time; the caller performs no I/O
 // and waits for nothing — the first fetch runs inside the goroutine.
 // A second call cancels the previous refresher's loop first: two loops
-// would race their stores into the snapshot.
+// would race their stores into the snapshot. An empty URL stops the
+// refresher and clears the snapshot.
 func SetModelsDevRefreshSource(ctx context.Context, url string) {
-	if url == "" {
-		return
-	}
 	modelsDevRefreshMu.Lock()
 	defer modelsDevRefreshMu.Unlock()
 	if modelsDevRefreshCancel != nil {
 		modelsDevRefreshCancel()
+		modelsDevRefreshCancel = nil
+	}
+	if url == "" {
+		modelsDevSnapshot.Store(nil)
+		return
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	modelsDevRefreshCancel = cancel
@@ -82,10 +85,16 @@ var modelsDevRefreshCancel context.CancelFunc
 func startModelsDevRefresh(ctx context.Context, url string) {
 	go func() {
 		if err := refreshModelsDevWindows(ctx, url); err != nil {
-			slog.Warn("engine: models.dev: initial snapshot fetch failed", "error", err.Error())
+			slog.Warn("engine: models.dev: initial snapshot fetch failed", "error", modelsDevErrText(err, url))
 		}
 	}()
 	go refreshModelsDevLoop(ctx, url)
+}
+
+// modelsDevErrText strips the fetch URL from the error text: *url.Error
+// embeds the full URL, which can carry query tokens or userinfo.
+func modelsDevErrText(err error, url string) string {
+	return strings.ReplaceAll(err.Error(), url, "<redacted>")
 }
 
 func refreshModelsDevLoop(ctx context.Context, url string) {
@@ -106,6 +115,13 @@ func refreshModelsDevLoop(ctx context.Context, url string) {
 func refreshModelsDevWindows(ctx context.Context, url string) error {
 	windows, err := fetchModelsDevWindows(ctx, url)
 	if err != nil {
+		return err
+	}
+	// A fetch that outlived a source swap must not republish it; the mutex
+	// serializes this store against SetModelsDevRefreshSource.
+	modelsDevRefreshMu.Lock()
+	defer modelsDevRefreshMu.Unlock()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	modelsDevSnapshot.Store(&modelsDevWindows{windows: windows})

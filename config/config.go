@@ -1783,6 +1783,12 @@ func (c *Config) ContextWindowRequiredValue() bool {
 // `context_window_models_dev: true` turns it on, and even then an empty
 // ContextWindowModelsDevURL leaves the source off. A nil receiver (no
 // config) uses the default too.
+func (c *Config) ContextWindowFromModelsDevValue() bool {
+	if c == nil || c.ContextWindowFromModelsDev == nil {
+		return false
+	}
+	return *c.ContextWindowFromModelsDev
+}
 
 // ContextWindowModelsDevURLValue resolves the URL to a plain string: empty
 // when unset, the set value otherwise (a project-level "" disables a
@@ -1792,12 +1798,6 @@ func (c *Config) ContextWindowModelsDevURLValue() string {
 		return ""
 	}
 	return *c.ContextWindowModelsDevURL
-}
-func (c *Config) ContextWindowFromModelsDevValue() bool {
-	if c == nil || c.ContextWindowFromModelsDev == nil {
-		return false
-	}
-	return *c.ContextWindowFromModelsDev
 }
 
 // defaultMaxTokensContinuations is the product default for how many
