@@ -469,10 +469,9 @@ func (s *stream) handle(data []byte) error {
 	}
 	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
 	// reasoning (OpenRouter), and Gemini via Bifrost delivers structured
-	// reasoning_details. One encoding per chunk: kimi-k3 via Fireworks/Bifrost
-	// echoes the SAME text in reasoning_content and reasoning_details at once,
-	// so the three shapes are alternatives, never additive, or that route
-	// doubles every character.
+	// reasoning_details. Kimi-k3 via Fireworks/Bifrost echoes the same text
+	// in reasoning_content and reasoning_details at once; only a verbatim
+	// repeat is deduped, and distinct texts stay additive.
 	hasDetailText := false
 	detailJoined := ""
 	for _, rd := range choice.Delta.ReasoningDetails {

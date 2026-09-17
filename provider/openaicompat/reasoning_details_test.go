@@ -182,7 +182,7 @@ func TestStreamReasoningDetailsDistinctTextsAreAdditive(t *testing.T) {
 			done = &e
 		}
 	}
-	if len(reasoningDeltas) != 2 || (reasoningDeltas[0] != "step 2" && reasoningDeltas[1] != "step 1: ") {
+	if len(reasoningDeltas) != 2 || reasoningDeltas[0] != "step 2" || reasoningDeltas[1] != "step 1: " {
 		t.Fatalf("reasoning deltas = %v, want both distinct texts", reasoningDeltas)
 	}
 	rp, ok := done.Message.Parts[0].(*message.Reasoning)

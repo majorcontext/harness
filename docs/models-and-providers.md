@@ -135,13 +135,14 @@ like a model swap, needs no migration step:
   block (266 chars) with the field absent, and zero reasoning content (0
   chars, 8 vs 133 completion tokens) with the literal `"off"` sent. Only
   `EffortUnset` omits the field, leaving the gateway/model default in force.
-  It surfaces returned reasoning from ONE wire field per chunk — Gemini via
-  Bifrost `reasoning_details` (structured, first precedence), Bifrost/DeepSeek
-  `reasoning_content`, or OpenRouter `reasoning` — as a `Reasoning` part. The
-  fields are alternatives, never additive: kimi-k3 via Fireworks/Bifrost
-  echoes the same text in `reasoning_content` and `reasoning_details` on one
-  chunk, and additive parsing doubled every character, so the structured
-  field wins and the aliases are read only when it carries no text.
+  It surfaces returned reasoning from the wire fields on each chunk — Gemini
+  via Bifrost `reasoning_details` (structured, first precedence),
+  Bifrost/DeepSeek `reasoning_content`, or OpenRouter `reasoning` — as a
+  `Reasoning` part. Kimi-k3 via Fireworks/Bifrost echoes the same text in
+  `reasoning_content` and `reasoning_details` on one chunk, and additive
+  parsing of that echo doubled every character, so an exact match between
+  the structured text and the alias is deduped; distinct texts from both
+  encodings on one chunk stay additive.
 
 `Effort` does NOT police which model accepts which level — that is a
 provider-and-model fact the engine cannot know from the ref alone. The adapter
