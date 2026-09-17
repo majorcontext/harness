@@ -117,6 +117,28 @@ var bedrockAnthropicContextWindows = map[string]int{
 	"claude-sonnet-5":            1_000_000,
 }
 
+// bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
+// for the Fireworks models the boxes fleet ships, keyed by the last path
+// segment. firerouter has no models.dev entry; its value is the smallest
+// window among the open-source targets it can redirect to.
+var bifrostFireworksContextWindows = map[string]int{
+	"firerouter":             1_000_000,
+	"kimi-k3":                1_048_576,
+	"kimi-k2p7-code":         262_000,
+	"glm-5p2":                1_048_575,
+	"deepseek-v4-pro-0813":   1_000_000,
+	"deepseek-v4-flash-0731": 1_000_000,
+}
+
+// bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
+// for the Vertex Gemini models the boxes fleet ships.
+var bifrostVertexContextWindows = map[string]int{
+	"gemini-3.1-pro-preview": 1_048_576,
+	"gemini-3.5-flash-lite":  1_048_576,
+	"gemini-3.7-flash":       1_048_576,
+	"gemini-3.8-flash":       1_048_576,
+}
+
 // ContextWindow reports ref's advertised context window in tokens. It returns
 // false for an unrecognized provider or model.
 //
@@ -181,6 +203,11 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// a genuinely unknown model instead of a boxes-side override
 		// disabling it globally.
 		tokens, ok = openaiContextWindows[model]
+	case "bifrost":
+		if tokens, ok = bifrostFireworksContextWindows[model]; ok {
+			return tokens, ok
+		}
+		tokens, ok = bifrostVertexContextWindows[model]
 	case "amazon-bedrock":
 		if suffix, isAnthropic := stripBedrockAnthropicPrefix(model); isAnthropic {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]

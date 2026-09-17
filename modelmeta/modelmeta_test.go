@@ -92,6 +92,38 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 	}
 }
 
+// TestContextWindowBifrost verifies the boxes fleet default
+// ("bifrost/fireworks/accounts/fireworks/routers/firerouter") and every
+// other bifrost/<vendor>/<path> ref the boxes catalog ships resolves a
+// known window.
+func TestContextWindowBifrost(t *testing.T) {
+	cases := []struct {
+		refString string
+		want      int
+	}{
+		{"bifrost/fireworks/accounts/fireworks/routers/firerouter", 1_000_000},
+		{"bifrost/fireworks/accounts/fireworks/models/kimi-k3", 1_048_576},
+		{"bifrost/fireworks/accounts/fireworks/models/kimi-k2p7-code", 262_000},
+		{"bifrost/fireworks/accounts/fireworks/models/glm-5p2", 1_048_575},
+		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-pro-0813", 1_000_000},
+		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-flash-0731", 1_000_000},
+		{"bifrost/vertex/gemini-3.1-pro-preview", 1_048_576},
+		{"bifrost/vertex/gemini-3.5-flash-lite", 1_048_576},
+		{"bifrost/vertex/gemini-3.7-flash", 1_048_576},
+		{"bifrost/vertex/gemini-3.8-flash", 1_048_576},
+	}
+	for _, tt := range cases {
+		ref, err := message.ParseModelRef(tt.refString)
+		if err != nil {
+			t.Fatalf("message.ParseModelRef(%q) error: %v", tt.refString, err)
+		}
+		tokens, ok := ContextWindow(ref)
+		if !ok || tokens != tt.want {
+			t.Errorf("ContextWindow(%q) = %d, %v; want %d, true", tt.refString, tokens, ok, tt.want)
+		}
+	}
+}
+
 // TestContextWindowBoxesThreeSegmentRefs verifies that the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
 // model refs exclusively, e.g. "anthropic/anthropic/claude-fable-5" and

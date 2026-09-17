@@ -93,6 +93,15 @@ ZERO model ref (nothing to look up; the refusal belongs to whatever later
 names a model), and a model the registry KNOWS whose window is below
 `minAutoContextWindowTokens` (a known model, not a gap).
 
+The registry covers `anthropic`, `openai`, `codex`, `amazon-bedrock`,
+`claude-code`, and `bifrost` refs. The `bifrost` case
+(`modelmeta.bifrostFireworksContextWindows`,
+`modelmeta.bifrostVertexContextWindows`) answers for the boxes fleet's
+openai-compat gateway route, e.g. the fleet default
+`bifrost/fireworks/accounts/fireworks/routers/firerouter` — without it,
+every `bifrost/<vendor>/<path>` ref was a registry miss and refused unless a
+config set `context_window_required: false`.
+
 The refusal is recorded at the earliest point of use and surfaced everywhere a
 model starts being used: `newSession`, `SetModel`, and `LoadSession`'s
 post-replay re-derive set `Session.contextWindowErr`; `ContextWindowErr()` lets
