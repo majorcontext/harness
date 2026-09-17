@@ -1792,9 +1792,9 @@ func (c *Config) ContextWindowFromModelsDevValue() bool {
 
 // ContextWindowModelsDevURLValue resolves the URL to a plain string: empty
 // when unset, the set value otherwise (a project-level "" disables a
-// user-level URL by presence).
+// user-level URL by presence). A nil receiver (no config) is empty too.
 func (c *Config) ContextWindowModelsDevURLValue() string {
-	if c.ContextWindowModelsDevURL == nil {
+	if c == nil || c.ContextWindowModelsDevURL == nil {
 		return ""
 	}
 	return *c.ContextWindowModelsDevURL

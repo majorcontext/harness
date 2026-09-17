@@ -57,8 +57,8 @@ var modelsDevRefreshMu sync.Mutex
 // background refresher. Call it at wiring time; the caller performs no I/O
 // and waits for nothing — the first fetch runs inside the goroutine.
 // A second call cancels the previous refresher's loop first: two loops
-// would race their stores into the snapshot. An empty URL stops the
-// refresher and clears the snapshot.
+// would race their stores into the snapshot. Any call also clears the
+// snapshot: the last-good guarantee is scoped to the active source.
 func SetModelsDevRefreshSource(ctx context.Context, url string) {
 	modelsDevRefreshMu.Lock()
 	defer modelsDevRefreshMu.Unlock()
@@ -66,8 +66,8 @@ func SetModelsDevRefreshSource(ctx context.Context, url string) {
 		modelsDevRefreshCancel()
 		modelsDevRefreshCancel = nil
 	}
+	modelsDevSnapshot.Store(nil)
 	if url == "" {
-		modelsDevSnapshot.Store(nil)
 		return
 	}
 	loopCtx, cancel := context.WithCancel(ctx)

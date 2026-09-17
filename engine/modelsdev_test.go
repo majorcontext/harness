@@ -239,6 +239,35 @@ func TestSetModelsDevRefreshSourceEmptyDisables(t *testing.T) {
 	}
 }
 
+// A source swap must not serve the previous source's snapshot: until the
+// new URL's first fetch succeeds, lookups miss instead of resolving the
+// old source's entries.
+func TestSetModelsDevRefreshSourceSwapClearsSnapshot(t *testing.T) {
+	resetModelsDevSnapshot(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"gemini-3.8-flash":1048576}`))
+	}))
+	t.Cleanup(srv.Close)
+	if err := refreshModelsDevWindows(context.Background(), srv.URL); err != nil {
+		t.Fatalf("populate snapshot: %v", err)
+	}
+
+	fetch := &parkedFetchTransport{
+		fetchCtx: make(chan context.Context, 1),
+		release:  make(chan struct{}),
+	}
+	swapModelsDevClient(t, fetch)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	SetModelsDevRefreshSource(ctx, "http://other.invalid/windows")
+
+	<-fetch.fetchCtx // the new source's initial fetch is parked mid-flight
+	if _, ok := modelsDevWindowLookup(message.ModelRef{Provider: "bifrost", Model: "vertex/gemini-3.8-flash"}); ok {
+		t.Fatal("source swap still served the previous source's snapshot")
+	}
+	close(fetch.release)
+}
+
 func TestSetModelsDevRefreshSourceEmptyCancelsRefresher(t *testing.T) {
 	resetModelsDevSnapshot(t)
 	fetch := &parkedFetchTransport{

@@ -661,10 +661,6 @@ func runCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if cfg.ContextWindowFromModelsDevValue() {
-		engine.SetModelsDevRefreshSource(ctx, cfg.ContextWindowModelsDevURLValue())
-	}
-
 	// mcpMgr's defer is declared before the plugin host's below, so (defers
 	// unwind LIFO) it closes MCP server connections only after the plugin
 	// host has closed — a plugin's client/mcp.call has nowhere left to route
@@ -713,6 +709,12 @@ func runCmd(args []string) error {
 	sessMgr := engine.NewSessionManager(ctx, envInt("HARNESS_MAX_TASK_DEPTH"), envInt("HARNESS_MAX_CONCURRENT_TASKS"))
 	// SetMaxTreeTokens is opt-in. A zero value disables the check.
 	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
+
+	// Started only after setup has succeeded — a run that fails during
+	// construction never fetches. resolveSession is the first consumer.
+	if cfg.ContextWindowFromModelsDevValue() {
+		engine.SetModelsDevRefreshSource(ctx, cfg.ContextWindowModelsDevURLValue())
+	}
 
 	s, err := resolveSession(engine.Config{
 		Providers: registry(cfg),
@@ -1478,16 +1480,6 @@ func serveCmd(args []string) error {
 	defer stopGCWatch()
 	go gcWatch.run(gcCtx)
 
-	// The models.dev snapshot refresher keeps the process-wide context-window
-	// table fresh without ever running on a request path. Same lifecycle as
-	// the watchdog above: a dedicated cancelable context, cancelled the
-	// moment serveCmd returns by any path. An empty URL is a no-op.
-	modelsDevCtx, stopModelsDevRefresh := context.WithCancel(context.Background())
-	defer stopModelsDevRefresh()
-	if cfg.ContextWindowFromModelsDevValue() {
-		engine.SetModelsDevRefreshSource(modelsDevCtx, cfg.ContextWindowModelsDevURLValue())
-	}
-
 	// The event journal owner needs each engine session to report events to
 	// it, so the session wrappers wire OnEvent to the server's Publish.
 	// host is built just below, once srv exists (its ClientAPI is
@@ -1735,6 +1727,17 @@ func serveCmd(args []string) error {
 	defer srv.Close()
 
 	lateAPI.Bind(srv.ClientAPI())
+
+	// The models.dev snapshot refresher keeps the process-wide context-window
+	// table fresh without ever running on a request path. Started only after
+	// setup has succeeded, so a serve that fails during construction never
+	// fetches. Same lifecycle as the watchdog: a dedicated cancelable
+	// context, cancelled the moment serveCmd returns by any path.
+	modelsDevCtx, stopModelsDevRefresh := context.WithCancel(context.Background())
+	defer stopModelsDevRefresh()
+	if cfg.ContextWindowFromModelsDevValue() {
+		engine.SetModelsDevRefreshSource(modelsDevCtx, cfg.ContextWindowModelsDevURLValue())
+	}
 
 	httpSrv := &http.Server{Addr: addr, Handler: srv}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

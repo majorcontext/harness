@@ -1893,6 +1893,12 @@ func TestContextWindowModelsDev(t *testing.T) {
 			t.Errorf("ContextWindowModelsDevURL = %q, want the configured URL", c.ContextWindowModelsDevURLValue())
 		}
 	})
+	t.Run("nil receiver is empty", func(t *testing.T) {
+		var c *Config
+		if got := c.ContextWindowModelsDevURLValue(); got != "" {
+			t.Errorf("nil ContextWindowModelsDevURLValue = %q, want empty", got)
+		}
+	})
 	t.Run("project false overrides user true", func(t *testing.T) {
 		yes := true
 		no := false
