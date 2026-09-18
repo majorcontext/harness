@@ -38,8 +38,9 @@ func TestExtraHeadersCannotOverrideFixedHeaders(t *testing.T) {
 	}
 }
 
-// Nil extras must leave the request exactly as it was before this field.
-func TestNoExtraHeadersLeavesRequestUnchanged(t *testing.T) {
+// With no extras configured the fixed headers must still be intact, so the
+// new loop cannot disturb a request that sets none.
+func TestNoExtraHeadersKeepsFixedHeaders(t *testing.T) {
 	h := captureHeaders(t, &Client{APIKey: "test-key"})
 	if got := h.Get("X-Api-Key"); got != "test-key" {
 		t.Errorf("X-Api-Key = %q, want %q", got, "test-key")

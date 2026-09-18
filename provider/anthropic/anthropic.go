@@ -43,11 +43,16 @@ type Client struct {
 	// DefaultCacheTTL — see that constant for why the default is 1h. Any
 	// other value fails Stream, like a missing API key.
 	CacheTTL string
-	// ExtraHeaders are sent verbatim on every request, as in openaicompat.
-	// A gateway that attributes spend by header needs them here too: this
-	// adapter is the only path to an Anthropic-shaped upstream, so without
-	// them that traffic reaches the gateway carrying no identity at all.
-	// The fixed headers above win on a key collision.
+	// ExtraHeaders are sent verbatim on every request. A gateway that
+	// attributes spend by header needs them here: this adapter is the only
+	// path to an Anthropic-shaped upstream, so without them that traffic
+	// reaches the gateway carrying no identity at all.
+	//
+	// Precedence is the opposite of openaicompat's, deliberately. That
+	// adapter applies extras last, so a configured header can displace even
+	// Authorization. Here they are applied first and the fixed headers
+	// overwrite them, so no config can replace X-Api-Key, Anthropic-Version,
+	// or Content-Type.
 	ExtraHeaders map[string]string
 }
 
