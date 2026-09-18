@@ -238,6 +238,11 @@ orchestrator implements it. Deployment-specific provisioning stays outside
 Harness: the operator supplies the spawn command, and the orchestrator passes
 the selected box name through the environment described below.
 
+The name is historical: it dates from the development hub this repository
+removed. The name stays because deployed orchestrators already set it, so
+harness cannot change it unilaterally without breaking them. Renaming it is a
+coordinated change across `meetneptune/boxes`.
+
 When an orchestrator spawns a box, it generates or selects the box's NAME (§1)
 and passes it to the spawn command's environment as `HARNESS_HUB_BOX_NAME`.
 Deployment scripts invoked by that spawn command read this variable to
