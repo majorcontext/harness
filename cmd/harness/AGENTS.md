@@ -7,10 +7,10 @@ If root guidance is not active, locate the Git root and read
 ## Composition root
 
 Keep the command package thin. It resolves config, constructs providers and
-managers, and composes the engine, server, and embedded local tools.
+managers, and composes the engine and server.
 
-Do not move engine behavior into command handlers. Do not make `server` import
-`tools/*`; inject pages and dependencies through options.
+Do not move engine behavior into command handlers. Inject dependencies through
+options.
 
 ## Startup budget
 

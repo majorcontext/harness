@@ -7,9 +7,8 @@ Read `engine/AGENTS.md` for session state machines.
 
 ## Layering
 
-The server exposes the headless engine through HTTP and SSE. It must not import
-`tools/*`. The CLI injects embedded tool pages through
-`server.Options`.
+The server exposes the headless engine through HTTP and SSE. The CLI injects
+dependencies through `server.Options`.
 
 Update `server/openapi.yaml` with an API contract change.
 
