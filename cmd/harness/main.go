@@ -1062,6 +1062,17 @@ func nativeResponsesPath(cfg *config.Config) string {
 // the adapter sending every param it always has. A keyed type:"openai"
 // entry carries its own list and is wired by registerOpenAIProviders
 // instead. Mirrors nativeResponsesPath exactly.
+func nativeOmitResponseParams(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	p := cfg.Providers[openai.Family]
+	if p.Type != "" {
+		return nil
+	}
+	return p.OmitResponseParams
+}
+
 // nativeExtraHeaders reads extra_headers configured on a NATIVE provider
 // entry (the map key itself, no type). A keyed type:"..." entry carries its
 // own value and is wired by its own register* function instead. Mirrors
@@ -1075,17 +1086,6 @@ func nativeExtraHeaders(cfg *config.Config, family string) map[string]string {
 		return nil
 	}
 	return p.ExtraHeaders
-}
-
-func nativeOmitResponseParams(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	p := cfg.Providers[openai.Family]
-	if p.Type != "" {
-		return nil
-	}
-	return p.OmitResponseParams
 }
 
 // nativeSanitizeToolSchemas reads sanitize_tool_schemas configured on the
