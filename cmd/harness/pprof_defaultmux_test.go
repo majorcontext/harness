@@ -9,7 +9,7 @@ import (
 // TestPProf_NotRegisteredOnDefaultServeMux is the server-package guard's
 // twin, at the binary's own import graph. The server test proves only that
 // nothing on THAT package's graph imports net/http/pprof; this binary links
-// far more (the engine, providers, plugins, MCP, the hub, every tool), and
+// far more (the engine, providers, plugins, MCP, every tool), and
 // any one of those pulling in net/http/pprof would publish /debug/pprof/*
 // on http.DefaultServeMux for the whole process, outside Options.PProf.
 //

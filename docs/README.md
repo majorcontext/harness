@@ -13,7 +13,6 @@ remain authoritative when historical material describes an earlier behavior.
 | [models-and-providers.md](models-and-providers.md) | Model state, effort, cache affinity, and adapters |
 | [mcp-tool-loading.md](mcp-tool-loading.md) | Deferred MCP schemas and stable tool ordering |
 | [plugins-and-protocols.md](plugins-and-protocols.md) | Plugin lifecycle and external protocol boundaries |
-| [development-interfaces.md](development-interfaces.md) | Hub behavior |
 | [fleet-and-serve.md](fleet-and-serve.md) | Fleet state, lineage, exhaustion, and diagnostics |
 | [deploy-modal.md](deploy-modal.md) | Deployment modal behavior |
 

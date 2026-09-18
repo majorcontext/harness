@@ -49,10 +49,7 @@ Responses clients so opaque data cannot cross endpoints.
 Do not validate credentials during registry construction. The first provider
 request owns credential validation.
 
-## Hub composition
-
-`cmd/harness` may import `tools/hub`. The server may
-not.
+## Serve composition
 
 Only allow empty-token unauthenticated service when `resolveUnauthenticated`
 proves loopback or receives the explicit non-loopback opt-in. Keep the two

@@ -44,25 +44,6 @@ jobs:
 
       - run: go vet ./...
 
-      - name: Inspector unit tests
-        # The session inspector is a single build-free HTML file; its pure
-        # helpers (SSE parser + formatters) are unit-tested with node's built-in
-        # test runner. ubuntu-latest ships Node preinstalled, so no
-        # actions/setup-node is needed. The glob (not a bare directory) is
-        # deliberate: `node --test` treats a positional directory path as a file
-        # to execute, not a tree to scan, so the shell expands the glob to the
-        # test file, which the runner then runs directly.
-        run: node --test tools/inspector/*_test.mjs
-
-      - name: Hub unit tests
-        # tools/hub's pure logic has been unit-tested by hub_test.mjs since
-        # its introduction (AGENTS.md's "Development hub" section documents
-        # `node --test tools/hub/*_test.mjs` as the way to run it, and
-        # tools/hub/e2e's own comments assume it runs), but it was never
-        # actually wired into this workflow — a pre-existing gap, closed
-        # here. Same glob-not-directory rationale as the inspector step.
-        run: node --test tools/hub/*_test.mjs
-
       - name: Startup budget
         # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
         # shared-runner noise out; the bound is generous versus the ~5ms

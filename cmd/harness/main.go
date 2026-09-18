@@ -37,7 +37,6 @@ import (
 	"github.com/majorcontext/harness/provider/openai"
 	"github.com/majorcontext/harness/provider/openaicompat"
 	"github.com/majorcontext/harness/server"
-	"github.com/majorcontext/harness/tools/hub"
 )
 
 // defaultOpenRouterName is the providers map key that gets a built-in
@@ -204,11 +203,6 @@ func main() {
 			fmt.Fprintln(os.Stderr, "harness:", err)
 			os.Exit(1)
 		}
-	case "hub":
-		if err := hub.Run(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, "harness:", err)
-			os.Exit(1)
-		}
 	default:
 		usage()
 		os.Exit(2)
@@ -228,9 +222,6 @@ func usage() {
   harness plugin probe              re-probe configured plugins and refresh
                                     the manifest cache
   harness sessions [--json]         list persisted sessions
-  harness hub [-addr host:port] [-spawn-command cmd]
-                                    serve the local fleet hub UI (see
-                                    tools/AGENTS.md's "Development hub" section)
   harness version                   print version
 
 run flags:
@@ -1349,7 +1340,7 @@ func serveCmd(args []string) error {
 	var addr string
 	fs.StringVar(&addr, "addr", "localhost:4096", "listen address")
 	var corsOrigin string
-	fs.StringVar(&corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. your inspector origin, or * for dev); empty disables CORS")
+	fs.StringVar(&corsOrigin, "cors-origin", "", "enable browser CORS by echoing this Access-Control-Allow-Origin value (e.g. a browser client's origin, or * for dev); empty disables CORS")
 	var noInstructions bool
 	fs.BoolVar(&noInstructions, "no-instructions", false, "disable automatic AGENTS.md injection for sessions served by this instance")
 	var unauthenticatedFlag bool

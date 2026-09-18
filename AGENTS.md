@@ -32,7 +32,6 @@ edits a subsystem.
 | `sdk/` | `sdk/AGENTS.md` |
 | `plugin/` | `plugin/AGENTS.md` |
 | `process/` | `process/AGENTS.md` |
-| `tools/` | `tools/AGENTS.md` |
 | `e2e/` | `e2e/AGENTS.md` |
 
 Keep detailed technical material in `docs/`. Keep design decisions in
@@ -49,14 +48,14 @@ Harness is a Go agent harness with four priorities, in order:
 
 ## Architecture
 
-The engine is a headless library. The CLI, server, and local tools are clients.
+The engine is a headless library. The CLI and server are clients.
 `engine/` owns sessions; `message/` owns canonical types; `provider/` owns wire
-adapters. `cmd/harness/` composes `config/`, `server/`, plugins, MCP, managed
-processes, and local tools. `skill/`, `modelmeta/`, `imageclamp/`, and `sdk/`
+adapters. `cmd/harness/` composes `config/`, `server/`, plugins, MCP, and
+managed processes. `skill/`, `modelmeta/`, `imageclamp/`, and `sdk/`
 provide focused support packages.
 
 Keep package boundaries one-way. The engine must not import the CLI or a local
-UI. The server must not import `tools/*`; `cmd/harness` composes them.
+UI.
 
 ## Cross-cutting invariants
 
@@ -90,6 +89,7 @@ Do not add these features without a new explicit design decision:
 - A JavaScript runtime or an opencode plugin compatibility layer.
 - Plugin auth hooks. Deployed credential injection belongs at the network layer.
 - A2A support without a concrete cross-organization use case.
+- A web UI or browser frontend. `meetneptune/boxes` owns that surface.
 
 ## Startup rules
 

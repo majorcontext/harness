@@ -238,46 +238,34 @@ The `e2e/` suite verifies that a native request contains the exact configured
 segments in their expected positions. It also verifies project instructions
 and the skill catalog in their expected order.
 
-## Inspecting sessions
+## Browser clients and CORS
 
-`tools/inspector/index.html` is a standalone browser UI for a running
-`harness serve` instance: a session list, live timelines (streaming text,
-tool calls, reasoning, errors), and a prompt box. It is **not** served by
-harness — the box exposes only the API — so you open the file yourself and
-point it at the tunnel.
+This repository ships no browser UI. A browser client of a running
+`harness serve` instance — for example the `meetneptune/boxes` console —
+lives outside this repo and talks to the box over the HTTP+SSE API.
 
 Because a browser page enforces the same-origin policy, `harness serve` must
-opt into CORS for the inspector's origin:
+opt into CORS for that client's origin:
 
 ```bash
 # In the sandbox, alongside HARNESS_RUN_TOKEN:
 harness serve -cors-origin '*'          # dev: allow any origin
-# or, tighter, the exact origin you'll open the inspector from:
-harness serve -cors-origin 'https://your-inspector-host.example'
+# or, tighter, the exact origin the client is served from:
+harness serve -cors-origin 'https://your-console-host.example'
 ```
 
 `-cors-origin` echoes its literal value in `Access-Control-Allow-Origin` on
 every response (including the SSE stream and 401s, so the browser can read
 errors) and answers unauthenticated `OPTIONS` preflights with 204. Leaving it
-unset keeps the current behavior — no CORS headers at all. When you serve the
-inspector from a real static host, prefer that host's exact origin over `*`.
+unset keeps the current behavior — no CORS headers at all. Prefer the client
+host's exact origin over `*`.
 
-Then:
-
-1. Open `tools/inspector/index.html` — straight from `file://`, or from any
-   static host.
-2. Paste the tunnel base URL (e.g. the Modal `encrypted_ports` URL, or
-   `http://localhost:4096` locally) and the run token into the connect bar,
-   then **Connect**. Both are remembered in `localStorage`.
-3. Pick a session (or **+ new session**) and watch its timeline stream live.
-   The inspector reconnects automatically with backoff if the sandbox restarts
-   or the tunnel URL drops, replaying from the last durable event it saw.
-
-The base URL and run token are stored in the browser's `localStorage` in
-plaintext so a reload reconnects without re-entering them. Treat the inspector
-as a dev tool: don't host it on a shared origin with a long-lived token. Run
-tokens are workspace-scoped and rotate with the workspace, so the blast radius
-of a leaked token is one workspace until its next rotation.
+The client needs the tunnel base URL (e.g. the Modal `encrypted_ports` URL, or
+`http://localhost:4096` locally) and the run token. A browser client that
+stores either one keeps it in the browser, so do not host such a client on a
+shared origin with a long-lived token. Run tokens are workspace-scoped and
+rotate with the workspace, so the blast radius of a leaked token is one
+workspace until its next rotation.
 
 ## Ephemerality e2e
 

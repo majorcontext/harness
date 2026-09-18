@@ -3476,8 +3476,8 @@ paths:
       operationId: events
       summary: Server-sent event stream with replay.
       description: |
-        One stream for the whole instance (the hub holds exactly one of
-        these per box). `from` (or the standard `Last-Event-ID` header)
+        One stream for the whole instance (the orchestrator holds exactly
+        one of these per box). `from` (or the standard `Last-Event-ID` header)
         replays durable records with seq greater than the given value, in
         order, then continues with live events. Optional `session` filter
         restricts to one session.

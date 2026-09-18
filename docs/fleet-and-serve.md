@@ -192,14 +192,14 @@ captured session variable: `configSnapshot` copies the func value into
 every spawned child, which misattributes the child's `request.meta`
 records to the closed-over session's id.
 
-**Hub spawn contract:** the hub that spawns boxes — `harness hub`, now
-implemented in `tools/hub/` (see `docs/development-interfaces.md`) — passes the
-generated box NAME to the spawn command's environment as
+**Box spawn contract:** the external orchestrator that spawns boxes passes
+the generated box NAME to the spawn command's environment as
 `HARNESS_HUB_BOX_NAME`, so deployment scripts can derive per-name storage
-(e.g. mount/create a volume named after it) without the hub and the box
-needing any other side channel to agree on identity. Harness itself never
-reads this variable — it is a contract between the hub and deployment
-tooling, documented in `docs/design/fleet-model.md` §8.
+(e.g. mount/create a volume named after it) without the orchestrator and the
+box needing any other side channel to agree on identity. Harness itself never
+reads this variable — it is a contract between the orchestrator and deployment
+tooling, documented in `docs/design/fleet-model.md` §8. No component in this
+repository implements the orchestrator side.
 
 ## Serve-mode latency diagnostics
 

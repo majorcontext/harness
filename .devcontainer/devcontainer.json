@@ -15,10 +15,9 @@
 	// Ports a harness dev environment serves. Headless boxes read this
 	// list at spawn time to decide which ports to tunnel (the spawn
 	// contract in AGENTS.md); editors use it for auto-forwarding.
-	"forwardPorts": [4096, 7777],
+	"forwardPorts": [4096],
 	"portsAttributes": {
-		"4096": { "label": "harness serve (session API)" },
-		"7777": { "label": "harness hub" }
+		"4096": { "label": "harness serve (session API)" }
 	},
 
 	// Warm the module cache so the first build/test after attach is fast.

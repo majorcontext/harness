@@ -728,10 +728,10 @@ func TestAuthRequired(t *testing.T) {
 }
 
 func TestCORSPreflightUnauthenticated(t *testing.T) {
-	h := newCORSHarness(t, "https://inspector.example")
+	h := newCORSHarness(t, "https://console.example")
 	// Preflight to an authed route, carrying no Authorization header.
 	req, _ := http.NewRequest("OPTIONS", h.ts.URL+"/session/abc/prompt_async", nil)
-	req.Header.Set("Origin", "https://inspector.example")
+	req.Header.Set("Origin", "https://console.example")
 	req.Header.Set("Access-Control-Request-Method", "POST")
 	resp, err := h.ts.Client().Do(req)
 	if err != nil {
@@ -741,7 +741,7 @@ func TestCORSPreflightUnauthenticated(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("preflight status = %d, want 204", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://console.example" {
 		t.Errorf("ACAO = %q, want origin echoed", got)
 	}
 	if got := resp.Header.Get("Access-Control-Allow-Methods"); got != "GET, POST, DELETE, OPTIONS" {
@@ -759,12 +759,12 @@ func TestCORSPreflightUnauthenticated(t *testing.T) {
 }
 
 func TestCORSAllowedOnAuthedResponse(t *testing.T) {
-	h := newCORSHarness(t, "https://inspector.example")
+	h := newCORSHarness(t, "https://console.example")
 	resp, _ := h.do("GET", "/session", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://console.example" {
 		t.Errorf("ACAO = %q, want origin echoed", got)
 	}
 	if got := resp.Header.Get("Vary"); got != "Origin" {
@@ -781,11 +781,11 @@ func TestCORSWildcardEchoed(t *testing.T) {
 }
 
 func TestCORSHeaderOnUnauthorized(t *testing.T) {
-	h := newCORSHarness(t, "https://inspector.example")
+	h := newCORSHarness(t, "https://console.example")
 	// A real (non-preflight) request without credentials must still carry ACAO
 	// so the browser can read the 401 body.
 	req, _ := http.NewRequest("GET", h.ts.URL+"/session", nil)
-	req.Header.Set("Origin", "https://inspector.example")
+	req.Header.Set("Origin", "https://console.example")
 	resp, err := h.ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -794,7 +794,7 @@ func TestCORSHeaderOnUnauthorized(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://inspector.example" {
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "https://console.example" {
 		t.Errorf("ACAO on 401 = %q, want origin echoed", got)
 	}
 }
@@ -809,7 +809,7 @@ func TestCORSDisabledByDefault(t *testing.T) {
 	// OPTIONS gets no special handling (mux has no OPTIONS route → 405), and
 	// certainly no CORS headers.
 	req, _ := http.NewRequest("OPTIONS", h.ts.URL+"/session", nil)
-	req.Header.Set("Origin", "https://inspector.example")
+	req.Header.Set("Origin", "https://console.example")
 	resp2, err := h.ts.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

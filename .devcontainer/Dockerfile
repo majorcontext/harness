@@ -17,8 +17,9 @@
 # requirement.
 FROM golang:1.25-bookworm
 
-# Node is required for the repo's build-free web tooling tests
-# (node --test tools/inspector/*_test.mjs, tools/hub/*_test.mjs) and for
+# Node is required for the TypeScript plugin SDK tests
+# (node --test sdk/typescript/test/*.test.mjs, and the conformance test in
+# plugin/ that execs examples/plugins/redactor.mjs under `go test`) and for
 # agent work on JS-adjacent repos. nodesource over apt's node: bookworm
 # ships node 18, below what current web tooling wants.
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
