@@ -43,6 +43,12 @@ type Client struct {
 	// DefaultCacheTTL — see that constant for why the default is 1h. Any
 	// other value fails Stream, like a missing API key.
 	CacheTTL string
+	// ExtraHeaders are sent verbatim on every request, as in openaicompat.
+	// A gateway that attributes spend by header needs them here too: this
+	// adapter is the only path to an Anthropic-shaped upstream, so without
+	// them that traffic reaches the gateway carrying no identity at all.
+	// The fixed headers above win on a key collision.
+	ExtraHeaders map[string]string
 }
 
 func (c *Client) Name() string { return Family }
@@ -71,6 +77,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range c.ExtraHeaders {
+		httpReq.Header.Set(k, v)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")

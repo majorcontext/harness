@@ -918,7 +918,7 @@ func registry(cfg *config.Config) provider.Registry {
 	akey, abase := providerAuth(cfg, anthropic.Family, "ANTHROPIC_API_KEY")
 	okey, obase := providerAuth(cfg, openai.Family, defaultOpenAIKeyEnv)
 	reg := provider.Registry{
-		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg)},
+		anthropic.Family: &anthropic.Client{APIKey: akey, BaseURL: abase, CacheTTL: anthropicCacheTTL(cfg), ExtraHeaders: nativeExtraHeaders(cfg, anthropic.Family)},
 		// The built-in openai entry deliberately leaves Family empty: it IS
 		// the package default, and naming it here would only invite the two
 		// to drift. Its ResponsesPath/OmitResponseParams/
@@ -1062,6 +1062,21 @@ func nativeResponsesPath(cfg *config.Config) string {
 // the adapter sending every param it always has. A keyed type:"openai"
 // entry carries its own list and is wired by registerOpenAIProviders
 // instead. Mirrors nativeResponsesPath exactly.
+// nativeExtraHeaders reads extra_headers configured on a NATIVE provider
+// entry (the map key itself, no type). A keyed type:"..." entry carries its
+// own value and is wired by its own register* function instead. Mirrors
+// nativeOmitResponseParams.
+func nativeExtraHeaders(cfg *config.Config, family string) map[string]string {
+	if cfg == nil {
+		return nil
+	}
+	p := cfg.Providers[family]
+	if p.Type != "" {
+		return nil
+	}
+	return p.ExtraHeaders
+}
+
 func nativeOmitResponseParams(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil

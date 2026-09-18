@@ -600,7 +600,8 @@ type Provider struct {
 	// defaults to the providers map key when empty.
 	Family string `json:"family,omitempty"`
 	// ExtraHeaders are sent verbatim on every request by the openaicompat
-	// adapter, e.g. OpenRouter's HTTP-Referer/X-Title attribution headers.
+	// and anthropic adapters, e.g. OpenRouter's HTTP-Referer/X-Title
+	// attribution headers, or a gateway's own spend-attribution header.
 	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
 	// NoPromptCacheKey omits the top-level prompt_cache_key field from
 	// every request this provider sends. The default (false) sends it,
