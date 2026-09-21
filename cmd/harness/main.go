@@ -861,10 +861,9 @@ func runCmd(args []string) error {
 		}
 		goalNotAchieved = !res.Achieved
 	case unknownCmd != nil && s.ClaudeCodeDelegated():
-		// s.Model() is known now, so the question modelDecidableBeforeSession
-		// couldn't answer earlier is settled: the CLI advertises its own
-		// slash commands (slash_commands in its stream-json init line) and
-		// reports its own error for a name it does not know either. Send
+		// The CLI advertises its own slash commands (slash_commands in its
+		// stream-json init line) and reports its own error for a name it
+		// does not know either. Send
 		// opts.prompt, the ORIGINAL line (e.g. "/cost"), not res.Text —
 		// Resolve set no Text for an unknown command, and the CLI expects
 		// its own leading slash.
