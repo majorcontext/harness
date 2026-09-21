@@ -620,6 +620,20 @@ func newRunOnEventHandler(printer *textStreamPrinter, enc *json.Encoder, jsonOut
 	}
 }
 
+// modelDecidableBeforeSession reports whether a run's effective model is
+// knowable before resolveSession loads or creates a session, and so
+// whether an unknown /name's fate (refuse, or defer to a delegated
+// session's own vocabulary) can be decided now. A fresh run (neither
+// resume nor cont) has no persisted session to disagree with the
+// configured model: it IS the effective model. A resumed or continued run
+// with an explicit -model (modelSet) also qualifies — resolveSession's
+// SetModel lets the flag override the persisted record. Only a resumed or
+// continued run without an explicit -model is undecidable this early: its
+// persisted model is known only once resolveSession has loaded it.
+func modelDecidableBeforeSession(resume string, cont bool, modelSet bool) bool {
+	return (resume == "" && !cont) || modelSet
+}
+
 func runCmd(args []string) error {
 	// Captured once, at the top of the command, before any flag parsing or
 	// session create/load — the ambient engine-identity block's StartedAt
@@ -657,13 +671,9 @@ func runCmd(args []string) error {
 	// An unknown /name is the one exception: harness owns no route for it,
 	// but a session delegated to the Claude Code CLI has its own slash
 	// vocabulary (/cost, /context, ...) this line might name instead.
-	// Whether that applies is decidable here for a FRESH run — its
-	// effective model is exactly the configured one below, no persisted
-	// record to disagree — but not for a resumed or continued run, whose
-	// model comes from its persisted log instead. See the fresh-run check
-	// beside model resolution below, and the deferred dispatch further
-	// down for the resumed/continued case. unknownCmd is nil for every
-	// other outcome.
+	// modelDecidableBeforeSession below decides whether that question can
+	// be answered now or must defer to the dispatch switch further down.
+	// unknownCmd is nil for every other outcome.
 	var res command.Resolution
 	var resErr error
 	var unknownCmd *command.UnknownCommandError
@@ -701,20 +711,12 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	// A fresh run (neither -resume nor -continue) has no persisted session
-	// to disagree with model above: it IS the effective model this run
-	// will use. An explicit -model on a resumed or continued run also
-	// decides early — resolveSession's SetModel lets the flag override the
-	// persisted record, so model above is what s.Model() will be too.
-	// Decide the deferred unknown-command question now in both cases,
-	// before resolveSession below builds and prewarms a session (and, for
-	// a resumed run, calls SetModel — which durably persists a model
-	// record) for a run that was always going to be refused. Only a
-	// resumed or continued run WITHOUT an explicit -model still defers
-	// past resolveSession (see the dispatch switch below): its persisted
-	// model can disagree with model here, and only s itself, once loaded,
-	// knows which one won.
-	if unknownCmd != nil && model.Provider != claudecode.Family && ((opts.resume == "" && !opts.cont) || modelSet) {
+	// Refusing here, before resolveSession runs, matters beyond avoiding a
+	// wasted session build: on a resumed run resolveSession also calls
+	// SetModel, which durably persists a model record — see
+	// modelDecidableBeforeSession's doc comment for which runs can decide
+	// early enough to refuse before that happens.
+	if unknownCmd != nil && model.Provider != claudecode.Family && modelDecidableBeforeSession(opts.resume, opts.cont, modelSet) {
 		return resErr
 	}
 	workDir, err := os.Getwd()
@@ -859,13 +861,13 @@ func runCmd(args []string) error {
 		}
 		goalNotAchieved = !res.Achieved
 	case unknownCmd != nil && s.ClaudeCodeDelegated():
-		// harness owns no route for unknownCmd.Name, but a delegated
-		// session is a second frontend with its own vocabulary: the CLI
-		// advertises its own slash commands (slash_commands in its
-		// stream-json init line) and reports its own error for a name it
-		// does not know either. Send opts.prompt, the ORIGINAL line
-		// (e.g. "/cost"), not res.Text — Resolve set no Text for an
-		// unknown command, and the CLI expects its own leading slash.
+		// s.Model() is known now, so the question modelDecidableBeforeSession
+		// couldn't answer earlier is settled: the CLI advertises its own
+		// slash commands (slash_commands in its stream-json init line) and
+		// reports its own error for a name it does not know either. Send
+		// opts.prompt, the ORIGINAL line (e.g. "/cost"), not res.Text —
+		// Resolve set no Text for an unknown command, and the CLI expects
+		// its own leading slash.
 		if err := promptSession(ctx, sessMgr, s, opts.prompt); err != nil {
 			return err
 		}
