@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -781,21 +782,31 @@ func runCmd(args []string) error {
 		}
 		goalNotAchieved = !res.Achieved
 	} else {
-		// ReportTurnStart/ReportTurnEnd bracket this bare Prompt call —
-		// see runGoal's identical bracket (and its doc comment) for why:
-		// without it, a `task` child that finishes while this Prompt call
-		// is still in flight would find s "idle" from SessionManager's
-		// point of view and fire a concurrent resume turn on the SAME
-		// session this call is still driving. resume is fired
-		// synchronously if non-nil, exactly like runGoal's own tail.
-		sessMgr.ReportTurnStart(s)
-		msg, promptErr := s.Prompt(ctx, opts.prompt)
-		resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
-		if promptErr != nil {
-			return promptErr
-		}
-		if resume != nil {
-			resume()
+		res, cerr := command.NewRegistry().Resolve(opts.prompt)
+		switch {
+		case cerr == nil:
+			if derr := dispatchCommand(ctx, s, res); derr != nil {
+				return derr
+			}
+		case !errors.Is(cerr, command.ErrNotCommand):
+			return cerr
+		default:
+			// ReportTurnStart/ReportTurnEnd bracket this bare Prompt call —
+			// see runGoal's identical bracket (and its doc comment) for why:
+			// without it, a `task` child that finishes while this Prompt call
+			// is still in flight would find s "idle" from SessionManager's
+			// point of view and fire a concurrent resume turn on the SAME
+			// session this call is still driving. resume is fired
+			// synchronously if non-nil, exactly like runGoal's own tail.
+			sessMgr.ReportTurnStart(s)
+			msg, promptErr := s.Prompt(ctx, res.Text)
+			resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
+			if promptErr != nil {
+				return promptErr
+			}
+			if resume != nil {
+				resume()
+			}
 		}
 	}
 	if printer.PrintedText() {

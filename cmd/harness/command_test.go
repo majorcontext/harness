@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -55,5 +56,28 @@ func TestFrontendOpIsRefused(t *testing.T) {
 	err := dispatchCommand(t.Context(), nil, command.Resolution{Kind: command.KindFrontend, Spec: spec})
 	if err == nil {
 		t.Fatal("dispatchCommand returned nil for a frontend command")
+	}
+}
+
+// TestPromptTextPassesThrough pins that ordinary text is untouched: the
+// command layer must not change what a non-command prompt sends.
+func TestPromptTextPassesThrough(t *testing.T) {
+	r := command.NewRegistry()
+	const in = "summarize the diff"
+	res, err := r.Resolve(in)
+	if !errors.Is(err, command.ErrNotCommand) {
+		t.Fatalf("Resolve error = %v, want ErrNotCommand", err)
+	}
+	if res.Text != in {
+		t.Errorf("Text = %q, want %q", res.Text, in)
+	}
+}
+
+// TestUnknownCommandDoesNotBecomeAPrompt pins the spec's §3 rule: an
+// unknown /name is an error, never literal text sent to the model.
+func TestUnknownCommandDoesNotBecomeAPrompt(t *testing.T) {
+	_, err := command.NewRegistry().Resolve("/nope")
+	if err == nil || errors.Is(err, command.ErrNotCommand) {
+		t.Fatalf("Resolve(\"/nope\") error = %v, want a command error", err)
 	}
 }
