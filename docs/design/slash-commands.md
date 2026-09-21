@@ -61,6 +61,7 @@ type Spec struct {
     Name        string
     Aliases     []string
     Kind        Kind     // KindControl, KindFrontend, or KindPrompt
+    Op          Op       // control only; empty for every other kind
     Summary     string   // one line, for the menu
     ArgHint     string   // "<ref>", shown after the name
     Args        []ArgSpec
