@@ -137,12 +137,18 @@ fsync → rename), and its failure lands in `lastSnapshotErr`, never
 promise.
 
 Because the write is background, no ordinary call returns when it lands.
-`Session.WaitSnapshots` is the join: it blocks until every write this
-session started has finished, and it is not a barrier against a new one.
+`Session.WaitSnapshots` is the join, and its contract is exact: it blocks
+until the write IN FLIGHT WHEN IT WAS CALLED has finished. It is not a
+barrier. A trigger that fires during the wait starts a new write, and that
+write is not joined. A caller that must see a settled directory — to read
+it, or to delete it — therefore has to stop the session from writing first;
+the join alone only settles what was already running.
+
 A process that exits right after a turn must call it, or the checkpoint it
 just scheduled races teardown and is lost — `harness run` joins it in
-`runCmd` before it returns. A caller that deletes the session directory
-must call it too: an unjoined write recreates the directory it is deleting.
+`runCmd` before it returns, after the turn it drove has ended. A caller
+that deletes the session directory must call it too: an unjoined write
+recreates the directory it is deleting.
 
 A load that takes the snapshot path marks the metadata-index fold BROKEN
 rather than building a partial one: the index summarizes EVERY record, and

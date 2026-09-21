@@ -465,6 +465,12 @@ func (s *Session) waitSnapshots() {
 // it: the write runs in a goroutine no other exported call waits for, so an
 // unjoined one keeps creating files under a directory the cleanup is
 // already deleting, and the removal fails with "directory not empty".
+//
+// It joins the write in flight when it is called and nothing later, so a
+// caller that needs a settled directory must first stop the session from
+// starting another one — both callers above hold that: the run has ended
+// its turn, and the test drives the only trigger itself.
+//
 // Logic lives in waitSnapshots; this is a thin wrapper, not a second copy.
 func (s *Session) WaitSnapshots() {
 	s.waitSnapshots()
