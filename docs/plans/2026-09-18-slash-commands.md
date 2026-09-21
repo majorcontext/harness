@@ -74,12 +74,41 @@ Four, each deliberate. Raise them in the pull request body.
    route, breaking the invariant Task 4 asserts. `GET /commands` already
    IS the help text. The spec's deferred question about `/help` stays
    open.
-3. **`/status`, `/processes`, and `/mcp` ship as control entries with
-   routes but no run-mode support.** See Task 4's support matrix.
+3. **`/status` and `/processes` ship as control entries with routes but
+   no run-mode support.** See Task 4's support matrix. This item named
+   `/mcp` too; see the amendments below.
 4. **`/compact` takes `keep_turns` only.** The spec's §4 table also lists
    `model`. A second positional argument after an optional first cannot
    bind unambiguously, and the route still accepts `model` for a client
    that needs it. Add it only with a named-argument syntax.
+
+## Amendments after execution
+
+The task bodies below are the plan as written, and they are left that way on
+purpose: this file is a dated record of what was planned, and rewriting it to
+match the result would erase what the work actually discovered. Four things
+changed during execution. Where a task body and this list disagree, this list
+is what shipped.
+
+1. **`/mcp` does not exist.** The plan and the design both mapped it to
+   `POST /session/{id}/mcp`, read as a reload. That route is
+   `handleSessionMCP`, the Streamable HTTP MCP JSON-RPC endpoint, and no
+   reload operation exists anywhere. The command, `OpMCP`, its route entry
+   and its support-matrix entry are all gone. Ignore every `OpMCP` and
+   `/mcp` line in the tasks below.
+2. **An argument error names the alias the user typed**, not the canonical
+   name. Task 2's `bindArgs` passes `spec.Name` into its error text, so
+   `/clear extra` reported `/new`. The shipped code carries the typed name
+   through.
+3. **`runCmd` resolves the command line before it builds a session.** Task 5
+   placed the resolve after `resolveSession`, so a refused command still
+   constructed a session and started its startup prewarm — which reads disk,
+   runs hooks, connects MCP, and can reach the network.
+4. **Run-mode `/compact` rejects a non-positive `keep_turns`**, matching
+   `POST /session/{id}/compact`. `Session.effectiveKeepTurns` treats a
+   non-positive value as "use the configured default", so without the check
+   `/compact 0` quietly compacted with a different value than the one asked
+   for.
 
 ---
 
