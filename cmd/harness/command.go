@@ -37,6 +37,23 @@ func resName(res command.Resolution) string {
 	return string(res.Op)
 }
 
+// compactSkipMessage renders a CompactResult.SkipReason as a sentence a
+// person at a terminal can act on. A skip is not success: run mode has no
+// server response to carry skip_reason silently, so the reason must reach
+// the user through the command's own error text instead (§5).
+func compactSkipMessage(reason string) string {
+	switch reason {
+	case engine.SkipReasonNotEnoughTurns:
+		return "the session does not have enough turns yet to fold"
+	case engine.SkipReasonLoneExistingSummary:
+		return "the session's history is already a single summary with nothing left to fold"
+	case engine.SkipReasonSummarizerEmpty:
+		return "the summarizer returned no usable summary"
+	default:
+		return reason
+	}
+}
+
 // dispatchCommand performs one resolved control command against the
 // session a run holds. Session resolution is not a concern here: a run
 // has exactly one session, and it is a root.
@@ -53,8 +70,14 @@ func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolut
 		if n, ok := res.Args["keep_turns"].(int); ok {
 			opts.KeepTurns = n
 		}
-		_, err := s.Compact(ctx, opts)
-		return err
+		result, err := s.Compact(ctx, opts)
+		if err != nil {
+			return err
+		}
+		if result.SkipReason != "" {
+			return fmt.Errorf("/compact did nothing: %s", compactSkipMessage(result.SkipReason))
+		}
+		return nil
 	case command.OpSetModel:
 		ref, err := message.ParseModelRef(res.Args["model"].(string))
 		if err != nil {

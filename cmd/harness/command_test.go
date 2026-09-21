@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TestRunModeOpsAreDeclared pins the support matrix in both directions:
@@ -79,5 +82,35 @@ func TestUnknownCommandDoesNotBecomeAPrompt(t *testing.T) {
 	_, err := command.NewRegistry().Resolve("/nope")
 	if err == nil || errors.Is(err, command.ErrNotCommand) {
 		t.Fatalf("Resolve(\"/nope\") error = %v, want a command error", err)
+	}
+}
+
+// TestCompactSkipIsAnError pins spec §5's "silence is the failure to
+// avoid": a fresh run-mode session has no prior history to fold, so
+// Session.Compact returns a nil error with SkipReasonNotEnoughTurns
+// (success, not failure, from the engine's point of view). Discarding
+// that result lets `harness run -p "/compact"` print nothing and exit
+// 0 even though the user's destructive command did nothing. dispatchCommand
+// must turn a non-empty SkipReason into an error naming why.
+func TestCompactSkipIsAnError(t *testing.T) {
+	sess := engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		WorkDir:      t.TempDir(),
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	spec, ok := command.NewRegistry().Lookup("compact")
+	if !ok {
+		t.Fatal("compact not in registry")
+	}
+	res := command.Resolution{Kind: command.KindControl, Spec: spec, Op: command.OpCompact, Args: map[string]any{}}
+
+	err := dispatchCommand(t.Context(), sess, res)
+	if err == nil {
+		t.Fatal("dispatchCommand returned nil for a compact that folded nothing; want an error naming the skip reason")
+	}
+	if !strings.Contains(err.Error(), "enough turns") {
+		t.Errorf("error = %q, want it to name why nothing was compacted", err)
 	}
 }
