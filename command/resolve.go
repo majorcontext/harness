@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ErrNotCommand reports that a line is ordinary text. Resolution.Text
@@ -49,10 +50,14 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 		return Resolution{Text: line}, ErrNotCommand
 	}
 	body := line[1:]
-	if body != "" && unicode.IsSpace(rune(body[0])) {
+	if lead, _ := utf8.DecodeRuneInString(body); body != "" && unicode.IsSpace(lead) {
 		return Resolution{Text: line}, ErrNotCommand
 	}
-	name, rest, _ := strings.Cut(body, " ")
+	name, rest := body, ""
+	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {
+		_, size := utf8.DecodeRuneInString(body[i:])
+		name, rest = body[:i], body[i+size:]
+	}
 	if name == "" {
 		return Resolution{Text: line}, ErrNotCommand
 	}

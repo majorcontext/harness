@@ -62,6 +62,7 @@ func TestResolveRejectsWhitespaceAfterSlash(t *testing.T) {
 		{name: "space after slash", in: "/ clear"},
 		{name: "tab after slash", in: "/\tclear"},
 		{name: "multiple spaces after slash", in: "/  compact 5"},
+		{name: "unicode NBSP after slash", in: "/\u00A0clear"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -79,13 +80,25 @@ func TestResolveRejectsWhitespaceAfterSlash(t *testing.T) {
 	}
 }
 
-// TestResolveNormalSpacingStillBinds proves the whitespace-after-slash
-// fix left the ordinary single-space path untouched.
-func TestResolveNormalSpacingStillBinds(t *testing.T) {
+// TestResolveTabSeparatesNameFromArgs pins that any Unicode whitespace
+// after a complete command name acts as the separator, exactly as a
+// space does. Unlike whitespace BEFORE the name (rule 4), whitespace
+// AFTER the name drops no content: it is a separator or trailing
+// padding, not text the parse throws away.
+func TestResolveTabSeparatesNameFromArgs(t *testing.T) {
 	r := NewRegistry()
-	res, err := r.Resolve("/compact 5")
+
+	res, err := r.Resolve("/clear\t")
 	if err != nil {
-		t.Fatalf("Resolve(\"/compact 5\") error = %v, want nil", err)
+		t.Fatalf("Resolve(\"/clear\\t\") error = %v, want nil", err)
+	}
+	if res.Spec == nil || res.Spec.Name != "new" {
+		t.Errorf("Resolve(\"/clear\\t\").Spec = %+v, want the %q spec", res.Spec, "new")
+	}
+
+	res, err = r.Resolve("/compact\t5")
+	if err != nil {
+		t.Fatalf("Resolve(\"/compact\\t5\") error = %v, want nil", err)
 	}
 	if res.Args["keep_turns"] != 5 {
 		t.Errorf("Args[%q] = %#v, want 5", "keep_turns", res.Args["keep_turns"])
