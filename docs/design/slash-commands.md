@@ -108,6 +108,12 @@ name a route. The `command` package holds no transport and no session, so
 Route mapping belongs to `server`, which owns the routes. Section 5
 explains why an abstract `Op` is the right currency.
 
+A rest argument keeps its internal spacing and drops its trailing
+whitespace. The leading whitespace is the separator, and trailing
+whitespace is invisible: two goal conditions that differ only by trailing
+spaces are the same condition, and keeping the difference would make them
+look different in a log.
+
 A line that does not start with `/` is not a command. `Resolve` reports
 that, and the caller sends the line unchanged. An unknown `/name` is an
 error. A frontend must not send it to the model as literal text.
