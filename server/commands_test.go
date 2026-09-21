@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/command"
@@ -119,6 +121,24 @@ func TestEveryControlOpHasARoute(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("route map has Op %q with no command", op)
+		}
+	}
+}
+
+// TestOpRoutesMatchTheMux pins that every opRoutes entry names a route
+// that actually exists on the server's mux. opRoutes and server.go's
+// registrations are two independently-maintained lists; comparing
+// opRoutes only against the command registry (TestEveryControlOpHasARoute)
+// never catches a route that was renamed or removed in server.go, which
+// would otherwise ship a GET /commands entry that 404s.
+func TestOpRoutesMatchTheMux(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	for op, rt := range opRoutes {
+		path := strings.ReplaceAll(rt.path, "{id}", "placeholder")
+		req := httptest.NewRequest(rt.method, path, nil)
+		_, pattern := h.srv.mux.Handler(req)
+		if pattern == "" {
+			t.Errorf("op %q: %s %s matched no route in the mux", op, rt.method, path)
 		}
 	}
 }
