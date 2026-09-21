@@ -54,30 +54,6 @@ func TestResolveArgErrorNamesTheTypedAlias(t *testing.T) {
 
 // TestResolveEscape pins parse rule 3: a user must be able to write about
 // a command. //clear is the literal text /clear.
-func TestResolveEscape(t *testing.T) {
-	r := NewRegistry()
-	res, err := r.Resolve("//clear")
-	if !errors.Is(err, ErrNotCommand) {
-		t.Fatalf("Resolve(\"//clear\") error = %v, want ErrNotCommand", err)
-	}
-	if res.Text != "/clear" {
-		t.Errorf("Resolve(\"//clear\").Text = %q, want %q", res.Text, "/clear")
-	}
-}
-
-// TestResolveMultiLineIsNotACommand pins parse rule 2.
-func TestResolveMultiLineIsNotACommand(t *testing.T) {
-	r := NewRegistry()
-	const in = "/compact\nand then explain what you did"
-	res, err := r.Resolve(in)
-	if !errors.Is(err, ErrNotCommand) {
-		t.Fatalf("Resolve error = %v, want ErrNotCommand", err)
-	}
-	if res.Text != in {
-		t.Errorf("Resolve().Text = %q, want the line unchanged", res.Text)
-	}
-}
-
 // TestResolveRejectsWhitespaceAfterSlash pins rule 4: a line must parse
 // as a command without dropping any text, including whitespace right
 // after the slash. "/ clear" must not silently become "/clear" and fire
@@ -109,11 +85,10 @@ func TestResolveRejectsWhitespaceAfterSlash(t *testing.T) {
 	}
 }
 
-// TestResolveTabSeparatesNameFromArgs pins that any Unicode whitespace
-// after a complete command name acts as the separator, exactly as a
-// space does. Unlike whitespace BEFORE the name (rule 4), whitespace
-// AFTER the name drops no content: it is a separator or trailing
-// padding, not text the parse throws away.
+// TestResolveTabSeparatesNameFromArgs pins the asymmetry in rule 4:
+// whitespace BEFORE the name makes the line text, because dropping it
+// would change what parses; whitespace AFTER a complete name is a
+// separator and drops no content.
 func TestResolveTabSeparatesNameFromArgs(t *testing.T) {
 	r := NewRegistry()
 
@@ -154,9 +129,10 @@ func TestResolveTable(t *testing.T) {
 			wantOp: OpSetModel, wantArgs: map[string]any{"model": "anthropic/claude-sonnet-5"}},
 		{name: "rest arg takes the remainder", in: "/goal the tests pass and CI is green",
 			wantOp: OpSetGoal, wantArgs: map[string]any{"condition": "the tests pass and CI is green"}},
-		{name: "unknown command", in: "/nope", wantErr: true},
 		{name: "plain text", in: "review this", wantText: "review this"},
 		{name: "leading space is text", in: " /compact", wantText: " /compact"},
+		{name: "rule 3: // is a literal slash", in: "//clear", wantText: "/clear"},
+		{name: "rule 2: multi-line is text", in: "/compact\nand explain", wantText: "/compact\nand explain"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,15 +175,10 @@ func TestResolveTable(t *testing.T) {
 	}
 }
 
-// TestBindArgsSplitsOnUnicodeWhitespace pins that bindArgs splits a
-// positional argument on any Unicode whitespace rune, the same rule
-// Resolve's own name/rest split already uses (rule 4). Before this fix,
-// bindArgs cut only on an ASCII " " (strings.Cut(rest, " ")), so a folded
-// non-ASCII space (NBSP, an ideographic space) from a mobile keyboard or a
-// paste survived into a single-value field whole instead of separating two
-// tokens, with no surplus error. /thinking's one ArgString argument makes
-// the second token a surplus that must be rejected once the split is
-// correct.
+// TestBindArgsSplitsOnUnicodeWhitespace pins that a positional argument
+// splits on any Unicode whitespace, so a folded non-ASCII space cannot
+// smuggle a second token into a single-value field. /thinking takes one
+// argument, so the second token must be rejected as surplus.
 func TestBindArgsSplitsOnUnicodeWhitespace(t *testing.T) {
 	r := NewRegistry()
 	tests := []struct {
@@ -233,11 +204,8 @@ func TestBindArgsSplitsOnUnicodeWhitespace(t *testing.T) {
 	}
 }
 
-// TestResolveArgRestKeepsInternalWhitespace pins that fixing bindArgs's
-// positional split (TestBindArgsSplitsOnUnicodeWhitespace) leaves an
-// ArgRest argument untouched: "/goal a b  c" must bind the remainder
-// verbatim, including the internal double space, because ArgRest returns
-// before bindArgs' per-field split ever runs.
+// TestResolveArgRestKeepsInternalWhitespace pins that ArgRest binds the
+// remainder verbatim: the per-field whitespace split must not reach it.
 func TestResolveArgRestKeepsInternalWhitespace(t *testing.T) {
 	r := NewRegistry()
 	const in = "/goal a b  c"

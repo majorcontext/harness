@@ -53,11 +53,7 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 	if lead, _ := utf8.DecodeRuneInString(body); body != "" && unicode.IsSpace(lead) {
 		return Resolution{Text: line}, ErrNotCommand
 	}
-	name, rest := body, ""
-	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {
-		_, size := utf8.DecodeRuneInString(body[i:])
-		name, rest = body[:i], body[i+size:]
-	}
+	name, rest := cutSpace(body)
 	if name == "" {
 		return Resolution{Text: line}, ErrNotCommand
 	}
@@ -72,11 +68,9 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 	return Resolution{Kind: spec.Kind, Spec: spec, Op: spec.Op, Args: args}, nil
 }
 
-// cutSpace splits s at the first Unicode whitespace rune, mirroring Resolve's
-// own name/rest split (the IndexFunc/DecodeRuneInString pair above) instead
-// of strings.Cut's ASCII-only " ". Without this, a folded non-ASCII space
-// (NBSP, an ideographic space) survives into a positional field bindArgs
-// binds verbatim, splitting on the wrong boundary or not at all.
+// cutSpace splits s at the first Unicode whitespace rune. strings.Cut's
+// ASCII-only " " would let a folded non-ASCII space (NBSP, an ideographic
+// space) survive into a field as if it were content.
 func cutSpace(s string) (field, rest string) {
 	i := strings.IndexFunc(s, unicode.IsSpace)
 	if i < 0 {
@@ -99,7 +93,7 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 		}
 		return args, nil
 	}
-	for i, a := range spec.Args {
+	for _, a := range spec.Args {
 		if a.Type == ArgRest {
 			if rest == "" {
 				if a.Optional {
@@ -129,9 +123,9 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 		default:
 			args[a.Name] = field
 		}
-		if i == len(spec.Args)-1 && rest != "" {
-			return nil, fmt.Errorf("command: /%s takes %d argument(s), got extra %q", typedName, len(spec.Args), rest)
-		}
+	}
+	if rest != "" {
+		return nil, fmt.Errorf("command: /%s takes %d argument(s), got extra %q", typedName, len(spec.Args), rest)
 	}
 	return args, nil
 }

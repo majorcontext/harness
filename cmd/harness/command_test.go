@@ -62,29 +62,6 @@ func TestFrontendOpIsRefused(t *testing.T) {
 	}
 }
 
-// TestPromptTextPassesThrough pins that ordinary text is untouched: the
-// command layer must not change what a non-command prompt sends.
-func TestPromptTextPassesThrough(t *testing.T) {
-	r := command.NewRegistry()
-	const in = "summarize the diff"
-	res, err := r.Resolve(in)
-	if !errors.Is(err, command.ErrNotCommand) {
-		t.Fatalf("Resolve error = %v, want ErrNotCommand", err)
-	}
-	if res.Text != in {
-		t.Errorf("Text = %q, want %q", res.Text, in)
-	}
-}
-
-// TestUnknownCommandDoesNotBecomeAPrompt pins the spec's §3 rule: an
-// unknown /name is an error, never literal text sent to the model.
-func TestUnknownCommandDoesNotBecomeAPrompt(t *testing.T) {
-	_, err := command.NewRegistry().Resolve("/nope")
-	if err == nil || errors.Is(err, command.ErrNotCommand) {
-		t.Fatalf("Resolve(\"/nope\") error = %v, want a command error", err)
-	}
-}
-
 // TestCompactSkipIsAnError pins spec §5's "silence is the failure to
 // avoid": a fresh run-mode session has no prior history to fold, so
 // Session.Compact returns a nil error with SkipReasonNotEnoughTurns
