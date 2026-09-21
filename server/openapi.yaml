@@ -2460,6 +2460,29 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Health" }
 
+  /commands:
+    get:
+      operationId: commands
+      summary: The slash-command registry.
+      description: |
+        Every command a human can type, with the argument shape each one
+        takes. A control command carries `op`, `method`, and `path`. A
+        frontend command carries none of the three: the client owns that
+        action. See docs/design/slash-commands.md.
+      responses:
+        "200":
+          description: The registry.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  commands:
+                    type: array
+                    items:
+                      type: object
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /session:
     get:
       operationId: listSessions

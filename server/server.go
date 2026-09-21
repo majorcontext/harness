@@ -1010,6 +1010,7 @@ func (s *Server) worktreeBaseDir() (string, error) {
 func (s *Server) routes() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /commands", s.auth(s.handleCommands))
 	mux.HandleFunc("GET /session", s.auth(s.handleList))
 	mux.HandleFunc("POST /session", s.auth(s.handleCreate))
 	// A precise pattern outranks the {id} wildcard, so /session/status is not
