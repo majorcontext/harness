@@ -787,11 +787,15 @@ func runCmd(args []string) error {
 		case cerr == nil:
 			// A control command mutates or reports on an EXISTING session
 			// (§5 of docs/design/slash-commands.md). Neither -resume nor
-			// -cont was given here, so s is a fresh, throwaway session: run
-			// mode would otherwise create it, mutate it, persist it, and
-			// exit 0, leaving the user with no session to have acted on.
-			if res.Kind == command.KindControl && opts.resume == "" && !opts.cont {
-				return fmt.Errorf("/%s needs an existing session: pass -resume or -cont, or drop the command and send a plain prompt", resName(res))
+			// -continue was given here, so s is a fresh, throwaway session:
+			// run mode would otherwise create it, mutate it, persist it, and
+			// exit 0, leaving the user with no session to have acted on. An
+			// Op that run mode never supports (runModeOps == false) gets no
+			// say here: it falls through to dispatchCommand's own "not
+			// available in this mode" refusal below, which applies no
+			// matter what session exists.
+			if supported, known := runModeOps[res.Op]; res.Kind == command.KindControl && known && supported && opts.resume == "" && !opts.cont {
+				return fmt.Errorf("/%s needs an existing session: pass -resume or -continue, or drop the command and send a plain prompt", resName(res))
 			}
 			if derr := dispatchCommand(ctx, s, res); derr != nil {
 				return derr

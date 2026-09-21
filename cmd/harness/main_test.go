@@ -326,6 +326,34 @@ func TestRunCmdControlCommandNeedsHistory(t *testing.T) {
 	}
 }
 
+// TestRunCmdUnsupportedOpReportsUnsupportedFirst pins the refusal order for
+// an Op run mode never supports (runModeOps[op] == false): it must report
+// "not available in this mode", never the -resume/-continue advice, because
+// no session — existing or not — would let run mode perform it.
+func TestRunCmdUnsupportedOpReportsUnsupportedFirst(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_CONFIG", "")
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/status"})
+	})
+	if runErr == nil {
+		t.Fatal("runCmd returned nil for an Op run mode does not support")
+	}
+	if !strings.Contains(runErr.Error(), "not available in this mode") {
+		t.Errorf("error = %q, want it to say the op is not available in this mode", runErr)
+	}
+	if strings.Contains(runErr.Error(), "-resume") || strings.Contains(runErr.Error(), "-continue") {
+		t.Errorf("error = %q, should not advise -resume/-continue for an Op run mode never supports", runErr)
+	}
+}
+
 func TestFormatSessions(t *testing.T) {
 	t.Run("empty list yields no output", func(t *testing.T) {
 		if got := formatSessions(nil); got != "" {
