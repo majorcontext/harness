@@ -183,7 +183,7 @@ ways:
   name resolves through the same single-token lookup as every other command.
 - `/compact` takes `keep_turns` only. A one-shot `model` override on a
   single compact call adds a second way to change the session's model,
-  beside `/model` itself. `/model` stays the one place a model change
+  besides `/model` itself. `/model` stays the one place a model change
   happens.
 - `/help` did not ship. `GET /commands` already serves the same registry a
   `/help` command would read, so a frontend can build its own help surface
@@ -269,10 +269,10 @@ A direct `Session.Compact` call from `cmd/harness` is safe because the two
 server-only concerns above do not exist in run mode — there is one
 session, and it is a root — AND because `Session.Compact` itself carries
 the authoritative Claude Code delegation guard (`engine/compact.go`): the
-setter refuses on its own, so a caller needs no separate check before it
+mutator refuses on its own, so a caller needs no separate check before it
 calls Compact.
 
-Not every setter guards itself this way. `Session.SetModel` has no
+Not every mutator guards itself this way. `Session.SetModel` has no
 internal guard at all; it persists unconditionally. `Session.ModelSupported`
 and `Session.CheckModel` are checks the CALLER must run before the swap,
 not guards inside the setter — `handleSetModel` (`server/handlers.go`) runs

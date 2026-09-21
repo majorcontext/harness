@@ -290,8 +290,9 @@ func TestResolveSession(t *testing.T) {
 }
 
 // TestRunCmdControlCommandNeedsHistory pins spec §5's "no prior history"
-// rule (docs/design/slash-commands.md:274): `harness run` with neither
-// -resume nor -cont has no prior session for a control command to act on.
+// rule (docs/design/slash-commands.md, §5 "Dispatch"): `harness run` with
+// neither -resume nor -continue has no prior session for a control command
+// to act on.
 // Commit 6364df3 fixed only the /compact symptom, through SkipReason;
 // /thinking (and /model, /tier) on a fresh session still created a
 // throwaway session, mutated it, persisted it, and exited 0. The
