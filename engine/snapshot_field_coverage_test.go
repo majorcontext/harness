@@ -92,7 +92,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"snapshotSeq":               "the snapshot writer's own anchor bookkeeping; set directly by the loader/writer, not restored from a snapshot payload",
 	"snapshotting":              "coalescing flag for the in-flight snapshot write, runtime-only",
 	"lastSnapshotErr":           "runtime error cache for the snapshot writer itself",
-	"snapshotWG":                "sync.WaitGroup, runtime-only",
+	"snapshotDone":              "completion channel for the in-flight snapshot write, runtime-only",
 	"snapshotWrites":            "atomic counter, runtime-only diagnostics",
 	"snapshotInFlight":          "atomic counter, runtime-only diagnostics",
 	"snapshotConcurrentPeak":    "atomic counter, runtime-only diagnostics",

@@ -408,9 +408,10 @@ func (s *Session) startSnapshotLocked() {
 	s.snapshotting = true
 	s.snapshotSeq = snap.Seq
 	dir, id, sync := s.cfg.SessionDir, s.ID, !s.volumeSync()
-	s.snapshotWG.Add(1)
+	done := make(chan struct{})
+	s.snapshotDone = done
 	go func() {
-		defer s.snapshotWG.Done()
+		defer close(done)
 		inFlight := s.snapshotInFlight.Add(1)
 		for {
 			peak := s.snapshotConcurrentPeak.Load()
@@ -435,13 +436,26 @@ func (s *Session) startSnapshotLocked() {
 	}()
 }
 
-// waitSnapshots blocks until every snapshot write this session started has
-// finished. A shutdown path that must leave the disk settled joins here
-// (cmd/harness's runCmd, through WaitSnapshots), and so does a test that
-// reads or removes the session directory; it is NOT a barrier a new
-// snapshot cannot start behind.
+// waitSnapshots blocks until the snapshot write in flight when it was
+// called has finished. A shutdown path that must leave the disk settled
+// joins here (cmd/harness's runCmd, through WaitSnapshots), and so does a
+// test that reads or removes the session directory; it is NOT a barrier a
+// new snapshot cannot start behind.
+//
+// It reads the channel under s.mu and then waits off the lock, which is
+// what makes a start CONCURRENT with a wait safe: a new snapshot only ever
+// installs a fresh channel, and the caller joins the one it captured. A
+// sync.WaitGroup cannot promise that — an Add that takes the counter from
+// zero while a Wait is parked is API misuse and panics — and this wait is
+// exported, so a concurrent start is reachable rather than hypothetical
+// (see runCmd, whose deferred join can overlap a late task-child resume).
 func (s *Session) waitSnapshots() {
-	s.snapshotWG.Wait()
+	s.mu.Lock()
+	done := s.snapshotDone
+	s.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 // WaitSnapshots is waitSnapshots exported for callers outside this package.

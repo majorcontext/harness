@@ -1240,12 +1240,17 @@ type Session struct {
 	snapshotSeq     int64
 	snapshotting    bool
 	lastSnapshotErr error
-	// snapshotWG tracks in-flight snapshot writes so a caller can wait for
-	// a settled disk (waitSnapshots). snapshotWrites/snapshotInFlight/
-	// snapshotConcurrentPeak are the counters the coalescing invariant
-	// (rule 4) is asserted against; they are atomics because the
-	// background writer touches them while holding no lock.
-	snapshotWG             sync.WaitGroup
+	// snapshotDone is closed by the most recently started snapshot write
+	// when it finishes, so a caller can wait for a settled disk
+	// (waitSnapshots). It is a channel rather than a sync.WaitGroup
+	// because the wait is EXPORTED: a WaitGroup panics when an Add that
+	// starts from zero races a Wait, and any trigger can start a snapshot
+	// while an out-of-package caller is already inside WaitSnapshots.
+	// Written under mu, at most one live at a time (rule 4's coalescing).
+	// snapshotWrites/snapshotInFlight/snapshotConcurrentPeak are the
+	// counters that invariant is asserted against; they are atomics
+	// because the background writer touches them while holding no lock.
+	snapshotDone           chan struct{}
 	snapshotWrites         atomic.Int64
 	snapshotInFlight       atomic.Int64
 	snapshotConcurrentPeak atomic.Int64
