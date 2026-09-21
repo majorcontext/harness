@@ -50,28 +50,48 @@ func TestCommandsListsEveryBuiltin(t *testing.T) {
 // TestCommandsRouteInvariant pins the spec's §6 contract in both
 // directions: a control command carries an op, a method, and a path; a
 // frontend command carries none of the three, which is how a client
-// learns it owns the action itself.
+// learns it owns the action itself. It decodes each entry as raw JSON
+// keys, not as a struct with plain string fields, because a struct
+// field decodes an absent key and a present-but-empty key to the same
+// zero value: only checking key presence actually pins absence.
 func TestCommandsRouteInvariant(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	_, data := h.do("GET", "/commands", nil)
 	var body struct {
-		Commands []commandJSON `json:"commands"`
+		Commands []map[string]json.RawMessage `json:"commands"`
 	}
 	if err := json.Unmarshal(data, &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, c := range body.Commands {
-		switch c.Kind {
+	for _, entry := range body.Commands {
+		var name, kind string
+		if err := json.Unmarshal(entry["name"], &name); err != nil {
+			t.Fatalf("unmarshal name: %v", err)
+		}
+		if err := json.Unmarshal(entry["kind"], &kind); err != nil {
+			t.Fatalf("unmarshal kind: %v", err)
+		}
+		_, hasOp := entry["op"]
+		_, hasMethod := entry["method"]
+		_, hasPath := entry["path"]
+		switch kind {
 		case string(command.KindControl):
-			if c.Op == "" || c.Method == "" || c.Path == "" {
-				t.Errorf("control %q: op=%q method=%q path=%q, want all set", c.Name, c.Op, c.Method, c.Path)
+			if !hasOp || !hasMethod || !hasPath {
+				t.Errorf("control %q: op present=%v method present=%v path present=%v, want all present", name, hasOp, hasMethod, hasPath)
+			}
+			var op, method, path string
+			json.Unmarshal(entry["op"], &op)
+			json.Unmarshal(entry["method"], &method)
+			json.Unmarshal(entry["path"], &path)
+			if op == "" || method == "" || path == "" {
+				t.Errorf("control %q: op=%q method=%q path=%q, want all non-empty", name, op, method, path)
 			}
 		case string(command.KindFrontend):
-			if c.Op != "" || c.Method != "" || c.Path != "" {
-				t.Errorf("frontend %q: op=%q method=%q path=%q, want all empty", c.Name, c.Op, c.Method, c.Path)
+			if hasOp || hasMethod || hasPath {
+				t.Errorf("frontend %q: op present=%v method present=%v path present=%v, want all absent", name, hasOp, hasMethod, hasPath)
 			}
 		default:
-			t.Errorf("%q has kind %q", c.Name, c.Kind)
+			t.Errorf("%q has kind %q", name, kind)
 		}
 	}
 }
