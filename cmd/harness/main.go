@@ -395,6 +395,26 @@ func sessionDir(noSave bool, configDir string) (string, error) {
 	return filepath.Join(home, ".harness", "sessions"), nil
 }
 
+// promptSession sends text as an ordinary prompt on s, bracketed by
+// sessMgr's turn reporting — see runGoal's identical bracket (and its doc
+// comment) for why: without it, a `task` child that finishes while this
+// Prompt call is still in flight would find s "idle" from
+// SessionManager's point of view and fire a concurrent resume turn on the
+// SAME session this call is still driving. resume is fired synchronously
+// if non-nil, exactly like runGoal's own tail.
+func promptSession(ctx context.Context, sessMgr *engine.SessionManager, s *engine.Session, text string) error {
+	sessMgr.ReportTurnStart(s)
+	msg, promptErr := s.Prompt(ctx, text)
+	resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
+	if promptErr != nil {
+		return promptErr
+	}
+	if resume != nil {
+		resume()
+	}
+	return nil
+}
+
 // resolveSession creates or resumes the session for a run: a fresh session
 // by default, the named one for -r, the most recently created one for -c.
 //
@@ -627,14 +647,23 @@ func runCmd(args []string) error {
 		return fmt.Errorf("-p and -goal are mutually exclusive")
 	}
 	// Registry.Resolve is pure (no I/O, no session), so it runs before any
-	// session exists. A command this run will refuse outright — unknown,
-	// surplus arguments, unsupported in this mode, a frontend command, or a
-	// control command with neither -resume nor -continue — must fail here,
-	// before resolveSession below builds and prewarms a session for a run
-	// that was always going to be refused. Only a command that will
-	// actually be dispatched, or ordinary text, reaches resolveSession.
+	// session exists. A command this run will refuse outright — surplus
+	// arguments, unsupported in this mode, a frontend command, or a control
+	// command with neither -resume nor -continue — must fail here, before
+	// resolveSession below builds and prewarms a session for a run that was
+	// always going to be refused. Only a command that will actually be
+	// dispatched, or ordinary text, reaches resolveSession.
+	//
+	// An unknown /name is the one exception: harness owns no route for it,
+	// but a session delegated to the Claude Code CLI has its own slash
+	// vocabulary (/cost, /context, ...) this line might name instead.
+	// Whether s is delegated is not decidable here — a resumed session's
+	// model comes from its persisted log, not the configured ref — so an
+	// unknown command defers its refusal past resolveSession below instead
+	// of returning now. unknownCmd is nil for every other outcome.
 	var res command.Resolution
 	var resErr error
+	var unknownCmd *command.UnknownCommandError
 	if opts.goal == "" {
 		res, resErr = command.NewRegistry().Resolve(opts.prompt)
 		switch {
@@ -648,6 +677,8 @@ func runCmd(args []string) error {
 			if opts.resume == "" && !opts.cont {
 				return fmt.Errorf("/%s needs an existing session: pass -resume or -continue, or drop the command and send a plain prompt", resName(res))
 			}
+		case errors.As(resErr, &unknownCmd):
+			// Deferred; see dispatch below.
 		case !errors.Is(resErr, command.ErrNotCommand):
 			return resErr
 		}
@@ -801,34 +832,35 @@ func runCmd(args []string) error {
 	_ = sessMgr.AdoptReloaded(s)
 
 	goalNotAchieved := false
-	if opts.goal != "" {
+	switch {
+	case opts.goal != "":
 		res, err := runGoal(ctx, cfg, s, sessMgr, opts)
 		if err != nil {
 			return err
 		}
 		goalNotAchieved = !res.Achieved
-	} else if resErr == nil {
+	case unknownCmd != nil && s.ClaudeCodeDelegated():
+		// harness owns no route for unknownCmd.Name, but a delegated
+		// session is a second frontend with its own vocabulary: the CLI
+		// advertises its own slash commands (slash_commands in its
+		// stream-json init line) and reports its own error for a name it
+		// does not know either. Send opts.prompt, the ORIGINAL line
+		// (e.g. "/cost"), not res.Text — Resolve set no Text for an
+		// unknown command, and the CLI expects its own leading slash.
+		if err := promptSession(ctx, sessMgr, s, opts.prompt); err != nil {
+			return err
+		}
+	case unknownCmd != nil:
+		return resErr
+	case resErr == nil:
 		// res was already resolved and refusal-checked above, before s was
 		// built: only a command that will actually run reaches here.
 		if derr := dispatchCommand(ctx, s, res); derr != nil {
 			return derr
 		}
-	} else {
-		// ReportTurnStart/ReportTurnEnd bracket this bare Prompt call — see
-		// runGoal's identical bracket (and its doc comment) for why: without
-		// it, a `task` child that finishes while this Prompt call is still
-		// in flight would find s "idle" from SessionManager's point of view
-		// and fire a concurrent resume turn on the SAME session this call
-		// is still driving. resume is fired synchronously if non-nil,
-		// exactly like runGoal's own tail.
-		sessMgr.ReportTurnStart(s)
-		msg, promptErr := s.Prompt(ctx, res.Text)
-		resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
-		if promptErr != nil {
-			return promptErr
-		}
-		if resume != nil {
-			resume()
+	default:
+		if err := promptSession(ctx, sessMgr, s, res.Text); err != nil {
+			return err
 		}
 	}
 	if printer.PrintedText() {

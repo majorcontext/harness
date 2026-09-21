@@ -118,6 +118,19 @@ A line that does not start with `/` is not a command. `Resolve` reports
 that, and the caller sends the line unchanged. An unknown `/name` is an
 error. A frontend must not send it to the model as literal text.
 
+One case sends an unknown `/name` on as literal text, on purpose: a
+session delegated to the Claude Code CLI (`engine.Session.ClaudeCodeDelegated`).
+That CLI is not "the model". It is a second frontend with its own slash
+vocabulary — `/cost`, `/context`, `/usage`, and more, which it advertises
+in the `slash_commands` array of its own `init` line. `harness run` owns
+no route for a name like `/cost`; the delegated CLI does. So `harness run`
+sends the unresolved line to `Session.Prompt` unchanged, and the CLI
+answers with its own output, or reports its own unknown-command error for
+a name it does not know either. `command.Registry.Resolve` itself stays
+unchanged: it still returns `UnknownCommandError` for every unknown name,
+delegated session or not. Only the caller's response to that error
+differs, and only on a delegated session.
+
 ### Parsing is strict
 
 A slash parser sits between a human and a destructive operation. Claude
