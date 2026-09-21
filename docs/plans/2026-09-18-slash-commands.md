@@ -61,7 +61,7 @@ rather than an addition to the 4000-line `server/handlers.go`.
 
 ## Spec deviations
 
-Three, each deliberate. Raise them in the pull request body.
+Four, each deliberate. Raise them in the pull request body.
 
 1. **`/goal clear` and `/queue clear` become `/goal-clear` and
    `/queue-clear`.** The spec's §4 table writes them as a `clear`
@@ -76,6 +76,10 @@ Three, each deliberate. Raise them in the pull request body.
    open.
 3. **`/status`, `/processes`, and `/mcp` ship as control entries with
    routes but no run-mode support.** See Task 4's support matrix.
+4. **`/compact` takes `keep_turns` only.** The spec's §4 table also lists
+   `model`. A second positional argument after an optional first cannot
+   bind unambiguously, and the route still accepts `model` for a client
+   that needs it. Add it only with a named-argument syntax.
 
 ---
 
@@ -92,7 +96,7 @@ Three, each deliberate. Raise them in the pull request body.
   `command.Op` (`OpCompact`, `OpSetModel`, `OpSetThinking`,
   `OpSetServiceTier`, `OpAbort`, `OpSetGoal`, `OpClearGoal`,
   `OpQueueList`, `OpQueueClear`, `OpStatus`, `OpProcessList`, `OpMCP`),
-  `command.ArgType` (`ArgString`, `ArgInt`), `command.ArgSpec`,
+  `command.ArgType` (`ArgString`, `ArgInt`, `ArgRest`), `command.ArgSpec`,
   `command.Category`, `command.Spec`, `command.Registry`,
   `func NewRegistry() *Registry`,
   `func (*Registry) Lookup(name string) (*Spec, bool)`,
@@ -1140,15 +1144,24 @@ var runModeOps = map[command.Op]bool{
 	command.OpMCP:            false,
 }
 
+// resName names a resolution for an error message. Resolve always sets
+// Spec, but an error path must not panic on a hand-built Resolution.
+func resName(res command.Resolution) string {
+	if res.Spec != nil {
+		return res.Spec.Name
+	}
+	return string(res.Op)
+}
+
 // dispatchCommand performs one resolved control command against the
 // session a run holds. Session resolution is not a concern here: a run
 // has exactly one session, and it is a root.
 func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolution) error {
 	if res.Kind == command.KindFrontend {
-		return fmt.Errorf("/%s is a frontend command; harness run does not own the session pointer", res.Spec.Name)
+		return fmt.Errorf("/%s is a frontend command; harness run does not own the session pointer", resName(res))
 	}
 	if supported, known := runModeOps[res.Op]; !known || !supported {
-		return fmt.Errorf("/%s is not available in this mode: harness run has no server to perform %q", res.Spec.Name, res.Op)
+		return fmt.Errorf("/%s is not available in this mode: harness run has no server to perform %q", resName(res), res.Op)
 	}
 	switch res.Op {
 	case command.OpCompact:
@@ -1255,16 +1268,26 @@ line 801, resolve first:
 			if derr := dispatchCommand(ctx, s, res); derr != nil {
 				return derr
 			}
-			return nil
 		case !errors.Is(cerr, command.ErrNotCommand):
 			return cerr
+		default:
+			sessMgr.ReportTurnStart(s)
+			msg, promptErr := s.Prompt(ctx, res.Text)
+			resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
+			if promptErr != nil {
+				return promptErr
+			}
+			if resume != nil {
+				resume()
+			}
 		}
-		sessMgr.ReportTurnStart(s)
-		msg, promptErr := s.Prompt(ctx, res.Text)
 ```
 
-`res.Text` replaces `opts.prompt` so a `//` escape sends its unescaped
-form. Add `"github.com/majorcontext/harness/command"` to the import block
+The existing `ReportTurnStart`/`Prompt`/`ReportTurnEnd` body moves into
+the `default` arm unchanged. Do NOT return early from the command arm: the
+function tail after this block prints the trailing newline and the session
+id, and a command run must keep both. `res.Text` replaces `opts.prompt` so
+a `//` escape sends its unescaped form. Add `"github.com/majorcontext/harness/command"` to the import block
 at `cmd/harness/main.go:40`.
 
 - [ ] **Step 4: Run the tests to verify they pass**
