@@ -40,3 +40,4 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 | [mcp-lazy-tools.md](design/mcp-lazy-tools.md) | Deferred MCP schema design |
 | [nested-instruction-loading.md](design/nested-instruction-loading.md) | Project instruction discovery and truncation |
 | [session-send-unification.md](design/session-send-unification.md) | Single-owner session.send/prompt_async routing for a root and a managed child |
+| [slash-commands.md](design/slash-commands.md) | Human-invoked control and prompt commands in one registry |
