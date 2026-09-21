@@ -83,6 +83,12 @@ func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolut
 		if err != nil {
 			return err
 		}
+		if !s.ModelSupported(ref) {
+			return fmt.Errorf("provider %q is not configured", ref.Provider)
+		}
+		if err := s.CheckModel(ref); err != nil {
+			return err
+		}
 		s.SetModel(ref)
 		return nil
 	case command.OpSetThinking:

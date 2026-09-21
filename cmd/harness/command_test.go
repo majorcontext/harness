@@ -114,3 +114,43 @@ func TestCompactSkipIsAnError(t *testing.T) {
 		t.Errorf("error = %q, want it to name why nothing was compacted", err)
 	}
 }
+
+// TestSetModelRunModeRejectsUnconfiguredProvider pins that /model in run
+// mode runs the same two gates handleSetModel runs before SetModel
+// (server/handlers.go): ModelSupported and CheckModel. Session.SetModel
+// itself has no internal guard — it persists unconditionally — so a
+// dispatcher that skips these gates durably pins a resumed session to a
+// provider that was never configured, with no in-band way to undo it. The
+// model-unchanged assertion is the one that matters: it pins that a
+// rejected ref never reaches the durable recModel record.
+func TestSetModelRunModeRejectsUnconfiguredProvider(t *testing.T) {
+	want := message.ModelRef{Provider: "test", Model: "m1"}
+	sess := engine.NewSession(engine.Config{
+		Providers:    provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:        want,
+		WorkDir:      t.TempDir(),
+		Instructions: &engine.InstructionsConfig{Disabled: true},
+		SkillsDirs:   []string{},
+	})
+	spec, ok := command.NewRegistry().Lookup("model")
+	if !ok {
+		t.Fatal("model not in registry")
+	}
+	res := command.Resolution{
+		Kind: command.KindControl,
+		Spec: spec,
+		Op:   command.OpSetModel,
+		Args: map[string]any{"model": "anthropi/claude-sonnet-5"},
+	}
+
+	err := dispatchCommand(t.Context(), sess, res)
+	if err == nil {
+		t.Fatal("dispatchCommand returned nil for a model naming an unconfigured provider")
+	}
+	if !strings.Contains(err.Error(), "not configured") {
+		t.Errorf("error = %q, want it to say the provider is not configured", err)
+	}
+	if got := sess.Model(); got != want {
+		t.Errorf("Model() = %v after a rejected /model, want unchanged %v", got, want)
+	}
+}
