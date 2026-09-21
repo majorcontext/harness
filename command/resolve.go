@@ -65,7 +65,7 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 	if !ok {
 		return Resolution{}, &UnknownCommandError{Name: name}
 	}
-	args, err := bindArgs(spec, strings.TrimSpace(rest))
+	args, err := bindArgs(spec, name, strings.TrimSpace(rest))
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -73,12 +73,15 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 }
 
 // bindArgs binds the remainder of a line to a Spec's positional
-// arguments. Rule 1 lives here: leftover input is an error.
-func bindArgs(spec *Spec, rest string) (map[string]any, error) {
+// arguments. Rule 1 lives here: leftover input is an error. typedName
+// is the name (or alias) the user actually wrote, used in error text
+// instead of spec.Name so a message never names a command the user
+// did not type.
+func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 	args := map[string]any{}
 	if len(spec.Args) == 0 {
 		if rest != "" {
-			return nil, fmt.Errorf("command: /%s takes no arguments, got %q", spec.Name, rest)
+			return nil, fmt.Errorf("command: /%s takes no arguments, got %q", typedName, rest)
 		}
 		return args, nil
 	}
@@ -88,7 +91,7 @@ func bindArgs(spec *Spec, rest string) (map[string]any, error) {
 				if a.Optional {
 					return args, nil
 				}
-				return nil, fmt.Errorf("command: /%s needs %s", spec.Name, a.Name)
+				return nil, fmt.Errorf("command: /%s needs %s", typedName, a.Name)
 			}
 			args[a.Name] = rest
 			return args, nil
@@ -100,20 +103,20 @@ func bindArgs(spec *Spec, rest string) (map[string]any, error) {
 			if a.Optional {
 				continue
 			}
-			return nil, fmt.Errorf("command: /%s needs %s", spec.Name, a.Name)
+			return nil, fmt.Errorf("command: /%s needs %s", typedName, a.Name)
 		}
 		switch a.Type {
 		case ArgInt:
 			n, err := strconv.Atoi(field)
 			if err != nil {
-				return nil, fmt.Errorf("command: /%s %s must be a number, got %q", spec.Name, a.Name, field)
+				return nil, fmt.Errorf("command: /%s %s must be a number, got %q", typedName, a.Name, field)
 			}
 			args[a.Name] = n
 		default:
 			args[a.Name] = field
 		}
 		if i == len(spec.Args)-1 && rest != "" {
-			return nil, fmt.Errorf("command: /%s takes %d argument(s), got extra %q", spec.Name, len(spec.Args), rest)
+			return nil, fmt.Errorf("command: /%s takes %d argument(s), got extra %q", typedName, len(spec.Args), rest)
 		}
 	}
 	return args, nil

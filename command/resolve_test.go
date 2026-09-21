@@ -2,6 +2,7 @@ package command
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,34 @@ func TestResolveRejectsSurplusInput(t *testing.T) {
 	}
 	if res.Op != "" || res.Spec != nil {
 		t.Errorf("Resolve returned a dispatchable resolution %+v; nothing must run", res)
+	}
+}
+
+// TestResolveArgErrorNamesTheTypedAlias pins that an argument-binding
+// error names what the user actually typed, not the canonical Spec
+// name it resolved to. /clear is an alias for the "new" spec; a user
+// who typed /clear and is told about /new has to work out they are
+// the same command.
+func TestResolveArgErrorNamesTheTypedAlias(t *testing.T) {
+	r := NewRegistry()
+
+	_, err := r.Resolve("/clear extra")
+	if err == nil {
+		t.Fatalf("Resolve(\"/clear extra\") returned no error, want a surplus-input error")
+	}
+	if !strings.Contains(err.Error(), "clear") {
+		t.Errorf("Resolve(\"/clear extra\") error = %q, want it to mention %q", err.Error(), "clear")
+	}
+	if strings.Contains(err.Error(), "/new") {
+		t.Errorf("Resolve(\"/clear extra\") error = %q, want it not to mention the canonical name %q", err.Error(), "/new")
+	}
+
+	_, err = r.Resolve("/new extra")
+	if err == nil {
+		t.Fatalf("Resolve(\"/new extra\") returned no error, want a surplus-input error")
+	}
+	if !strings.Contains(err.Error(), "new") {
+		t.Errorf("Resolve(\"/new extra\") error = %q, want it to mention %q", err.Error(), "new")
 	}
 }
 
