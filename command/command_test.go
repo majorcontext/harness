@@ -71,7 +71,10 @@ func TestAliasResolvesToSameSpec(t *testing.T) {
 // TestDestructiveMarking pins that every command which loses context or a
 // turn is marked, because a frontend gates confirmation on this field.
 func TestDestructiveMarking(t *testing.T) {
-	want := map[string]bool{"compact": true, "abort": true, "new": true, "queue-clear": true}
+	want := map[string]bool{
+		"compact": true, "abort": true, "new": true, "queue-clear": true,
+		"model": false, "status": false,
+	}
 	r := NewRegistry()
 	for name, wantDestructive := range want {
 		s, ok := r.Lookup(name)
