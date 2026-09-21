@@ -36,11 +36,6 @@ func builtins() []*Spec {
 			Source: "builtin",
 		},
 		{
-			Name: "mcp", Kind: KindControl, Op: OpMCP,
-			Summary: "Reload MCP servers", Category: CategoryInfo,
-			Source: "builtin",
-		},
-		{
 			Name: "model", Kind: KindControl, Op: OpSetModel,
 			Summary: "Change the session model", ArgHint: "<provider/model>",
 			Args:     []ArgSpec{{Name: "model", Type: ArgString}},

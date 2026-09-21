@@ -168,13 +168,12 @@ set to method calls instead — see section 5.
 | `/queue-clear` | `DELETE /session/{id}/queue` | — |
 | `/status` | `GET /session/{id}` | — |
 | `/processes` | `GET /process` | — |
-| `/mcp` | `POST /session/{id}/mcp` | — |
 
 `/model` completes from `modelmeta`. The catalog is static, so completion
 costs no network call.
 
 This table matches the shipped registry (`command/registry.go`), which
-differs from the table an earlier draft of this design carried, in three
+differs from the table an earlier draft of this design carried, in four
 ways:
 
 - `/goal clear` and `/queue clear` shipped as `/goal-clear` and
@@ -189,6 +188,12 @@ ways:
   `/help` command would read, so a frontend can build its own help surface
   from that response. Whether a frontend ALSO wants a `/help` command that
   renders it inline stays open — see Deferred decisions.
+- `/mcp` did not ship. An earlier draft of this table paired the name with
+  `POST /session/{id}/mcp`, reading that route as "reload MCP servers". That
+  route is `handleSessionMCP`, the Streamable HTTP MCP JSON-RPC endpoint —
+  not a reload. No reload operation exists anywhere in the engine to name
+  instead, so the row was removed rather than repointed. Do not re-add
+  `/mcp` on the strength of that path alone.
 
 These fx commands stay out: `/login`, `/logout`, `/credits`,
 `/permissions`, `/allowlist`, `/undo`, `/statusline`, `/notifications`,

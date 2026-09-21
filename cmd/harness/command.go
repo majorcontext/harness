@@ -25,7 +25,6 @@ var runModeOps = map[command.Op]bool{
 	command.OpQueueClear:     false,
 	command.OpStatus:         false,
 	command.OpProcessList:    false,
-	command.OpMCP:            false,
 }
 
 // resName names a resolution for an error message. Resolve always sets

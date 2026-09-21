@@ -26,7 +26,6 @@ var opRoutes = map[command.Op]route{
 	command.OpQueueClear:     {"DELETE", "/session/{id}/queue"},
 	command.OpStatus:         {"GET", "/session/{id}"},
 	command.OpProcessList:    {"GET", "/process"},
-	command.OpMCP:            {"POST", "/session/{id}/mcp"},
 }
 
 type commandArgJSON struct {

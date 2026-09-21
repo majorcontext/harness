@@ -34,7 +34,6 @@ const (
 	OpQueueClear     Op = "queue_clear"
 	OpStatus         Op = "status"
 	OpProcessList    Op = "process_list"
-	OpMCP            Op = "mcp"
 )
 
 // ArgType is the type a dispatcher receives in Resolution.Args.
