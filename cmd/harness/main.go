@@ -785,6 +785,14 @@ func runCmd(args []string) error {
 		res, cerr := command.NewRegistry().Resolve(opts.prompt)
 		switch {
 		case cerr == nil:
+			// A control command mutates or reports on an EXISTING session
+			// (§5 of docs/design/slash-commands.md). Neither -resume nor
+			// -cont was given here, so s is a fresh, throwaway session: run
+			// mode would otherwise create it, mutate it, persist it, and
+			// exit 0, leaving the user with no session to have acted on.
+			if res.Kind == command.KindControl && opts.resume == "" && !opts.cont {
+				return fmt.Errorf("/%s needs an existing session: pass -resume or -cont, or drop the command and send a plain prompt", resName(res))
+			}
 			if derr := dispatchCommand(ctx, s, res); derr != nil {
 				return derr
 			}

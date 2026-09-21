@@ -289,6 +289,43 @@ func TestResolveSession(t *testing.T) {
 	})
 }
 
+// TestRunCmdControlCommandNeedsHistory pins spec §5's "no prior history"
+// rule (docs/design/slash-commands.md:274): `harness run` with neither
+// -resume nor -cont has no prior session for a control command to act on.
+// Commit 6364df3 fixed only the /compact symptom, through SkipReason;
+// /thinking (and /model, /tier) on a fresh session still created a
+// throwaway session, mutated it, persisted it, and exited 0. The
+// session-dir-stays-empty assertion is the one that matters: it pins that
+// dispatchCommand never ran and nothing was persisted, not just that
+// runCmd returned an error.
+func TestRunCmdControlCommandNeedsHistory(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_CONFIG", "")
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/thinking high"})
+	})
+	if runErr == nil {
+		t.Fatal("runCmd returned nil for a control command with neither -resume nor -cont")
+	}
+	if !strings.Contains(runErr.Error(), "needs an existing session") {
+		t.Errorf("error = %q, want it to say a control command needs an existing session", runErr)
+	}
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		t.Fatalf("reading session dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("session dir has %d entries after a refused control command, want 0 (nothing should have been persisted)", len(entries))
+	}
+}
+
 func TestFormatSessions(t *testing.T) {
 	t.Run("empty list yields no output", func(t *testing.T) {
 		if got := formatSessions(nil); got != "" {
