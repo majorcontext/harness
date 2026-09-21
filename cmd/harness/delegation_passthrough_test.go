@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/majorcontext/harness/engine"
 )
 
 // fakeClaudeBinForHarness is the compiled engine/testdata/fakeclaude
@@ -183,5 +185,91 @@ func TestRunCmdSurplusArgOnDelegatedSessionStillRefuses(t *testing.T) {
 		t.Error("fakeclaude invocation log exists — the CLI child was spawned for a command harness itself must refuse")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat invocation log: %v", err)
+	}
+}
+
+// TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged names the
+// failure the other three tests in this file cannot: a RESUMED session
+// whose persisted model is claude-code, resumed under a config whose
+// DEFAULT model is native, must still route an unknown /name (here /cost)
+// to the CLI. runCmd's dispatch checks s.ClaudeCodeDelegated() — the
+// LOADED session's current model (engine.LoadSession: "the last model
+// record wins; Config.Model otherwise") — strictly after resolveSession
+// returns s, precisely so this case works. Reading the CONFIGURED model ref
+// instead (the "obvious" simplification, decided before resolveSession
+// even runs) would see the native default here and refuse /cost with
+// *command.UnknownCommandError, never reaching Session.Prompt. See
+// runCmd's own comment just above its unknownCmd/resolveSession ordering
+// for why the check is deferred.
+//
+// -resume and -continue converge on the same load path: resolveSession
+// (main.go) picks `id` differently (the -r value directly, or the most
+// recent entry from engine.ListSessions for -c) but both then call the
+// identical engine.LoadSession(cfg, id) — the one place a persisted model
+// record is restored. One test against -resume exercises that shared path;
+// a second against -continue would only re-prove the id-selection branch,
+// not this test's mechanism.
+func TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged(t *testing.T) {
+	bin := buildFakeClaudeForHarness(t)
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	// First run: config whose DEFAULT model is claude-code, so the fresh
+	// session it creates persists a claude-code model record. An ordinary
+	// prompt (not a slash command) is enough to commit that turn to disk.
+	writeDelegatedConfig(t, workDir, bin)
+	t.Setenv("FAKE_CLAUDE_MODE", "normal")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", filepath.Join(t.TempDir(), "seed-stdin.log"))
+	var seedErr error
+	captureStdout(t, func() {
+		seedErr = runCmd([]string{"-p", "hello"})
+	})
+	if seedErr != nil {
+		t.Fatalf("seeding delegated session: %v", seedErr)
+	}
+	infos, err := engine.ListSessions(sessDir)
+	if err != nil {
+		t.Fatalf("engine.ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("engine.ListSessions returned %d sessions, want 1", len(infos))
+	}
+	id := infos[0].ID
+
+	// Second run: a DIFFERENT config, same claude-code provider entry (so
+	// the restored model is still routable) but no top-level "model" —
+	// resolves to config.DefaultModel, a native ref. This is what
+	// distinguishes "delegation read from the loaded session" from
+	// "delegation read from config": if the latter drove the check, this
+	// run would see a native default and refuse.
+	nativeConfigPath := filepath.Join(workDir, "native-default-config.json")
+	nativeConfigBody := `{"snapshot_every_records": 0, "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
+	if err := os.WriteFile(nativeConfigPath, []byte(nativeConfigBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARNESS_CONFIG", nativeConfigPath)
+
+	stdinLog := filepath.Join(t.TempDir(), "resume-stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/cost", "-resume", id})
+	})
+	if runErr != nil {
+		t.Fatalf("runCmd: %v", runErr)
+	}
+
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	stdin := string(stdinBytes)
+	if !strings.Contains(stdin, `"content":"/cost"`) {
+		t.Errorf("CLI stdin = %q, want it to contain the original line %q unchanged", stdin, "/cost")
 	}
 }
