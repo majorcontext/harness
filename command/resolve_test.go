@@ -49,6 +49,49 @@ func TestResolveMultiLineIsNotACommand(t *testing.T) {
 	}
 }
 
+// TestResolveRejectsWhitespaceAfterSlash pins rule 4: a line must parse
+// as a command without dropping any text, including whitespace right
+// after the slash. "/ clear" must not silently become "/clear" and fire
+// a destructive frontend command.
+func TestResolveRejectsWhitespaceAfterSlash(t *testing.T) {
+	r := NewRegistry()
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{name: "space after slash", in: "/ clear"},
+		{name: "tab after slash", in: "/\tclear"},
+		{name: "multiple spaces after slash", in: "/  compact 5"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := r.Resolve(tt.in)
+			if !errors.Is(err, ErrNotCommand) {
+				t.Fatalf("Resolve(%q) error = %v, want ErrNotCommand", tt.in, err)
+			}
+			if res.Text != tt.in {
+				t.Errorf("Resolve(%q).Text = %q, want %q", tt.in, res.Text, tt.in)
+			}
+			if res.Spec != nil {
+				t.Errorf("Resolve(%q) returned Spec %+v, want nil", tt.in, res.Spec)
+			}
+		})
+	}
+}
+
+// TestResolveNormalSpacingStillBinds proves the whitespace-after-slash
+// fix left the ordinary single-space path untouched.
+func TestResolveNormalSpacingStillBinds(t *testing.T) {
+	r := NewRegistry()
+	res, err := r.Resolve("/compact 5")
+	if err != nil {
+		t.Fatalf("Resolve(\"/compact 5\") error = %v, want nil", err)
+	}
+	if res.Args["keep_turns"] != 5 {
+		t.Errorf("Args[%q] = %#v, want 5", "keep_turns", res.Args["keep_turns"])
+	}
+}
+
 func TestResolveTable(t *testing.T) {
 	r := NewRegistry()
 	tests := []struct {

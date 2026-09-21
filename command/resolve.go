@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // ErrNotCommand reports that a line is ordinary text. Resolution.Text
@@ -47,7 +48,11 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 	if !strings.HasPrefix(line, "/") {
 		return Resolution{Text: line}, ErrNotCommand
 	}
-	name, rest, _ := strings.Cut(strings.TrimSpace(line[1:]), " ")
+	body := line[1:]
+	if body != "" && unicode.IsSpace(rune(body[0])) {
+		return Resolution{Text: line}, ErrNotCommand
+	}
+	name, rest, _ := strings.Cut(body, " ")
 	if name == "" {
 		return Resolution{Text: line}, ErrNotCommand
 	}
