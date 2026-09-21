@@ -79,6 +79,9 @@ func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolut
 	case command.OpCompact:
 		var opts engine.CompactOptions
 		if n, ok := res.Args["keep_turns"].(int); ok {
+			if n <= 0 {
+				return fmt.Errorf("keep_turns must be >= 1")
+			}
 			opts.KeepTurns = n
 		}
 		result, err := s.Compact(ctx, opts)

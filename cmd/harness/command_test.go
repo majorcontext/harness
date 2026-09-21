@@ -92,6 +92,34 @@ func TestCompactSkipIsAnError(t *testing.T) {
 	}
 }
 
+// TestCompactRejectsNonPositiveKeepTurns pins that run mode's /compact
+// gate matches POST /session/{id}/compact's (server/handlers.go:3817-3818):
+// a non-positive keep_turns is a request error, not a silent fallback.
+// Session.effectiveKeepTurns (engine/compact.go:233-241) treats keep <= 0
+// as "use the configured default", so without this gate /compact 0 and
+// /compact -1 would each quietly perform a DIFFERENT compaction than the
+// one requested instead of failing. s is nil: a rejected keep_turns must
+// never reach Session.Compact.
+func TestCompactRejectsNonPositiveKeepTurns(t *testing.T) {
+	spec, ok := command.NewRegistry().Lookup("compact")
+	if !ok {
+		t.Fatal("compact not in registry")
+	}
+	for _, n := range []int{0, -1} {
+		res := command.Resolution{
+			Kind: command.KindControl, Spec: spec, Op: command.OpCompact,
+			Args: map[string]any{"keep_turns": n},
+		}
+		err := dispatchCommand(t.Context(), nil, res)
+		if err == nil {
+			t.Fatalf("dispatchCommand(keep_turns=%d) returned nil, want an error", n)
+		}
+		if !strings.Contains(err.Error(), "keep_turns must be >= 1") {
+			t.Errorf("dispatchCommand(keep_turns=%d) error = %q, want it to say keep_turns must be >= 1", n, err)
+		}
+	}
+}
+
 // TestSetModelRunModeRejectsUnconfiguredProvider pins that /model in run
 // mode runs the same two gates handleSetModel runs before SetModel
 // (server/handlers.go): ModelSupported and CheckModel. Session.SetModel
