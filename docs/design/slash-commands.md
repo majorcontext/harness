@@ -297,9 +297,9 @@ reason. Silence is the failure to avoid.
 - An HTTP client (the console, the SDK) reads `method` and `path` from
   `GET /commands` and makes the request.
 - `cmd/harness` maps `Op` to a method call on the session it holds.
-  `harness run -cont -p "/compact"` compacts the continued session with no
-  server present.
-- `harness run` with neither `-resume` nor `-cont` has no prior history. A
+  `harness run -continue -p "/compact"` compacts the continued session with
+  no server present.
+- `harness run` with neither `-resume` nor `-continue` has no prior history. A
   control command there reports a clear error.
 
 Every error a route returns today becomes the command's error in serve
@@ -440,7 +440,7 @@ box. Wrapping is not owning, and it is out of scope here.
 2. `server` dispatcher: the `Op`-to-route map, `GET /commands`, and the
    `server/openapi.yaml` entry.
 3. `cmd/harness` dispatcher: `Op` to a method call on the held session,
-   for `-resume` and `-cont` runs.
+   for `-resume` and `-continue` runs.
 4. Console menu: `/` in the input area opens a menu built from
    `GET /commands`. This stage lands in `meetneptune/boxes`, not here.
 5. `.agents/commands/*.md` discovery, `commands_dirs`, substitution, and
