@@ -97,6 +97,83 @@ components:
             expected in production; a defensive default).
           example: "2024-06-01T12:00:00Z"
 
+    CommandArg:
+      type: object
+      description: One positional argument a command's Args binds by name.
+      required: [name, type]
+      properties:
+        name:
+          type: string
+          description: The key a dispatcher reads out of the bound argument map.
+        type:
+          type: string
+          enum: [string, int, rest]
+          description: >
+            The argument's value type. "rest" takes the remainder of the
+            line as one string, and only the command's final arg may use it.
+        optional:
+          type: boolean
+          description: >
+            Whether the argument may be omitted. Omitted (false) means the
+            argument is required.
+
+    Command:
+      type: object
+      description: >
+        One entry in the slash-command registry. A control command
+        (kind "control") carries op, method, and path. A frontend command
+        (kind "frontend") carries none of the three: the client owns that
+        action. See docs/design/slash-commands.md §6.
+      required: [name, kind, summary, category]
+      properties:
+        name:
+          type: string
+          description: The canonical command name, typed after the leading slash.
+        aliases:
+          type: array
+          items: { type: string }
+          description: Other names that resolve to this same command.
+        kind:
+          type: string
+          enum: [control, frontend, prompt]
+          description: >
+            What the name resolves to. "control" runs an existing session
+            operation. "frontend" changes which session the user talks to,
+            with no op or route of its own. "prompt" appends one user
+            message; reserved, no v1 entry uses it.
+        op:
+          type: string
+          description: >
+            The abstract session operation this command runs. Present only
+            for kind "control".
+        summary:
+          type: string
+          description: A one-line description for a command menu.
+        arg_hint:
+          type: string
+          description: A short human-readable hint for this command's arguments.
+        args:
+          type: array
+          items: { $ref: "#/components/schemas/CommandArg" }
+          description: This command's positional arguments, in binding order.
+        category:
+          type: string
+          enum: [session, model, info, frontend]
+          description: Groups commands in a menu.
+        destructive:
+          type: boolean
+          description: Whether running this command discards state a user may want.
+        method:
+          type: string
+          description: >
+            The HTTP method this dispatcher answers the op with. Present
+            only for kind "control".
+        path:
+          type: string
+          description: >
+            The HTTP path (with `{id}` path parameters) this dispatcher
+            answers the op with. Present only for kind "control".
+
     Session:
       type: object
       required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued, subscription_usage]
@@ -2479,8 +2556,7 @@ paths:
                 properties:
                   commands:
                     type: array
-                    items:
-                      type: object
+                    items: { $ref: "#/components/schemas/Command" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /session:
