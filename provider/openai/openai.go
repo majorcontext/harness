@@ -421,6 +421,11 @@ type stream struct {
 	visibleOutput    bool
 	responseFrames   int
 
+	// A consumer joins consecutive reasoning deltas into one block, so
+	// reasoning that resumes under a different item needs a visible break.
+	reasoningItem     int
+	reasoningStreamed bool
+
 	queue []provider.Event
 	done  bool
 }
@@ -708,8 +713,15 @@ func (s *stream) handle(name string, data []byte) error {
 			it.kind = "reasoning"
 		}
 		it.text.WriteString(ev.Delta)
+		// The break belongs in the stream only: each item keeps its own part.
+		delta := ev.Delta
+		if s.reasoningStreamed && ev.OutputIndex != s.reasoningItem {
+			delta = "\n\n" + delta
+		}
+		s.reasoningItem = ev.OutputIndex
+		s.reasoningStreamed = true
 		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta})
 
 	case "response.output_item.done":
 		var ev struct {

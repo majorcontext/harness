@@ -3,9 +3,11 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -286,5 +288,64 @@ func TestStreamNoAPIKey(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "API key") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// One reasoning item per summary headline, separated on the wire by
+// output_index alone, reaches a consumer that joins consecutive deltas as
+// "**A.****B.**", which no longer parses as Markdown emphasis.
+func TestStreamReasoningItemsStayApart(t *testing.T) {
+	const (
+		wantFirst  = "**Awaiting destination version.**"
+		wantSecond = "**Checking deployment prerequisites**"
+	)
+	item := func(id, summary string) string {
+		return fmt.Sprintf(`{"id":%q,"type":"reasoning","summary":[{"type":"summary_text","text":%q}],"encrypted_content":"ENC"}`, id, summary)
+	}
+	fixture := strings.Join([]string{
+		sse("response.created", `{"type":"response.created","response":{"id":"resp_3"}}`),
+		sse("response.reasoning_summary_text.delta", `{"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"**Awaiting destination "}`),
+		sse("response.reasoning_summary_text.delta", `{"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"version.**"}`),
+		sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":`+item("rs_1", wantFirst)+`}`),
+		sse("response.reasoning_summary_text.delta", `{"type":"response.reasoning_summary_text.delta","output_index":1,"delta":`+strconv.Quote(wantSecond)+`}`),
+		sse("response.output_item.done", `{"type":"response.output_item.done","output_index":1,"item":`+item("rs_2", wantSecond)+`}`),
+		sse("response.completed", `{"type":"response.completed","response":{"id":"resp_3","usage":{"input_tokens":4,"output_tokens":6}}}`),
+	}, "")
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, fixture) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "gpt-5"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ship it"}}}},
+		MaxTokens: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var streamed string
+	var done provider.Event
+	for _, ev := range collect(t, s) {
+		switch ev.Type {
+		case provider.EventReasoningDelta:
+			streamed += ev.Text
+		case provider.EventDone:
+			done = ev
+		}
+	}
+	if want := wantFirst + "\n\n" + wantSecond; streamed != want {
+		t.Errorf("streamed reasoning = %q, want %q", streamed, want)
+	}
+	// Each item keeps its own part, so neither one carries the break.
+	parts := done.Message.Parts
+	if len(parts) != 2 {
+		t.Fatalf("parts = %+v", parts)
+	}
+	for i, want := range []string{wantFirst, wantSecond} {
+		if rp, ok := parts[i].(*message.Reasoning); !ok || rp.Text != want {
+			t.Errorf("part %d = %+v, want reasoning %q", i, parts[i], want)
+		}
 	}
 }
