@@ -157,22 +157,38 @@ set to method calls instead — see section 5.
 
 | Command | Method and path (serve) | Args |
 |---|---|---|
-| `/compact` | `POST /session/{id}/compact` | `keep_turns`, `model` |
+| `/compact` | `POST /session/{id}/compact` | `keep_turns` |
 | `/model` | `POST /session/{id}/model` | `model` |
 | `/thinking` | `POST /session/{id}/thinking` | `effort` |
 | `/tier` | `POST /session/{id}/service-tier` | `service_tier` |
 | `/abort` | `POST /session/{id}/abort` | — |
 | `/goal` | `POST /session/{id}/goal` | condition |
-| `/goal clear` | `DELETE /session/{id}/goal` | — |
+| `/goal-clear` | `DELETE /session/{id}/goal` | — |
 | `/queue` | `GET /session/{id}/queue` | — |
-| `/queue clear` | `DELETE /session/{id}/queue` | — |
+| `/queue-clear` | `DELETE /session/{id}/queue` | — |
 | `/status` | `GET /session/{id}` | — |
 | `/processes` | `GET /process` | — |
 | `/mcp` | `POST /session/{id}/mcp` | — |
-| `/help` | none — reads the registry | — |
 
 `/model` completes from `modelmeta`. The catalog is static, so completion
 costs no network call.
+
+This table matches the shipped registry (`command/registry.go`), which
+differs from the table an earlier draft of this design carried, in three
+ways:
+
+- `/goal clear` and `/queue clear` shipped as `/goal-clear` and
+  `/queue-clear`. A space-separated subcommand needs a second token in the
+  name-and-rest split that section 3 does not otherwise require. A hyphenated
+  name resolves through the same single-token lookup as every other command.
+- `/compact` takes `keep_turns` only. A one-shot `model` override on a
+  single compact call adds a second way to change the session's model,
+  beside `/model` itself. `/model` stays the one place a model change
+  happens.
+- `/help` did not ship. `GET /commands` already serves the same registry a
+  `/help` command would read, so a frontend can build its own help surface
+  from that response. Whether a frontend ALSO wants a `/help` command that
+  renders it inline stays open — see Deferred decisions.
 
 These fx commands stay out: `/login`, `/logout`, `/credits`,
 `/permissions`, `/allowlist`, `/undo`, `/statusline`, `/notifications`,
@@ -249,10 +265,22 @@ two composition points, and each maps `Op` its own way.
 | Run slot | No contention to arbitrate | `claimForPrompt` |
 | `OpCompact` maps to | `Session.Compact` | `POST /session/{id}/compact` |
 
-A direct `Session.Compact` call from `cmd/harness` is safe for exactly the
-reason section 5 opens with: the engine carries the authoritative guards.
-The two server-only concerns do not exist in run mode. There is one
-session, and it is a root.
+A direct `Session.Compact` call from `cmd/harness` is safe because the two
+server-only concerns above do not exist in run mode — there is one
+session, and it is a root — AND because `Session.Compact` itself carries
+the authoritative Claude Code delegation guard (`engine/compact.go`): the
+setter refuses on its own, so a caller needs no separate check before it
+calls Compact.
+
+Not every setter guards itself this way. `Session.SetModel` has no
+internal guard at all; it persists unconditionally. `Session.ModelSupported`
+and `Session.CheckModel` are checks the CALLER must run before the swap,
+not guards inside the setter — `handleSetModel` (`server/handlers.go`) runs
+both before it calls `SetModel`, and a run-mode dispatcher must run the
+same two checks before its own call, in the same order, or it durably
+persists a swap the server would have rejected. Read each setter's own
+guarantee before calling it directly; do not assume the engine guards
+every mutation for you.
 
 This is why `Resolution` names an `Op` and not a route. A route is one
 dispatcher's answer, not the operation.
