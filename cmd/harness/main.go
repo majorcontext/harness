@@ -657,10 +657,13 @@ func runCmd(args []string) error {
 	// An unknown /name is the one exception: harness owns no route for it,
 	// but a session delegated to the Claude Code CLI has its own slash
 	// vocabulary (/cost, /context, ...) this line might name instead.
-	// Whether s is delegated is not decidable here — a resumed session's
-	// model comes from its persisted log, not the configured ref — so an
-	// unknown command defers its refusal past resolveSession below instead
-	// of returning now. unknownCmd is nil for every other outcome.
+	// Whether that applies is decidable here for a FRESH run — its
+	// effective model is exactly the configured one below, no persisted
+	// record to disagree — but not for a resumed or continued run, whose
+	// model comes from its persisted log instead. See the fresh-run check
+	// beside model resolution below, and the deferred dispatch further
+	// down for the resumed/continued case. unknownCmd is nil for every
+	// other outcome.
 	var res command.Resolution
 	var resErr error
 	var unknownCmd *command.UnknownCommandError
@@ -697,6 +700,18 @@ func runCmd(args []string) error {
 	model, err := cfg.ResolveModel(opts.model)
 	if err != nil {
 		return err
+	}
+	// A fresh run (neither -resume nor -continue) has no persisted session
+	// to disagree with model above: it IS the effective model this run
+	// will use. Decide the deferred unknown-command question now, before
+	// resolveSession below builds and prewarms a session for a run that
+	// was always going to be refused — restoring 5a5105b's guard for the
+	// one case this refusal can actually decide early. A resumed or
+	// continued run still defers past resolveSession (see the dispatch
+	// switch below): its persisted model can disagree with model here,
+	// and only s itself, once loaded, knows which one won.
+	if unknownCmd != nil && opts.resume == "" && !opts.cont && model.Provider != claudecode.Family {
+		return resErr
 	}
 	workDir, err := os.Getwd()
 	if err != nil {

@@ -70,6 +70,51 @@ func writeDelegatedConfig(t *testing.T, dir, bin string) {
 	t.Setenv("HARNESS_CONFIG", configPath)
 }
 
+// TestRunCmdUnknownCommandFreshNativeBuildsNoSession is the regression test
+// for the finding pinned to f6da901's deferral: a FRESH run (neither
+// -resume nor -continue) has no persisted session to disagree with the
+// configured model, so a native default must refuse an unknown /name
+// immediately, before resolveSession ever builds and prewarms a session for
+// a run that was always going to be refused (5a5105b's original guard).
+//
+// The refusal error alone cannot prove that: it is identical in the broken
+// version (defer past resolveSession unconditionally, then refuse in the
+// dispatch switch once s.ClaudeCodeDelegated() is false) and the fixed one
+// (refuse before resolveSession runs at all). So this configures a plugin
+// naming a binary that does not exist: buildPluginHost's manifest probe
+// (cmd/harness/plugins.go, via plugin.ResolveExecutable) fails loudly and
+// SYNCHRONOUSLY the moment it runs, and it sits textually between the
+// fresh-run delegation check and resolveSession in runCmd. If the deferral
+// ever widens back to "always defer," runCmd reaches buildPluginHost and
+// returns ITS error instead of the unknown-command one — a different,
+// checkable failure the plain error-message assertion by itself would miss.
+func TestRunCmdUnknownCommandFreshNativeBuildsNoSession(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	configPath := filepath.Join(workDir, "config.json")
+	body := `{"plugins": [{"name": "canary", "command": ["no-such-plugin-binary-xyz"]}]}`
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARNESS_CONFIG", configPath)
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/nope"})
+	})
+	if runErr == nil {
+		t.Fatal("runCmd returned nil for an unknown command on a fresh, native session")
+	}
+	if !strings.Contains(runErr.Error(), `unknown command "nope"`) {
+		t.Errorf(`error = %q, want the unknown-command refusal — got a different error, which means runCmd built a session (and its plugin host) before refusing`, runErr)
+	}
+}
+
 // TestRunCmdUnknownCommandNonDelegatedStillErrors red-verifies that the
 // delegation exception does not widen the general case: on a session that
 // does NOT route to the Claude Code CLI (here, the default anthropic
