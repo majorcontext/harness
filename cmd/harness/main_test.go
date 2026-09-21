@@ -355,6 +355,52 @@ func TestRunCmdUnsupportedOpReportsUnsupportedFirst(t *testing.T) {
 	}
 }
 
+// TestRunCmdRefusedCommandNeverLoadsConfig pins that a control command
+// refused for lacking -resume/-continue fails before runCmd does ANY of
+// the work building a session requires, not merely before that session
+// gets persisted. resolveSession builds a fresh engine.Session that starts
+// asynchronous startup prewarm (engine/startup_prewarm.go), which can read
+// disk, invoke hooks, connect MCP dependencies, and use the network for an
+// eligible provider — work a refused run must never start.
+//
+// loadConfigLogged, which runs strictly before resolveSession, always
+// emits exactly one slog line (logConfigSummary): "no config file found"
+// here, since HARNESS_CONFIG is unset and workDir holds none. Its absence
+// from stderr is the signal that the refusal returned before that call,
+// and therefore before resolveSession and prewarm ever ran.
+func TestRunCmdRefusedCommandNeverLoadsConfig(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_CONFIG", "")
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	var runErr error
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			runErr = runCmd([]string{"-p", "/thinking high"})
+		})
+	})
+	if runErr == nil {
+		t.Fatal("runCmd returned nil for a control command with neither -resume nor -cont")
+	}
+	if !strings.Contains(runErr.Error(), "needs an existing session") {
+		t.Errorf("error = %q, want it to say a control command needs an existing session", runErr)
+	}
+	if strings.Contains(stderr, "no config file found") || strings.Contains(stderr, `"config:`) {
+		t.Errorf("stderr = %q, want no config-load log line: a refused command must return before loadConfigLogged runs", stderr)
+	}
+	entries, err := os.ReadDir(sessDir)
+	if err != nil {
+		t.Fatalf("reading session dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("session dir has %d entries after a refused control command, want 0", len(entries))
+	}
+}
+
 func TestFormatSessions(t *testing.T) {
 	t.Run("empty list yields no output", func(t *testing.T) {
 		if got := formatSessions(nil); got != "" {

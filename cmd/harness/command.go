@@ -53,15 +53,27 @@ func compactSkipMessage(reason string) string {
 	}
 }
 
-// dispatchCommand performs one resolved control command against the
-// session a run holds. Session resolution is not a concern here: a run
-// has exactly one session, and it is a root.
-func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolution) error {
+// checkRunModeSupport reports whether harness run can act on res at all: a
+// frontend command owns no route here, and an Op with no true entry in
+// runModeOps has no dispatch case below. It performs no I/O, so a caller
+// can run it before a session exists to refuse a command that would fail
+// anyway.
+func checkRunModeSupport(res command.Resolution) error {
 	if res.Kind == command.KindFrontend {
 		return fmt.Errorf("/%s is a frontend command; harness run does not own the session pointer", resName(res))
 	}
 	if supported, known := runModeOps[res.Op]; !known || !supported {
 		return fmt.Errorf("/%s is not available in this mode: harness run has no server to perform %q", resName(res), res.Op)
+	}
+	return nil
+}
+
+// dispatchCommand performs one resolved control command against the
+// session a run holds. Session resolution is not a concern here: a run
+// has exactly one session, and it is a root.
+func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolution) error {
+	if err := checkRunModeSupport(res); err != nil {
+		return err
 	}
 	switch res.Op {
 	case command.OpCompact:

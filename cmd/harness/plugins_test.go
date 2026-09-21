@@ -375,6 +375,31 @@ func captureStdout(t *testing.T, fn func()) string {
 	return out
 }
 
+// captureStderr redirects os.Stderr for the duration of fn and returns what
+// was written. Used to observe (or confirm the absence of) the slog JSON
+// lines runCmd and serveCmd emit there.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		io.Copy(&buf, r) //nolint:errcheck
+		done <- buf.String()
+	}()
+	fn()
+	os.Stderr = orig
+	w.Close()
+	out := <-done
+	r.Close()
+	return out
+}
+
 // TestProbeSpecEnvAndDirReachProbedProcess verifies that probing
 // use the full plugin.Spec (Env, Dir, Config), not just the bare command, so
 // the cached manifest matches what the live, fully-configured plugin
