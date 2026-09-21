@@ -72,6 +72,20 @@ func (r *Registry) Resolve(line string) (Resolution, error) {
 	return Resolution{Kind: spec.Kind, Spec: spec, Op: spec.Op, Args: args}, nil
 }
 
+// cutSpace splits s at the first Unicode whitespace rune, mirroring Resolve's
+// own name/rest split (the IndexFunc/DecodeRuneInString pair above) instead
+// of strings.Cut's ASCII-only " ". Without this, a folded non-ASCII space
+// (NBSP, an ideographic space) survives into a positional field bindArgs
+// binds verbatim, splitting on the wrong boundary or not at all.
+func cutSpace(s string) (field, rest string) {
+	i := strings.IndexFunc(s, unicode.IsSpace)
+	if i < 0 {
+		return s, ""
+	}
+	_, size := utf8.DecodeRuneInString(s[i:])
+	return s[:i], s[i+size:]
+}
+
 // bindArgs binds the remainder of a line to a Spec's positional
 // arguments. Rule 1 lives here: leftover input is an error. typedName
 // is the name (or alias) the user actually wrote, used in error text
@@ -97,7 +111,7 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 			return args, nil
 		}
 		var field string
-		field, rest, _ = strings.Cut(rest, " ")
+		field, rest = cutSpace(rest)
 		rest = strings.TrimSpace(rest)
 		if field == "" {
 			if a.Optional {

@@ -199,6 +199,58 @@ func TestResolveTable(t *testing.T) {
 	}
 }
 
+// TestBindArgsSplitsOnUnicodeWhitespace pins that bindArgs splits a
+// positional argument on any Unicode whitespace rune, the same rule
+// Resolve's own name/rest split already uses (rule 4). Before this fix,
+// bindArgs cut only on an ASCII " " (strings.Cut(rest, " ")), so a folded
+// non-ASCII space (NBSP, an ideographic space) from a mobile keyboard or a
+// paste survived into a single-value field whole instead of separating two
+// tokens, with no surplus error. /thinking's one ArgString argument makes
+// the second token a surplus that must be rejected once the split is
+// correct.
+func TestBindArgsSplitsOnUnicodeWhitespace(t *testing.T) {
+	r := NewRegistry()
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{name: "NBSP", in: "/thinking high\u00A0junk"},
+		{name: "ideographic space", in: "/thinking high\u3000junk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := r.Resolve(tt.in)
+			if err == nil {
+				t.Fatalf("Resolve(%q) = %+v, want a surplus-input error", tt.in, res)
+			}
+			if errors.Is(err, ErrNotCommand) {
+				t.Fatalf("Resolve(%q) error = %v, want a surplus-input error, not ErrNotCommand", tt.in, err)
+			}
+			if res.Op != "" || res.Spec != nil {
+				t.Errorf("Resolve(%q) returned a dispatchable resolution %+v; nothing must run", tt.in, res)
+			}
+		})
+	}
+}
+
+// TestResolveArgRestKeepsInternalWhitespace pins that fixing bindArgs's
+// positional split (TestBindArgsSplitsOnUnicodeWhitespace) leaves an
+// ArgRest argument untouched: "/goal a b  c" must bind the remainder
+// verbatim, including the internal double space, because ArgRest returns
+// before bindArgs' per-field split ever runs.
+func TestResolveArgRestKeepsInternalWhitespace(t *testing.T) {
+	r := NewRegistry()
+	const in = "/goal a b  c"
+	res, err := r.Resolve(in)
+	if err != nil {
+		t.Fatalf("Resolve(%q) error = %v, want nil", in, err)
+	}
+	want := "a b  c"
+	if got := res.Args["condition"]; got != want {
+		t.Errorf("Resolve(%q) Args[condition] = %q, want %q", in, got, want)
+	}
+}
+
 // TestResolveUnknownIsNotText pins that an unknown /name never reaches the
 // model as literal text.
 func TestResolveUnknownIsNotText(t *testing.T) {
