@@ -436,10 +436,24 @@ func (s *Session) startSnapshotLocked() {
 }
 
 // waitSnapshots blocks until every snapshot write this session started has
-// finished. It is what a shutdown path (and a test that wants a settled
-// disk) uses; it is NOT a barrier a new snapshot cannot start behind.
+// finished. A shutdown path that must leave the disk settled joins here
+// (cmd/harness's runCmd, through WaitSnapshots), and so does a test that
+// reads or removes the session directory; it is NOT a barrier a new
+// snapshot cannot start behind.
 func (s *Session) waitSnapshots() {
 	s.snapshotWG.Wait()
+}
+
+// WaitSnapshots is waitSnapshots exported for callers outside this package.
+// Two of them exist. cmd/harness's runCmd joins the checkpoint its one-shot
+// run just scheduled before the process exits. A test outside this package
+// joins it before it reads the session directory or lets t.TempDir() remove
+// it: the write runs in a goroutine no other exported call waits for, so an
+// unjoined one keeps creating files under a directory the cleanup is
+// already deleting, and the removal fails with "directory not empty".
+// Logic lives in waitSnapshots; this is a thin wrapper, not a second copy.
+func (s *Session) WaitSnapshots() {
+	s.waitSnapshots()
 }
 
 // captureSnapshotLocked builds the snapshot value for the state as it
