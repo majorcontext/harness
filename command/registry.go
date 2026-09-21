@@ -14,7 +14,7 @@ func builtins() []*Spec {
 		{
 			Name: "abort", Kind: KindControl, Op: OpAbort,
 			Summary: "Stop the running turn", Category: CategorySession,
-			Destructive: true, Source: "builtin",
+			Destructive: true, AvailableDuringTask: true, Source: "builtin",
 		},
 		{
 			Name: "compact", Kind: KindControl, Op: OpCompact,
@@ -27,19 +27,21 @@ func builtins() []*Spec {
 			Name: "goal", Kind: KindControl, Op: OpSetGoal,
 			Summary: "Pursue a goal until its condition holds",
 			ArgHint: "<condition>", Category: CategorySession,
-			Args:   []ArgSpec{{Name: "condition", Type: ArgRest}},
-			Source: "builtin",
+			Args:                []ArgSpec{{Name: "condition", Type: ArgRest}},
+			AvailableDuringTask: true,
+			Source:              "builtin",
 		},
 		{
 			Name: "goal-clear", Kind: KindControl, Op: OpClearGoal,
 			Summary: "Stop pursuing the current goal", Category: CategorySession,
-			Source: "builtin",
+			AvailableDuringTask: true,
+			Source:              "builtin",
 		},
 		{
 			Name: "model", Kind: KindControl, Op: OpSetModel,
 			Summary: "Change the session model", ArgHint: "<provider/model>",
 			Args:     []ArgSpec{{Name: "model", Type: ArgString}},
-			Category: CategoryModel, Source: "builtin",
+			Category: CategoryModel, AvailableDuringTask: true, Source: "builtin",
 		},
 		{
 			Name: "new", Aliases: []string{"clear"}, Kind: KindFrontend,
@@ -49,17 +51,19 @@ func builtins() []*Spec {
 		{
 			Name: "processes", Kind: KindControl, Op: OpProcessList,
 			Summary: "List managed processes", Category: CategoryInfo,
-			Source: "builtin",
+			AvailableDuringTask: true,
+			Source:              "builtin",
 		},
 		{
 			Name: "queue", Kind: KindControl, Op: OpQueueList,
 			Summary: "Show queued prompts", Category: CategorySession,
-			Source: "builtin",
+			AvailableDuringTask: true,
+			Source:              "builtin",
 		},
 		{
 			Name: "queue-clear", Kind: KindControl, Op: OpQueueClear,
 			Summary: "Drop every queued prompt", Category: CategorySession,
-			Destructive: true, Source: "builtin",
+			Destructive: true, AvailableDuringTask: true, Source: "builtin",
 		},
 		{
 			Name: "quit", Kind: KindFrontend,
@@ -75,19 +79,20 @@ func builtins() []*Spec {
 		{
 			Name: "status", Kind: KindControl, Op: OpStatus,
 			Summary: "Show the session state", Category: CategoryInfo,
-			Source: "builtin",
+			AvailableDuringTask: true,
+			Source:              "builtin",
 		},
 		{
 			Name: "thinking", Kind: KindControl, Op: OpSetThinking,
 			Summary: "Set the reasoning effort", ArgHint: "<effort>",
 			Args:     []ArgSpec{{Name: "effort", Type: ArgString}},
-			Category: CategoryModel, Source: "builtin",
+			Category: CategoryModel, AvailableDuringTask: true, Source: "builtin",
 		},
 		{
 			Name: "tier", Kind: KindControl, Op: OpSetServiceTier,
 			Summary: "Set the provider service tier", ArgHint: "<tier>",
 			Args:     []ArgSpec{{Name: "service_tier", Type: ArgString}},
-			Category: CategoryModel, Source: "builtin",
+			Category: CategoryModel, AvailableDuringTask: true, Source: "builtin",
 		},
 	}
 }

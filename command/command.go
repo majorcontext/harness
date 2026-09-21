@@ -67,14 +67,20 @@ const (
 
 // Spec describes one command.
 type Spec struct {
-	Name        string
-	Aliases     []string
-	Kind        Kind
-	Op          Op
-	Summary     string
-	ArgHint     string
-	Args        []ArgSpec
-	Category    Category
-	Destructive bool
-	Source      string
+	Name     string
+	Aliases  []string
+	Kind     Kind
+	Op       Op
+	Summary  string
+	ArgHint  string
+	Args     []ArgSpec
+	Category Category
+	// AvailableDuringTask reports whether the operation applies while a
+	// turn is in flight. Only a route that claims the run slot
+	// (server.claimForPrompt) cannot, so a client cannot derive this from
+	// the command's shape — it is route behavior, discoverable otherwise
+	// only by trying and reading the conflict.
+	AvailableDuringTask bool
+	Destructive         bool
+	Source              string
 }

@@ -35,17 +35,22 @@ type commandArgJSON struct {
 }
 
 type commandEntryJSON struct {
-	Name        string           `json:"name"`
-	Aliases     []string         `json:"aliases,omitempty"`
-	Kind        string           `json:"kind"`
-	Op          string           `json:"op,omitempty"`
-	Summary     string           `json:"summary"`
-	ArgHint     string           `json:"arg_hint,omitempty"`
-	Args        []commandArgJSON `json:"args,omitempty"`
-	Category    string           `json:"category"`
-	Destructive bool             `json:"destructive,omitempty"`
-	Method      string           `json:"method,omitempty"`
-	Path        string           `json:"path,omitempty"`
+	Name     string           `json:"name"`
+	Aliases  []string         `json:"aliases,omitempty"`
+	Kind     string           `json:"kind"`
+	Op       string           `json:"op,omitempty"`
+	Summary  string           `json:"summary"`
+	ArgHint  string           `json:"arg_hint,omitempty"`
+	Args     []commandArgJSON `json:"args,omitempty"`
+	Category string           `json:"category"`
+	// AvailableDuringTask is a pointer so a frontend entry omits it
+	// entirely, like op/method/path: the field describes route behavior
+	// and a frontend command has no route. A client reading an older
+	// server that omits it for a CONTROL command must assume false.
+	AvailableDuringTask *bool  `json:"available_during_task,omitempty"`
+	Destructive         bool   `json:"destructive,omitempty"`
+	Method              string `json:"method,omitempty"`
+	Path                string `json:"path,omitempty"`
 }
 
 // handleCommands returns the resolved registry. A frontend renders its
@@ -69,6 +74,8 @@ func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 		}
 		if rt, ok := opRoutes[spec.Op]; ok {
 			e.Method, e.Path = rt.method, rt.path
+			avail := spec.AvailableDuringTask
+			e.AvailableDuringTask = &avail
 		}
 		out = append(out, e)
 	}

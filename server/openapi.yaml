@@ -163,6 +163,12 @@ components:
         destructive:
           type: boolean
           description: Whether running this command discards state a user may want.
+        available_during_task:
+          type: boolean
+          description: |
+            Whether the operation applies while a turn is in flight.
+            Present on a control command only. A client reading a server
+            that omits it for a control command must assume false.
         method:
           type: string
           description: >
