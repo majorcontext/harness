@@ -8,8 +8,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/provider/claudecode"
 )
 
 // fakeClaudeBinForHarness is the compiled engine/testdata/fakeclaude
@@ -316,5 +318,145 @@ func TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged(t *testing.T
 	stdin := string(stdinBytes)
 	if !strings.Contains(stdin, `"content":"/cost"`) {
 		t.Errorf("CLI stdin = %q, want it to contain the original line %q unchanged", stdin, "/cost")
+	}
+}
+
+// TestRunCmdUnknownCommandResumedExplicitNativeModelRefusesNoModelPersist
+// is the regression for the finding on this branch's second round:
+// resolveSession's own doc comment says an explicit -model on resume wins
+// over the persisted record via SetModel, "which also persists a model
+// record" — so a naive defer-every-resumed-run guard would let an unknown
+// command that is going to be REFUSED reach resolveSession first, and
+// SetModel would durably overwrite the session's persisted model before
+// the refusal ever runs. The refusal error alone cannot prove that (it is
+// identical whether or not the record was written), so this reloads the
+// session from disk afterward and asserts the persisted model is
+// byte-for-byte unchanged, not just that an error came back.
+func TestRunCmdUnknownCommandResumedExplicitNativeModelRefusesNoModelPersist(t *testing.T) {
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_CONFIG", "")
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	base := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+	id := "ses_4444444444444444"
+	writeDelegatedSessionFile(t, sessDir, id, base)
+
+	cfg := engine.Config{SessionDir: sessDir}
+	before, err := engine.LoadSession(cfg, id)
+	if err != nil {
+		t.Fatalf("LoadSession before refusal: %v", err)
+	}
+	if before.Model().Provider != claudecode.Family {
+		t.Fatalf("seed model provider = %q, want %q", before.Model().Provider, claudecode.Family)
+	}
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/nope", "-resume", id, "-model", "anthropic/claude-3-5-sonnet-20241022"})
+	})
+	if runErr == nil {
+		t.Fatal("runCmd returned nil for an unknown command with an explicit native -model on resume")
+	}
+	if !strings.Contains(runErr.Error(), `unknown command "nope"`) {
+		t.Errorf("error = %q, want the unknown-command refusal", runErr)
+	}
+
+	after, err := engine.LoadSession(cfg, id)
+	if err != nil {
+		t.Fatalf("LoadSession after refusal: %v", err)
+	}
+	if got, want := after.Model(), before.Model(); got != want {
+		t.Errorf("session model = %v after a refused command, want unchanged %v (a refusal must not persist a model record)", got, want)
+	}
+}
+
+// TestRunCmdUnknownCommandResumedExplicitDelegatedModelReachesPromptUnchanged
+// proves the other half of the same generalized condition: an explicit
+// -model naming the Claude Code family on a resumed run must still pass an
+// unknown /name through to the CLI, exactly like the implicit
+// (persisted-model) case TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged
+// already covers. The second run's config default is native — only the
+// explicit -model flag makes this route delegated — so this also proves
+// the flag, not config, decides.
+func TestRunCmdUnknownCommandResumedExplicitDelegatedModelReachesPromptUnchanged(t *testing.T) {
+	bin := buildFakeClaudeForHarness(t)
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	// Seed run: config default is claude-code, so the fresh session it
+	// creates persists a claude-code model record.
+	writeDelegatedConfig(t, workDir, bin)
+	t.Setenv("FAKE_CLAUDE_MODE", "normal")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", filepath.Join(t.TempDir(), "seed-stdin.log"))
+	var seedErr error
+	captureStdout(t, func() {
+		seedErr = runCmd([]string{"-p", "hello"})
+	})
+	if seedErr != nil {
+		t.Fatalf("seeding delegated session: %v", seedErr)
+	}
+	infos, err := engine.ListSessions(sessDir)
+	if err != nil {
+		t.Fatalf("engine.ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("engine.ListSessions returned %d sessions, want 1", len(infos))
+	}
+	id := infos[0].ID
+
+	// Second run: a native-default config (no top-level "model", so
+	// cfg.ResolveModel would otherwise pick a native default) but with an
+	// explicit -model naming the claude-code family.
+	nativeConfigPath := filepath.Join(workDir, "native-default-config.json")
+	nativeConfigBody := `{"snapshot_every_records": 0, "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
+	if err := os.WriteFile(nativeConfigPath, []byte(nativeConfigBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HARNESS_CONFIG", nativeConfigPath)
+
+	stdinLog := filepath.Join(t.TempDir(), "resume-stdin.log")
+	t.Setenv("FAKE_CLAUDE_STDIN_LOG", stdinLog)
+
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/cost", "-resume", id, "-model", "claude-code/sonnet"})
+	})
+	if runErr != nil {
+		t.Fatalf("runCmd: %v", runErr)
+	}
+
+	stdinBytes, err := os.ReadFile(stdinLog)
+	if err != nil {
+		t.Fatalf("reading captured CLI stdin: %v", err)
+	}
+	stdin := string(stdinBytes)
+	if !strings.Contains(stdin, `"content":"/cost"`) {
+		t.Errorf("CLI stdin = %q, want it to contain the original line %q unchanged", stdin, "/cost")
+	}
+}
+
+// writeDelegatedSessionFile writes a minimal session log, by hand, whose
+// persisted model is the claude-code family — mirrors main_test.go's
+// writeSessionFile, kept as a local copy because that one hardcodes a
+// native "anthropic/persisted-model" record the tests in this file must
+// NOT get (the whole point here is a persisted DELEGATED model an explicit
+// native -model on resume must override before it can persist).
+func writeDelegatedSessionFile(t *testing.T, dir, id string, createdAt time.Time) {
+	t.Helper()
+	f := fmt.Sprintf("{\"type\":\"session\",\"id\":%q,\"created_at\":%q}\n",
+		id, createdAt.Format(time.RFC3339Nano))
+	f += "{\"type\":\"model\",\"model\":\"claude-code/sonnet\"}\n"
+	f += fmt.Sprintf("{\"type\":\"message\",\"message\":{\"id\":\"msg_0\",\"role\":\"user\",\"parts\":[{\"type\":\"text\",\"text\":\"hello\"}],\"created_at\":%q}}\n",
+		createdAt.Format(time.RFC3339Nano))
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(f), 0o644); err != nil {
+		t.Fatalf("writing session file: %v", err)
 	}
 }

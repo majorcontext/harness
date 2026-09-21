@@ -703,14 +703,18 @@ func runCmd(args []string) error {
 	}
 	// A fresh run (neither -resume nor -continue) has no persisted session
 	// to disagree with model above: it IS the effective model this run
-	// will use. Decide the deferred unknown-command question now, before
-	// resolveSession below builds and prewarms a session for a run that
-	// was always going to be refused — restoring 5a5105b's guard for the
-	// one case this refusal can actually decide early. A resumed or
-	// continued run still defers past resolveSession (see the dispatch
-	// switch below): its persisted model can disagree with model here,
-	// and only s itself, once loaded, knows which one won.
-	if unknownCmd != nil && opts.resume == "" && !opts.cont && model.Provider != claudecode.Family {
+	// will use. An explicit -model on a resumed or continued run also
+	// decides early — resolveSession's SetModel lets the flag override the
+	// persisted record, so model above is what s.Model() will be too.
+	// Decide the deferred unknown-command question now in both cases,
+	// before resolveSession below builds and prewarms a session (and, for
+	// a resumed run, calls SetModel — which durably persists a model
+	// record) for a run that was always going to be refused. Only a
+	// resumed or continued run WITHOUT an explicit -model still defers
+	// past resolveSession (see the dispatch switch below): its persisted
+	// model can disagree with model here, and only s itself, once loaded,
+	// knows which one won.
+	if unknownCmd != nil && model.Provider != claudecode.Family && ((opts.resume == "" && !opts.cont) || modelSet) {
 		return resErr
 	}
 	workDir, err := os.Getwd()
