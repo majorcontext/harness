@@ -136,6 +136,14 @@ fsync → rename), and its failure lands in `lastSnapshotErr`, never
 `lastPersistErr` — a snapshot is derived acceleration, not a durability
 promise.
 
+Because the write is background, no ordinary call returns when it lands.
+`Session.WaitSnapshots` is the join: it blocks until every write this
+session started has finished, and it is not a barrier against a new one.
+A process that exits right after a turn must call it, or the checkpoint it
+just scheduled races teardown and is lost — `harness run` joins it in
+`runCmd` before it returns. A caller that deletes the session directory
+must call it too: an unjoined write recreates the directory it is deleting.
+
 A load that takes the snapshot path marks the metadata-index fold BROKEN
 rather than building a partial one: the index summarizes EVERY record, and
 this load deliberately did not see most of them. The index is a cache with

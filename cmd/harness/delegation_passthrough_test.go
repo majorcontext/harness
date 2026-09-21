@@ -52,20 +52,14 @@ func buildFakeClaudeForHarness(t *testing.T) string {
 // routes to the claude-code delegated backend, with binary_path set to
 // bin (the fakeclaude stand-in), and points HARNESS_CONFIG at it.
 //
-// snapshot_every_records is explicitly 0 (off): Session.Prompt defers
-// snapshotOnIdle unconditionally (engine/engine.go), which starts an
-// UNJOINED background goroutine (engine/snapshot.go's startSnapshotLocked)
-// the instant any record has been written — cmd/harness has no seam to
-// wait for it. Left at its product default, that write races this test's
-// own t.TempDir() cleanup and intermittently fails it with "directory not
-// empty" (reproduced under -race; see the delegation-passthrough report
-// for the isolated repro). Disabling it removes the race outright without
-// touching engine/ or cmd/harness production code for a test-only
-// concern.
+// Snapshotting stays at its product cadence here: runCmd joins its own
+// session's background snapshot write before it returns (see its
+// engine.Session.WaitSnapshots call), so the write cannot outlive this test
+// body and race t.TempDir() cleanup.
 func writeDelegatedConfig(t *testing.T, dir, bin string) {
 	t.Helper()
 	configPath := filepath.Join(dir, "config.json")
-	body := `{"model": "claude-code/sonnet", "snapshot_every_records": 0, "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
+	body := `{"model": "claude-code/sonnet", "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +288,7 @@ func TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged(t *testing.T
 	// "delegation read from config": if the latter drove the check, this
 	// run would see a native default and refuse.
 	nativeConfigPath := filepath.Join(workDir, "native-default-config.json")
-	nativeConfigBody := `{"snapshot_every_records": 0, "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
+	nativeConfigBody := `{"providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
 	if err := os.WriteFile(nativeConfigPath, []byte(nativeConfigBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +410,7 @@ func TestRunCmdUnknownCommandResumedExplicitDelegatedModelReachesPromptUnchanged
 	// cfg.ResolveModel would otherwise pick a native default) but with an
 	// explicit -model naming the claude-code family.
 	nativeConfigPath := filepath.Join(workDir, "native-default-config.json")
-	nativeConfigBody := `{"snapshot_every_records": 0, "providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
+	nativeConfigBody := `{"providers": {"claude-code": {"type": "claude-code-cli", "binary_path": ` + fmt.Sprintf("%q", bin) + `}}}`
 	if err := os.WriteFile(nativeConfigPath, []byte(nativeConfigBody), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -838,6 +838,24 @@ func runCmd(args []string) error {
 		return err
 	}
 	sess = s
+	// The turn below schedules a checkpoint of s at the journal head and
+	// writes it in a background goroutine (engine/snapshot.go's on-idle
+	// trigger). This process exits the moment runCmd returns, so an
+	// unjoined write is a checkpoint racing process teardown: lost, and the
+	// next -continue pays the full journal replay the checkpoint exists to
+	// bound. The same unjoined write is what makes a caller that deletes
+	// the session directory — a test's t.TempDir() cleanup — fail with
+	// "directory not empty".
+	//
+	// It joins s and nothing else, and that limit is real, not an
+	// oversight: a `task` child owns its own session, writes its own
+	// journal and snapshots under the same directory, and a child that
+	// finalizes late can still fire a resume turn on s. A run that spawns
+	// children can therefore still have writes in flight at teardown.
+	// Draining a whole manager tree is a different problem with a
+	// different answer (server.Server's drain), and nothing has reported
+	// it for run mode.
+	defer s.WaitSnapshots()
 	// AdoptReloaded, not AdoptRoot: s.ID may be user-supplied via
 	// -resume/-r and could name a FORMER task-tool child from a previous
 	// process (its own SessionManager tree, hence its own tree lineage,
