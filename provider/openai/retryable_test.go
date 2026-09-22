@@ -110,6 +110,86 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 	}
 }
 
+// TestUsageLimitExhaustionClassification covers both paths that turn a
+// Codex error body into a Go error (apiError, streamError), a message-only
+// and a code-only body on each, and a plain 429 that must stay retryable.
+func TestUsageLimitExhaustionClassification(t *testing.T) {
+	cases := []struct {
+		name          string
+		useHTTP       bool
+		status        int
+		body          string
+		eventData     string
+		wantExhausted bool
+		wantClass     provider.RetryableClass
+		wantContains  string
+	}{
+		{name: "HTTP usage limit message", useHTTP: true, status: http.StatusBadRequest, body: `{"error":{"type":"invalid_request_error","message":"The usage limit has been reached"}}`, wantExhausted: true},
+		{name: "HTTP insufficient_quota code with empty message classifies exhausted", useHTTP: true, status: http.StatusBadRequest, body: `{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}`, wantExhausted: true, wantContains: "insufficient_quota"},
+		{name: "HTTP plain 429 rate limit stays retryable, not exhausted", useHTTP: true, status: http.StatusTooManyRequests, body: `{"error":{"type":"rate_limit_exceeded","message":"Rate limit reached for requests"}}`, wantClass: provider.RetryableRateLimited},
+		{name: "stream usage limit message, no code", eventData: `{"type":"error","message":"The usage limit has been reached"}`, wantExhausted: true},
+		{name: "stream insufficient_quota code with empty message classifies exhausted", eventData: `{"type":"error","code":"insufficient_quota"}`, wantExhausted: true, wantContains: "insufficient_quota"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.useHTTP {
+				c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tc.status)
+					io.WriteString(w, tc.body) //nolint:errcheck
+				})
+				_, err = c.Stream(context.Background(), testUsageLimitRequest())
+			} else {
+				c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					io.WriteString(w, sse("response.created", `{"type":"response.created","response":{"id":"resp_9"}}`)) //nolint:errcheck
+					io.WriteString(w, sse("error", tc.eventData))                                                        //nolint:errcheck
+				})
+				s, sErr := c.Stream(context.Background(), testUsageLimitRequest())
+				if sErr != nil {
+					t.Fatal(sErr)
+				}
+				defer s.Close()
+				for err == nil {
+					_, err = s.Next()
+					if err == io.EOF {
+						t.Fatal("stream ended without an error")
+					}
+				}
+			}
+			if err == nil {
+				t.Fatal("err = nil, want a classified error")
+			}
+			assertExhaustionClassification(t, err, tc.wantExhausted, tc.wantClass)
+			if tc.wantContains != "" && !strings.Contains(err.Error(), tc.wantContains) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantContains)
+			}
+		})
+	}
+}
+
+func testUsageLimitRequest() *provider.Request {
+	return &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	}
+}
+
+func assertExhaustionClassification(t *testing.T, err error, wantExhausted bool, wantClass provider.RetryableClass) {
+	t.Helper()
+	if _, ok := provider.AsProviderExhausted(err); ok != wantExhausted {
+		t.Fatalf("AsProviderExhausted(%v) = %v, want %v", err, ok, wantExhausted)
+	}
+	if permanent := provider.AsPermanent(err); permanent != wantExhausted {
+		t.Fatalf("AsPermanent(%v) = %v, want %v", err, permanent, wantExhausted)
+	}
+	class, ok := provider.AsRetryable(err)
+	if ok != (wantClass != "") || class != wantClass {
+		t.Fatalf("AsRetryable(%v) = %q, %v; want %q", err, class, ok, wantClass)
+	}
+}
+
 // TestStreamTruncationClassification mirrors provider/anthropic's test of
 // the same name (see the 2026-08-06 incident described there): a stream cut
 // before response.completed must be classified

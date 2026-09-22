@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -316,12 +317,32 @@ func apiError(resp *http.Response) error {
 	var body struct {
 		Error struct {
 			Type    string `json:"type"`
+			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	var err error
-	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
-		err = fmt.Errorf("openai: %s (%s, HTTP %d)", body.Error.Message, body.Error.Type, resp.StatusCode)
+	decoded := json.Unmarshal(raw, &body) == nil
+	if decoded && (body.Error.Message != "" || body.Error.Type != "" || body.Error.Code != "") {
+		kind := body.Error.Type
+		switch {
+		case kind == "":
+			kind = body.Error.Code
+		case body.Error.Code != "" && body.Error.Code != kind:
+			kind = kind + "/" + body.Error.Code
+		}
+		msg := fmt.Sprintf("openai: %s (%s, HTTP %d)", body.Error.Message, kind, resp.StatusCode)
+		if body.Error.Message == "" {
+			msg = fmt.Sprintf("openai: %s (HTTP %d)", kind, resp.StatusCode)
+		}
+		if hint, ok := parseUsageExhaustion(resp.StatusCode, body.Error.Message, body.Error.Type, body.Error.Code); ok {
+			return provider.MarkPermanent(&provider.Error{
+				Kind:        provider.ErrKindProviderExhausted,
+				Raw:         msg,
+				RecoverHint: hint,
+			})
+		}
+		err = errors.New(msg)
 	} else {
 		err = fmt.Errorf("openai: HTTP %d", resp.StatusCode)
 	}
@@ -626,15 +647,74 @@ func streamError(code, message string) error {
 		}
 		return &previousResponseNotFoundError{message: message}
 	}
-	if code == "" {
-		return fmt.Errorf("openai: %s", message)
+	msg := fmt.Sprintf("openai: %s", message)
+	if code != "" {
+		msg = fmt.Sprintf("openai: %s (%s)", message, code)
 	}
-	err := fmt.Errorf("openai: %s (%s)", message, code)
+	if hint, ok := parseUsageExhaustion(0, message, code); ok {
+		return provider.MarkPermanent(&provider.Error{
+			Kind:        provider.ErrKindProviderExhausted,
+			Raw:         msg,
+			RecoverHint: hint,
+		})
+	}
+	err := errors.New(msg)
+	if code == "" {
+		return err
+	}
 	if class, ok := classifyErrorCode(code); ok {
 		return provider.MarkRetryable(err, class)
 	}
 	return err
 }
+
+var usageExhaustionPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)usage limit has been reached`),
+	regexp.MustCompile(`(?i)usage limit (?:reached|exceeded)`),
+}
+
+var usageExhaustionCodes = map[string]bool{
+	"insufficient_quota": true,
+}
+
+var exhaustionStatuses = map[int]bool{
+	http.StatusBadRequest:      true,
+	http.StatusPaymentRequired: true,
+	http.StatusForbidden:       true,
+	http.StatusTooManyRequests: true,
+}
+
+// parseUsageExhaustion checks status and code before ever matching the
+// message text, mirroring provider/anthropic's parseUsageExhaustion.
+func parseUsageExhaustion(status int, message string, codes ...string) (recoverHint string, ok bool) {
+	if status > 0 && !exhaustionStatuses[status] {
+		return "", false
+	}
+	matched := false
+	for _, c := range codes {
+		if usageExhaustionCodes[c] {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		for _, pat := range usageExhaustionPatterns {
+			if pat.MatchString(message) {
+				matched = true
+				break
+			}
+		}
+	}
+	if !matched {
+		return "", false
+	}
+	if m := recoverHintPattern.FindStringSubmatch(message); m != nil {
+		return strings.TrimSpace(m[1]), true
+	}
+	return "", true
+}
+
+var recoverHintPattern = regexp.MustCompile(`(?i)regain access on ([^.\n"]+)`)
 
 func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
 	if name != "response.failed" && name != "error" {
@@ -847,11 +927,11 @@ func (s *stream) handle(name string, data []byte) error {
 			return streamError(ev.Error.Code, ev.Error.Message)
 		case isNotFoundErrorCode(ev.Code):
 			return streamError(ev.Code, ev.Message)
-		case ev.Response.Error.Message != "":
+		case ev.Response.Error.Message != "" || ev.Response.Error.Code != "":
 			return streamError(ev.Response.Error.Code, ev.Response.Error.Message)
-		case ev.Error.Message != "":
+		case ev.Error.Message != "" || ev.Error.Code != "":
 			return streamError(ev.Error.Code, ev.Error.Message)
-		case ev.Message != "":
+		case ev.Message != "" || ev.Code != "":
 			return streamError(ev.Code, ev.Message)
 		default:
 			return fmt.Errorf("openai: stream error: %s", data)

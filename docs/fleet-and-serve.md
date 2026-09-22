@@ -86,7 +86,8 @@ incident measured. Three layers carry it:
   `provider.Error{Kind: ErrKindProviderExhausted, RecoverHint}` wrapped
   permanent (no backoff outlives a spent quota). This is the second place
   message matching is tolerated, under `parseContextOverflow`'s rules. Other
-  adapters opt in by producing the same kind; only anthropic does today.
+  adapters opt in by producing the same kind; `provider/anthropic` and
+  `provider/openai` do today.
 - The ENGINE reads the typed classification, never text.
   `classifySpawnFailure` (`engine/session_manager.go`) maps
   `provider.AsProviderExhausted` — or a `RetryableRateLimited` class that
