@@ -633,7 +633,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = proc.Kill()
 	}()
 
-	finalMsg, started, turnErr := s.consumeClaudeCodeStream(stdout, model)
+	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model)
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
 	// goroutine's own doc comment above): signal it to stop, THEN close
@@ -748,14 +748,15 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	waitErr := cmd.Wait()
 
 	return claudeCodeTurnResult(claudeCodeTurnOutcome{
-		ctxErr:   ctx.Err(),
-		turnErr:  turnErr,
-		waitErr:  waitErr,
-		inputErr: inputErr,
-		started:  started,
-		finalMsg: finalMsg,
-		binary:   binary,
-		stderr:   stderr.String(),
+		ctxErr:        ctx.Err(),
+		turnErr:       turnErr,
+		waitErr:       waitErr,
+		inputErr:      inputErr,
+		started:       started,
+		finalMsg:      finalMsg,
+		zeroMessageOK: zeroMessageOK,
+		binary:        binary,
+		stderr:        stderr.String(),
 	})
 }
 
@@ -763,14 +764,15 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 // one delegated turn's process/stream lifecycle — see claudeCodeTurnResult,
 // the sole consumer, for what each field decides.
 type claudeCodeTurnOutcome struct {
-	ctxErr   error
-	turnErr  error
-	waitErr  error
-	inputErr error
-	started  bool
-	finalMsg *message.Message
-	binary   string
-	stderr   string
+	ctxErr        error
+	turnErr       error
+	waitErr       error
+	inputErr      error
+	started       bool
+	finalMsg      *message.Message
+	zeroMessageOK bool
+	binary        string
+	stderr        string
 }
 
 // claudeCodeTurnResult turns one claudeCodeTurnOutcome into runClaudeCodeTurn's
@@ -827,6 +829,9 @@ func claudeCodeTurnResult(o claudeCodeTurnOutcome) (*message.Message, error) {
 		return nil, err
 	}
 	if o.finalMsg == nil {
+		if o.zeroMessageOK {
+			return nil, nil
+		}
 		if o.inputErr != nil {
 			// No usable result at all, AND writing/closing stdin itself
 			// failed: the write error is almost certainly the actual root
@@ -954,7 +959,14 @@ func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []
 // child's process group: that would kill the very background session
 // --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
 // its subsequent cmd.Wait() does not reintroduce this wait.
-func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error) {
+func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
+	var compactBoundarySeen, compactUnsettled bool
+	settleCompaction := func() {
+		if compactUnsettled {
+			compactUnsettled = false
+			s.emit(Event{Type: EventCompactionFailed})
+		}
+	}
 	scanner := bufio.NewScanner(r)
 	// A tool call's arguments or a large tool result can exceed
 	// bufio.Scanner's 64KiB default token size; 8MiB comfortably covers
@@ -1134,7 +1146,18 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			switch env.Subtype {
 			case "init":
 				s.recordClaudeCodeSessionID(env.SessionID)
+			case "status":
+				switch {
+				case env.Status == "compacting":
+					compactUnsettled = true
+					s.emit(Event{Type: EventCompactionStarted})
+				case env.CompactResultStatus != "" && env.CompactResultStatus != "success":
+					compactUnsettled = false
+					s.emit(Event{Type: EventCompactionFailed, Text: env.CompactResultStatus})
+				}
 			case "compact_boundary":
+				compactBoundarySeen = true
+				compactUnsettled = false
 				// The CLI just compacted its OWN internal context — see
 				// EventClaudeCodeCompacted's own doc comment for why this
 				// is forwarded as a distinct, observability-only event
@@ -1319,8 +1342,13 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			s.append(*msg)
 			s.emit(Event{Type: EventMessage, Message: msg})
 		case "result":
-			if !env.IsError && env.NumTurns != nil && *env.NumTurns == 0 && env.Result == "" &&
-				finalMsg == nil && pendingAssistant == nil && len(pendingReasoning) == 0 {
+			zeroTurnEmpty := !env.IsError && env.NumTurns != nil && *env.NumTurns == 0 && env.Result == "" &&
+				finalMsg == nil && pendingAssistant == nil && len(pendingReasoning) == 0
+			if zeroTurnEmpty && (env.LocalCommand == "compact" || (env.LocalCommand == "" && compactBoundarySeen)) {
+				// Must precede the #309 placeholder check below: a `/compact`
+				// result matches that same zero-turn/empty-result shape.
+				zeroMessageOK = true
+			} else if zeroTurnEmpty {
 				// A queued <task-notification> precedes this placeholder;
 				// the real turn's own events still follow.
 				continue
@@ -1380,7 +1408,8 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// ever emits — rate_limit_event, when present, arrived before
 			// it both times, never after. Nothing observed contradicts the
 			// result as the terminal event.
-			return finalMsg, started, turnErr
+			settleCompaction()
+			return finalMsg, started, turnErr, zeroMessageOK
 		case "rate_limit_event":
 			// The CLI's own subscription rate-limit/quota signal — see
 			// mapClaudeCodeRateLimit's own doc comment for the wire shape
@@ -1401,7 +1430,8 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// doc comments.
 	flushPendingAssistant()
 	flushPendingReasoning()
-	return finalMsg, started, turnErr
+	settleCompaction()
+	return finalMsg, started, turnErr, false
 }
 
 // reasoningOnlyParts reports whether parts is non-empty and every part is
@@ -1466,7 +1496,10 @@ type claudeCodeEnvelope struct {
 	// payload — see claudeCodeCompactMetadata and
 	// consumeClaudeCodeStream's "system" case. nil for every other event
 	// type or subtype.
-	CompactMetadata *claudeCodeCompactMetadata `json:"compact_metadata,omitempty"`
+	CompactMetadata     *claudeCodeCompactMetadata `json:"compact_metadata,omitempty"`
+	Status              string                     `json:"status,omitempty"`
+	CompactResultStatus string                     `json:"compact_result,omitempty"`
+	LocalCommand        string                     `json:"local_command,omitempty"`
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own

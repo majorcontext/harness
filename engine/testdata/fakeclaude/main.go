@@ -179,6 +179,39 @@ func main() {
 		os.Exit(1)
 	}
 
+	if mode == "compact_turn" {
+		// The exact stream `claude` 2.1.278 emits for `/compact`: a
+		// "compacting" status, its settling status, init, compact_boundary,
+		// two inert "user" frames, and a terminal num_turns:0 result — no
+		// "assistant" frame ever fires. FAKECLAUDE_COMPACT_LOCAL_COMMAND
+		// (default "compact") sets the result's own local_command field;
+		// "" omits it. FAKECLAUDE_COMPACT_RESULT (default "success") sets
+		// the settling status's compact_result.
+		localCommand, hasLocalCommand := os.LookupEnv("FAKECLAUDE_COMPACT_LOCAL_COMMAND")
+		if !hasLocalCommand {
+			localCommand = "compact"
+		}
+		compactResult := os.Getenv("FAKECLAUDE_COMPACT_RESULT")
+		if compactResult == "" {
+			compactResult = "success"
+		}
+		emit(map[string]any{"type": "system", "subtype": "status", "status": "compacting"})
+		emit(map[string]any{"type": "system", "subtype": "status", "status": nil, "compact_result": compactResult})
+		if compactResult != "success" {
+			return
+		}
+		emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+		emit(map[string]any{"type": "system", "subtype": "compact_boundary", "compact_metadata": map[string]any{"trigger": "manual", "pre_tokens": 42010, "post_tokens": 7039}, "session_id": sessionID})
+		emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "This session is being continued from a previous conversation ..."}})
+		emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"}})
+		result := map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 0, "result": "", "usage": map[string]any{"input_tokens": 0, "output_tokens": 0}}
+		if localCommand != "" {
+			result["local_command"] = localCommand
+		}
+		emit(result)
+		return
+	}
+
 	if mode == "queued_empty_result" || mode == "queued_empty_result_error" {
 		// Sequence: task_notification, init, empty zero-turn result, then
 		// either an error result (queued_empty_result_error) or init/assistant/result.

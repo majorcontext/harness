@@ -471,7 +471,10 @@ settlement — but no `summary_id`, which does not exist yet. Live only,
 like `compaction.failed` below: never journaled, since a `started` that
 never resolves has nothing durable to reconcile against on replay. It is
 always followed by exactly one of `history.compacted` or
-`compaction.failed`, never left orphaned.
+`compaction.failed`, never left orphaned. A claude-code-delegated turn
+also emits `compaction.started` on the CLI's own "compacting" status, and
+settles it with `compaction.claude_code` (success) or `compaction.failed`
+(failure or an unsettled stream).
 
 A successful compaction then emits TWO more things, in order. First the
 summary itself flows through the ordinary message-event path

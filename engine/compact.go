@@ -34,7 +34,10 @@ const (
 	// CompactSummaryID, which does not exist yet at this point. Live
 	// only, like EventCompactionFailed: not journaled, since a "started"
 	// that never resolves has nothing durable to reconcile against on
-	// replay.
+	// replay. consumeClaudeCodeStream (claude_code_backend.go) also fires
+	// this event, for a delegated turn's own "compacting" status; that
+	// call carries no fold-range fields and settles with
+	// EventClaudeCodeCompacted instead of EventHistoryCompacted.
 	EventCompactionStarted = "compaction.started"
 
 	// EventClaudeCodeCompacted fires when a claude-code-delegated turn's

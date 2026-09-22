@@ -353,6 +353,79 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 	})
 }
 
+// TestClaudeCodeCompactTurn proves a `/compact` turn's own zero-message
+// result settles as a successful turn with no assistant message, that the
+// local_command fallback stays scoped to "compact" (or an omitted field),
+// and that a failing compact_result status still emits EventCompactionFailed.
+func TestClaudeCodeCompactTurn(t *testing.T) {
+	tests := []struct {
+		name            string
+		setLocalCommand bool
+		localCommand    string
+		compactResult   string
+		wantErr         bool
+		wantFailed      bool
+	}{
+		{name: "default local_command"},
+		{name: "local_command omitted", setLocalCommand: true, localCommand: ""},
+		{name: "local_command other is not a compact success", setLocalCommand: true, localCommand: "other", wantErr: true},
+		{name: "compact_result failure emits EventCompactionFailed", compactResult: "failure", wantFailed: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setLocalCommand {
+				t.Setenv("FAKECLAUDE_COMPACT_LOCAL_COMMAND", tt.localCommand)
+			}
+			if tt.compactResult != "" {
+				t.Setenv("FAKECLAUDE_COMPACT_RESULT", tt.compactResult)
+			}
+			s, _ := claudeCodeTestSession(t, "compact_turn")
+			var events []Event
+			s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+			msg, err := s.Prompt(context.Background(), "/compact")
+
+			switch {
+			case tt.wantErr && err == nil:
+				t.Error("Prompt returned no error, want the no-assistant-message error")
+			case tt.wantErr && !strings.Contains(err.Error(), "turn ended with no assistant message"):
+				t.Errorf("err = %q, want it to contain %q", err.Error(), "turn ended with no assistant message")
+			case !tt.wantErr && err != nil:
+				t.Fatalf("Prompt: %v, want nil", err)
+			}
+			if msg != nil {
+				t.Errorf("Prompt returned a non-nil message: %+v, want nil", msg)
+			}
+
+			var sawStarted, sawCompacted bool
+			failed := 0
+			for _, ev := range events {
+				switch ev.Type {
+				case EventCompactionStarted:
+					sawStarted = true
+				case EventClaudeCodeCompacted:
+					sawCompacted = true
+				case EventCompactionFailed:
+					failed++
+				}
+			}
+			if !sawStarted {
+				t.Error("no EventCompactionStarted for the status/compacting frame")
+			}
+			if sawCompacted == tt.wantFailed {
+				t.Errorf("EventClaudeCodeCompacted seen = %v, want %v", sawCompacted, !tt.wantFailed)
+			}
+			wantFailed := 0
+			if tt.wantFailed {
+				wantFailed = 1
+			}
+			if failed != wantFailed {
+				t.Errorf("EventCompactionFailed count = %d, want %d", failed, wantFailed)
+			}
+		})
+	}
+}
+
 // TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification is the
 // regression test for the claude-code delegated lane's own bypass of the
 // task-notification delivery/commit machinery — root-caused live as an
