@@ -443,8 +443,10 @@ type stream struct {
 	responseFrames   int
 
 	// A consumer joins consecutive reasoning deltas into one block, so
-	// reasoning that resumes under a different item needs a visible break.
+	// reasoning that resumes under a different item or summary part needs a
+	// visible break.
 	reasoningItem     int
+	reasoningSummary  int
 	reasoningStreamed bool
 
 	queue []provider.Event
@@ -745,6 +747,9 @@ func isPreviousResponseNotFoundFrame(name string, data []byte) bool {
 		isInvalidPreviousResponseMessage(ev.Error.Message)
 }
 
+// reasoningBreak separates two reasoning summaries a consumer joins.
+const reasoningBreak = "\n\n"
+
 func (s *stream) handle(name string, data []byte) error {
 	switch name {
 	case "response.created":
@@ -779,8 +784,9 @@ func (s *stream) handle(name string, data []byte) error {
 
 	case "response.reasoning_summary_text.delta":
 		var ev struct {
-			OutputIndex int    `json:"output_index"`
-			Delta       string `json:"delta"`
+			OutputIndex  int    `json:"output_index"`
+			SummaryIndex int    `json:"summary_index"`
+			Delta        string `json:"delta"`
 		}
 		if err := json.Unmarshal(data, &ev); err != nil {
 			return fmt.Errorf("openai: bad response.reasoning_summary_text.delta: %w", err)
@@ -792,13 +798,20 @@ func (s *stream) handle(name string, data []byte) error {
 		if it.kind == "" {
 			it.kind = "reasoning"
 		}
+		newItem := s.reasoningStreamed && ev.OutputIndex != s.reasoningItem
+		newSummary := s.reasoningStreamed && !newItem && ev.SummaryIndex != s.reasoningSummary
+		// A new item becomes its own part, so its break belongs in the stream
+		// only. A new summary part shares one part and needs the stored break.
+		if newSummary {
+			it.text.WriteString(reasoningBreak)
+		}
 		it.text.WriteString(ev.Delta)
-		// The break belongs in the stream only: each item keeps its own part.
 		delta := ev.Delta
-		if s.reasoningStreamed && ev.OutputIndex != s.reasoningItem {
-			delta = "\n\n" + delta
+		if newItem || newSummary {
+			delta = reasoningBreak + delta
 		}
 		s.reasoningItem = ev.OutputIndex
+		s.reasoningSummary = ev.SummaryIndex
 		s.reasoningStreamed = true
 		s.visibleOutput = true
 		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta})

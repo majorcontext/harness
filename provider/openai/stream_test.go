@@ -349,3 +349,65 @@ func TestStreamReasoningItemsStayApart(t *testing.T) {
 		}
 	}
 }
+
+// One reasoning item carries a summary part per headline, separated on the
+// wire by summary_index alone, and both parts join into one stored part. A
+// consumer that joins consecutive deltas reads "**A**\n\n**B**", never
+// "**A****B**", and the stored part carries the same break.
+func TestStreamReasoningSummaryPartsStayApart(t *testing.T) {
+	const (
+		wantFirst  = "**Adding precise pin group tests**"
+		wantSecond = "**Planning limit and pin complement tests**"
+	)
+	item := fmt.Sprintf(
+		`{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":%q},{"type":"summary_text","text":%q}],"encrypted_content":"ENC"}`,
+		wantFirst, wantSecond)
+	delta := func(summaryIndex int, text string) string {
+		return sse("response.reasoning_summary_text.delta", fmt.Sprintf(
+			`{"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":%d,"delta":%s}`,
+			summaryIndex, strconv.Quote(text)))
+	}
+	fixture := strings.Join([]string{
+		sse("response.created", `{"type":"response.created","response":{"id":"resp_4"}}`),
+		delta(0, "**Adding precise "),
+		delta(0, "pin group tests**"),
+		delta(1, wantSecond),
+		sse("response.output_item.done", `{"type":"response.output_item.done","output_index":0,"item":`+item+`}`),
+		sse("response.completed", `{"type":"response.completed","response":{"id":"resp_4","usage":{"input_tokens":4,"output_tokens":6}}}`),
+	}, "")
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, fixture) //nolint:errcheck
+	})
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ship it"}}}},
+		MaxTokens: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var streamed string
+	var done provider.Event
+	for _, ev := range collect(t, s) {
+		switch ev.Type {
+		case provider.EventReasoningDelta:
+			streamed += ev.Text
+		case provider.EventDone:
+			done = ev
+		}
+	}
+	want := wantFirst + "\n\n" + wantSecond
+	if streamed != want {
+		t.Errorf("streamed reasoning = %q, want %q", streamed, want)
+	}
+	parts := done.Message.Parts
+	if len(parts) != 1 {
+		t.Fatalf("parts = %+v", parts)
+	}
+	if rp, ok := parts[0].(*message.Reasoning); !ok || rp.Text != want {
+		t.Errorf("part = %+v, want reasoning %q", parts[0], want)
+	}
+}
