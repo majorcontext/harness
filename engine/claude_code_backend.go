@@ -1319,6 +1319,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			s.append(*msg)
 			s.emit(Event{Type: EventMessage, Message: msg})
 		case "result":
+			if !env.IsError && env.NumTurns != nil && *env.NumTurns == 0 && env.Result == "" &&
+				finalMsg == nil && pendingAssistant == nil && len(pendingReasoning) == 0 {
+				// A queued <task-notification> precedes this placeholder;
+				// the real turn's own events still follow.
+				continue
+			}
 			// Terminal: nothing more can join the open response.
 			flushPendingAssistant()
 			usage := mapClaudeCodeUsage(env.Usage)
@@ -1427,6 +1433,7 @@ type claudeCodeEnvelope struct {
 	Message   json.RawMessage  `json:"message,omitempty"`
 	IsError   bool             `json:"is_error,omitempty"`
 	Result    string           `json:"result,omitempty"`
+	NumTurns  *int             `json:"num_turns,omitempty"`
 	Usage     *claudeCodeUsage `json:"usage,omitempty"`
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
 	// whole delegated turn — folded into the session's cumulative

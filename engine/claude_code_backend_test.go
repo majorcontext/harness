@@ -291,6 +291,68 @@ func TestClaudeCodeErrorResultReturnsError(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn proves the sequence
+// task_notification, init, empty zero-turn result, init, assistant, result still
+// yields the real turn; the sibling case pins an is_error zero-turn result as terminal.
+func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
+	t.Run("skips the placeholder and returns the real turn", func(t *testing.T) {
+		s, _ := claudeCodeTestSession(t, "queued_empty_result")
+
+		var metrics []TurnMetrics
+		s.cfg.OnTurnMetrics = func(m TurnMetrics) { metrics = append(metrics, m) }
+
+		msg, err := s.Prompt(context.Background(), "continue")
+		if err != nil {
+			t.Fatalf("Prompt: %v", err)
+		}
+		if msg == nil {
+			t.Fatal("Prompt returned a nil final message")
+		}
+		if got := msg.Parts.Text(); got != "second" {
+			t.Errorf("final message text = %q, want %q", got, "second")
+		}
+		if len(metrics) != 1 {
+			t.Fatalf("OnTurnMetrics called %d times, want 1 (the placeholder must not emit its own): %+v", len(metrics), metrics)
+		}
+		if metrics[0].InputTokens != 9 || metrics[0].OutputTokens != 4 {
+			t.Errorf("TurnMetrics usage = {input:%d output:%d}, want {9 4} (the real turn's own usage, not the placeholder's)", metrics[0].InputTokens, metrics[0].OutputTokens)
+		}
+		if usage := s.Usage(); usage.InputTokens != 9 || usage.OutputTokens != 4 {
+			t.Errorf("Usage() = %+v, want {9 4 0 0} (the placeholder's own 3/1 usage must never be applied)", usage)
+		}
+	})
+
+	t.Run("a zero-turn error result still terminates the turn", func(t *testing.T) {
+		s, _ := claudeCodeTestSession(t, "queued_empty_result_error")
+
+		msg, err := s.Prompt(context.Background(), "continue")
+		if err == nil {
+			t.Fatal("Prompt returned no error for an is_error, num_turns 0 result")
+		}
+		if msg != nil {
+			t.Errorf("Prompt returned a non-nil message alongside an error: %+v", msg)
+		}
+	})
+
+	t.Run("an empty result with no num_turns field is still treated as terminal", func(t *testing.T) {
+		s, _ := claudeCodeTestSession(t, "empty_result_no_num_turns")
+
+		var metrics []TurnMetrics
+		s.cfg.OnTurnMetrics = func(m TurnMetrics) { metrics = append(metrics, m) }
+
+		msg, err := s.Prompt(context.Background(), "continue")
+		if err == nil {
+			t.Fatal("Prompt returned no error for a num_turns-less empty result")
+		}
+		if msg != nil {
+			t.Errorf("Prompt returned a non-nil message alongside an error: %+v", msg)
+		}
+		if len(metrics) != 1 {
+			t.Fatalf("OnTurnMetrics called %d times, want 1 (a missing num_turns must not be treated as the placeholder): %+v", len(metrics), metrics)
+		}
+	})
+}
+
 // TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification is the
 // regression test for the claude-code delegated lane's own bypass of the
 // task-notification delivery/commit machinery — root-caused live as an

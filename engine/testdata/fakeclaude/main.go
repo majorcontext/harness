@@ -179,6 +179,61 @@ func main() {
 		os.Exit(1)
 	}
 
+	if mode == "queued_empty_result" || mode == "queued_empty_result_error" {
+		// Sequence: task_notification, init, empty zero-turn result, then
+		// either an error result (queued_empty_result_error) or init/assistant/result.
+		emit(map[string]any{"type": "system", "subtype": "task_notification", "session_id": sessionID})
+		emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+		if mode == "queued_empty_result_error" {
+			emit(map[string]any{
+				"type":      "result",
+				"subtype":   "error_during_execution",
+				"is_error":  true,
+				"num_turns": 0,
+				"result":    "",
+				"usage": map[string]any{
+					"input_tokens":  0,
+					"output_tokens": 0,
+				},
+			})
+			return
+		}
+		emit(map[string]any{
+			"type":        "result",
+			"subtype":     "success",
+			"is_error":    false,
+			"num_turns":   0,
+			"result":      "",
+			"duration_ms": 80,
+			"usage": map[string]any{
+				"input_tokens":  3,
+				"output_tokens": 1,
+			},
+		})
+		emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "second"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":      "result",
+			"subtype":   "success",
+			"is_error":  false,
+			"num_turns": 1,
+			"result":    "second",
+			"usage": map[string]any{
+				"input_tokens":  9,
+				"output_tokens": 4,
+			},
+		})
+		return
+	}
+
 	emit(map[string]any{
 		"type":       "system",
 		"subtype":    "init",
@@ -435,6 +490,18 @@ func main() {
 			"usage": map[string]any{
 				"input_tokens":  11,
 				"output_tokens": 3,
+			},
+		})
+		return
+	case "empty_result_no_num_turns":
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "",
+			"usage": map[string]any{
+				"input_tokens":  0,
+				"output_tokens": 0,
 			},
 		})
 		return
