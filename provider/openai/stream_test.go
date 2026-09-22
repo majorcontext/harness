@@ -379,6 +379,7 @@ func TestStreamReasoningSummaryPartsStayApart(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, fixture) //nolint:errcheck
 	})
+	c.Family = CodexFamily
 	s, err := c.Stream(context.Background(), &provider.Request{
 		Model:     message.ModelRef{Provider: CodexFamily, Model: "gpt-5.6-sol"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "ship it"}}}},
