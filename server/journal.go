@@ -154,6 +154,12 @@ type Event struct {
 	PreTokens  int    `json:"pre_tokens,omitempty"`
 	PostTokens int    `json:"post_tokens,omitempty"`
 
+	// ContextUsedTokens/ContextWindowTokens are carried by evtTurnEnd only,
+	// mirroring contextJSON's two fields. Both 0 (key absent) when
+	// recordTurnEnd had no live *engine.Session to read.
+	ContextUsedTokens   int `json:"context_used_tokens,omitempty"`
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
+
 	// Prompt-queue fields, carried by the prompt.queued/prompt.dequeued
 	// durable records (see engine/queue.go and docs/plans/2026-07-19-prompt-
 	// queue.md). QueueID is the queue-assigned, session-monotonic prompt ID.
@@ -741,7 +747,10 @@ func (s *Server) publishQueue(ev engine.Event) {
 // (see Server.lastTurn). outcome is "completed" or "error"; turnErr is the
 // triggering error on failure (sanitized here via
 // plugin.SanitizeSessionError — never credentials or request bodies — before
-// it is journaled, streamed, or exposed), nil on a clean completion.
+// it is journaled, streamed, or exposed), nil on a clean completion. sess
+// supplies the record's context fields when non-nil; onChildTurnEnd's
+// resolveLive lookup can pass nil for a child this process does not hold
+// live at settle time.
 //
 // This is the "idle because done" vs "idle because the turn died" wire
 // contract: today, three plain-prompt turns died mid-stream (final assistant
@@ -769,19 +778,22 @@ func (s *Server) publishQueue(ev engine.Event) {
 // long-running shape, the per-worker-turn heartbeat instead comes from
 // publishGoal's own logging: "goal eval" at INFO (the evaluator runs exactly
 // once per completed worker turn) and "goal stalled" at WARN (a worker-turn
-// retry) — see publishGoal's doc comment. Usage/token counts are
-// deliberately not threaded in here: they are not already available at this
-// call site (only outcome and the sanitized error string are), and this
-// fix's scope is "log what exists", not "thread new state through the
-// engine for logging".
-func (s *Server) recordTurnEnd(sessionID, outcome string, turnErr error) {
+// retry) — see publishGoal's doc comment.
+func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome string, turnErr error) {
 	errStr := ""
 	if turnErr != nil {
 		errStr = plugin.SanitizeSessionError(turnErr.Error())
 	}
+	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr}
+	if sess != nil {
+		if last, ok := sess.LastUsage(); ok {
+			ev.ContextUsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		}
+		ev.ContextWindowTokens = sess.ContextWindowTokens()
+	}
 	s.mu.Lock()
 	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
-	s.emitDurableLocked(&Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr})
+	s.emitDurableLocked(ev)
 	s.mu.Unlock()
 
 	if outcome == "completed" {
@@ -854,10 +866,10 @@ func (s *Server) onChildTurnEnd(id string, msg *message.Message, err error, canc
 	case canceled:
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	case err == nil:
-		s.recordTurnEnd(id, "completed", nil)
+		s.recordTurnEnd(id, s.resolveLive(id).session(), "completed", nil)
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, turnEndOutcome(err), err)
+		s.recordTurnEnd(id, s.resolveLive(id).session(), turnEndOutcome(err), err)
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }

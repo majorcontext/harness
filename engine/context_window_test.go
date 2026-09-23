@@ -70,6 +70,29 @@ func TestResolveContextWindowUnknownModelDisabled(t *testing.T) {
 	}
 }
 
+// TestResolveModelContextWindow is the server-facing cold-read helper's
+// table: a known model reports its resolved window, and an unknown model
+// reports 0 — the value a consumer must treat as "unknown", not "full".
+func TestResolveModelContextWindow(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+
+	cases := []struct {
+		name  string
+		model message.ModelRef
+		want  int
+	}{
+		{"known model", modelKnownBig, 500_000},
+		{"unknown model", modelUnknown, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveModelContextWindow(tc.model); got != tc.want {
+				t.Errorf("ResolveModelContextWindow(%s) = %d, want %d", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestResolveContextWindowFloorRejectsBogusValue is the safety-floor case
 // the jumpy-pizza follow-up asked for explicitly: a implausibly small
 // model-derived value (well below minAutoContextWindowTokens) must not arm
@@ -328,6 +351,22 @@ func TestSetModelSameWindowDoesNotLog(t *testing.T) {
 	}
 	if s.cfg.ContextWindowTokens != 500_000 {
 		t.Fatalf("cfg.ContextWindowTokens = %d, want 500000 (window value itself is unaffected by log suppression)", s.cfg.ContextWindowTokens)
+	}
+}
+
+func TestResolveModelContextWindowIsSilent(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := ResolveModelContextWindow(modelBogusTiny); got != 0 {
+		t.Fatalf("ResolveModelContextWindow(bogus-tiny) = %d, want 0", got)
+	}
+	if out := buf.String(); out != "" {
+		t.Errorf("ResolveModelContextWindow logged for a below-floor model:\n%s", out)
 	}
 }
 

@@ -542,6 +542,18 @@ and its `trigger`/`pre_tokens`/`post_tokens` fields alongside
 absent-vs-zero caveat above — the hand-written API contract a caller reads
 instead of this design doc.
 
+**The context-window gauge.** `Session.context` (`used_tokens`,
+`window_tokens`) and the mirrored `turn.end` event fields
+(`context_used_tokens`/`context_window_tokens`) expose the same two numbers
+this section's trigger check compares: `used_tokens` is
+`InputTokens + CacheReadTokens + CacheWriteTokens` from the most recent
+completed turn, the identical expression `maybeAutoCompact` evaluates
+against `window_tokens`, so a console gauge and automatic compaction agree
+whenever the provider reported usage for that turn. They part company in one
+case: when every input component is zero, `maybeAutoCompact` falls back to
+`estimatePromptTokensFromHistory`, so compaction can act while `used_tokens`
+still reads 0.
+
 ## 5. Non-goals
 
 - **No local tokenizer.** Compaction relies entirely on the provider's own

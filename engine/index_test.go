@@ -21,25 +21,27 @@ import (
 // accessors (server/handlers.go's buildSession) — so an index that
 // disagrees with it is wrong by definition.
 type indexOracle struct {
-	ID              string
-	CreatedAt       time.Time
-	LastActivityAt  time.Time
-	Model           message.ModelRef
-	Effort          message.Effort
-	WorkDir         string
-	ParentSession   string
-	TaskParentID    string
-	TaskAgentType   string
-	TaskDepth       int
-	SpawnedChildIDs []string
-	Messages        int
-	Usage           provider.Usage
-	LastInputTokens int
-	GoalActive      bool
-	GoalCondition   string
-	Queued          int
-	CompactionCount int
-	LastCompactedAt time.Time
+	ID               string
+	CreatedAt        time.Time
+	LastActivityAt   time.Time
+	Model            message.ModelRef
+	Effort           message.Effort
+	WorkDir          string
+	ParentSession    string
+	TaskParentID     string
+	TaskAgentType    string
+	TaskDepth        int
+	SpawnedChildIDs  []string
+	Messages         int
+	Usage            provider.Usage
+	LastInputTokens  int
+	LastPromptTokens int
+	WindowTokens     int
+	GoalActive       bool
+	GoalCondition    string
+	Queued           int
+	CompactionCount  int
+	LastCompactedAt  time.Time
 }
 
 // oracleOf reads the authority: a session loaded from its journal.
@@ -64,8 +66,10 @@ func oracleOf(t *testing.T, sess *Session) indexOracle {
 		LastCompactedAt: sess.LastCompactedAt(),
 	}
 	o.GoalCondition, o.GoalActive = sess.ActiveGoal()
+	o.WindowTokens = sess.ContextWindowTokens()
 	if last, ok := sess.LastUsage(); ok {
 		o.LastInputTokens = last.InputTokens
+		o.LastPromptTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 	}
 	return o
 }
@@ -73,25 +77,27 @@ func oracleOf(t *testing.T, sess *Session) indexOracle {
 // oracleOfIndex projects a SessionIndex onto the same shape.
 func oracleOfIndex(ix SessionIndex) indexOracle {
 	return indexOracle{
-		ID:              ix.ID,
-		CreatedAt:       ix.CreatedAt,
-		LastActivityAt:  ix.LastActivityAt,
-		Model:           ix.Model,
-		Effort:          ix.Effort,
-		WorkDir:         ix.WorkDir,
-		ParentSession:   ix.ParentSession,
-		TaskParentID:    ix.TaskParentID,
-		TaskAgentType:   ix.TaskAgentType,
-		TaskDepth:       ix.TaskDepth,
-		SpawnedChildIDs: ix.SpawnedChildIDs,
-		Messages:        ix.Messages,
-		Usage:           ix.Usage,
-		LastInputTokens: ix.LastInputTokens,
-		GoalActive:      ix.GoalActive,
-		GoalCondition:   ix.GoalCondition,
-		Queued:          ix.Queued,
-		CompactionCount: ix.CompactionCount,
-		LastCompactedAt: ix.LastCompactedAt,
+		ID:               ix.ID,
+		CreatedAt:        ix.CreatedAt,
+		LastActivityAt:   ix.LastActivityAt,
+		Model:            ix.Model,
+		Effort:           ix.Effort,
+		WorkDir:          ix.WorkDir,
+		ParentSession:    ix.ParentSession,
+		TaskParentID:     ix.TaskParentID,
+		TaskAgentType:    ix.TaskAgentType,
+		TaskDepth:        ix.TaskDepth,
+		SpawnedChildIDs:  ix.SpawnedChildIDs,
+		Messages:         ix.Messages,
+		Usage:            ix.Usage,
+		LastInputTokens:  ix.LastInputTokens,
+		LastPromptTokens: ix.LastPromptTokens,
+		WindowTokens:     ix.WindowTokens,
+		GoalActive:       ix.GoalActive,
+		GoalCondition:    ix.GoalCondition,
+		Queued:           ix.Queued,
+		CompactionCount:  ix.CompactionCount,
+		LastCompactedAt:  ix.LastCompactedAt,
 	}
 }
 
@@ -463,6 +469,117 @@ func TestReadSessionIndexIgnoresUnusableSidecar(t *testing.T) {
 	}
 }
 
+func TestSessionIndexLastPromptTokensFoldsDelegatedUsage(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(persistCfg(dir, &scriptedProvider{name: "test"}))
+	if err := s.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	s.applyClaudeCodeUsage(provider.Usage{InputTokens: 5, CacheReadTokens: 200, CacheWriteTokens: 10}, 0.05)
+
+	last, ok := s.LastUsage()
+	if !ok {
+		t.Fatal("LastUsage not ok after a delegated turn")
+	}
+	wantUsed := last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.LastPromptTokens != wantUsed {
+		t.Errorf("cold LastPromptTokens = %d, want %d (the live sum a resident read reports)", ix.LastPromptTokens, wantUsed)
+	}
+}
+
+// TestReadSessionIndexRefoldsStaleVersionForNewField: a version-1 sidecar must refold.
+func TestReadSessionIndexRefoldsStaleVersionForNewField(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 3, CacheWriteTokens: 4}),
+	}}
+	cfg := persistCfg(dir, prov)
+	s := NewSession(cfg)
+	runTurns(t, s, 1)
+
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ix.Version = 1
+	ix.LastPromptTokens = 0
+	if err := os.WriteFile(filepath.Join(dir, s.ID+sessionIndexSuffix), mustMarshalIndex(t, ix), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if got.LastPromptTokens != 17 {
+		t.Errorf("LastPromptTokens = %d, want 17 (a version-1 sidecar must refold, not trust the zero it shipped with)", got.LastPromptTokens)
+	}
+}
+
+func TestSessionIndexWindowTokensReportsExplicitOverride(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+	}}
+	cfg := persistCfg(dir, prov)
+	cfg.Model = modelKnownBig // modelmeta's own window: 500_000
+	cfg.ContextWindowTokens = 42_000
+	s := NewSession(cfg)
+	runTurns(t, s, 1)
+
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.WindowTokens != 42_000 {
+		t.Errorf("WindowTokens = %d, want 42000 (the explicit override, not modelKnownBig's own 500000)", ix.WindowTokens)
+	}
+}
+
+func TestReadSessionIndexResolvesLegacyModelRecordWindow(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/big"}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.WindowTokens != 500_000 {
+		t.Errorf("WindowTokens = %d, want 500000 (modelKnownBig re-derived for a legacy record)", ix.WindowTokens)
+	}
+}
+
+func TestReadSessionIndexKeepsIntentionalDisarmAtZero(t *testing.T) {
+	stubContextWindowLookup(t, testContextWindowTable())
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/big","context_window_tokens":0}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.WindowTokens != 0 {
+		t.Errorf("WindowTokens = %d, want 0 (an intentional disarm must not be re-derived from Model)", ix.WindowTokens)
+	}
+}
+
 // mustMarshalIndex renders a sidecar exactly as the production writers do,
 // checksum included, so a test that alters a field still produces a file
 // that reaches the check it means to exercise.
@@ -566,11 +683,13 @@ func TestListSessionsMatchesIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, want := infos[0], SessionInfo{
-		ID:              ix.ID,
-		CreatedAt:       ix.CreatedAt,
-		Messages:        ix.Messages,
-		Usage:           ix.Usage,
-		LastInputTokens: ix.LastInputTokens,
+		ID:               ix.ID,
+		CreatedAt:        ix.CreatedAt,
+		Messages:         ix.Messages,
+		Usage:            ix.Usage,
+		LastInputTokens:  ix.LastInputTokens,
+		LastPromptTokens: ix.LastPromptTokens,
+		WindowTokens:     ix.WindowTokens,
 	}
 	if mustJSON(t, got) != mustJSON(t, want) {
 		t.Errorf("ListSessions entry = %s, want %s", mustJSON(t, got), mustJSON(t, want))
@@ -1144,7 +1263,9 @@ func TestListingNeverWritesSidecars(t *testing.T) {
 // numbers the index would have reported, not the numbers the pre-index scan
 // did. A compact record carries the summarization call's own spend;
 // LoadSession adds it to cumulative usage and so does the index, so the
-// fallback does too. LastInputTokens still moves for message records only.
+// fallback does too. LastInputTokens and LastPromptTokens still move for
+// message records only — a compact record's own cache tokens must not
+// count toward LastPromptTokens either.
 func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
 	dir := t.TempDir()
 	id := "ses_0123456789abcdef"
@@ -1152,8 +1273,8 @@ func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
 	// breaks, so the listing must take its fallback path.
 	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
 {"type":"model","model":"test/m1"}
-{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":11,"output_tokens":3}}
-{"type":"compact","usage":{"input_tokens":5,"output_tokens":2},"compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":11,"output_tokens":3,"cache_read_tokens":6,"cache_write_tokens":2}}
+{"type":"compact","usage":{"input_tokens":5,"output_tokens":2,"cache_read_tokens":50,"cache_write_tokens":50},"compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
 `
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
 		t.Fatal(err)
@@ -1175,6 +1296,41 @@ func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
 	}
 	if got.LastInputTokens != 11 {
 		t.Errorf("last_input_tokens = %d, want 11 (a compact record must not move it)", got.LastInputTokens)
+	}
+	if got.LastPromptTokens != 19 {
+		t.Errorf("last_prompt_tokens = %d, want 19 (11+6+2, a compact record's 100 cache tokens must not move it)", got.LastPromptTokens)
+	}
+}
+
+// TestListSessionsFallbackFoldsDelegatedUsage: the fallback scan must move
+// LastPromptTokens for a delegated-usage record, exactly as the index fold
+// does, or a claude-code turn reports the previous turn's size whenever the
+// sidecar is unavailable.
+func TestListSessionsFallbackFoldsDelegatedUsage(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_fedcba9876543210"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"test/m1"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hi"}]},"usage":{"input_tokens":11,"output_tokens":3,"cache_read_tokens":6,"cache_write_tokens":2}}
+{"type":"claude_code.usage","usage":{"input_tokens":5,"output_tokens":4,"cache_read_tokens":200,"cache_write_tokens":10}}
+{"type":"compact","compact":{"first_id":"absent","last_id":"absent","turns_folded":1,"summary":{"id":"cmpsum_x","role":"user"}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSessionIndex(dir, id); err == nil {
+		t.Fatal("test setup: the journal folded cleanly, so the fallback never runs")
+	}
+
+	infos, err := ListSessions(dir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("listed %d sessions, want 1", len(infos))
+	}
+	if got := infos[0].LastPromptTokens; got != 215 {
+		t.Errorf("last_prompt_tokens = %d, want 215 (5+200+10, the delegated turn)", got)
 	}
 }
 

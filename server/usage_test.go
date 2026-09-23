@@ -20,10 +20,17 @@ type usageJSONForTest struct {
 	LastInputTokens  int `json:"last_input_tokens,omitempty"`
 }
 
+// contextJSONForTest mirrors the openapi Context shape.
+type contextJSONForTest struct {
+	UsedTokens   int `json:"used_tokens"`
+	WindowTokens int `json:"window_tokens"`
+}
+
 type sessionJSONForTest struct {
 	ID                string                     `json:"id"`
 	Messages          int                        `json:"messages"`
 	Usage             usageJSONForTest           `json:"usage"`
+	Context           contextJSONForTest         `json:"context"`
 	LastActivityAt    time.Time                  `json:"last_activity_at"`
 	SubscriptionUsage *message.SubscriptionUsage `json:"subscription_usage"`
 }
@@ -31,6 +38,51 @@ type sessionJSONForTest struct {
 func withUsageTurn(text string, in, out int) []provider.Event {
 	msg := &message.Message{ID: message.ProviderCallID("m", text, 12), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}}
 	return []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: provider.Usage{InputTokens: in, OutputTokens: out}}}
+}
+
+// withCachedUsageTurn is withUsageTurn plus cache tokens, for the context
+// gauge tests: it must sum all three components, not InputTokens alone.
+func withCachedUsageTurn(text string, in, out, cacheRead, cacheWrite int) []provider.Event {
+	msg := &message.Message{ID: message.ProviderCallID("m", text, 12), Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}}
+	usage := provider.Usage{InputTokens: in, OutputTokens: out, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite}
+	return []provider.Event{{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: usage}}
+}
+
+// TestSessionContextUsageSurfacedOnGet is the red-first test for the
+// context-window gauge (a real fleet turn once reported input_tokens=271
+// against cache_read_tokens=319744 — InputTokens alone is not the prompt
+// size): GET /session/{id} must surface context.used_tokens as the sum of
+// a completed turn's InputTokens, CacheReadTokens, and CacheWriteTokens —
+// the same expression maybeAutoCompact compares against the window — and
+// context.window_tokens as 0 for a model the registry does not recognize
+// (test/m1), which a consumer must read as "unknown", not "full".
+func TestSessionContextUsageSurfacedOnGet(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		withCachedUsageTurn("first", 271, 20, 319744, 0),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	sse := h.openSSE("?from=0", "")
+	h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hi"}},
+	})
+	sse.collectUntilIdle(t)
+
+	resp, data := h.do("GET", "/session/"+id, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET session status %d: %s", resp.StatusCode, data)
+	}
+	var sess sessionJSONForTest
+	if err := json.Unmarshal(data, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if want := 271 + 319744; sess.Context.UsedTokens != want {
+		t.Errorf("Context.UsedTokens = %d, want %d (input+cache_read+cache_write, not input_tokens alone)", sess.Context.UsedTokens, want)
+	}
+	if sess.Context.WindowTokens != 0 {
+		t.Errorf("Context.WindowTokens = %d, want 0 (test/m1 has no known context window)", sess.Context.WindowTokens)
+	}
 }
 
 // TestSessionUsageSurfacedOnGet is the red-first test for issue #62 layer 2:

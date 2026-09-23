@@ -26,9 +26,12 @@ type lastTurnJSONForTest struct {
 // durable turn.end record with outcome "completed" and no error, reaches the
 // SSE stream, and is surfaced as Session.last_turn — a poller watching only
 // GET /session/{id} must be able to tell "idle, and the last turn actually
-// finished" without inferring anything from message part shapes.
+// finished" without inferring anything from message part shapes. It also
+// carries the turn's context_used_tokens/context_window_tokens (mirroring
+// Session.context), so a live SSE consumer's gauge updates every turn
+// without a separate GET /session poll.
 func TestTurnEndOnPromptCompletionExposedAsLastTurn(t *testing.T) {
-	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("all good")}}
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{withCachedUsageTurn("all good", 10, 5, 3, 4)}}
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
 
@@ -49,6 +52,12 @@ func TestTurnEndOnPromptCompletionExposedAsLastTurn(t *testing.T) {
 	}
 	if end.Error != "" {
 		t.Errorf("turn.end error = %q, want empty on completion", end.Error)
+	}
+	if want := 10 + 3 + 4; end.ContextUsedTokens != want {
+		t.Errorf("turn.end context_used_tokens = %d, want %d (input+cache_read+cache_write)", end.ContextUsedTokens, want)
+	}
+	if end.ContextWindowTokens != 0 {
+		t.Errorf("turn.end context_window_tokens = %d, want 0 (test/m1 has no known context window)", end.ContextWindowTokens)
 	}
 
 	idle := sse.waitFor(t, "session.status")

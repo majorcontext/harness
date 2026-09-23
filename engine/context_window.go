@@ -99,6 +99,10 @@ var modelContextWindowLookup = modelmeta.ContextWindow
 // opt-out, no model at all, or a model the registry knows whose window is
 // simply below the auto-arm floor.
 func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens int, source string, miss error) {
+	return resolveContextWindowLogged(explicitTokens, model, true)
+}
+
+func resolveContextWindowLogged(explicitTokens int, model message.ModelRef, logFloor bool) (tokens int, source string, miss error) {
 	if explicitTokens > 0 {
 		return explicitTokens, contextWindowSourceConfig, nil
 	}
@@ -124,11 +128,21 @@ func resolveContextWindow(explicitTokens int, model message.ModelRef) (tokens in
 		// small to auto-arm — not evidence of corruption. Warning here
 		// would page a false "metadata bug" alarm on every session that
 		// starts on or switches to such a model.
-		slog.Info("engine: model-derived context window below auto-compaction floor; compaction disabled",
-			"model", model.String(), "tokens", got, "floor", minAutoContextWindowTokens)
+		if logFloor {
+			slog.Info("engine: model-derived context window below auto-compaction floor; compaction disabled",
+				"model", model.String(), "tokens", got, "floor", minAutoContextWindowTokens)
+		}
 		return 0, contextWindowSourceDisabled, nil
 	}
 	return got, contextWindowSourceModelDerived, nil
+}
+
+// ResolveModelContextWindow reports the model-derived window for model (0
+// on a registry miss or a below-floor entry), ignoring any Config
+// override. It never logs, unlike resolveContextWindow.
+func ResolveModelContextWindow(model message.ModelRef) int {
+	tokens, _, _ := resolveContextWindowLogged(0, model, false)
+	return tokens
 }
 
 // requiredContextWindowErr turns a resolveContextWindow miss into this

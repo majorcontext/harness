@@ -69,6 +69,9 @@ type sessionJSON struct {
 	// engine tracks usage for every session, resident or reloaded from its
 	// log — a fresh, never-prompted session simply reports all zeros.
 	Usage usageJSON `json:"usage"`
+	// Context is the session's context-window gauge (see contextJSON).
+	// Always present, resident or not.
+	Context contextJSON `json:"context"`
 	// LastActivityAt is the timestamp of the most recent message appended
 	// to the session (user, assistant, or tool) — or CreatedAt if none has
 	// been appended yet. See engine.Session.LastActivityAt's doc comment
@@ -285,6 +288,35 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 		Messages:         info.Messages,
 		LastInputTokens:  info.LastInputTokens,
 	}
+}
+
+// contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
+// the exact sum maybeAutoCompact (engine/compact.go) compares against
+// WindowTokens, so this gauge and auto-compaction never disagree.
+// WindowTokens is 0 when automatic compaction is disarmed — a caller must
+// treat 0 as "unknown", never as "full".
+type contextJSON struct {
+	UsedTokens   int `json:"used_tokens"`
+	WindowTokens int `json:"window_tokens"`
+}
+
+// contextJSONForSession mirrors usageJSONForSession.
+func contextJSONForSession(sess *engine.Session) contextJSON {
+	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
+	if last, ok := sess.LastUsage(); ok {
+		out.UsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	}
+	return out
+}
+
+// contextJSONForInfo mirrors usageJSONForInfo.
+func contextJSONForInfo(info engine.SessionInfo) contextJSON {
+	return contextJSON{UsedTokens: info.LastPromptTokens, WindowTokens: info.WindowTokens}
+}
+
+// contextJSONForIndex mirrors buildSessionFromIndex's cold projections.
+func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
+	return contextJSON{UsedTokens: ix.LastPromptTokens, WindowTokens: ix.WindowTokens}
 }
 
 // lastTurnJSON is the openapi LastTurn shape.
@@ -1673,6 +1705,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		State    string        `json:"state"`
 		LastTurn *lastTurnJSON `json:"last_turn,omitempty"`
 		Usage    usageJSON     `json:"usage"`
+		Context  contextJSON   `json:"context"`
 	}
 	result := map[string]entry{}
 
@@ -1693,6 +1726,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			State:    s.compositeStateFor(m.id, m.running),
 			LastTurn: s.lastTurnFor(m.id),
 			Usage:    usageJSONForSession(m.sess),
+			Context:  contextJSONForSession(m.sess),
 		}
 	}
 	// Ids first, indexes second — the same rule GET /session follows. A
@@ -1720,6 +1754,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			State:    s.compositeStateFor(id, false),
 			LastTurn: s.lastTurnFor(id),
 			Usage:    usageJSONForInfo(info),
+			Context:  contextJSONForInfo(info),
 		}
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -2580,12 +2615,12 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
 	case err == nil:
-		s.recordTurnEnd(id, "completed", nil)
+		s.recordTurnEnd(id, st.sess, "completed", nil)
 	case errors.Is(err, context.Canceled):
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, turnEndOutcome(err), err)
+		s.recordTurnEnd(id, st.sess, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 	if s.postIdleEmitRace != nil {
@@ -3084,7 +3119,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.syncMessages(id)
 	switch {
 	case err == nil && res.Achieved:
-		s.recordTurnEnd(id, "completed", nil)
+		s.recordTurnEnd(id, st.sess, "completed", nil)
 	case err == nil && res.Reason == "goal cleared":
 		// Cleared in flight without the context being cancelled: goal.cleared
 		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
@@ -3092,12 +3127,12 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	case err == nil:
 		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
 		// PursueGoal's only remaining terminal case (see its doc comment).
-		s.recordTurnEnd(id, outcomeMaxTurnsExceeded, nil)
+		s.recordTurnEnd(id, st.sess, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, turnEndOutcome(err), err)
+		s.recordTurnEnd(id, st.sess, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 
@@ -4373,6 +4408,7 @@ func (s *Server) buildSession(lv liveSession) sessionJSON {
 		WorkDir:           sess.WorkDir(),
 		LastTurn:          lastTurn,
 		Usage:             usageJSONForSession(sess),
+		Context:           contextJSONForSession(sess),
 		LastActivityAt:    sess.LastActivityAt(),
 		ParentSession:     sess.ParentSession(),
 		CompactionCount:   sess.CompactionCount(),
@@ -4431,6 +4467,7 @@ func (s *Server) buildSessionFromIndex(ix engine.SessionIndex) sessionJSON {
 			Messages:         ix.Messages,
 			LastInputTokens:  ix.LastInputTokens,
 		},
+		Context:         contextJSONForIndex(ix),
 		LastActivityAt:  ix.LastActivityAt,
 		ParentSession:   ix.ParentSession,
 		CompactionCount: ix.CompactionCount,

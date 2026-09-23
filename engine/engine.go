@@ -1813,7 +1813,6 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
-	s.persistModel(ref)
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
@@ -1834,6 +1833,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 			logContextWindowArmed(s.ID, ref, nextTokens, nextSource, "model_switch")
 		}
 	}
+	s.persistModel(ref) // after the window settles, to persist ref's window
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
 
@@ -2300,6 +2300,14 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastUsage, s.haveLastUsage
+}
+
+// ContextWindowTokens returns this session's resolved context window — 0
+// when automatic compaction is disarmed.
+func (s *Session) ContextWindowTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg.ContextWindowTokens
 }
 
 // applySubscriptionUsage records u as this session's latest subscription-

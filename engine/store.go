@@ -274,6 +274,9 @@ type record struct {
 	TaskDepth int              `json:"task_depth,omitempty"`
 	Message   *message.Message `json:"message,omitempty"`
 	Model     message.ModelRef `json:"model,omitzero"`
+	// ContextWindowTokens carries s.cfg.ContextWindowTokens on a recModel
+	// record. A *int: nil means a legacy record, distinct from a real disarm.
+	ContextWindowTokens *int `json:"context_window_tokens,omitempty"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -578,6 +581,9 @@ type SessionInfo struct {
 	// LastInputTokens is the input-token count of the most recent message
 	// record carrying Usage (0 if none do).
 	LastInputTokens int
+	// LastPromptTokens mirrors SessionIndex.LastPromptTokens.
+	LastPromptTokens int
+	WindowTokens     int
 }
 
 // addUsage accumulates one record's usage into a listing summary.
@@ -670,7 +676,9 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		s.lastPersistErr = err
 		return
 	}
-	if err := s.writeRecord(record{Type: recModel, Model: ref}); err != nil {
+	tokens := s.cfg.ContextWindowTokens
+	rec := record{Type: recModel, Model: ref, ContextWindowTokens: &tokens}
+	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1140,9 +1148,10 @@ func (s *Session) ensureLog() error {
 		// under a mid-write crash is a truncated final line, which
 		// LoadSession already tolerates.
 		var buf bytes.Buffer
+		windowTokens := s.cfg.ContextWindowTokens
 		headerRecs := []record{
 			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
-			{Type: recModel, Model: s.model},
+			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens},
 		}
 		// A selection made before the log existed has no other durable
 		// carrier: persistMCPToolsSelected no-ops until logStarted, and
@@ -2243,11 +2252,13 @@ func ReadSessionInfo(dir, id string) (SessionInfo, error) {
 func sessionInfoAt(dir, id string) (SessionInfo, error) {
 	if ix, err := readSessionIndexAt(dir, id, false); err == nil {
 		return SessionInfo{
-			ID:              ix.ID,
-			CreatedAt:       ix.CreatedAt,
-			Messages:        ix.Messages,
-			Usage:           ix.Usage,
-			LastInputTokens: ix.LastInputTokens,
+			ID:               ix.ID,
+			CreatedAt:        ix.CreatedAt,
+			Messages:         ix.Messages,
+			Usage:            ix.Usage,
+			LastInputTokens:  ix.LastInputTokens,
+			LastPromptTokens: ix.LastPromptTokens,
+			WindowTokens:     ix.WindowTokens,
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
@@ -2288,10 +2299,12 @@ func readSessionInfo(path string) (SessionInfo, error) {
 		return SessionInfo{}, err
 	}
 	type headRecord struct {
-		Type      string          `json:"type"`
-		ID        string          `json:"id"`
-		CreatedAt time.Time       `json:"created_at"`
-		Usage     *provider.Usage `json:"usage,omitempty"`
+		Type                string           `json:"type"`
+		ID                  string           `json:"id"`
+		CreatedAt           time.Time        `json:"created_at"`
+		Usage               *provider.Usage  `json:"usage,omitempty"`
+		Model               message.ModelRef `json:"model,omitzero"`
+		ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
 	}
 	var info SessionInfo
 	first := true
@@ -2305,17 +2318,28 @@ func readSessionInfo(path string) (SessionInfo, error) {
 			first = false
 			return nil
 		}
-		// Two record types carry usage a reader counts, and only two: a
-		// message record and a compact record. LoadSession reads exactly
-		// those, so a stray usage field on any other record — a goal
-		// record written by a future build, say — must not inflate a
-		// listing that the authoritative load would not.
+		// Only a message, a compact, and a delegated-usage record carry
+		// usage a reader counts. LoadSession reads exactly those, so a
+		// stray usage field on any other record — a goal record written
+		// by a future build, say — must not inflate a listing that the
+		// authoritative load would not.
 		switch rec.Type {
 		case recMessage:
 			info.Messages++
 			if rec.Usage != nil {
 				info.addUsage(*rec.Usage)
 				info.LastInputTokens = rec.Usage.InputTokens
+				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			}
+		case recClaudeCodeUsage:
+			if rec.Usage != nil {
+				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			}
+		case recModel:
+			if rec.ContextWindowTokens != nil {
+				info.WindowTokens = *rec.ContextWindowTokens
+			} else {
+				info.WindowTokens = ResolveModelContextWindow(rec.Model)
 			}
 		case recCompact:
 			if rec.Usage != nil {

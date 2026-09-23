@@ -182,7 +182,7 @@ components:
 
     Session:
       type: object
-      required: [id, created_at, model, status, state, messages, workdir, usage, last_activity_at, plugins, queued, subscription_usage]
+      required: [id, created_at, model, status, state, messages, workdir, usage, context, last_activity_at, plugins, queued, subscription_usage]
       properties:
         id:
           type: string
@@ -260,6 +260,11 @@ components:
             failure mode). Always present, resident or not — the engine
             tracks this for every session, including one reloaded from its
             log after a restart.
+        context:
+          $ref: "#/components/schemas/Context"
+          description: >
+            The session's context-window gauge. Always present, resident or
+            not, same as `usage`.
         last_activity_at:
           type: string
           format: date-time
@@ -486,6 +491,35 @@ components:
             the request that just went out, distinct from the cumulative
             total above. Absent (0) until at least one turn has completed.
 
+    Context:
+      type: object
+      description: >
+        A session's context-window gauge, surfaced on Session.context and
+        each GET /session/status entry's `context`, and mirrored per turn
+        on the turn.end event (context_used_tokens/context_window_tokens).
+      required: [used_tokens, window_tokens]
+      properties:
+        used_tokens:
+          type: integer
+          description: >
+            The most recent completed turn's provider-reported input_tokens
+            plus cache_read_tokens plus cache_write_tokens — the full prompt
+            size, not input_tokens alone (which under prompt caching can be
+            a small fraction of it). 0 until a turn completes, or when the
+            provider reported no usage for it; automatic compaction can
+            still act on its own internal size estimate in that case, so 0
+            here does not mean compaction has nothing to do.
+        window_tokens:
+          type: integer
+          description: >
+            The session's resolved context window, in tokens. 0 when
+            automatic compaction is disarmed for this session — the model
+            has no known window, or the operator disabled it — and a
+            caller must treat 0 as "unknown", never as "full". A session
+            whose journal predates this field reports the model's own
+            window on a cold read, which can differ from an explicit
+            operator override the journal never recorded.
+
     LastTurn:
       type: object
       description: >
@@ -698,7 +732,7 @@ components:
         deliberately byte-compatible with opencode's /session/status response
         shape (existing orchestration handlers port without parsing changes);
         "state" is additive — see SessionState for its precedence rule.
-      required: [type, state, usage]
+      required: [type, state, usage, context]
       properties:
         type:
           $ref: "#/components/schemas/SessionStatus"
@@ -712,6 +746,11 @@ components:
           description: >
             Same field as Session.usage — cheaply derived (no full session
             load) for a non-resident session, same as `type`/`state` above.
+        context:
+          $ref: "#/components/schemas/Context"
+          description: >
+            Same field as Session.context, cheaply derived like `usage`
+            above.
 
     StatusResponse:
       type: object
@@ -1595,7 +1634,11 @@ components:
             /session/{id}/goal) finishes, mirrored onto Session.last_turn
             and each /session/status entry's last_turn, so a client can tell
             "idle because done" from "idle because the turn died" without
-            inferring it from message part shapes. A goal loop that
+            inferring it from message part shapes. It also carries
+            `context_used_tokens`/`context_window_tokens`, the same two
+            numbers as Session.context, so a live SSE consumer's gauge
+            updates every turn without a separate poll — see Context and
+            those two properties' own descriptions. A goal loop that
             exhausts `max_turns` without the evaluator ever returning MET
             records "max_turns_exceeded", never "completed" — it gave up, it
             did not finish. A deliberate abort or clear (POST
@@ -2037,6 +2080,22 @@ components:
             nothing" and "the CLI reported exactly 0" indistinguishable —
             both leave the key ABSENT. A client must render "unknown",
             never "0", whenever the key is missing.
+        context_used_tokens:
+          type: integer
+          description: >
+            Carried on turn.end only: the same value as Context.used_tokens
+            (see that schema), read from the session at the moment the
+            turn settled — so an SSE consumer's gauge updates every turn
+            without a separate GET /session poll. Absent (0) when the
+            server had no live session to read at settle time.
+        context_window_tokens:
+          type: integer
+          description: >
+            Carried on turn.end only: the same value as
+            Context.window_tokens. Absent (0) both when automatic
+            compaction is disarmed for this session and when the server
+            had no live session to read at settle time — a client must
+            treat either as "unknown", never as "full".
 
     JournalResponse:
       type: object

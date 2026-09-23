@@ -26,7 +26,7 @@ import (
 // refolds — never guesses — when a stored index carries any other value, so
 // a field added here needs no migration: bump this and every stale sidecar
 // is rebuilt on its next read.
-const sessionIndexVersion = 1
+const sessionIndexVersion = 2
 
 // sessionIndexSuffix is appended to a session id to name its sidecar. It
 // deliberately does NOT end in ".jsonl", so ListSessionIndexes' own scan for
@@ -78,6 +78,11 @@ type SessionIndex struct {
 	DurableMessages int            `json:"durable_messages"`
 	Usage           provider.Usage `json:"usage,omitzero"`
 	LastInputTokens int            `json:"last_input_tokens,omitempty"`
+	// LastPromptTokens is LastInputTokens's sibling: InputTokens plus
+	// CacheReadTokens plus CacheWriteTokens from the same record, the full
+	// prompt size maybeAutoCompact compares against the window (compact.go).
+	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
+	WindowTokens     int `json:"window_tokens,omitempty"`
 
 	// GoalActive and GoalCondition are the durable goal state LoadSession
 	// restores (store.go's recGoalSet fold): the condition of a goal set
@@ -183,23 +188,24 @@ type indexCompact struct {
 // so a record type the fold ignores costs a type-string compare and
 // nothing else.
 type indexRecord struct {
-	Type          string           `json:"type"`
-	ID            string           `json:"id,omitempty"`
-	CreatedAt     time.Time        `json:"created_at,omitzero"`
-	WorkDir       string           `json:"workdir,omitempty"`
-	ParentSession string           `json:"parent_session,omitempty"`
-	TaskParentID  string           `json:"task_parent_id,omitempty"`
-	TaskAgentType string           `json:"task_agent_type,omitempty"`
-	TaskDepth     int              `json:"task_depth,omitempty"`
-	Model         message.ModelRef `json:"model,omitzero"`
-	Effort        message.Effort   `json:"effort,omitempty"`
-	ServiceTier   string           `json:"service_tier,omitempty"`
-	Message       *indexMessage    `json:"message,omitempty"`
-	Usage         *provider.Usage  `json:"usage,omitempty"`
-	Goal          *goalRecord      `json:"goal,omitempty"`
-	Prompt        *promptRecord    `json:"prompt,omitempty"`
-	TaskSpawn     *taskSpawnRecord `json:"task_spawn,omitempty"`
-	Compact       *indexCompact    `json:"compact,omitempty"`
+	Type                string           `json:"type"`
+	ID                  string           `json:"id,omitempty"`
+	CreatedAt           time.Time        `json:"created_at,omitzero"`
+	WorkDir             string           `json:"workdir,omitempty"`
+	ParentSession       string           `json:"parent_session,omitempty"`
+	TaskParentID        string           `json:"task_parent_id,omitempty"`
+	TaskAgentType       string           `json:"task_agent_type,omitempty"`
+	TaskDepth           int              `json:"task_depth,omitempty"`
+	Model               message.ModelRef `json:"model,omitzero"`
+	ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
+	Effort              message.Effort   `json:"effort,omitempty"`
+	ServiceTier         string           `json:"service_tier,omitempty"`
+	Message             *indexMessage    `json:"message,omitempty"`
+	Usage               *provider.Usage  `json:"usage,omitempty"`
+	Goal                *goalRecord      `json:"goal,omitempty"`
+	Prompt              *promptRecord    `json:"prompt,omitempty"`
+	TaskSpawn           *taskSpawnRecord `json:"task_spawn,omitempty"`
+	Compact             *indexCompact    `json:"compact,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -208,21 +214,22 @@ type indexRecord struct {
 // folded from disk take the identical branch.
 func indexRecordOf(rec record) indexRecord {
 	out := indexRecord{
-		Type:          rec.Type,
-		ID:            rec.ID,
-		CreatedAt:     rec.CreatedAt,
-		WorkDir:       rec.WorkDir,
-		ParentSession: rec.ParentSession,
-		TaskParentID:  rec.TaskParentID,
-		TaskAgentType: rec.TaskAgentType,
-		TaskDepth:     rec.TaskDepth,
-		Model:         rec.Model,
-		Effort:        rec.Effort,
-		ServiceTier:   rec.ServiceTier,
-		Usage:         rec.Usage,
-		Goal:          rec.Goal,
-		Prompt:        rec.Prompt,
-		TaskSpawn:     rec.TaskSpawn,
+		Type:                rec.Type,
+		ID:                  rec.ID,
+		CreatedAt:           rec.CreatedAt,
+		WorkDir:             rec.WorkDir,
+		ParentSession:       rec.ParentSession,
+		TaskParentID:        rec.TaskParentID,
+		TaskAgentType:       rec.TaskAgentType,
+		TaskDepth:           rec.TaskDepth,
+		Model:               rec.Model,
+		ContextWindowTokens: rec.ContextWindowTokens,
+		Effort:              rec.Effort,
+		ServiceTier:         rec.ServiceTier,
+		Usage:               rec.Usage,
+		Goal:                rec.Goal,
+		Prompt:              rec.Prompt,
+		TaskSpawn:           rec.TaskSpawn,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)
@@ -318,9 +325,19 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		if rec.Usage != nil {
 			f.addUsage(*rec.Usage)
 			f.ix.LastInputTokens = rec.Usage.InputTokens
+			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+		}
+	case recClaudeCodeUsage:
+		if rec.Usage != nil {
+			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 		}
 	case recModel:
 		f.ix.Model = rec.Model
+		if rec.ContextWindowTokens != nil {
+			f.ix.WindowTokens = *rec.ContextWindowTokens
+		} else {
+			f.ix.WindowTokens = ResolveModelContextWindow(rec.Model)
+		}
 	case recEffort:
 		f.ix.Effort = rec.Effort
 	case recServiceTier:
