@@ -177,8 +177,8 @@ func TestRunTaskToolSpawnEffort(t *testing.T) {
 		setParentEffort bool
 	}{
 		{name: "override", effort: "high", want: message.EffortHigh},
-		{name: "omitted", want: message.EffortLow},
-		{name: "omitted after parent effort change", want: message.EffortHigh, setParentEffort: true},
+		{name: "omitted", want: message.EffortUnset},
+		{name: "omitted after parent effort change", want: message.EffortUnset, setParentEffort: true},
 		{name: "invalid", effort: "extreme", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

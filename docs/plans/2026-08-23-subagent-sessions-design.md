@@ -134,7 +134,8 @@ precedent for a multi-operation session tool (`goal_tool.go`,
   withheld at the limit, but a race is still answered with an error, not
   a crash), tree concurrency cap reached.
 - Optional `model` overrides the definition's model, which overrides the
-  parent's. Optional `effort` sets the child's reasoning-effort level.
+  parent's. Optional `effort` sets the child's reasoning-effort level; omitted
+  means the provider default.
 
 **cancel**, **status**, **send**, and **log** are ancestor-gated: `session_id`
 must be a descendant of the calling session — spawned by it directly, or

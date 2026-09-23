@@ -216,7 +216,8 @@ current model is.
 
 The `task` tool's `spawn` action takes an optional `effort`. It sets the
 child's create-time level on the child's session header. When `effort` is
-omitted, the child takes the parent's current effort.
+omitted, the child runs at the provider default and never inherits the
+parent's effort.
 
 **Effort at the three request-build sites is NOT uniform, by design.** The
 main turn (`streamTurn`, `engine/engine.go`) sends `s.Effort()` — the

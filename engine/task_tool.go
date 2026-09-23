@@ -177,7 +177,7 @@ func taskTool() Tool {
 					"agent": {"type": "string", "description": "spawn only: the agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
 					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
-					"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high"},
+					"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high; omitted means the provider default"},
 					"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 					"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 				}
