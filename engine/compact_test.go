@@ -2373,6 +2373,50 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
+// TestPromptCompactCommandRunsCompactInsteadOfModelTurn: a native-lane
+// "/compact" prompt used to be appended as an ordinary user message with no
+// compaction event ever fired.
+func TestPromptCompactCommandRunsCompactInsteadOfModelTurn(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	var events []Event
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		OnEvent:   func(ev Event) { events = append(events, ev) },
+	})
+	runTurns(t, s, 3)
+
+	msg, err := s.Prompt(context.Background(), "/compact")
+	if err != nil {
+		t.Fatalf("Prompt(/compact): %v", err)
+	}
+	for _, m := range s.History() {
+		if m.Parts.Text() == "/compact" {
+			t.Fatalf("history contains a literal /compact user message: %+v", m)
+		}
+	}
+	if msg == nil || !strings.Contains(msg.Parts.Text(), "SUMMARY") {
+		t.Fatalf("Prompt(/compact) returned %+v, want the compaction summary", msg)
+	}
+	var sawStarted, sawCompacted bool
+	for _, ev := range events {
+		switch ev.Type {
+		case EventCompactionStarted:
+			sawStarted = true
+		case EventHistoryCompacted:
+			sawCompacted = true
+		}
+	}
+	if !sawStarted || !sawCompacted {
+		t.Fatalf("sawStarted=%v sawCompacted=%v, want both true", sawStarted, sawCompacted)
+	}
+}
+
 // TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated is the
 // red-first regression test for NIT 1: forceCompactionCheck used to survive
 // a switch BACK to claude-code delegation — SetModel's switch table cleared

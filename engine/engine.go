@@ -2830,33 +2830,18 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	// A session delegated to the Claude Code CLI (ClaudeCodeProviderFamily
-	// — see engine/claude_code_backend.go) dispatches here, FIRST, before
-	// every check and assembly step below: ContextWindowErr,
-	// ensureInstructions, ensureSkills, and maybeAutoCompact are all
-	// native-loop-only concerns (harness's own context-window bookkeeping,
-	// AGENTS.md/Agent-Skills injection into a system prompt this path
-	// never sends, and harness's own auto-compaction) that make no sense
-	// for a turn Claude Code drives end to end with its own context
-	// management. Appending the user message and handing off to
-	// runAgenticLoop is the entire job here; runAgenticLoop's own
-	// identical claudeCodeDelegated check (its doc comment explains why
-	// BOTH checks exist) is what also catches the goal-loop's direct
-	// runAgenticLoop retry call, which never reaches this function at all.
+	// A "/compact" prompt is a command, not model input — see
+	// RunCompactCommand.
+	if isExplicitCompactCommand(text, blobs) {
+		res, err := s.RunCompactCommand(ctx, CompactOptions{})
+		if err != nil {
+			s.emitSessionError(err)
+			return nil, err
+		}
+		return res.Summary, nil
+	}
 	if s.claudeCodeDelegated() {
-		msg := message.Message{
-			ID:            ResolveMessageID(id),
-			Role:          message.RoleUser,
-			Parts:         promptParts(text, blobs),
-			CreatedAt:     time.Now().UTC(),
-			Origin:        origin,
-			OperatorBatch: operatorBatch,
-		}
-		if prov != nil {
-			msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
-		}
-		s.append(msg)
-		return s.runAgenticLoop(ctx)
+		return s.dispatchClaudeCodeTurn(ctx, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -2910,6 +2895,27 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 		s.emitSessionError(err)
 		return nil, err
 	}
+	msg := message.Message{
+		ID:            ResolveMessageID(id),
+		Role:          message.RoleUser,
+		Parts:         promptParts(text, blobs),
+		CreatedAt:     time.Now().UTC(),
+		Origin:        origin,
+		OperatorBatch: operatorBatch,
+	}
+	if prov != nil {
+		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
+	}
+	s.append(msg)
+	return s.runAgenticLoop(ctx)
+}
+
+// dispatchClaudeCodeTurn appends text as a user message and runs it through
+// the Claude Code CLI. Shared by promptWithOrigin's ordinary delegated
+// dispatch and RunCompactCommand's harness-issued "/compact" — the latter
+// must not re-enter promptWithOrigin, which would recheck
+// isExplicitCompactCommand and recurse.
+func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
 		Role:          message.RoleUser,

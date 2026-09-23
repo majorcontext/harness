@@ -2334,6 +2334,15 @@ components:
             summarization provider is never called. summarizer_empty means
             the provider WAS called (and billed) but returned no usable
             text.
+        claude_code_delegated:
+          type: boolean
+          description: >
+            True when this session is delegated to the Claude Code CLI: this
+            call issued the CLI's own compact command instead of folding
+            harness's journal, and every other field is absent/zero — the
+            CLI's result is observable only via the compaction.started and
+            compaction.claude_code events, never turns_folded/first_id/
+            last_id/summary.
 
     GoalRequest:
       type: object
@@ -3307,7 +3316,10 @@ paths:
         registers/updates-in-place (goal), exactly as it would against a
         busy prompt or goal loop. A successful, non-empty compaction emits
         the summary via an ordinary `message` event first, then a durable
-        `history.compacted` event/record (see the Event schema).
+        `history.compacted` event/record (see the Event schema). On a
+        session delegated to the Claude Code CLI, this issues the CLI's own
+        compact command instead of folding harness's journal — see
+        claude_code_delegated on CompactResponse.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:

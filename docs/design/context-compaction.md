@@ -201,17 +201,23 @@ to the real-error case above (`Prompt` fails outright) and the conclusive
 case (`Prompt` proceeds without ever having recorded the pre-compaction
 attempt's own text).
 
-`POST /session/{id}/compact` is guarded the other direction: it refuses a
-CURRENTLY-delegated session. A resident session is checked before
-`claimForPrompt` (409, `server/handlers.go`'s
-`rejectClaudeCodeDelegatedCompact`, the same before-the-claim shape
-`rejectManagedChildTurn` already uses); every session is re-checked AFTER
-the claim, on the exact object `claimForPrompt` resolved, since `SetModel`
-takes no run slot and a native-to-claude-code switch can land in the
-window between the two. `Session.Compact` itself carries the identical
-guard as the authoritative backstop for any other caller. None of the
-three runs harness's summarizer against a journal the CLI's own context
-management has already made irrelevant.
+**A `/compact` prompt** (exact text, trimmed, no attachments) is a command,
+not model input: `promptWithOrigin` intercepts it before either lane's
+ordinary dispatch, on every lane, so a client never has to know which lane a
+session is on. `POST /session/{id}/compact` and an explicit `/compact` prompt both funnel
+through one entry point, `Session.RunCompactCommand`: on a native session it
+calls `Session.Compact`; on a CURRENTLY-delegated session, `Session.Compact`
+itself still refuses (harness has no journal to fold there), so
+`RunCompactCommand` instead issues the Claude Code CLI's own `compact`
+command — the CLI's published control-request surface
+(`@anthropic-ai/claude-agent-sdk`'s `sdk.d.ts`) has no separate compaction
+trigger, so sending its command is the only mechanism. The command is
+dispatched with `message.OriginEngine`, never the caller's own text or
+provenance: harness decides to compact, the caller's literal prompt is never
+what reaches the CLI. A delegated compaction still fires
+`EventCompactionStarted` (the CLI's own "compacting" status), settling in
+`EventClaudeCodeCompacted`, never `EventHistoryCompacted` — no harness
+journal splice happens there.
 
 ## 2. Mechanism
 

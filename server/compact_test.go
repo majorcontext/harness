@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -595,46 +595,35 @@ func TestCompactEndpointUnknownSessionIs404(t *testing.T) {
 // slot or calling Session.Compact, rather than a 200 that accomplishes
 // nothing or (worse) a 500 from a native-provider transcoder choking on
 // claude-code-produced history.
-func TestCompactEndpointRejectsClaudeCodeDelegatedSession(t *testing.T) {
+// TestCompactEndpointDelegatesToClaudeCodeCLI: POST /session/{id}/compact
+// on a claude-code-delegated session used to refuse with 409 instead of
+// issuing the CLI's own compact command.
+func TestCompactEndpointDelegatesToClaudeCodeCLI(t *testing.T) {
+	bin := buildFakeClaudeForServer(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "test"}
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{}, nativeProv)
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
 	id := h.createSession("")
+	sse := h.openSSE("", "")
 
-	// Pinned to exactly 409 with a reason naming the Claude Code CLI (NIT 4
-	// of the fix round): the docs and the PR body both specify 409, and a
-	// test that accepts any 4xx cannot fail if the status regresses to,
-	// say, a 400 or a 422 that happens to also carry a nonempty body.
 	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("compact on a claude-code-delegated session status = %d, want 409: %s", resp.StatusCode, data)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want 200: %s", resp.StatusCode, data)
 	}
-	var out struct {
-		Error string `json:"error"`
+	var out compactResponseJSON
+	mustUnmarshal(t, data, &out)
+	if !out.ClaudeCodeDelegated {
+		t.Errorf("ClaudeCodeDelegated = false, want true")
 	}
-	if err := json.Unmarshal(data, &out); err != nil {
-		t.Fatalf("decode error body: %v (%s)", err, data)
-	}
-	if !strings.Contains(out.Error, "Claude Code CLI") {
-		t.Fatalf("error body = %q, want it to name the Claude Code CLI as the reason", out.Error)
+	if out.TurnsFolded != 0 || out.FirstID != "" || out.LastID != "" || out.Summary != nil {
+		t.Errorf("delegated compact response carries native fold fields: %+v", out)
 	}
 
-	// Never claimed the run slot: a session that was never running before
-	// this call is still idle/idle/not-queued afterward, not stranded busy
-	// by a rejection that skipped the claim/release bracket.
-	sessResp, sessData := h.do("GET", "/session/"+id, nil)
-	if sessResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET session status %d: %s", sessResp.StatusCode, sessData)
-	}
-	var got struct {
-		Status string `json:"status"`
-		State  string `json:"state"`
-		Queued int    `json:"queued"`
-	}
-	mustUnmarshal(t, sessData, &got)
-	if got.Status != "idle" || got.State != "idle" || got.Queued != 0 {
-		t.Errorf("after a rejected compact, status=%q state=%q queued=%d, want idle/idle/0", got.Status, got.State, got.Queued)
-	}
+	sse.waitFor(t, "compaction.started")
+	sse.waitFor(t, "compaction.claude_code")
 }
 
 // TestCompactEndpointRequiresAuth mirrors every other write endpoint's

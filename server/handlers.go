@@ -534,58 +534,6 @@ func (s *Server) rejectManagedChildTurn(w http.ResponseWriter, id string) bool {
 	return false
 }
 
-// claudeCodeDelegatedCompactErrText is handleCompact's 409 body for a
-// session delegated to the Claude Code CLI — shared between
-// rejectClaudeCodeDelegatedCompact's pre-claim advisory check and
-// handleCompact's own post-claim authoritative check below, so both report
-// the identical reason.
-const claudeCodeDelegatedCompactErrText = "session is delegated to the Claude Code CLI; context is managed by the CLI itself, not by harness — POST /session/{id}/compact has no effect on it"
-
-// rejectClaudeCodeDelegatedCompact is a cheap, BEST-EFFORT pre-claim check
-// for a session CURRENTLY delegated to the Claude Code CLI
-// (engine.Session.ClaudeCodeDelegated) — see docs/design/
-// context-compaction.md, "A session delegated to the Claude Code CLI": that
-// CLI manages its own context end to end, and harness's journal for such a
-// session is only ever a passive record of what streamed back, never
-// itself compacted. Running harness's own summarizer against it would
-// splice a journal nobody reads — a silent no-op relative to the CLI's
-// real context, not a fix for anything.
-//
-// Deliberately resident-only (s.residentSession, like rejectManagedChildTurn
-// above uses s.sessMgr.Session) rather than lookupSession's cold-disk
-// fallback: an earlier revision cold-loaded a non-resident session here just
-// to read Model(), then discarded the loaded object without releasing its
-// journal/index file handles — a full extra replay-and-leak on a repo whose
-// first stated priority is speed, for a session claimForPrompt was about to
-// load anyway. Skipping the check entirely for a NOT-YET-resident id (return
-// false) costs nothing: handleCompact's own post-claim check below is the
-// authoritative one and runs on the exact session object claimForPrompt
-// already resolved, no second load.
-//
-// This check alone is also advisory, not authoritative: SetModel does not
-// take the run slot ("SetModel is concurrency-safe, so it applies even
-// while a turn is running" — handleSetModel's own doc comment), so a
-// native-to-claude-code switch can land in the window between this check
-// and claimForPrompt. handleCompact's post-claim re-check (on the claimed
-// session, inside the run slot) and engine.Session.Compact's own identical
-// guard are what actually close that race; this function exists only to
-// answer fast and cheaply in the common case, not to be the last word.
-//
-// Returns true (having already written a 409) if id is resident and
-// currently claude-code-delegated and the caller must stop; false — safe to
-// proceed, including "not resident" and "resolved but native" — otherwise.
-func (s *Server) rejectClaudeCodeDelegatedCompact(w http.ResponseWriter, id string) bool {
-	sess := s.residentSession(id)
-	if sess == nil {
-		return false
-	}
-	if sess.ClaudeCodeDelegated() {
-		writeErr(w, http.StatusConflict, claudeCodeDelegatedCompactErrText)
-		return true
-	}
-	return false
-}
-
 // healthJSON is the openapi Health shape. VCSRevision, VCSTime, SessionSync,
 // and StartedAt are always present (never omitted, even empty) so a client
 // never has to special-case "field absent" vs "field empty" — see buildInfo
@@ -3812,6 +3760,9 @@ type compactResponseJSON struct {
 	LastID      string           `json:"last_id,omitempty"`
 	Summary     *message.Message `json:"summary,omitempty"`
 	SkipReason  string           `json:"skip_reason,omitempty"`
+	// ClaudeCodeDelegated is true when this call issued the Claude Code
+	// CLI's own compact command; every other field is then zero.
+	ClaudeCodeDelegated bool `json:"claude_code_delegated,omitempty"`
 }
 
 // handleCompact is POST /session/{id}/compact (docs/design/context-
@@ -3836,9 +3787,6 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
-	if s.rejectClaudeCodeDelegatedCompact(w, id) {
 		return
 	}
 	var body struct {
@@ -3992,27 +3940,11 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Authoritative re-check, on the exact session object claimForPrompt
-	// just resolved (inside the run slot, not a second load): the
-	// pre-claim rejectClaudeCodeDelegatedCompact above is best-effort only
-	// (see its own doc comment) — SetModel does not take the run slot, so
-	// a native-to-claude-code switch can land in the window between that
-	// check and this claim. engine.Session.Compact carries the same guard
-	// (defense in depth for every OTHER caller), but checking here first
-	// reports the precise 409 this endpoint has always promised instead of
-	// Compact's generic error falling through to the 500 branch below.
-	if st.sess.ClaudeCodeDelegated() {
-		err := errors.New(claudeCodeDelegatedCompactErrText)
-		release(err)
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	}
-
 	opts := engine.CompactOptions{Model: model}
 	if body.KeepTurns != nil {
 		opts.KeepTurns = *body.KeepTurns
 	}
-	res, err := st.sess.Compact(ctx, opts)
+	res, err := st.sess.RunCompactCommand(ctx, opts)
 	release(err)
 
 	if err != nil {
@@ -4020,11 +3952,12 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, compactResponseJSON{
-		TurnsFolded: res.TurnsFolded,
-		FirstID:     res.FirstID,
-		LastID:      res.LastID,
-		Summary:     res.Summary,
-		SkipReason:  res.SkipReason,
+		TurnsFolded:         res.TurnsFolded,
+		FirstID:             res.FirstID,
+		LastID:              res.LastID,
+		Summary:             res.Summary,
+		SkipReason:          res.SkipReason,
+		ClaudeCodeDelegated: res.ClaudeCodeDelegated,
 	})
 }
 
@@ -4118,11 +4051,7 @@ func (s *Server) lookup(id string) (liveSession, bool) {
 
 // residentSession returns the resident *engine.Session for id, or nil if the
 // session is not currently resident. Unlike claimForPrompt, this never loads
-// from disk and never claims the run slot. Two callers: handleGoalBusy
-// (via handleGoal, reached exclusively when claimForPrompt just reported id
-// as resident and running) and rejectClaudeCodeDelegatedCompact's best-effort
-// pre-claim check, which deliberately skips entirely (returns false) rather
-// than cold-load for a not-yet-resident id.
+// from disk and never claims the run slot.
 func (s *Server) residentSession(id string) *engine.Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
