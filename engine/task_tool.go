@@ -58,6 +58,7 @@ type taskToolArgs struct {
 	Agent     string `json:"agent"`
 	Prompt    string `json:"prompt"`
 	Model     string `json:"model"`
+	Effort    string `json:"effort"`
 	SessionID string `json:"session_id"`
 	// Tail is the log action's entry count: omitted (0) means
 	// taskLogDefaultTail, a value over taskLogMaxTail is clamped, and a
@@ -153,13 +154,13 @@ func taskTool() Tool {
 			Name: taskToolName,
 			Description: "Delegate work to a child session, or manage one you already spawned (directly or transitively). action selects the " +
 				"operation and defaults to \"spawn\" if omitted. " +
-				"spawn(agent, prompt, model?): starts a child session that runs independently in the background and returns immediately with its " +
+				"spawn(agent, prompt, model?, effort?): starts a child session that runs independently in the background and returns immediately with its " +
 				"session id — it does NOT wait for the child to finish, and you do not need to poll for the result. The child's outcome arrives " +
 				"later as engine context on one of your own future turns. agent selects the child's tool set and persona: built-in types are " +
 				"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
 				"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
 				"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
-				"not recognize. model optionally overrides which model the child uses. " +
+				"not recognize. model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
 				"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 				"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
 				"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
@@ -176,6 +177,7 @@ func taskTool() Tool {
 					"agent": {"type": "string", "description": "spawn only: the agent type to spawn: general-purpose, explore, plan, or a custom .agents/*.md definition name — call with an unrecognized name to see this project's full current roster in the error"},
 					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
+					"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high"},
 					"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 					"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 				}
@@ -274,6 +276,13 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 	}
 
 	model := def.Model
+	var effort message.Effort
+	if in.Effort != "" {
+		effort, err = message.ParseEffort(in.Effort)
+		if err != nil {
+			return nil, fmt.Errorf("task: invalid effort %q: %w", in.Effort, err)
+		}
+	}
 	if in.Model != "" {
 		ref, err := message.ParseModelRef(in.Model)
 		if err != nil {
@@ -306,6 +315,7 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 		ParentID:     s.ID,
 		Prompt:       in.Prompt,
 		Model:        model,
+		Effort:       effort,
 		SystemAppend: def.SystemAppend,
 		ToolNames:    def.Tools,
 		AgentType:    in.Agent,

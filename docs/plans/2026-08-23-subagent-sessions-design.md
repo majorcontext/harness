@@ -117,7 +117,7 @@ argument shape (`agent`/`prompt`/`model`, no `action` field at all) is
 unchanged and keeps working:
 
     task(action?: "spawn"|"cancel"|"status"|"send"|"log", agent?: string,
-         prompt?: string, model?: string, session_id?: string,
+         prompt?: string, model?: string, effort?: string, session_id?: string,
          tail?: int) -> {...}
 
 One tool, action-based, rather than four separate tools — inspired by
@@ -134,7 +134,7 @@ precedent for a multi-operation session tool (`goal_tool.go`,
   withheld at the limit, but a race is still answered with an error, not
   a crash), tree concurrency cap reached.
 - Optional `model` overrides the definition's model, which overrides the
-  parent's.
+  parent's. Optional `effort` sets the child's reasoning-effort level.
 
 **cancel**, **status**, **send**, and **log** are ancestor-gated: `session_id`
 must be a descendant of the calling session — spawned by it directly, or

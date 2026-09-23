@@ -2852,7 +2852,8 @@ type SpawnOptions struct {
 	Prompt string
 	// Model overrides the child's model. The zero value inherits the
 	// parent's.
-	Model message.ModelRef
+	Model  message.ModelRef
+	Effort message.Effort
 	// SystemAppend, if non-empty, is appended as one more Config.System
 	// segment — how an agent definition's body extends the child's system
 	// prompt (Stage 2). Empty means no addition: the child's system prompt
@@ -2950,6 +2951,9 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	childCfg.TaskDepth = childDepth
 	if !opts.Model.IsZero() {
 		childCfg.Model = opts.Model
+	}
+	if !opts.Effort.IsZero() {
+		childCfg.Effort = opts.Effort
 	}
 	if opts.SystemAppend != "" {
 		childCfg.System = append(append([]string(nil), childCfg.System...), opts.SystemAppend)

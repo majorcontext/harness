@@ -169,6 +169,52 @@ func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
 	}
 }
 
+func TestRunTaskToolSpawnEffort(t *testing.T) {
+	for _, tc := range []struct {
+		name, effort string
+		want         message.Effort
+		invalid      bool
+	}{
+		{name: "override", effort: "high", want: message.EffortHigh},
+		{name: "omitted", want: message.EffortLow},
+		{name: "invalid", effort: "extreme", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewSessionManager(context.Background(), 0, 0)
+			cfg := managedConfig("root", scriptedTurns("root", nil), scriptedTurns(AgentExplore, doneTurn("done")))
+			cfg.Effort = message.EffortLow
+			root := mgr.NewRoot(cfg)
+			args := map[string]string{"action": "spawn", "agent": AgentExplore, "prompt": "go"}
+			if tc.effort != "" {
+				args["effort"] = tc.effort
+			}
+			raw, _ := json.Marshal(args)
+			parts, err := runTaskTool(root, raw)
+			if tc.invalid {
+				if err == nil || !strings.Contains(err.Error(), `task: invalid effort "extreme"`) {
+					t.Fatalf("runTaskTool error = %v", err)
+				}
+				info, _ := mgr.Info(root.ID)
+				if len(info.Children) != 0 {
+					t.Fatal("invalid effort spawned a child")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runTaskTool: %v", err)
+			}
+			var result taskToolResult
+			if err := json.Unmarshal([]byte(parts.Text()), &result); err != nil {
+				t.Fatal(err)
+			}
+			child, ok := mgr.Session(result.SessionID)
+			if !ok || child.Effort() != tc.want {
+				t.Fatalf("child effort = %v, want %v", child.Effort(), tc.want)
+			}
+		})
+	}
+}
+
 func TestRunTaskToolSpawnsChildAndReturnsImmediately(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root",
