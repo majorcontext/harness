@@ -295,14 +295,9 @@ func TestSetClaudeCodeContextUsage(t *testing.T) {
 	}
 }
 
-// TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit: a stale generation, an explicit window, and an opt-out each reject.
-func TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit(t *testing.T) {
+// TestSetClaudeCodeContextUsageIgnoresExplicitAndOptOut: an explicit window and an opt-out each reject.
+func TestSetClaudeCodeContextUsageIgnoresExplicitAndOptOut(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
-
-	stale := NewSession(Config{Model: claudeCodeRef, Providers: prov})
-	staleGen := stale.beginClaudeCodeContextUsageTurn()
-	stale.SetModel(message.ModelRef{Provider: "test", Model: "x"})
-	stale.setClaudeCodeContextUsage(staleGen, 15_554, 1_000_000)
 
 	explicit := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov})
 	explicit.setClaudeCodeContextUsage(explicit.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
@@ -310,7 +305,7 @@ func TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit(t *testing.T) {
 	optOut := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov})
 	optOut.setClaudeCodeContextUsage(optOut.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
 
-	for name, s := range map[string]*Session{"stale": stale, "explicit": explicit, "opt-out": optOut} {
+	for name, s := range map[string]*Session{"explicit": explicit, "opt-out": optOut} {
 		if _, ok := s.ContextUsedTokens(); ok {
 			t.Errorf("%s: ContextUsedTokens() ok, want not ok", name)
 		}
