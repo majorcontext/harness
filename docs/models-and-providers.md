@@ -214,6 +214,10 @@ an empty string as "clear to provider default", and rejects an unknown session
 current level is read back on `GET /session/{id}` (`effort`), the same way the
 current model is.
 
+The `task` tool's `spawn` action takes an optional `effort`. It sets the
+child's create-time level on the child's session header. When `effort` is
+omitted, the child takes the parent's `Config.Effort`.
+
 **Effort at the three request-build sites is NOT uniform, by design.** The
 main turn (`streamTurn`, `engine/engine.go`) sends `s.Effort()` — the
 session's current level, read fresh every request. The two internal
