@@ -204,17 +204,17 @@ attempt's own text).
 **A `/compact` prompt** (exact text, trimmed, no attachments) is a command,
 not model input: `promptWithOrigin` intercepts it before either lane's
 ordinary dispatch, on every lane, so a client never has to know which lane a
-session is on. `POST /session/{id}/compact` and an explicit `/compact` prompt both funnel
-through one entry point, `Session.RunCompactCommand`: on a native session it
-calls `Session.Compact`; on a CURRENTLY-delegated session, `Session.Compact`
-itself still refuses (harness has no journal to fold there), so
-`RunCompactCommand` instead issues the Claude Code CLI's own `compact`
-command — the CLI's published control-request surface
+session is on. `POST /session/{id}/compact` and an explicit `/compact`
+prompt both funnel through one entry point, `Session.RunCompactCommand`: on
+a native session it calls `Session.Compact`; on a CURRENTLY-delegated
+session, `Session.Compact` itself still refuses (harness has no journal to
+fold there), so `RunCompactCommand` instead issues the Claude Code CLI's
+own `compact` command — the CLI's published control-request surface
 (`@anthropic-ai/claude-agent-sdk`'s `sdk.d.ts`) has no separate compaction
 trigger, so sending its command is the only mechanism. The command is
 dispatched with `message.OriginEngine`, never the caller's own text or
-provenance: harness decides to compact, the caller's literal prompt is never
-what reaches the CLI. A delegated compaction still fires
+provenance: harness decides to compact, the caller's literal prompt is
+never what reaches the CLI. A delegated compaction still fires
 `EventCompactionStarted` (the CLI's own "compacting" status), settling in
 `EventClaudeCodeCompacted`, never `EventHistoryCompacted` — no harness
 journal splice happens there.
