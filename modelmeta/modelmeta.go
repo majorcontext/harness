@@ -26,6 +26,7 @@ var anthropicContextWindows = map[string]int{
 	"claude-opus-4-7":            1_000_000,
 	"claude-opus-4-8":            1_000_000,
 	"claude-opus-5":              1_000_000,
+	"claude-opus-5-5":            1_000_000,
 	"claude-sonnet-4-5":          1_000_000,
 	"claude-sonnet-4-5-20250929": 1_000_000,
 	"claude-sonnet-4-6":          1_000_000,
@@ -121,15 +122,32 @@ var bedrockAnthropicContextWindows = map[string]int{
 
 // bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
 // for the Fireworks models the boxes fleet ships, keyed by the last path
-// segment. firerouter has no models.dev entry; its value is the smallest
-// window among the open-source targets it can redirect to.
+// segment. firerouter's value is pinned to firerouterCandidateModels by
+// TestFirerouterFloorPinnedToCandidates. glm-5p3/glm-5p3-flash have no
+// fireworks-ai entry (checked live); models.dev catalogs the same model
+// under "zai-org" as "GLM-5.3"/"GLM-5.3-Flash", 1_048_576.
 var bifrostFireworksContextWindows = map[string]int{
 	"firerouter":             1_000_000,
 	"kimi-k3":                1_048_576,
 	"kimi-k2p7-code":         262_000,
 	"glm-5p2":                1_048_575,
+	"glm-5p3":                1_048_576,
+	"glm-5p3-flash":          1_048_576,
 	"deepseek-v4-pro-0813":   1_000_000,
 	"deepseek-v4-flash-0731": 1_000_000,
+}
+
+// firerouterCandidateModels names every model firerouter is known to
+// redirect requests to — checked live via Bifrost's gen_ai span
+// telemetry (glm-5p3, glm-5p3-flash, kimi-k3). Fireworks can add an
+// unlisted model without notice; the pin test only catches a listed one.
+var firerouterCandidateModels = []string{
+	"kimi-k3",
+	"glm-5p2",
+	"glm-5p3",
+	"glm-5p3-flash",
+	"deepseek-v4-pro-0813",
+	"deepseek-v4-flash-0731",
 }
 
 // bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
@@ -215,21 +233,13 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// A turn delegated to the Claude Code CLI (see
-		// engine/claude_code_backend.go) is driven entirely by that CLI's
-		// OWN context management: it runs its own tool loop and its own
-		// compaction over its own history, never harness's. This entry
-		// exists ONLY so engine.Config.RequireContextWindow (default true
-		// — an unrecognized model is a hard session-create refusal, see
-		// engine/context_window.go) does not refuse a claude-code model
-		// ref outright; harness's OWN automatic-compaction threshold is
-		// unconditionally skipped for a delegated turn regardless of what
-		// this reports (see PromptWithOrigin's early dispatch), so the
-		// exact figure here drives no real behavior. claudeCodeContextWindow
-		// (200,000, Sonnet's advertised first-party window) is a stand-in
-		// chosen only to be an honest, plausible-sounding number rather
-		// than an arbitrary placeholder like 0 or MaxInt.
-		tokens, ok = claudeCodeContextWindow, true
+		// ref carries only the bare CLI alias ("opus"); the `claude`
+		// binary resolves it itself, even to a different window for the
+		// same alias (live-verified: "haiku" resolves 200k, "haiku[1m]"
+		// resolves 1M). 0 keeps RequireContextWindow's non-refusal
+		// (ok=true) without guessing; ClaudeCodeResolvedWindow replaces it
+		// once the CLI self-reports its resolved model.
+		tokens, ok = 0, true
 	}
 	return tokens, ok
 }
@@ -250,10 +260,38 @@ const claudeCodeProvider = "claude-code"
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
 
-// claudeCodeContextWindow is the stand-in context-window figure reported
-// for claudeCodeProvider — see the ContextWindow case above for why its
-// exact value carries no real weight.
-const claudeCodeContextWindow = 200_000
+// claudeCodeOneMillionSuffix marks a `claude` CLI model string as running
+// the CLI's 1M-context beta — live-verified: it forces 1,000,000 tokens
+// regardless of the base model's own baseline.
+const claudeCodeOneMillionSuffix = "[1m]"
+
+// ClaudeCodeResolvedWindow reports the context window for resolvedModel,
+// the model a running `claude` CLI's "system"/"init" event names — not
+// the bare alias harness invoked it with. false means unknown.
+func ClaudeCodeResolvedWindow(resolvedModel string) (tokens int, ok bool) {
+	if resolvedModel == "" {
+		return 0, false
+	}
+	if strings.HasSuffix(resolvedModel, claudeCodeOneMillionSuffix) {
+		return 1_000_000, true
+	}
+	tokens, ok = anthropicContextWindows[resolvedModel]
+	return tokens, ok
+}
+
+// SuppressUsageGauge reports whether ref's session must never render a
+// used/window percentage. claude-code's Session.LastUsage is a whole-turn
+// AGGREGATE, not one prompt's occupancy; firerouter's denominator is a
+// floor across whichever model actually served the request.
+func SuppressUsageGauge(ref message.ModelRef) bool {
+	if ref.Provider == claudeCodeProvider {
+		return true
+	}
+	if ref.Provider != "bifrost" {
+		return false
+	}
+	return lastPathSegment(ref.Model) == "firerouter"
+}
 
 // lastPathSegment returns the substring of model after its last '/', or
 // model unchanged if it contains no '/'. message.ModelRef.Model may itself

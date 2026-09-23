@@ -334,9 +334,9 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 	case recModel:
 		f.ix.Model = rec.Model
 		if rec.ContextWindowTokens != nil {
-			f.ix.WindowTokens = *rec.ContextWindowTokens
+			f.ix.WindowTokens = displayContextWindow(rec.Model, *rec.ContextWindowTokens)
 		} else {
-			f.ix.WindowTokens = ResolveModelContextWindow(rec.Model)
+			f.ix.WindowTokens = displayContextWindow(rec.Model, ResolveModelContextWindow(rec.Model))
 		}
 	case recEffort:
 		f.ix.Effort = rec.Effort

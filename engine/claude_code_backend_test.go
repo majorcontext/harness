@@ -2886,3 +2886,45 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", found.ClaudeCodeCompactPreTokens)
 	}
 }
+
+// TestClaudeCodeInitModelResolvesRealContextWindow: fakeclaude's
+// FAKE_CLAUDE_MODEL stands in for the "system"/"init" event's own model
+// field (live-verified on a real `claude` 2.1.280 binary). cfg tokens must
+// pick up a resolved model and stay 0 for one this repo's tables miss;
+// ContextWindowTokens() (display) must always stay 0 regardless.
+func TestClaudeCodeInitModelResolvesRealContextWindow(t *testing.T) {
+	cases := []struct {
+		name         string
+		resolved     string
+		wantCfgAfter int
+	}{
+		{"resolved model arms the internal window", "claude-haiku-4-5-20251001[1m]", 1_000_000},
+		{"unrecognized model reports unknown", "claude-model-from-the-future", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := buildFakeClaude(t)
+			t.Setenv("FAKE_CLAUDE_MODEL", c.resolved)
+
+			s := NewSession(Config{
+				SessionDir: t.TempDir(),
+				Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "haiku"},
+				ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+			})
+			if got := s.cfg.ContextWindowTokens; got != 0 {
+				t.Fatalf("before any turn, cfg.ContextWindowTokens = %d, want 0", got)
+			}
+
+			if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+
+			if got := s.cfg.ContextWindowTokens; got != c.wantCfgAfter {
+				t.Errorf("after turn, cfg.ContextWindowTokens = %d, want %d", got, c.wantCfgAfter)
+			}
+			if got := s.ContextWindowTokens(); got != 0 {
+				t.Errorf("ContextWindowTokens() = %d, want 0", got)
+			}
+		})
+	}
+}

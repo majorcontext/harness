@@ -1837,6 +1837,27 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
 
+// reportObservedContextWindow lets a delegated backend correct this
+// session's window once its OWN live signal reveals which model actually
+// served a turn. It never refuses the session. ok=false clears any earlier
+// guess back to unknown rather than keep a possibly stale number.
+func (s *Session) reportObservedContextWindow(tokens int, ok bool, reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextWindowExplicit {
+		return
+	}
+	nextTokens, nextSource := 0, contextWindowSourceDisabled
+	if ok && tokens >= minAutoContextWindowTokens {
+		nextTokens, nextSource = tokens, contextWindowSourceModelDerived
+	}
+	if nextTokens == s.cfg.ContextWindowTokens && nextSource == s.contextWindowSource {
+		return
+	}
+	s.cfg.ContextWindowTokens, s.contextWindowSource = nextTokens, nextSource
+	logContextWindowArmed(s.ID, s.model, nextTokens, nextSource, reason)
+}
+
 // ModelSupported reports whether ref names a configured provider — the same
 // s.cfg.Providers.For check per-turn selection (see streamTurn) and the `model`
 // tool use. It lets POST /session/{id}/model reject a swap to an unconfigured
@@ -2302,12 +2323,14 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
-// ContextWindowTokens returns this session's resolved context window — 0
-// when automatic compaction is disarmed.
+// ContextWindowTokens returns this session's DISPLAY-safe context window —
+// 0 when compaction is disarmed, or when displayContextWindow marks the
+// usage/window pairing untrustworthy. Compaction arms off the internal
+// s.cfg.ContextWindowTokens directly (compact.go), never through this.
 func (s *Session) ContextWindowTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.ContextWindowTokens
+	return displayContextWindow(s.model, s.cfg.ContextWindowTokens)
 }
 
 // applySubscriptionUsage records u as this session's latest subscription-

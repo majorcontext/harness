@@ -205,3 +205,65 @@ func TestSetModelToUnknownModelIsRefused(t *testing.T) {
 		t.Errorf("Prompt after switching to an unknown model = %v, want ErrUnknownContextWindow", err)
 	}
 }
+
+// firerouterRef and claudeCodeRef exercise SuppressUsageGauge's two lanes
+// through the REAL modelmeta table.
+var (
+	firerouterRef = message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/routers/firerouter"}
+	claudeCodeRef = message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"}
+)
+
+// TestSessionContextWindowTokensHidesGauge: firerouter's internal window
+// still arms (compaction must not disarm), but neither ref may ever
+// display a percentage, and a fresh claude-code session must never refuse.
+func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
+	cases := []struct {
+		ref          message.ModelRef
+		wantCfgArmed bool
+	}{
+		{firerouterRef, true},
+		{claudeCodeRef, false},
+	}
+	for _, c := range cases {
+		s := NewSession(Config{Model: c.ref})
+		if armed := s.cfg.ContextWindowTokens != 0; armed != c.wantCfgArmed {
+			t.Errorf("%v: cfg.ContextWindowTokens armed = %v, want %v", c.ref, armed, c.wantCfgArmed)
+		}
+		if err := s.ContextWindowErr(); err != nil {
+			t.Errorf("%v: ContextWindowErr() = %v, want nil", c.ref, err)
+		}
+		if got := s.ContextWindowTokens(); got != 0 {
+			t.Errorf("%v: ContextWindowTokens() = %d, want 0", c.ref, got)
+		}
+	}
+}
+
+// TestReportObservedContextWindow: a live resolved model updates the
+// internal arming field (display stays 0, SuppressUsageGauge covers
+// claude-code unconditionally); an unresolved model clears a stale guess
+// back to unknown; explicit config always wins.
+func TestReportObservedContextWindow(t *testing.T) {
+	cases := []struct {
+		name          string
+		explicit      int
+		tokens        int
+		ok            bool
+		wantCfgTokens int
+	}{
+		{"resolved model arms the internal window", 0, 1_000_000, true, 1_000_000},
+		{"unrecognized model reports unknown", 0, 0, false, 0},
+		{"explicit config wins over any report", 42_000, 1_000_000, true, 42_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: c.explicit})
+			s.reportObservedContextWindow(c.tokens, c.ok, "test")
+			if s.cfg.ContextWindowTokens != c.wantCfgTokens {
+				t.Fatalf("cfg.ContextWindowTokens = %d, want %d", s.cfg.ContextWindowTokens, c.wantCfgTokens)
+			}
+			if got := s.ContextWindowTokens(); got != 0 {
+				t.Errorf("ContextWindowTokens() = %d, want 0", got)
+			}
+		})
+	}
+}

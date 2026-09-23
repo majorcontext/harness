@@ -267,11 +267,15 @@ func main() {
 		return
 	}
 
-	emit(map[string]any{
+	initEvent := map[string]any{
 		"type":       "system",
 		"subtype":    "init",
 		"session_id": sessionID,
-	})
+	}
+	if resolvedModel := os.Getenv("FAKE_CLAUDE_MODEL"); resolvedModel != "" {
+		initEvent["model"] = resolvedModel
+	}
+	emit(initEvent)
 
 	switch mode {
 	case "compact_boundary":

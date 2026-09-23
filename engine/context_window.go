@@ -145,6 +145,16 @@ func ResolveModelContextWindow(model message.ModelRef) int {
 	return tokens
 }
 
+// displayContextWindow projects the internal, compaction-arming tokens to
+// what a caller may safely render as a percentage's denominator: 0 when
+// modelmeta.SuppressUsageGauge(model) is true, tokens unchanged otherwise.
+func displayContextWindow(model message.ModelRef, tokens int) int {
+	if modelmeta.SuppressUsageGauge(model) {
+		return 0
+	}
+	return tokens
+}
+
 // requiredContextWindowErr turns a resolveContextWindow miss into this
 // session's refusal, or into nothing at all.
 //

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -1146,6 +1147,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			switch env.Subtype {
 			case "init":
 				s.recordClaudeCodeSessionID(env.SessionID)
+				if env.Model != "" {
+					tokens, ok := modelmeta.ClaudeCodeResolvedWindow(env.Model)
+					s.reportObservedContextWindow(tokens, ok, "claude_code_resolved")
+				}
 			case "status":
 				switch {
 				case env.Status == "compacting":
@@ -1457,14 +1462,18 @@ func reasoningOnlyParts(parts message.Parts) bool {
 // field here is optional so a line missing one just zero-values it) —
 // Unknown fields and missing optional fields are tolerated.
 type claudeCodeEnvelope struct {
-	Type      string           `json:"type"`
-	Subtype   string           `json:"subtype,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	Message   json.RawMessage  `json:"message,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
-	Result    string           `json:"result,omitempty"`
-	NumTurns  *int             `json:"num_turns,omitempty"`
-	Usage     *claudeCodeUsage `json:"usage,omitempty"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Model is a "system"/"init" envelope's report of the CONCRETE model
+	// resolved from --model's alias, e.g. "claude-opus-5-5[1m]". See
+	// modelmeta.ClaudeCodeResolvedWindow, the only reader.
+	Model    string           `json:"model,omitempty"`
+	Message  json.RawMessage  `json:"message,omitempty"`
+	IsError  bool             `json:"is_error,omitempty"`
+	Result   string           `json:"result,omitempty"`
+	NumTurns *int             `json:"num_turns,omitempty"`
+	Usage    *claudeCodeUsage `json:"usage,omitempty"`
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
 	// whole delegated turn — folded into the session's cumulative
 	// message.SubscriptionUsage.SessionCostUSD by applyClaudeCodeUsage

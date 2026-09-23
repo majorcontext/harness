@@ -293,8 +293,9 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 // contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
 // the exact sum maybeAutoCompact (engine/compact.go) compares against
 // WindowTokens, so this gauge and auto-compaction never disagree.
-// WindowTokens is 0 when automatic compaction is disarmed — a caller must
-// treat 0 as "unknown", never as "full".
+// WindowTokens is 0 when compaction is disarmed, or when
+// Session.ContextWindowTokens has a real floor SuppressUsageGauge still
+// marks untrustworthy to render — a caller must treat 0 as "unknown".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`

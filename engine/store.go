@@ -2337,9 +2337,9 @@ func readSessionInfo(path string) (SessionInfo, error) {
 			}
 		case recModel:
 			if rec.ContextWindowTokens != nil {
-				info.WindowTokens = *rec.ContextWindowTokens
+				info.WindowTokens = displayContextWindow(rec.Model, *rec.ContextWindowTokens)
 			} else {
-				info.WindowTokens = ResolveModelContextWindow(rec.Model)
+				info.WindowTokens = displayContextWindow(rec.Model, ResolveModelContextWindow(rec.Model))
 			}
 		case recCompact:
 			if rec.Usage != nil {
