@@ -187,6 +187,7 @@ type sessionSnapshot struct {
 	// not a load failure.
 	ClaudeCodeCLISessionID     string `json:"claude_code_cli_session_id,omitempty"`
 	ClaudeCodeHistoryWatermark int    `json:"claude_code_history_watermark,omitempty"`
+	ClaudeCodePendingQuestion  string `json:"claude_code_pending_question,omitempty"`
 
 	ClaudeCodeSessionCostUSD float64 `json:"claude_code_session_cost_usd,omitempty"`
 	HaveClaudeCodeCost       bool    `json:"have_claude_code_cost,omitempty"`
@@ -513,6 +514,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 
 		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
 		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
+		ClaudeCodePendingQuestion:  s.claudeCodePendingQuestion,
 
 		ClaudeCodeSessionCostUSD: s.claudeCodeSessionCostUSD,
 		HaveClaudeCodeCost:       s.haveClaudeCodeCost,
@@ -607,6 +609,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	// full replay would also leave.
 	s.claudeCodeCLISessionID = snap.ClaudeCodeCLISessionID
 	s.claudeCodeHistoryWatermark = snap.ClaudeCodeHistoryWatermark
+	s.claudeCodePendingQuestion = snap.ClaudeCodePendingQuestion
 	s.claudeCodeSessionCostUSD = snap.ClaudeCodeSessionCostUSD
 	s.haveClaudeCodeCost = snap.HaveClaudeCodeCost
 	if snap.CommittedOutcome != nil {

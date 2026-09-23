@@ -22,6 +22,11 @@ applies it and writes the result back into history, so it stays purely
 additive. It deliberately leaves several shapes wire-invalid. Do not "fix"
 it — that is the whole point of the split.
 
+`LoadSession` calls `ResolveOrphanToolCallsExcept` with a parked Claude Code
+question's call id, when one is pending (see "Claude Code structured
+questions" in `docs/models-and-providers.md`). That one call is waiting for
+an answer, not orphaned. Every other orphan gets its repair.
+
 `message.NormalizeForWire` (`message/wire_normalize.go`) is the
 transcode-only sibling. Every transcoder calls it instead. It builds one
 throwaway request, so it may relocate a part. It must still never delete a

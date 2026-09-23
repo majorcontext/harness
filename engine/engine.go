@@ -1196,6 +1196,12 @@ type Session struct {
 	// restored by LoadSession, alongside claudeCodeCLISessionID.
 	claudeCodeHistoryWatermark int
 
+	// claudeCodePendingQuestion is the call id of the AskUserQuestion call
+	// a delegated turn parked on, or "". The CLI resumes that call on its
+	// next --resume before it reads stdin, so every later turn must answer
+	// or dismiss it first. Persisted (recClaudeCodeQuestion, store.go).
+	claudeCodePendingQuestion string
+
 	// spawnedChildIDs is every child id this session has ever Spawn'd —
 	// appended to live (Spawn, session_manager.go) and folded back from
 	// the durable recTaskSpawned audit trail on reload (store.go's
@@ -2844,6 +2850,10 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	// BOTH checks exist) is what also catches the goal-loop's direct
 	// runAgenticLoop retry call, which never reaches this function at all.
 	if s.claudeCodeDelegated() {
+		if err := s.dismissClaudeCodeQuestion(ctx); err != nil {
+			s.emitSessionError(err)
+			return nil, err
+		}
 		msg := message.Message{
 			ID:            ResolveMessageID(id),
 			Role:          message.RoleUser,

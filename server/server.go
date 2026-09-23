@@ -803,8 +803,9 @@ func resetGoalPauseLocked(g *goalTracker) {
 // (last_turn) and /session/status entries. outcome is "completed" or
 // "error"; error is the sanitized failure detail (empty on completion).
 type turnOutcome struct {
-	outcome string
-	error   string
+	outcome        string
+	error          string
+	questionCallID string
 }
 
 // sessionState tracks an in-memory session and any in-flight prompt. lastUsed
@@ -1033,6 +1034,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /session/{id}/mcp", s.auth(s.handleSessionMCP))
 	mux.HandleFunc("POST /session/{id}/prompt_async", s.auth(s.handlePrompt))
 	mux.HandleFunc("POST /session/{id}/enqueue", s.auth(s.handleEnqueue))
+	mux.HandleFunc("POST /session/{id}/question/{call_id}/answer", s.auth(s.handleAnswerQuestion))
 	mux.HandleFunc("GET /session/{id}/queue", s.auth(s.handleQueueGet))
 	mux.HandleFunc("DELETE /session/{id}/queue", s.auth(s.handleQueueDelete))
 	mux.HandleFunc("POST /session/{id}/compact", s.auth(s.handleCompact))

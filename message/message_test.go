@@ -1027,3 +1027,25 @@ func TestMessageNormalizeLeavesRealToolResultContentAlone(t *testing.T) {
 		t.Errorf("Normalize disturbed real content: got %q", tr.Content.Text())
 	}
 }
+
+// TestResolveOrphanToolCallsExceptRepairsEveryOtherOrphan pins the bound on
+// the exemption: only the pending call stays open. An orphan beside it, in
+// the same message or an earlier one, is still repaired.
+func TestResolveOrphanToolCallsExceptRepairsEveryOtherOrphan(t *testing.T) {
+	in := []Message{
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("crashed", "bash", `{}`)}},
+		{Role: RoleUser, Parts: Parts{&Text{Text: "again"}}},
+		{Role: RoleAssistant, Parts: Parts{toolCallPart("sibling", "bash", `{}`), toolCallPart("pending", "AskUserQuestion", `{}`)}},
+	}
+	var repaired []string
+	for _, m := range ResolveOrphanToolCallsExcept(in, "pending") {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*ToolResult); ok {
+				repaired = append(repaired, tr.CallID)
+			}
+		}
+	}
+	if want := []string{"crashed", "sibling"}; strings.Join(repaired, ",") != strings.Join(want, ",") {
+		t.Errorf("repaired calls = %v, want %v", repaired, want)
+	}
+}

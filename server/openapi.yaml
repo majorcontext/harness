@@ -529,7 +529,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
@@ -577,12 +577,23 @@ components:
             reason to give up on the goal the way an operator-facing
             terminal would be. Session.error is still emitted alongside it
             (see the goal.parked Event description for the exact order).
+            "awaiting_input": a claude-code turn parked on an
+            AskUserQuestion call. It is not done and not failed.
+            question_call_id names the call. POST
+            /session/{id}/question/{call_id}/answer resumes the turn. Any
+            other prompt dismisses the question before it runs.
         error:
           type: string
           description: >
             Sanitized failure detail (never credentials or request bodies —
             see the turn.end Event field) when outcome is "error",
             "evaluator_exhausted", or "worker_parked". Absent otherwise.
+        question_call_id:
+          type: string
+          description: >
+            The parked AskUserQuestion tool-call id when outcome is
+            "awaiting_input". It matches the call_id of the tool_call part
+            in the transcript that carries the questions. Absent otherwise.
 
     SessionState:
       type: string
@@ -1869,7 +1880,7 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts
@@ -3101,6 +3112,57 @@ paths:
           description: >
             The request body exceeds 33554432 bytes and was refused before
             being decoded — see PromptRequest's `parts` description for why.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /session/{id}/question/{call_id}/answer:
+    post:
+      operationId: answerQuestion
+      summary: Answer a parked AskUserQuestion call and resume its turn.
+      description: |
+        Only for a claude-code session served with `-ask-user-question`.
+        A turn that asks parks with last_turn outcome "awaiting_input" and
+        question_call_id. The answer resumes that turn in the background;
+        progress arrives on /event like a prompt turn. The call's
+        tool_result message in the transcript records the answer.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+        - name: call_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answers]
+              properties:
+                answers:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: >
+                    One entry per question: the key is the question text,
+                    the value is the chosen option label, the labels joined
+                    with ", " for a multiSelect question, or free text.
+      responses:
+        "202":
+          description: The answer turn started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  seq: { type: integer, format: int64 }
+                  status: { type: string, enum: [started] }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            The session is busy, or call_id is not its parked question.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

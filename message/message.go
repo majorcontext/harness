@@ -955,6 +955,14 @@ func IsSyntheticOrphanID(id string) bool {
 // values are safe to reuse after this call. When no orphan exists the
 // input slice itself is returned unchanged (no allocation).
 func ResolveOrphanToolCalls(messages []Message) []Message {
+	return ResolveOrphanToolCallsExcept(messages, "")
+}
+
+// ResolveOrphanToolCallsExcept is ResolveOrphanToolCalls that leaves the one
+// call pendingCallID unrepaired. A call parked for a later answer has no
+// result yet by design; a synthetic error would read as its outcome and
+// then sit beside the real answer. Every other orphan is repaired as usual.
+func ResolveOrphanToolCallsExcept(messages []Message, pendingCallID string) []Message {
 	type insertion struct {
 		afterIndex int
 		parts      Parts
@@ -987,7 +995,7 @@ func ResolveOrphanToolCalls(messages []Message) []Message {
 		}
 		var missing []string
 		for _, id := range callIDs {
-			if !present[id] {
+			if !present[id] && (pendingCallID == "" || id != pendingCallID) {
 				missing = append(missing, id)
 			}
 		}

@@ -323,6 +323,9 @@ func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
 type lastTurnJSON struct {
 	Outcome string `json:"outcome"`
 	Error   string `json:"error,omitempty"`
+	// QuestionCallID names the parked AskUserQuestion call to answer when
+	// Outcome is "awaiting_input".
+	QuestionCallID string `json:"question_call_id,omitempty"`
 }
 
 // compositeState resolves the unambiguous Session.state field: goal-running
@@ -2065,6 +2068,55 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
 }
 
+// handleAnswerQuestion answers the AskUserQuestion call a delegated turn
+// parked on and resumes that turn. It never queues: a busy session is
+// already running a turn, and that turn dismissed the question if it was a
+// prompt.
+func (s *Server) handleAnswerQuestion(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.sessionIDOrNotFound(w, r)
+	if !ok {
+		return
+	}
+	callID := r.PathValue("call_id")
+	var body struct {
+		Answers map[string]string `json:"answers"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(body.Answers) == 0 {
+		writeErr(w, http.StatusBadRequest, "answers must be non-empty")
+		return
+	}
+	st, ctx, fromSeq, code, _ := s.claimForPrompt(id)
+	switch code {
+	case 0:
+	case http.StatusConflict:
+		writeErr(w, code, "session busy")
+		return
+	case http.StatusServiceUnavailable:
+		writeErr(w, code, "server shutting down")
+		return
+	default:
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	if callID == "" || st.sess.PendingQuestion() != callID {
+		s.releasePromptClaim(st)
+		writeErr(w, http.StatusConflict, engine.ErrNoPendingQuestion.Error())
+		return
+	}
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	go s.runTurn(ctx, id, st, func(ctx context.Context) (*message.Message, error) {
+		return st.sess.AnswerQuestion(ctx, callID, body.Answers)
+	})
+	writeJSON(w, http.StatusAccepted, struct {
+		Seq    int64  `json:"seq"`
+		Status string `json:"status"`
+	}{fromSeq, "started"})
+}
+
 // enqueueOrDispatch implements handlePrompt's same-session-busy branch:
 // claimForPrompt 409'd with an empty holder, meaning something in THIS
 // session (a running prompt or goal loop) already holds the run slot (the
@@ -2591,6 +2643,17 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 // PromptWithOriginFrom, mirroring PromptEngineResume's own nil-prov path
 // for the identical text.
 func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, text string, origin string, msgID string, prov *engine.PromptProvenance, blobs ...*message.Blob) {
+	s.runTurn(ctx, id, st, func(ctx context.Context) (*message.Message, error) {
+		if prov != nil {
+			return st.sess.PromptWithOriginFrom(ctx, text, origin, msgID, *prov, blobs...)
+		}
+		return st.sess.PromptWithOrigin(ctx, text, origin, msgID, blobs...)
+	})
+}
+
+// runTurn is runPrompt's body for any turn that ends like a prompt turn,
+// including an answer to a parked question (handleAnswerQuestion).
+func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, turn func(context.Context) (*message.Message, error)) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2605,15 +2668,11 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
-	var msg *message.Message
-	var err error
-	if prov != nil {
-		msg, err = st.sess.PromptWithOriginFrom(ctx, text, origin, msgID, *prov, blobs...)
-	} else {
-		msg, err = st.sess.PromptWithOrigin(ctx, text, origin, msgID, blobs...)
-	}
+	msg, err := turn(ctx)
 	s.syncMessages(id) // catch any message not yet journaled
 	switch {
+	case err == nil && st.sess.PendingQuestion() != "":
+		s.recordTurnEndQuestion(id, st.sess, st.sess.PendingQuestion())
 	case err == nil:
 		s.recordTurnEnd(id, st.sess, "completed", nil)
 	case errors.Is(err, context.Canceled):
@@ -4720,7 +4779,7 @@ func (s *Server) lastTurnJSONLocked(id string) *lastTurnJSON {
 	if t == nil {
 		return nil
 	}
-	return &lastTurnJSON{Outcome: t.outcome, Error: t.error}
+	return &lastTurnJSON{Outcome: t.outcome, Error: t.error, QuestionCallID: t.questionCallID}
 }
 
 func statusStr(running bool) string {

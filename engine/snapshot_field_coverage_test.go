@@ -63,6 +63,7 @@ var snapshottedSessionFields = map[string]bool{
 	"committedOutcome":           true,
 	"claudeCodeCLISessionID":     true,
 	"claudeCodeHistoryWatermark": true,
+	"claudeCodePendingQuestion":  true,
 	"claudeCodeSessionCostUSD":   true,
 	"haveClaudeCodeCost":         true,
 }

@@ -1453,6 +1453,8 @@ func serveCmd(args []string) error {
 		skillDirs = append(skillDirs, v)
 		return nil
 	})
+	var askUserQuestion bool
+	fs.BoolVar(&askUserQuestion, "ask-user-question", false, "offer the Claude Code AskUserQuestion tool to root claude-code sessions; set only when a client answers parked questions through POST /session/{id}/question/{call_id}/answer")
 	var enablePProf bool
 	fs.BoolVar(&enablePProf, "pprof", false, "serve the Go runtime profiles under /debug/pprof/, behind the same bearer check as every other route; off by default")
 	var agentDefDirs []string
@@ -1733,6 +1735,7 @@ func serveCmd(args []string) error {
 				cc := claudeCodeConfigFor(cfg, claudecode.Family)
 				cc.HTTPBaseURL = serveURLForAddr(addr)
 				cc.HTTPAuthToken = token
+				cc.AskUserQuestion = askUserQuestion
 				return cc
 			}(),
 		}

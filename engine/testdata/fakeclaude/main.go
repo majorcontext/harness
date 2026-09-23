@@ -147,7 +147,11 @@ func main() {
 		return strings.TrimRight(b, "\n"), err == nil
 	}
 
-	if mode != "fast_no_drain" {
+	questionState := os.Getenv("FAKE_CLAUDE_STATE")
+	_, statErr := os.Stat(questionState)
+	questionParked := mode == "question" && statErr == nil
+
+	if mode != "fast_no_drain" && !questionParked {
 		// Read the ONE turn-input line every mode's own first message
 		// carries. Every mode below that does not itself read a further
 		// line (i.e. every mode except "queue_injection") never calls
@@ -265,6 +269,56 @@ func main() {
 			},
 		})
 		return
+	}
+
+	if mode == "question" {
+		// "question": the first turn parks an AskUserQuestion call the way a
+		// defer hook does. A later --resume answers it over the control
+		// channel before reading any stdin text, as the real CLI does, and
+		// echoes the control response back as the tool result. Every turn
+		// after that is "normal".
+		ask := map[string]any{"questions": []map[string]any{{"question": "Which database?", "header": "DB", "multiSelect": false,
+			"options": []map[string]any{{"label": "PostgreSQL", "description": "a"}, {"label": "SQLite", "description": "b"}}}}}
+		if questionParked {
+			emit(map[string]any{"type": "control_request", "request_id": "req-1", "request": map[string]any{
+				"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_q", "input": ask}})
+			line, _ := readStdinLine()
+			_ = os.Remove(questionState)
+			var reply struct {
+				Response struct {
+					Response struct {
+						Message   string `json:"message"`
+						Interrupt bool   `json:"interrupt"`
+					} `json:"response"`
+				} `json:"response"`
+			}
+			_ = json.Unmarshal([]byte(line), &reply)
+			if d := reply.Response.Response; d.Interrupt {
+				// The real CLI's interrupted denial: no init, an error
+				// result, and a nonzero exit.
+				emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
+					{"type": "tool_result", "tool_use_id": "toolu_q", "content": d.Message, "is_error": true}}}})
+				emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
+					{"type": "text", "text": "[Request interrupted by user]"}}}})
+				emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil})
+				os.Exit(1)
+			}
+			emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
+				{"type": "tool_result", "tool_use_id": "toolu_q", "content": line}}}})
+			emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+			emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "Noted."}}}})
+			emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "end_turn", "result": "Noted."})
+			return
+		}
+		if _, err := os.Stat(questionState + ".asked"); err != nil {
+			_ = os.WriteFile(questionState+".asked", nil, 0o644)
+			_ = os.WriteFile(questionState, nil, 0o644)
+			emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+			emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{
+				{"type": "tool_use", "id": "toolu_q", "name": "AskUserQuestion", "input": ask}}}})
+			emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
+			return
+		}
 	}
 
 	emit(map[string]any{

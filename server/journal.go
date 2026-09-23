@@ -121,6 +121,9 @@ type Event struct {
 	// "error", empty on a clean completion. See runPrompt/runGoal's
 	// recordTurnEnd.
 	Outcome string `json:"outcome,omitempty"`
+	// QuestionCallID carries a turn.end record's parked AskUserQuestion
+	// call id when Outcome is outcomeAwaitingInput.
+	QuestionCallID string `json:"question_call_id,omitempty"`
 
 	// WorktreePath carries the workdir.worktree_kept / workdir.worktree_removed
 	// records' worktree directory (see teardownWorktree and sweepWorktrees):
@@ -372,6 +375,12 @@ const outcomeEvaluatorExhausted = "evaluator_exhausted"
 // as a reason to give up on the goal, only as a reason to expect it to
 // resume on its own the next time this session sees any activity.
 const outcomeWorkerParked = "worker_parked"
+
+// outcomeAwaitingInput is the turn.end outcome for a delegated turn that
+// parked on an AskUserQuestion call. It is neither done nor failed: the turn
+// resumes when POST /session/{id}/question/{call_id}/answer answers it, and
+// any other prompt dismisses the question first.
+const outcomeAwaitingInput = "awaiting_input"
 
 // turnEndOutcome decides the turn.end outcome for a non-nil, non-cancelled
 // prompt/goal-worker error: outcomeEvaluatorExhausted when the engine's
@@ -780,11 +789,19 @@ func (s *Server) publishQueue(ev engine.Event) {
 // once per completed worker turn) and "goal stalled" at WARN (a worker-turn
 // retry) — see publishGoal's doc comment.
 func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome string, turnErr error) {
+	s.recordTurnEndEvent(sessionID, sess, outcome, turnErr, "")
+}
+
+func (s *Server) recordTurnEndQuestion(sessionID string, sess *engine.Session, callID string) {
+	s.recordTurnEndEvent(sessionID, sess, outcomeAwaitingInput, nil, callID)
+}
+
+func (s *Server) recordTurnEndEvent(sessionID string, sess *engine.Session, outcome string, turnErr error, questionCallID string) {
 	errStr := ""
 	if turnErr != nil {
 		errStr = plugin.SanitizeSessionError(turnErr.Error())
 	}
-	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr}
+	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr, QuestionCallID: questionCallID}
 	if sess != nil {
 		if last, ok := sess.LastUsage(); ok {
 			ev.ContextUsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
@@ -792,11 +809,11 @@ func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome s
 		ev.ContextWindowTokens = sess.ContextWindowTokens()
 	}
 	s.mu.Lock()
-	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}
+	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr, questionCallID: questionCallID}
 	s.emitDurableLocked(ev)
 	s.mu.Unlock()
 
-	if outcome == "completed" {
+	if outcome == "completed" || outcome == outcomeAwaitingInput {
 		s.logInfo("turn end", "session", sessionID, "outcome", outcome)
 		return
 	}
@@ -1701,7 +1718,7 @@ func (s *Server) loadJournal(data []byte) {
 			s.markSeenLocked(ev.SessionID, ev.Message.ID)
 		}
 		if ev.Type == evtTurnEnd {
-			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}
+			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error, questionCallID: ev.QuestionCallID}
 		}
 		s.foldGoalRecordLocked(ev)
 	}
