@@ -448,6 +448,10 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("engine: claude-code: starting %q: %w", binary, err)
 	}
+	// Allocated here, not inside the pump goroutine below: a generation
+	// captured after an async delay could span a SetModel that switches
+	// away and back before the pump's first write runs.
+	contextUsageGen := s.beginClaudeCodeContextUsageTurn()
 
 	// Drain stderrPipe into stderr for as long as it stays open, same as
 	// Cmd's own now-avoided internal copying goroutine would have —
@@ -530,7 +534,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// writer as every later mid-turn injection, never a separate
 		// one-off path.
 		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text, blobs)
-		_ = writeClaudeCodeContextUsageRequest(stdin, s.beginClaudeCodeContextUsageTurn())
+		_ = writeClaudeCodeContextUsageRequest(stdin, contextUsageGen)
 		for {
 			select {
 			case <-wake:

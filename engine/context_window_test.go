@@ -448,3 +448,32 @@ func TestLoadSessionExplicitConfigSurvivesModelSwitch(t *testing.T) {
 		t.Fatalf("loaded contextWindowSource = %q, want %q", loaded.contextWindowSource, contextWindowSourceConfig)
 	}
 }
+
+// TestColdContextWindow pins coldContextWindow's matrix: a claude-code
+// ref's persisted value is trusted only when explicit; every other ref
+// trusts a present persisted value regardless.
+func TestColdContextWindow(t *testing.T) {
+	claudeRef := message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"}
+	nativeRef := message.ModelRef{Provider: "test", Model: "big"}
+	tokens := 250_000
+
+	cases := []struct {
+		name      string
+		model     message.ModelRef
+		persisted *int
+		explicit  bool
+		want      int
+	}{
+		{"claude-code, non-explicit persisted value: untrusted", claudeRef, &tokens, false, 0},
+		{"claude-code, explicit persisted value: trusted", claudeRef, &tokens, true, 250_000},
+		{"claude-code, no persisted value: re-derived", claudeRef, nil, false, 0},
+		{"native, persisted value: trusted regardless of explicit", nativeRef, &tokens, false, 250_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := coldContextWindow(c.model, c.persisted, c.explicit); got != c.want {
+				t.Errorf("coldContextWindow(%v, %v, %v) = %d, want %d", c.model, c.persisted, c.explicit, got, c.want)
+			}
+		})
+	}
+}

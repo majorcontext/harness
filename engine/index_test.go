@@ -600,6 +600,27 @@ func TestReadSessionIndexHidesLegacyClaudeCodeWindow(t *testing.T) {
 	}
 }
 
+// TestReadSessionIndexKeepsExplicitClaudeCodeWindow: unlike the legacy
+// stand-in above, a persisted value marked context_window_explicit is an
+// operator's real pin and must survive a cold fold.
+func TestReadSessionIndexKeepsExplicitClaudeCodeWindow(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdff"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"claude-code/opus","context_window_tokens":250000,"context_window_explicit":true}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.WindowTokens != 250_000 {
+		t.Errorf("WindowTokens = %d, want 250000 (an explicit operator pin must survive a cold fold)", ix.WindowTokens)
+	}
+}
+
 // mustMarshalIndex renders a sidecar exactly as the production writers do,
 // checksum included, so a test that alters a field still produces a file
 // that reaches the check it means to exercise.

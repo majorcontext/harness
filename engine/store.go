@@ -277,6 +277,8 @@ type record struct {
 	// ContextWindowTokens carries s.cfg.ContextWindowTokens on a recModel
 	// record. A *int: nil means a legacy record, distinct from a real disarm.
 	ContextWindowTokens *int `json:"context_window_tokens,omitempty"`
+	// ContextWindowExplicit carries s.contextWindowExplicit; see coldContextWindow.
+	ContextWindowExplicit bool `json:"context_window_explicit,omitempty"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -677,7 +679,7 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		return
 	}
 	tokens := s.cfg.ContextWindowTokens
-	rec := record{Type: recModel, Model: ref, ContextWindowTokens: &tokens}
+	rec := record{Type: recModel, Model: ref, ContextWindowTokens: &tokens, ContextWindowExplicit: s.contextWindowExplicit}
 	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 	}
@@ -1151,7 +1153,7 @@ func (s *Session) ensureLog() error {
 		windowTokens := s.cfg.ContextWindowTokens
 		headerRecs := []record{
 			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
-			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens},
+			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens, ContextWindowExplicit: s.contextWindowExplicit},
 		}
 		// A selection made before the log existed has no other durable
 		// carrier: persistMCPToolsSelected no-ops until logStarted, and
@@ -2299,12 +2301,13 @@ func readSessionInfo(path string) (SessionInfo, error) {
 		return SessionInfo{}, err
 	}
 	type headRecord struct {
-		Type                string           `json:"type"`
-		ID                  string           `json:"id"`
-		CreatedAt           time.Time        `json:"created_at"`
-		Usage               *provider.Usage  `json:"usage,omitempty"`
-		Model               message.ModelRef `json:"model,omitzero"`
-		ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
+		Type                  string           `json:"type"`
+		ID                    string           `json:"id"`
+		CreatedAt             time.Time        `json:"created_at"`
+		Usage                 *provider.Usage  `json:"usage,omitempty"`
+		Model                 message.ModelRef `json:"model,omitzero"`
+		ContextWindowTokens   *int             `json:"context_window_tokens,omitempty"`
+		ContextWindowExplicit bool             `json:"context_window_explicit,omitempty"`
 	}
 	var info SessionInfo
 	first := true
@@ -2336,7 +2339,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 			}
 		case recModel:
-			info.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens)
+			info.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens, rec.ContextWindowExplicit)
 		case recCompact:
 			if rec.Usage != nil {
 				// Cumulative only. LastInputTokens must not move for a

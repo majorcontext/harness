@@ -188,24 +188,25 @@ type indexCompact struct {
 // so a record type the fold ignores costs a type-string compare and
 // nothing else.
 type indexRecord struct {
-	Type                string           `json:"type"`
-	ID                  string           `json:"id,omitempty"`
-	CreatedAt           time.Time        `json:"created_at,omitzero"`
-	WorkDir             string           `json:"workdir,omitempty"`
-	ParentSession       string           `json:"parent_session,omitempty"`
-	TaskParentID        string           `json:"task_parent_id,omitempty"`
-	TaskAgentType       string           `json:"task_agent_type,omitempty"`
-	TaskDepth           int              `json:"task_depth,omitempty"`
-	Model               message.ModelRef `json:"model,omitzero"`
-	ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
-	Effort              message.Effort   `json:"effort,omitempty"`
-	ServiceTier         string           `json:"service_tier,omitempty"`
-	Message             *indexMessage    `json:"message,omitempty"`
-	Usage               *provider.Usage  `json:"usage,omitempty"`
-	Goal                *goalRecord      `json:"goal,omitempty"`
-	Prompt              *promptRecord    `json:"prompt,omitempty"`
-	TaskSpawn           *taskSpawnRecord `json:"task_spawn,omitempty"`
-	Compact             *indexCompact    `json:"compact,omitempty"`
+	Type                  string           `json:"type"`
+	ID                    string           `json:"id,omitempty"`
+	CreatedAt             time.Time        `json:"created_at,omitzero"`
+	WorkDir               string           `json:"workdir,omitempty"`
+	ParentSession         string           `json:"parent_session,omitempty"`
+	TaskParentID          string           `json:"task_parent_id,omitempty"`
+	TaskAgentType         string           `json:"task_agent_type,omitempty"`
+	TaskDepth             int              `json:"task_depth,omitempty"`
+	Model                 message.ModelRef `json:"model,omitzero"`
+	ContextWindowTokens   *int             `json:"context_window_tokens,omitempty"`
+	ContextWindowExplicit bool             `json:"context_window_explicit,omitempty"`
+	Effort                message.Effort   `json:"effort,omitempty"`
+	ServiceTier           string           `json:"service_tier,omitempty"`
+	Message               *indexMessage    `json:"message,omitempty"`
+	Usage                 *provider.Usage  `json:"usage,omitempty"`
+	Goal                  *goalRecord      `json:"goal,omitempty"`
+	Prompt                *promptRecord    `json:"prompt,omitempty"`
+	TaskSpawn             *taskSpawnRecord `json:"task_spawn,omitempty"`
+	Compact               *indexCompact    `json:"compact,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -214,22 +215,23 @@ type indexRecord struct {
 // folded from disk take the identical branch.
 func indexRecordOf(rec record) indexRecord {
 	out := indexRecord{
-		Type:                rec.Type,
-		ID:                  rec.ID,
-		CreatedAt:           rec.CreatedAt,
-		WorkDir:             rec.WorkDir,
-		ParentSession:       rec.ParentSession,
-		TaskParentID:        rec.TaskParentID,
-		TaskAgentType:       rec.TaskAgentType,
-		TaskDepth:           rec.TaskDepth,
-		Model:               rec.Model,
-		ContextWindowTokens: rec.ContextWindowTokens,
-		Effort:              rec.Effort,
-		ServiceTier:         rec.ServiceTier,
-		Usage:               rec.Usage,
-		Goal:                rec.Goal,
-		Prompt:              rec.Prompt,
-		TaskSpawn:           rec.TaskSpawn,
+		Type:                  rec.Type,
+		ID:                    rec.ID,
+		CreatedAt:             rec.CreatedAt,
+		WorkDir:               rec.WorkDir,
+		ParentSession:         rec.ParentSession,
+		TaskParentID:          rec.TaskParentID,
+		TaskAgentType:         rec.TaskAgentType,
+		TaskDepth:             rec.TaskDepth,
+		Model:                 rec.Model,
+		ContextWindowTokens:   rec.ContextWindowTokens,
+		ContextWindowExplicit: rec.ContextWindowExplicit,
+		Effort:                rec.Effort,
+		ServiceTier:           rec.ServiceTier,
+		Usage:                 rec.Usage,
+		Goal:                  rec.Goal,
+		Prompt:                rec.Prompt,
+		TaskSpawn:             rec.TaskSpawn,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)
@@ -333,7 +335,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		}
 	case recModel:
 		f.ix.Model = rec.Model
-		f.ix.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens)
+		f.ix.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens, rec.ContextWindowExplicit)
 	case recEffort:
 		f.ix.Effort = rec.Effort
 	case recServiceTier:
