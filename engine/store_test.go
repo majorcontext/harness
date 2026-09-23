@@ -817,3 +817,23 @@ func TestScanLogRawAbsorbsOnlyItsOwnSentinel(t *testing.T) {
 		})
 	}
 }
+
+// TestReadSessionInfoHidesLegacyClaudeCodeWindow is the no-sidecar,
+// direct-scan analog of TestReadSessionIndexHidesLegacyClaudeCodeWindow.
+func TestReadSessionInfoHidesLegacyClaudeCodeWindow(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000001"
+	legacy := `{"type":"session","id":"` + id + `","created_at":"2030-01-01T00:00:00Z"}
+{"type":"model","model":"claude-code/opus","context_window_tokens":200000}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := ReadSessionInfo(dir, id)
+	if err != nil {
+		t.Fatalf("ReadSessionInfo: %v", err)
+	}
+	if info.WindowTokens != 0 {
+		t.Errorf("WindowTokens = %d, want 0 (legacy claude-code stand-in must not surface on a cold read)", info.WindowTokens)
+	}
+}

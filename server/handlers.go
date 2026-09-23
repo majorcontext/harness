@@ -298,20 +298,11 @@ type contextJSON struct {
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession.
+// contextJSONForSession mirrors usageJSONForSession, reading both fields
+// through Session.ContextGauge's one atomic snapshot.
 func contextJSONForSession(sess *engine.Session) contextJSON {
-	return contextJSON{WindowTokens: sess.ContextWindowTokens(), UsedTokens: sessionContextUsedTokens(sess)}
-}
-
-// sessionContextUsedTokens prefers a live claude-code reading, the same expression maybeAutoCompact uses.
-func sessionContextUsedTokens(sess *engine.Session) int {
-	if used, ok := sess.ContextUsedTokens(); ok {
-		return used
-	}
-	if last, ok := sess.LastUsage(); ok {
-		return last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
-	}
-	return 0
+	windowTokens, usedTokens := sess.ContextGauge()
+	return contextJSON{WindowTokens: windowTokens, UsedTokens: usedTokens}
 }
 
 // contextJSONForInfo mirrors usageJSONForInfo.

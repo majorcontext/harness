@@ -1495,6 +1495,8 @@ type Session struct {
 
 	// contextUsage is nil until a reading arrives; SetModel clears it off claude-code.
 	contextUsage *claudeCodeUsageSnapshot
+	// contextUsageGen increments on every SetModel and claude-code turn start; see setClaudeCodeContextUsage.
+	contextUsageGen uint64
 
 	// contextWindowErr is the refusal a registry MISS produces when
 	// Config.RequireContextWindow is set — see that field's doc comment.
@@ -1816,10 +1818,11 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
+	s.contextUsage = nil
+	s.contextUsageGen++
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
-		s.contextUsage = nil
 	case ref.Provider == ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = false
 	}
@@ -1845,11 +1848,21 @@ type claudeCodeUsageSnapshot struct {
 	usedTokens, windowTokens int
 }
 
-func (s *Session) setClaudeCodeContextUsage(usedTokens, windowTokens int) {
+// beginClaudeCodeContextUsageTurn clears any prior reading and returns the
+// generation this turn's request must carry.
+func (s *Session) beginClaudeCodeContextUsageTurn() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A concurrent SetModel may already have moved off claude-code or onto an explicit window.
-	if s.model.Provider != ClaudeCodeProviderFamily || s.contextWindowExplicit || s.contextWindowSource == contextWindowSourceOptOut {
+	s.contextUsage = nil
+	s.contextUsageGen++
+	return s.contextUsageGen
+}
+
+func (s *Session) setClaudeCodeContextUsage(gen uint64, usedTokens, windowTokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// gen rejects a response a concurrent SetModel or later turn already moved past.
+	if gen != s.contextUsageGen || s.model.Provider != ClaudeCodeProviderFamily || s.contextWindowExplicit || s.contextWindowSource == contextWindowSourceOptOut {
 		return
 	}
 	s.contextUsage = &claudeCodeUsageSnapshot{usedTokens: usedTokens, windowTokens: windowTokens}
@@ -2338,6 +2351,20 @@ func (s *Session) ContextWindowTokens() int {
 		return s.contextUsage.windowTokens
 	}
 	return displayContextWindow(s.model, s.cfg.ContextWindowTokens)
+}
+
+// ContextGauge returns window and used tokens as one consistent snapshot.
+func (s *Session) ContextGauge() (windowTokens, usedTokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextUsage != nil {
+		return s.contextUsage.windowTokens, s.contextUsage.usedTokens
+	}
+	windowTokens = displayContextWindow(s.model, s.cfg.ContextWindowTokens)
+	if s.haveLastUsage {
+		usedTokens = s.lastUsage.InputTokens + s.lastUsage.CacheReadTokens + s.lastUsage.CacheWriteTokens
+	}
+	return windowTokens, usedTokens
 }
 
 // applySubscriptionUsage records u as this session's latest subscription-

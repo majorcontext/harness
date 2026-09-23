@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -529,7 +530,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// writer as every later mid-turn injection, never a separate
 		// one-off path.
 		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text, blobs)
-		_ = writeClaudeCodeContextUsageRequest(stdin)
+		_ = writeClaudeCodeContextUsageRequest(stdin, s.beginClaudeCodeContextUsageTurn())
 		for {
 			select {
 			case <-wake:
@@ -1507,13 +1508,14 @@ type claudeCodeEnvelope struct {
 	LocalCommand        string                     `json:"local_command,omitempty"`
 }
 
-const claudeCodeContextUsageRequestID = "harness-context-usage"
+// claudeCodeContextUsageRequestIDPrefix precedes the requesting turn's contextUsageGen.
+const claudeCodeContextUsageRequestIDPrefix = "harness-context-usage-"
 
 // writeClaudeCodeContextUsageRequest is best-effort.
-func writeClaudeCodeContextUsageRequest(w io.Writer) error {
+func writeClaudeCodeContextUsageRequest(w io.Writer, gen uint64) error {
 	line, err := json.Marshal(map[string]any{
 		"type":       "control_request",
-		"request_id": claudeCodeContextUsageRequestID,
+		"request_id": claudeCodeContextUsageRequestIDPrefix + strconv.FormatUint(gen, 10),
 		"request":    map[string]string{"subtype": "get_context_usage", "detail": "summary"},
 	})
 	if err != nil {
@@ -1537,10 +1539,18 @@ type claudeCodeContextUsageResult struct {
 // applyClaudeCodeContextUsageResponse ignores anything but a matching success response.
 func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
 	var cr claudeCodeControlResponse
-	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.RequestID != claudeCodeContextUsageRequestID || cr.Response == nil {
+	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.Response == nil {
 		return
 	}
-	s.setClaudeCodeContextUsage(cr.Response.TotalTokens, cr.Response.RawMaxTokens)
+	genStr, ok := strings.CutPrefix(cr.RequestID, claudeCodeContextUsageRequestIDPrefix)
+	if !ok {
+		return
+	}
+	gen, err := strconv.ParseUint(genStr, 10, 64)
+	if err != nil {
+		return
+	}
+	s.setClaudeCodeContextUsage(gen, cr.Response.TotalTokens, cr.Response.RawMaxTokens)
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own

@@ -2336,11 +2336,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 			}
 		case recModel:
-			if rec.ContextWindowTokens != nil {
-				info.WindowTokens = displayContextWindow(rec.Model, *rec.ContextWindowTokens)
-			} else {
-				info.WindowTokens = displayContextWindow(rec.Model, ResolveModelContextWindow(rec.Model))
-			}
+			info.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens)
 		case recCompact:
 			if rec.Usage != nil {
 				// Cumulative only. LastInputTokens must not move for a

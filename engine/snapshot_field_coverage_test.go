@@ -125,6 +125,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"contextWindowSource":       "same derivation as contextWindowExplicit, same reasoning",
 	"contextWindowErr":          "same derivation as contextWindowExplicit; set/cleared by construction and SetModel, recomputed the same way on any load",
 	"contextUsage":              "live get_context_usage reading for the currently-running claude-code child; nil after any load, re-populated by the next turn's own query",
+	"contextUsageGen":           "in-process staleness counter for contextUsage; a fresh load has no in-flight request to correlate against, so it restarts at 0",
 	"toolConcurrency":           "resolved once in newSession from Config.ToolConcurrency, read-only afterward; not fold state",
 	"readBudget":                "resolved once in newSession from Config.ToolReadBudgetBytes; not fold state",
 	"deferredQueueRecords":      "in-flight deferred-durable-write buffer; snapshotSafeLocked refuses to capture while it is non-empty, so it is always empty at any actual anchor",

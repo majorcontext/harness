@@ -153,6 +153,18 @@ func displayContextWindow(model message.ModelRef, tokens int) int {
 	return tokens
 }
 
+// coldContextWindow is displayContextWindow for a reader with no live
+// session; it never trusts a persisted claude-code value (index.go, store.go).
+func coldContextWindow(model message.ModelRef, persisted *int) int {
+	if model.Provider == ClaudeCodeProviderFamily {
+		return displayContextWindow(model, ResolveModelContextWindow(model))
+	}
+	if persisted != nil {
+		return displayContextWindow(model, *persisted)
+	}
+	return displayContextWindow(model, ResolveModelContextWindow(model))
+}
+
 // requiredContextWindowErr turns a resolveContextWindow miss into this
 // session's refusal, or into nothing at all.
 //

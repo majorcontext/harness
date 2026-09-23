@@ -2900,10 +2900,10 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 
 func TestWriteClaudeCodeContextUsageRequest(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeClaudeCodeContextUsageRequest(&buf); err != nil {
+	if err := writeClaudeCodeContextUsageRequest(&buf, 7); err != nil {
 		t.Fatalf("writeClaudeCodeContextUsageRequest: %v", err)
 	}
-	want := `{"request":{"detail":"summary","subtype":"get_context_usage"},"request_id":"harness-context-usage","type":"control_request"}` + "\n"
+	want := `{"request":{"detail":"summary","subtype":"get_context_usage"},"request_id":"harness-context-usage-7","type":"control_request"}` + "\n"
 	if buf.String() != want {
 		t.Errorf("wrote %q, want %q", buf.String(), want)
 	}

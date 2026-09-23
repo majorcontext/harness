@@ -580,6 +580,26 @@ func TestReadSessionIndexKeepsIntentionalDisarmAtZero(t *testing.T) {
 	}
 }
 
+// TestReadSessionIndexHidesLegacyClaudeCodeWindow: a cold fold must not
+// trust a pre-fix journal's persisted 200_000 claude-code stand-in.
+func TestReadSessionIndexHidesLegacyClaudeCodeWindow(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_0123456789abcdef"
+	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+{"type":"model","model":"claude-code/opus","context_window_tokens":200000}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.WindowTokens != 0 {
+		t.Errorf("WindowTokens = %d, want 0 (legacy claude-code stand-in must not surface on a cold fold)", ix.WindowTokens)
+	}
+}
+
 // mustMarshalIndex renders a sidecar exactly as the production writers do,
 // checksum included, so a test that alters a field still produces a file
 // that reaches the check it means to exercise.

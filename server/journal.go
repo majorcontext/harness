@@ -786,8 +786,7 @@ func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome s
 	}
 	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr}
 	if sess != nil {
-		ev.ContextUsedTokens = sessionContextUsedTokens(sess)
-		ev.ContextWindowTokens = sess.ContextWindowTokens()
+		ev.ContextWindowTokens, ev.ContextUsedTokens = sess.ContextGauge()
 	}
 	s.mu.Lock()
 	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}

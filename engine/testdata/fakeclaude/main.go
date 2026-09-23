@@ -131,21 +131,35 @@ func main() {
 	// first turn is still open, exactly the mid-turn steering window this
 	// stand-in exists to prove.
 	stdinR := bufio.NewReader(os.Stdin)
-	// readStdinLine skips the driver's per-turn control_request line.
+	readRawLine := func() (line string, ok bool) {
+		b, err := stdinR.ReadString('\n')
+		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
+			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+				_, _ = f.WriteString(b)
+				f.Close()
+			}
+		}
+		return strings.TrimRight(b, "\n"), err == nil
+	}
+	var pendingControlRequestID string
+	extractControlRequestID := func(line string) string {
+		var req struct {
+			RequestID string `json:"request_id"`
+		}
+		if json.Unmarshal([]byte(line), &req) != nil {
+			return ""
+		}
+		return req.RequestID
+	}
+	// readStdinLine skips a control_request line, capturing its request_id.
 	readStdinLine := func() (line string, ok bool) {
 		for {
-			b, err := stdinR.ReadString('\n')
-			if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
-				if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
-					_, _ = f.WriteString(b)
-					f.Close()
-				}
-			}
-			line = strings.TrimRight(b, "\n")
-			if err != nil {
+			line, ok = readRawLine()
+			if !ok {
 				return line, false
 			}
 			if strings.Contains(line, `"type":"control_request"`) {
+				pendingControlRequestID = extractControlRequestID(line)
 				continue
 			}
 			return line, true
@@ -278,17 +292,29 @@ func main() {
 		"session_id": sessionID,
 	})
 	if usage := os.Getenv("FAKE_CLAUDE_CONTEXT_USAGE"); usage != "" {
-		total, max, _ := strings.Cut(usage, "/")
-		totalTokens, _ := strconv.Atoi(total)
-		maxTokens, _ := strconv.Atoi(max)
-		emit(map[string]any{
-			"type": "control_response",
-			"response": map[string]any{
-				"subtype":    "success",
-				"request_id": "harness-context-usage",
-				"response":   map[string]any{"totalTokens": totalTokens, "rawMaxTokens": maxTokens},
-			},
-		})
+		// Requires the actual control_request line rather than assuming one arrived.
+		for pendingControlRequestID == "" {
+			line, ok := readRawLine()
+			if !ok {
+				break
+			}
+			if id := extractControlRequestID(line); id != "" {
+				pendingControlRequestID = id
+			}
+		}
+		if pendingControlRequestID != "" {
+			total, max, _ := strings.Cut(usage, "/")
+			totalTokens, _ := strconv.Atoi(total)
+			maxTokens, _ := strconv.Atoi(max)
+			emit(map[string]any{
+				"type": "control_response",
+				"response": map[string]any{
+					"subtype":    "success",
+					"request_id": pendingControlRequestID,
+					"response":   map[string]any{"totalTokens": totalTokens, "rawMaxTokens": maxTokens},
+				},
+			})
+		}
 	}
 
 	switch mode {
