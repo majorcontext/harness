@@ -84,6 +84,26 @@ func TestSuppressUsageGauge(t *testing.T) {
 	}
 }
 
+func TestFirerouterFloorPinnedToCandidates(t *testing.T) {
+	if len(firerouterCandidateModels) == 0 {
+		t.Fatal("firerouterCandidateModels is empty")
+	}
+	min := -1
+	for _, m := range firerouterCandidateModels {
+		tokens, ok := bifrostFireworksContextWindows[m]
+		if !ok {
+			t.Fatalf("firerouterCandidateModels names %q, which bifrostFireworksContextWindows does not key", m)
+		}
+		if min == -1 || tokens < min {
+			min = tokens
+		}
+	}
+	floor := bifrostFireworksContextWindows["firerouter"]
+	if floor > min {
+		t.Errorf("firerouter floor = %d, want <= %d (the smallest candidate's window, %s)", floor, min, firerouterCandidateModels)
+	}
+}
+
 func TestContextWindowBedrockRegionPrefixes(t *testing.T) {
 	cases := []string{
 		"anthropic.claude-opus-4-8",

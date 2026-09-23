@@ -135,6 +135,15 @@ var bifrostFireworksContextWindows = map[string]int{
 	"deepseek-v4-flash-0731": 1_000_000,
 }
 
+var firerouterCandidateModels = []string{
+	"kimi-k3",
+	"glm-5p2",
+	"glm-5p3",
+	"glm-5p3-flash",
+	"deepseek-v4-pro-0813",
+	"deepseek-v4-flash-0731",
+}
+
 // bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
 // for the Vertex Gemini models the boxes fleet ships.
 var bifrostVertexContextWindows = map[string]int{
