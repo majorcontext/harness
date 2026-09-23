@@ -449,9 +449,6 @@ func TestLoadSessionExplicitConfigSurvivesModelSwitch(t *testing.T) {
 	}
 }
 
-// TestColdContextWindow pins coldContextWindow's matrix: a claude-code
-// ref's persisted value is trusted only when explicit; every other ref
-// trusts a present persisted value regardless.
 func TestColdContextWindow(t *testing.T) {
 	claudeRef := message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"}
 	nativeRef := message.ModelRef{Provider: "test", Model: "big"}

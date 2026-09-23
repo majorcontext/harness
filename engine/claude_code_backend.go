@@ -448,9 +448,8 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("engine: claude-code: starting %q: %w", binary, err)
 	}
-	// Allocated here, not inside the pump goroutine below: a generation
-	// captured after an async delay could span a SetModel that switches
-	// away and back before the pump's first write runs.
+	// Allocated here, not inside the pump goroutine: an async delay could
+	// let a SetModel race ahead of this turn's own first write.
 	contextUsageGen := s.beginClaudeCodeContextUsageTurn()
 
 	// Drain stderrPipe into stderr for as long as it stays open, same as
@@ -1512,10 +1511,8 @@ type claudeCodeEnvelope struct {
 	LocalCommand        string                     `json:"local_command,omitempty"`
 }
 
-// claudeCodeContextUsageRequestIDPrefix precedes the requesting turn's contextUsageGen.
 const claudeCodeContextUsageRequestIDPrefix = "harness-context-usage-"
 
-// writeClaudeCodeContextUsageRequest is best-effort.
 func writeClaudeCodeContextUsageRequest(w io.Writer, gen uint64) error {
 	line, err := json.Marshal(map[string]any{
 		"type":       "control_request",
@@ -1540,18 +1537,14 @@ type claudeCodeContextUsageResult struct {
 	RawMaxTokens int `json:"rawMaxTokens"`
 }
 
-// applyClaudeCodeContextUsageResponse ignores anything but a matching success response.
 func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
 	var cr claudeCodeControlResponse
 	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.Response == nil {
 		return
 	}
 	genStr, ok := strings.CutPrefix(cr.RequestID, claudeCodeContextUsageRequestIDPrefix)
-	if !ok {
-		return
-	}
 	gen, err := strconv.ParseUint(genStr, 10, 64)
-	if err != nil {
+	if !ok || err != nil {
 		return
 	}
 	s.setClaudeCodeContextUsage(gen, cr.Response.TotalTokens, cr.Response.RawMaxTokens)

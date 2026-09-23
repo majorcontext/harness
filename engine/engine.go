@@ -1493,9 +1493,7 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
-	// contextUsage is nil until a reading arrives; SetModel clears it off claude-code.
-	contextUsage *claudeCodeUsageSnapshot
-	// contextUsageGen increments on every SetModel and claude-code turn start; see setClaudeCodeContextUsage.
+	contextUsage    *claudeCodeUsageSnapshot
 	contextUsageGen uint64
 
 	// contextWindowErr is the refusal a registry MISS produces when
@@ -1818,8 +1816,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
-	s.contextUsage = nil
-	s.contextUsageGen++
+	s.clearContextUsageLocked()
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
@@ -1848,14 +1845,17 @@ type claudeCodeUsageSnapshot struct {
 	usedTokens, windowTokens int
 }
 
-// beginClaudeCodeContextUsageTurn clears any prior reading and returns the
-// generation this turn's request must carry.
-func (s *Session) beginClaudeCodeContextUsageTurn() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// clearContextUsageLocked assumes the caller holds s.mu.
+func (s *Session) clearContextUsageLocked() uint64 {
 	s.contextUsage = nil
 	s.contextUsageGen++
 	return s.contextUsageGen
+}
+
+func (s *Session) beginClaudeCodeContextUsageTurn() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clearContextUsageLocked()
 }
 
 func (s *Session) setClaudeCodeContextUsage(gen uint64, usedTokens, windowTokens int) {
@@ -1869,12 +1869,8 @@ func (s *Session) setClaudeCodeContextUsage(gen uint64, usedTokens, windowTokens
 }
 
 func (s *Session) ContextUsedTokens() (int, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.contextUsage == nil {
-		return 0, false
-	}
-	return s.contextUsage.usedTokens, true
+	_, used, live := s.ContextGauge()
+	return used, live
 }
 
 // ModelSupported reports whether ref names a configured provider — the same
@@ -2342,29 +2338,24 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
-// ContextWindowTokens returns this session's display-safe context window;
-// compaction arms off s.cfg.ContextWindowTokens directly (compact.go).
+// ContextWindowTokens is display-safe; compaction arms off s.cfg.ContextWindowTokens directly (compact.go).
 func (s *Session) ContextWindowTokens() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.contextUsage != nil {
-		return s.contextUsage.windowTokens
-	}
-	return displayContextWindow(s.model, s.cfg.ContextWindowTokens)
+	window, _, _ := s.ContextGauge()
+	return window
 }
 
-// ContextGauge returns window and used tokens as one consistent snapshot.
-func (s *Session) ContextGauge() (windowTokens, usedTokens int) {
+// ContextGauge: live reports whether usedTokens came from a claude-code reading.
+func (s *Session) ContextGauge() (windowTokens, usedTokens int, live bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.contextUsage != nil {
-		return s.contextUsage.windowTokens, s.contextUsage.usedTokens
+		return s.contextUsage.windowTokens, s.contextUsage.usedTokens, true
 	}
 	windowTokens = displayContextWindow(s.model, s.cfg.ContextWindowTokens)
 	if s.haveLastUsage {
 		usedTokens = s.lastUsage.InputTokens + s.lastUsage.CacheReadTokens + s.lastUsage.CacheWriteTokens
 	}
-	return windowTokens, usedTokens
+	return windowTokens, usedTokens, false
 }
 
 // applySubscriptionUsage records u as this session's latest subscription-

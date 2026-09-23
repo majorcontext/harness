@@ -290,18 +290,15 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	}
 }
 
-// contextJSON is the Session/StatusEntry context sub-object. WindowTokens
-// is 0 when compaction is disarmed or the window is untrustworthy to
-// render — a caller must treat 0 as "unknown".
+// contextJSON is the Session/StatusEntry context sub-object. A caller must
+// treat WindowTokens 0 as "unknown", never as "full".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession, reading both fields
-// through Session.ContextGauge's one atomic snapshot.
 func contextJSONForSession(sess *engine.Session) contextJSON {
-	windowTokens, usedTokens := sess.ContextGauge()
+	windowTokens, usedTokens, _ := sess.ContextGauge()
 	return contextJSON{WindowTokens: windowTokens, UsedTokens: usedTokens}
 }
 

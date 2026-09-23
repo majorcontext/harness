@@ -2433,7 +2433,6 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	}
 }
 
-// userInputLines filters out a non-user protocol line like a control_request.
 func userInputLines(stdin string) []string {
 	var out []string
 	for _, line := range strings.Split(stdin, "\n") {

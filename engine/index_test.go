@@ -580,44 +580,32 @@ func TestReadSessionIndexKeepsIntentionalDisarmAtZero(t *testing.T) {
 	}
 }
 
-// TestReadSessionIndexHidesLegacyClaudeCodeWindow: a cold fold must not
-// trust a pre-fix journal's persisted 200_000 claude-code stand-in.
-func TestReadSessionIndexHidesLegacyClaudeCodeWindow(t *testing.T) {
-	dir := t.TempDir()
-	id := "ses_0123456789abcdef"
-	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
-{"type":"model","model":"claude-code/opus","context_window_tokens":200000}
-`
-	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
-		t.Fatal(err)
+func TestReadSessionIndexClaudeCodeWindowProvenance(t *testing.T) {
+	cases := []struct {
+		name     string
+		modelRec string
+		want     int
+	}{
+		{"legacy stand-in hidden", `{"type":"model","model":"claude-code/opus","context_window_tokens":200000}`, 0},
+		{"explicit pin kept", `{"type":"model","model":"claude-code/opus","context_window_tokens":250000,"context_window_explicit":true}`, 250_000},
 	}
-	ix, err := ReadSessionIndex(dir, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ix.WindowTokens != 0 {
-		t.Errorf("WindowTokens = %d, want 0 (legacy claude-code stand-in must not surface on a cold fold)", ix.WindowTokens)
-	}
-}
-
-// TestReadSessionIndexKeepsExplicitClaudeCodeWindow: unlike the legacy
-// stand-in above, a persisted value marked context_window_explicit is an
-// operator's real pin and must survive a cold fold.
-func TestReadSessionIndexKeepsExplicitClaudeCodeWindow(t *testing.T) {
-	dir := t.TempDir()
-	id := "ses_0123456789abcdff"
-	journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
-{"type":"model","model":"claude-code/opus","context_window_tokens":250000,"context_window_explicit":true}
-`
-	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ix, err := ReadSessionIndex(dir, id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ix.WindowTokens != 250_000 {
-		t.Errorf("WindowTokens = %d, want 250000 (an explicit operator pin must survive a cold fold)", ix.WindowTokens)
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := fmt.Sprintf("ses_0123456789abcd%02x", i)
+			journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+` + c.modelRec + "\n"
+			if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ix, err := ReadSessionIndex(dir, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ix.WindowTokens != c.want {
+				t.Errorf("WindowTokens = %d, want %d", ix.WindowTokens, c.want)
+			}
+		})
 	}
 }
 

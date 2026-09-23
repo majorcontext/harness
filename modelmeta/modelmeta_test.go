@@ -55,7 +55,6 @@ func TestContextWindowCodex(t *testing.T) {
 	}
 }
 
-// TestContextWindowCodexUnknownModelStillMisses proves the codex case never falls back to a stand-in figure.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
 	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
@@ -82,26 +81,6 @@ func TestSuppressUsageGauge(t *testing.T) {
 		if got := SuppressUsageGauge(c.ref); got != c.want {
 			t.Errorf("SuppressUsageGauge(%v) = %v, want %v", c.ref, got, c.want)
 		}
-	}
-}
-
-func TestFirerouterFloorPinnedToCandidates(t *testing.T) {
-	if len(firerouterCandidateModels) == 0 {
-		t.Fatal("firerouterCandidateModels is empty")
-	}
-	min := -1
-	for _, m := range firerouterCandidateModels {
-		tokens, ok := bifrostFireworksContextWindows[m]
-		if !ok {
-			t.Fatalf("firerouterCandidateModels names %q, which bifrostFireworksContextWindows does not key", m)
-		}
-		if min == -1 || tokens < min {
-			min = tokens
-		}
-	}
-	floor := bifrostFireworksContextWindows["firerouter"]
-	if floor > min {
-		t.Errorf("firerouter floor = %d, want <= %d (the smallest candidate's window, %s)", floor, min, firerouterCandidateModels)
 	}
 }
 

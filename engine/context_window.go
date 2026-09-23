@@ -153,11 +153,9 @@ func displayContextWindow(model message.ModelRef, tokens int) int {
 	return tokens
 }
 
-// coldContextWindow is displayContextWindow for a reader with no live
-// session (index.go, store.go). A claude-code ref's persisted value is
-// trusted only when explicit is true (an operator pin, recorded alongside
-// it by persistModel): the value alone cannot tell that pin apart from the
-// pre-fix 200_000 stand-in.
+// coldContextWindow trusts a claude-code ref's persisted value only when
+// explicit is true: the value alone cannot tell an operator's pin apart
+// from a legacy 200_000 stand-in.
 func coldContextWindow(model message.ModelRef, persisted *int, explicit bool) int {
 	if persisted != nil && (explicit || model.Provider != ClaudeCodeProviderFamily) {
 		return displayContextWindow(model, *persisted)

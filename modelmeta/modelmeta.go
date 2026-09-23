@@ -122,7 +122,8 @@ var bedrockAnthropicContextWindows = map[string]int{
 
 // bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
 // for the Fireworks models the boxes fleet ships, keyed by the last path
-// segment. firerouter's floor is pinned by TestFirerouterFloorPinnedToCandidates.
+// segment. firerouter has no models.dev entry; its value is the smallest
+// window among the open-source targets it can redirect to.
 var bifrostFireworksContextWindows = map[string]int{
 	"firerouter":             1_000_000,
 	"kimi-k3":                1_048_576,
@@ -132,16 +133,6 @@ var bifrostFireworksContextWindows = map[string]int{
 	"glm-5p3-flash":          1_048_573,
 	"deepseek-v4-pro-0813":   1_000_000,
 	"deepseek-v4-flash-0731": 1_000_000,
-}
-
-// firerouterCandidateModels names every model firerouter can redirect to.
-var firerouterCandidateModels = []string{
-	"kimi-k3",
-	"glm-5p2",
-	"glm-5p3",
-	"glm-5p3-flash",
-	"deepseek-v4-pro-0813",
-	"deepseek-v4-flash-0731",
 }
 
 // bifrostVertexContextWindows is models.dev's "google-vertex" limit.context

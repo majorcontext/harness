@@ -131,6 +131,9 @@ func main() {
 	// first turn is still open, exactly the mid-turn steering window this
 	// stand-in exists to prove.
 	stdinR := bufio.NewReader(os.Stdin)
+	// pendingControlRequestID is set by readRawLine as a side effect,
+	// only once this process actually reads a control_request line.
+	var pendingControlRequestID string
 	readRawLine := func() (line string, ok bool) {
 		b, err := stdinR.ReadString('\n')
 		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
@@ -139,30 +142,23 @@ func main() {
 				f.Close()
 			}
 		}
-		return strings.TrimRight(b, "\n"), err == nil
-	}
-	var pendingControlRequestID string
-	extractControlRequestID := func(line string) string {
-		var req struct {
-			RequestID string `json:"request_id"`
+		line = strings.TrimRight(b, "\n")
+		if strings.Contains(line, `"type":"control_request"`) {
+			var req struct {
+				RequestID string `json:"request_id"`
+			}
+			if json.Unmarshal([]byte(line), &req) == nil {
+				pendingControlRequestID = req.RequestID
+			}
 		}
-		if json.Unmarshal([]byte(line), &req) != nil {
-			return ""
-		}
-		return req.RequestID
+		return line, err == nil
 	}
-	// readStdinLine skips a control_request line, capturing its request_id.
 	readStdinLine := func() (line string, ok bool) {
 		for {
 			line, ok = readRawLine()
-			if !ok {
-				return line, false
+			if !ok || !strings.Contains(line, `"type":"control_request"`) {
+				return line, ok
 			}
-			if strings.Contains(line, `"type":"control_request"`) {
-				pendingControlRequestID = extractControlRequestID(line)
-				continue
-			}
-			return line, true
 		}
 	}
 
@@ -294,12 +290,8 @@ func main() {
 	if usage := os.Getenv("FAKE_CLAUDE_CONTEXT_USAGE"); usage != "" {
 		// Requires the actual control_request line rather than assuming one arrived.
 		for pendingControlRequestID == "" {
-			line, ok := readRawLine()
-			if !ok {
+			if _, ok := readRawLine(); !ok {
 				break
-			}
-			if id := extractControlRequestID(line); id != "" {
-				pendingControlRequestID = id
 			}
 		}
 		if pendingControlRequestID != "" {

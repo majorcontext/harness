@@ -233,31 +233,23 @@ func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
 	}
 }
 
-// TestBeginClaudeCodeContextUsageTurnClearsPriorReading: an unanswered turn reports unknown, not a stale reading.
-func TestBeginClaudeCodeContextUsageTurnClearsPriorReading(t *testing.T) {
-	s := NewSession(Config{
-		Model:     claudeCodeRef,
-		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
-	})
-	s.setClaudeCodeContextUsage(s.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
-	if _, ok := s.ContextUsedTokens(); !ok {
-		t.Fatal("setup: first reading did not apply")
-	}
-
-	s.beginClaudeCodeContextUsageTurn() // a new turn starts; its own response never arrives
-	if _, ok := s.ContextUsedTokens(); ok {
-		t.Error("ContextUsedTokens() still ok after a new turn began with no response yet, want cleared")
-	}
-}
-
-// TestContextGauge pins its two lanes: a live claude-code reading, and the native LastUsage fallback.
 func TestContextGauge(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
 
 	claudeCode := NewSession(Config{Model: claudeCodeRef, Providers: prov})
 	claudeCode.setClaudeCodeContextUsage(claudeCode.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
-	if window, used := claudeCode.ContextGauge(); window != 1_000_000 || used != 15_554 {
-		t.Errorf("claude-code: ContextGauge() = %d, %d; want 1000000, 15554", window, used)
+	if window, used, live := claudeCode.ContextGauge(); window != 1_000_000 || used != 15_554 || !live {
+		t.Errorf("claude-code: ContextGauge() = %d, %d, %v; want 1000000, 15554, true", window, used, live)
+	}
+	if got := claudeCode.ContextWindowTokens(); got != 1_000_000 {
+		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
+	}
+	if used, ok := claudeCode.ContextUsedTokens(); !ok || used != 15_554 {
+		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
+	}
+	claudeCode.SetModel(message.ModelRef{Provider: "test", Model: "x"})
+	if _, ok := claudeCode.ContextUsedTokens(); ok {
+		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
 	}
 
 	native := NewSession(Config{
@@ -269,62 +261,39 @@ func TestContextGauge(t *testing.T) {
 	native.lastUsage = provider.Usage{InputTokens: 100, CacheReadTokens: 20, CacheWriteTokens: 5}
 	native.haveLastUsage = true
 	native.mu.Unlock()
-	if window, used := native.ContextGauge(); window != 500_000 || used != 125 {
-		t.Errorf("native: ContextGauge() = %d, %d; want 500000, 125", window, used)
+	if window, used, live := native.ContextGauge(); window != 500_000 || used != 125 || live {
+		t.Errorf("native: ContextGauge() = %d, %d, %v; want 500000, 125, false", window, used, live)
 	}
 }
 
-func TestSetClaudeCodeContextUsage(t *testing.T) {
-	s := NewSession(Config{
-		Model:     claudeCodeRef,
-		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
-	})
-	gen := s.beginClaudeCodeContextUsageTurn()
-	s.setClaudeCodeContextUsage(gen, 15_554, 1_000_000)
-
-	if got := s.ContextWindowTokens(); got != 1_000_000 {
-		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
-	}
-	if used, ok := s.ContextUsedTokens(); !ok || used != 15_554 {
-		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
-	}
-
-	s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
-	if _, ok := s.ContextUsedTokens(); ok {
-		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
-	}
-}
-
-// TestSetClaudeCodeContextUsageIgnoresExplicitAndOptOut: an explicit window and an opt-out each reject.
-func TestSetClaudeCodeContextUsageIgnoresExplicitAndOptOut(t *testing.T) {
+func TestSetClaudeCodeContextUsageRejects(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
-
-	explicit := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov})
-	explicit.setClaudeCodeContextUsage(explicit.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
-
-	optOut := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov})
-	optOut.setClaudeCodeContextUsage(optOut.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
-
-	for name, s := range map[string]*Session{"explicit": explicit, "opt-out": optOut} {
-		if _, ok := s.ContextUsedTokens(); ok {
-			t.Errorf("%s: ContextUsedTokens() ok, want not ok", name)
-		}
+	cases := []struct {
+		name  string
+		cfg   Config
+		setup func(*Session) uint64 // returns the generation the late reading carries
+	}{
+		{"explicit window", Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov}, (*Session).beginClaudeCodeContextUsageTurn},
+		{"opt-out", Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov}, (*Session).beginClaudeCodeContextUsageTurn},
+		{"superseded by this session's next turn", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+			gen := s.beginClaudeCodeContextUsageTurn()
+			s.beginClaudeCodeContextUsageTurn()
+			return gen
+		}},
+		{"superseded by SetModel switching back to the SAME ref", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+			gen := s.beginClaudeCodeContextUsageTurn()
+			s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
+			s.SetModel(claudeCodeRef)
+			return gen
+		}},
 	}
-}
-
-// TestSetClaudeCodeContextUsageIgnoresStaleAfterSwitchingBack: a provider match alone is not enough after SetModel returns to the SAME ref.
-func TestSetClaudeCodeContextUsageIgnoresStaleAfterSwitchingBack(t *testing.T) {
-	s := NewSession(Config{
-		Model:     claudeCodeRef,
-		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
-	})
-	staleGen := s.beginClaudeCodeContextUsageTurn()
-
-	s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
-	s.SetModel(claudeCodeRef)
-
-	s.setClaudeCodeContextUsage(staleGen, 15_554, 1_000_000)
-	if _, ok := s.ContextUsedTokens(); ok {
-		t.Error("ContextUsedTokens() ok for a stale generation after switching back, want rejected")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSession(c.cfg)
+			s.setClaudeCodeContextUsage(c.setup(s), 15_554, 1_000_000)
+			if _, ok := s.ContextUsedTokens(); ok {
+				t.Error("ContextUsedTokens() ok, want rejected")
+			}
+		})
 	}
 }
