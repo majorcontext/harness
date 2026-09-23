@@ -32,6 +32,13 @@ const defaultResponsesPath = "/v1/responses"
 type Client struct {
 	APIKey  string
 	BaseURL string // defaults to https://api.openai.com
+	// ExtraHeaders are sent verbatim on every request. A gateway that
+	// attributes spend by header needs them here.
+	//
+	// Applied first and overwritten by the fixed headers below, mirroring
+	// provider/anthropic: no config can replace Authorization, Content-Type,
+	// or Accept.
+	ExtraHeaders map[string]string
 	// ResponsesPath is the request path appended to BaseURL, defaulting to
 	// defaultResponsesPath. It is configurable because the Responses wire
 	// format is spoken by endpoints that do not serve it at OpenAI's own
@@ -158,15 +165,18 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 	if err != nil {
 		return nil, err
 	}
+	headers := http.Header{}
+	for k, v := range c.ExtraHeaders {
+		headers.Set(k, v)
+	}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Accept", "text/event-stream")
+	headers.Set("Authorization", "Bearer "+c.APIKey)
 	return &preparedRequest{
-		body: body,
-		url:  responsesURL(c.BaseURL, c.ResponsesPath),
-		headers: http.Header{
-			"Content-Type":  []string{"application/json"},
-			"Accept":        []string{"text/event-stream"},
-			"Authorization": []string{"Bearer " + c.APIKey},
-		},
-		client: c.httpClient(),
+		body:    body,
+		url:     responsesURL(c.BaseURL, c.ResponsesPath),
+		headers: headers,
+		client:  c.httpClient(),
 	}, nil
 }
 

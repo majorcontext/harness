@@ -28,6 +28,7 @@ func TestRegistryTypeOpenAIBuildsKeyedNativeClient(t *testing.T) {
 			BaseURL:       "https://gateway.example",
 			APIKeyEnv:     "SECONDARY_API_KEY",
 			ResponsesPath: "/alt/responses",
+			ExtraHeaders:  map[string]string{"X-Neptune-User": "someone@example.com"},
 		},
 	}})
 
@@ -46,6 +47,9 @@ func TestRegistryTypeOpenAIBuildsKeyedNativeClient(t *testing.T) {
 	}
 	if c.ResponsesPath != "/alt/responses" {
 		t.Errorf("ResponsesPath = %q, want /alt/responses", c.ResponsesPath)
+	}
+	if c.ExtraHeaders["X-Neptune-User"] != "someone@example.com" {
+		t.Errorf("ExtraHeaders = %+v, want X-Neptune-User=someone@example.com", c.ExtraHeaders)
 	}
 
 	// The built-in native entry must be untouched: a keyed entry ADDS a
@@ -203,15 +207,23 @@ func TestRegistryTypeOpenAIUnderNativeKey(t *testing.T) {
 }
 
 // TestRegistryNativeOpenAIHonorsResponsesPath: the bare "openai" key builds
-// the same adapter, so its responses_path must reach the client too.
+// the same adapter, so its responses_path and extra_headers must reach the
+// client too.
 func TestRegistryNativeOpenAIHonorsResponsesPath(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-builtin")
 	reg := registry(&config.Config{Providers: map[string]config.Provider{
-		"openai": {BaseURL: "http://proxy", ResponsesPath: "/alt/responses"},
+		"openai": {
+			BaseURL:       "http://proxy",
+			ResponsesPath: "/alt/responses",
+			ExtraHeaders:  map[string]string{"X-Neptune-User": "someone@example.com"},
+		},
 	}})
 	c := reg[openai.Family].(*openai.Client)
 	if c.ResponsesPath != "/alt/responses" {
 		t.Errorf("ResponsesPath = %q, want /alt/responses", c.ResponsesPath)
+	}
+	if c.ExtraHeaders["X-Neptune-User"] != "someone@example.com" {
+		t.Errorf("ExtraHeaders = %+v, want X-Neptune-User=someone@example.com", c.ExtraHeaders)
 	}
 	if c.Family != "" && c.Family != openai.Family {
 		t.Errorf("Family = %q, want the package default for the built-in entry", c.Family)

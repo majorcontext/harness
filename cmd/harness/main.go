@@ -1018,7 +1018,7 @@ func registry(cfg *config.Config) provider.Registry {
 		// to drift. Its ResponsesPath/OmitResponseParams/
 		// SanitizeToolSchemas/UseWebSocketTransport come from the native
 		// entry, if any.
-		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg), SanitizeToolSchemas: nativeSanitizeToolSchemas(cfg), UseWebSocketTransport: nativeUseWebSocketTransport(cfg)},
+		openai.Family: &openai.Client{APIKey: okey, BaseURL: obase, ExtraHeaders: nativeExtraHeaders(cfg, openai.Family), ResponsesPath: nativeResponsesPath(cfg), OmitResponseParams: nativeOmitResponseParams(cfg), SanitizeToolSchemas: nativeSanitizeToolSchemas(cfg), UseWebSocketTransport: nativeUseWebSocketTransport(cfg)},
 	}
 	registerOpenAICompatProviders(reg, cfg)
 	registerOpenAIProviders(reg, cfg)
@@ -1126,6 +1126,7 @@ func registerOpenAIProviders(reg provider.Registry, cfg *config.Config) {
 			Family:                name,
 			APIKey:                apiKey,
 			BaseURL:               p.BaseURL,
+			ExtraHeaders:          p.ExtraHeaders,
 			ResponsesPath:         p.ResponsesPath,
 			OmitResponseParams:    p.OmitResponseParams,
 			SanitizeToolSchemas:   p.SanitizeToolSchemas,
