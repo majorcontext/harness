@@ -2418,19 +2418,33 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 		t.Error("session history has no user message carrying the queued prompt's text — mid-turn delivery did not append into the transcript")
 	}
 
-	// The actual bytes reached the CLI's stdin as a genuine SECOND line,
-	// not just harness-side bookkeeping.
+	// The actual bytes reached the CLI's stdin as a genuine SECOND user
+	// line, not just harness-side bookkeeping. Filters out the per-turn
+	// get_context_usage control_request line (writeClaudeCodeContextUsageRequest),
+	// which is not a user input line.
 	stdinBytes, err := os.ReadFile(stdinLog)
 	if err != nil {
 		t.Fatalf("reading captured CLI stdin: %v", err)
 	}
-	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	lines := userInputLines(strings.TrimRight(string(stdinBytes), "\n"))
 	if len(lines) != 2 {
-		t.Fatalf("CLI stdin carried %d lines, want 2 (initial turn text + the mid-turn injected prompt): %q", len(lines), string(stdinBytes))
+		t.Fatalf("CLI stdin carried %d user input lines, want 2 (initial turn text + the mid-turn injected prompt): %q", len(lines), string(stdinBytes))
 	}
 	if !strings.Contains(lines[1], "QUEUE-MARKER: please continue") {
-		t.Errorf("CLI stdin's second line = %q, want it to carry the queued prompt's text", lines[1])
+		t.Errorf("CLI stdin's second user line = %q, want it to carry the queued prompt's text", lines[1])
 	}
+}
+
+// userInputLines returns stdin's own "user" input lines, filtering out a
+// protocol line like the per-turn get_context_usage control_request.
+func userInputLines(stdin string) []string {
+	var out []string
+	for _, line := range strings.Split(stdin, "\n") {
+		if strings.Contains(line, `"type":"user"`) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // TestClaudeCodeQueueInjectionStampsOperatorBatch is the named-failure
@@ -2773,9 +2787,9 @@ func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading captured CLI stdin: %v", err)
 	}
-	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	lines := userInputLines(strings.TrimRight(string(stdinBytes), "\n"))
 	if len(lines) != 2 {
-		t.Fatalf("CLI stdin carried %d lines, want 2: %q", len(lines), string(stdinBytes))
+		t.Fatalf("CLI stdin carried %d user input lines, want 2: %q", len(lines), string(stdinBytes))
 	}
 	injected := lines[1]
 	if !strings.Contains(injected, `"type":"image"`) {
@@ -2887,44 +2901,42 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 	}
 }
 
-// TestClaudeCodeInitModelResolvesRealContextWindow: fakeclaude's
-// FAKE_CLAUDE_MODEL stands in for the "system"/"init" event's own model
-// field (live-verified on a real `claude` 2.1.280 binary). cfg tokens must
-// pick up a resolved model and stay 0 for one this repo's tables miss;
-// ContextWindowTokens() (display) must always stay 0 regardless.
-func TestClaudeCodeInitModelResolvesRealContextWindow(t *testing.T) {
-	cases := []struct {
-		name         string
-		resolved     string
-		wantCfgAfter int
-	}{
-		{"resolved model arms the internal window", "claude-haiku-4-5-20251001[1m]", 1_000_000},
-		{"unrecognized model reports unknown", "claude-model-from-the-future", 0},
+// TestWriteClaudeCodeContextUsageRequest pins the control_request wire
+// shape verified against a running `claude` 2.1.280 binary.
+func TestWriteClaudeCodeContextUsageRequest(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeClaudeCodeContextUsageRequest(&buf); err != nil {
+		t.Fatalf("writeClaudeCodeContextUsageRequest: %v", err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			bin := buildFakeClaude(t)
-			t.Setenv("FAKE_CLAUDE_MODEL", c.resolved)
+	want := `{"request":{"subtype":"get_context_usage"},"request_id":"harness-context-usage","type":"control_request"}` + "\n"
+	if buf.String() != want {
+		t.Errorf("wrote %q, want %q", buf.String(), want)
+	}
+}
 
-			s := NewSession(Config{
-				SessionDir: t.TempDir(),
-				Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "haiku"},
-				ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
-			})
-			if got := s.cfg.ContextWindowTokens; got != 0 {
-				t.Fatalf("before any turn, cfg.ContextWindowTokens = %d, want 0", got)
-			}
+// TestClaudeCodeContextUsageQueryUpdatesGauge is the red-first test for
+// the reported defect: the CLI's own get_context_usage response (fakeclaude's
+// FAKE_CLAUDE_CONTEXT_USAGE stands in for it) must become the session's
+// window AND occupancy, not the old 200_000 stand-in or LastUsage's
+// whole-turn aggregate.
+func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
 
-			if _, err := s.Prompt(context.Background(), "hi"); err != nil {
-				t.Fatalf("Prompt: %v", err)
-			}
+	s := NewSession(Config{
+		SessionDir: t.TempDir(),
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+	})
 
-			if got := s.cfg.ContextWindowTokens; got != c.wantCfgAfter {
-				t.Errorf("after turn, cfg.ContextWindowTokens = %d, want %d", got, c.wantCfgAfter)
-			}
-			if got := s.ContextWindowTokens(); got != 0 {
-				t.Errorf("ContextWindowTokens() = %d, want 0", got)
-			}
-		})
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	if got := s.ContextWindowTokens(); got != 1_000_000 {
+		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
+	}
+	if used, ok := s.ContextUsedTokens(); !ok || used != 15_554 {
+		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
 	}
 }

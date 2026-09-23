@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -530,6 +529,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// writer as every later mid-turn injection, never a separate
 		// one-off path.
 		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text, blobs)
+		_ = writeClaudeCodeContextUsageRequest(stdin)
 		for {
 			select {
 			case <-wake:
@@ -1147,10 +1147,6 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			switch env.Subtype {
 			case "init":
 				s.recordClaudeCodeSessionID(env.SessionID)
-				if env.Model != "" {
-					tokens, ok := modelmeta.ClaudeCodeResolvedWindow(env.Model)
-					s.reportObservedContextWindow(tokens, ok, "claude_code_resolved")
-				}
 			case "status":
 				switch {
 				case env.Status == "compacting":
@@ -1199,6 +1195,8 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.
+		case "control_response":
+			applyClaudeCodeContextUsageResponse(s, env.Response)
 		case "assistant":
 			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
@@ -1465,10 +1463,9 @@ type claudeCodeEnvelope struct {
 	Type      string `json:"type"`
 	Subtype   string `json:"subtype,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
-	// Model is a "system"/"init" envelope's report of the CONCRETE model
-	// resolved from --model's alias, e.g. "claude-opus-5-5[1m]". See
-	// modelmeta.ClaudeCodeResolvedWindow, the only reader.
-	Model    string           `json:"model,omitempty"`
+	// Response is a "control_response" envelope's own payload. See
+	// applyClaudeCodeContextUsageResponse, the only reader.
+	Response json.RawMessage  `json:"response,omitempty"`
 	Message  json.RawMessage  `json:"message,omitempty"`
 	IsError  bool             `json:"is_error,omitempty"`
 	Result   string           `json:"result,omitempty"`
@@ -1509,6 +1506,53 @@ type claudeCodeEnvelope struct {
 	Status              string                     `json:"status,omitempty"`
 	CompactResultStatus string                     `json:"compact_result,omitempty"`
 	LocalCommand        string                     `json:"local_command,omitempty"`
+}
+
+// claudeCodeContextUsageRequestID correlates writeClaudeCodeContextUsageRequest
+// with applyClaudeCodeContextUsageResponse. A fixed value: only one such
+// request is ever in flight per child process.
+const claudeCodeContextUsageRequestID = "harness-context-usage"
+
+// writeClaudeCodeContextUsageRequest asks the CLI for its own live
+// occupancy/window via the control-protocol's "get_context_usage" request
+// (verified against a running `claude` 2.1.280 binary; wire shape from
+// @anthropic-ai/claude-agent-sdk's sdk.d.ts). Best-effort: a write failure
+// here just means no live reading arrives this turn.
+func writeClaudeCodeContextUsageRequest(w io.Writer) error {
+	line, err := json.Marshal(map[string]any{
+		"type":       "control_request",
+		"request_id": claudeCodeContextUsageRequestID,
+		"request":    map[string]string{"subtype": "get_context_usage"},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(line, '\n'))
+	return err
+}
+
+type claudeCodeControlResponse struct {
+	Subtype   string                        `json:"subtype"`
+	RequestID string                        `json:"request_id"`
+	Response  *claudeCodeContextUsageResult `json:"response"`
+}
+
+type claudeCodeContextUsageResult struct {
+	TotalTokens  int `json:"totalTokens"`
+	RawMaxTokens int `json:"rawMaxTokens"`
+}
+
+// applyClaudeCodeContextUsageResponse decodes a "control_response" envelope
+// and, if it answers claudeCodeContextUsageRequestID successfully, records
+// the CLI's own live occupancy/window on s. Permissively ignores anything
+// else (an error response, an older CLI with no such control request, or a
+// malformed line) — the session simply falls back to its prior state.
+func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
+	var cr claudeCodeControlResponse
+	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.RequestID != claudeCodeContextUsageRequestID || cr.Response == nil {
+		return
+	}
+	s.setClaudeCodeContextUsage(cr.Response.TotalTokens, cr.Response.RawMaxTokens)
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own

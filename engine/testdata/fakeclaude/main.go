@@ -131,20 +131,27 @@ func main() {
 	// first turn is still open, exactly the mid-turn steering window this
 	// stand-in exists to prove.
 	stdinR := bufio.NewReader(os.Stdin)
+	// readStdinLine skips a "control_request" line (the driver sends one
+	// unconditionally per turn, see writeClaudeCodeContextUsageRequest)
+	// rather than handing it to a mode expecting the next queued prompt.
 	readStdinLine := func() (line string, ok bool) {
-		b, err := stdinR.ReadString('\n')
-		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
-			// Record (append) exactly the bytes read, same shape the old
-			// one-shot read-to-EOF left behind — a test recovers the
-			// EXACT bytes the driver sent on each line, e.g. proving a
-			// checked-out task notification's rendered content actually
-			// reached the CLI's input (engine/claude_code_backend_test.go).
-			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
-				_, _ = f.WriteString(b)
-				f.Close()
+		for {
+			b, err := stdinR.ReadString('\n')
+			if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
+				if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
+					_, _ = f.WriteString(b)
+					f.Close()
+				}
 			}
+			line = strings.TrimRight(b, "\n")
+			if err != nil {
+				return line, false
+			}
+			if strings.Contains(line, `"type":"control_request"`) {
+				continue
+			}
+			return line, true
 		}
-		return strings.TrimRight(b, "\n"), err == nil
 	}
 
 	if mode != "fast_no_drain" {
@@ -267,15 +274,24 @@ func main() {
 		return
 	}
 
-	initEvent := map[string]any{
+	emit(map[string]any{
 		"type":       "system",
 		"subtype":    "init",
 		"session_id": sessionID,
+	})
+	if usage := os.Getenv("FAKE_CLAUDE_CONTEXT_USAGE"); usage != "" {
+		total, max, _ := strings.Cut(usage, "/")
+		totalTokens, _ := strconv.Atoi(total)
+		maxTokens, _ := strconv.Atoi(max)
+		emit(map[string]any{
+			"type": "control_response",
+			"response": map[string]any{
+				"subtype":    "success",
+				"request_id": "harness-context-usage",
+				"response":   map[string]any{"totalTokens": totalTokens, "rawMaxTokens": maxTokens},
+			},
+		})
 	}
-	if resolvedModel := os.Getenv("FAKE_CLAUDE_MODEL"); resolvedModel != "" {
-		initEvent["model"] = resolvedModel
-	}
-	emit(initEvent)
 
 	switch mode {
 	case "compact_boundary":

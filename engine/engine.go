@@ -1493,6 +1493,12 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
+	// contextUsage is the claude-code lane's live get_context_usage
+	// reading (claude_code_backend.go), nil until one arrives. Cleared on
+	// SetModel away from claude-code so a stale reading never survives a
+	// switch to a different model.
+	contextUsage *claudeCodeUsageSnapshot
+
 	// contextWindowErr is the refusal a registry MISS produces when
 	// Config.RequireContextWindow is set — see that field's doc comment.
 	// Set by newSession, by LoadSession's post-replay re-derive, and by
@@ -1816,6 +1822,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
+		s.contextUsage = nil
 	case ref.Provider == ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = false
 	}
@@ -1837,25 +1844,29 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
 
-// reportObservedContextWindow lets a delegated backend correct this
-// session's window once its OWN live signal reveals which model actually
-// served a turn. It never refuses the session. ok=false clears any earlier
-// guess back to unknown rather than keep a possibly stale number.
-func (s *Session) reportObservedContextWindow(tokens int, ok bool, reason string) {
+// claudeCodeUsageSnapshot is a live get_context_usage reading — see
+// Session.contextUsage.
+type claudeCodeUsageSnapshot struct {
+	usedTokens, windowTokens int
+}
+
+// setClaudeCodeContextUsage records a live get_context_usage reading (see
+// applyClaudeCodeContextUsageResponse) as s.contextUsage.
+func (s *Session) setClaudeCodeContextUsage(usedTokens, windowTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.contextWindowExplicit {
-		return
+	s.contextUsage = &claudeCodeUsageSnapshot{usedTokens: usedTokens, windowTokens: windowTokens}
+}
+
+// ContextUsedTokens reports a live, exact occupancy reading when one
+// exists — currently only the claude-code lane's get_context_usage query.
+func (s *Session) ContextUsedTokens() (int, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextUsage == nil {
+		return 0, false
 	}
-	nextTokens, nextSource := 0, contextWindowSourceDisabled
-	if ok && tokens >= minAutoContextWindowTokens {
-		nextTokens, nextSource = tokens, contextWindowSourceModelDerived
-	}
-	if nextTokens == s.cfg.ContextWindowTokens && nextSource == s.contextWindowSource {
-		return
-	}
-	s.cfg.ContextWindowTokens, s.contextWindowSource = nextTokens, nextSource
-	logContextWindowArmed(s.ID, s.model, nextTokens, nextSource, reason)
+	return s.contextUsage.usedTokens, true
 }
 
 // ModelSupported reports whether ref names a configured provider — the same
@@ -2323,13 +2334,17 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
-// ContextWindowTokens returns this session's DISPLAY-safe context window —
-// 0 when compaction is disarmed, or when displayContextWindow marks the
-// usage/window pairing untrustworthy. Compaction arms off the internal
-// s.cfg.ContextWindowTokens directly (compact.go), never through this.
+// ContextWindowTokens returns this session's DISPLAY-safe context window: a
+// live claude-code get_context_usage reading when one exists, else 0 when
+// compaction is disarmed or displayContextWindow marks the usage/window
+// pairing untrustworthy. Compaction arms off s.cfg.ContextWindowTokens
+// directly (compact.go), never through this.
 func (s *Session) ContextWindowTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.contextUsage != nil {
+		return s.contextUsage.windowTokens
+	}
 	return displayContextWindow(s.model, s.cfg.ContextWindowTokens)
 }
 

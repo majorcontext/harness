@@ -80,45 +80,16 @@ func TestContextWindowClaudeCodeNoStandIn(t *testing.T) {
 	}
 }
 
-// TestClaudeCodeResolvedWindow live-verified on a running box (CLI
-// 2.1.280): "--model haiku" resolves "claude-haiku-4-5-20251001" at 200k,
-// "--model haiku[1m]" resolves the same model name plus "[1m]" at 1M —
-// the suffix forces the window regardless of the base model's baseline.
-func TestClaudeCodeResolvedWindow(t *testing.T) {
-	cases := []struct {
-		resolved string
-		want     int
-		wantOK   bool
-	}{
-		{"claude-opus-5-5", 1_000_000, true},
-		{"claude-haiku-4-5-20251001", 200_000, true},
-		{"claude-haiku-4-5-20251001[1m]", 1_000_000, true},
-		{"claude-nonexistent-model", 0, false},
-		{"claude-nonexistent-model[1m]", 1_000_000, true},
-		{"", 0, false},
-	}
-	for _, c := range cases {
-		tokens, ok := ClaudeCodeResolvedWindow(c.resolved)
-		if ok != c.wantOK || tokens != c.want {
-			t.Errorf("ClaudeCodeResolvedWindow(%q) = %d, %v; want %d, %v", c.resolved, tokens, ok, c.want, c.wantOK)
-		}
-	}
-}
-
-// TestSuppressUsageGauge: claude-code's LastUsage is a whole-turn
-// aggregate, never one prompt's occupancy; firerouter serves a different
-// model per request (live-verified via Bifrost telemetry). Every other
-// ref pairs one request's usage with one exactly-known model.
+// TestSuppressUsageGauge: firerouter serves a different model per request
+// (live-verified via Bifrost telemetry), so it alone is suppressed.
 func TestSuppressUsageGauge(t *testing.T) {
 	cases := []struct {
 		ref  message.ModelRef
 		want bool
 	}{
-		{message.ModelRef{Provider: "claude-code", Model: "opus"}, true},
 		{message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/routers/firerouter"}, true},
 		{message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/models/glm-5p2"}, false},
-		{message.ModelRef{Provider: "anthropic", Model: "claude-fable-5"}, false},
-		{message.ModelRef{Provider: "openai", Model: "gpt-5"}, false},
+		{message.ModelRef{Provider: "claude-code", Model: "opus"}, false},
 	}
 	for _, c := range cases {
 		if got := SuppressUsageGauge(c.ref); got != c.want {

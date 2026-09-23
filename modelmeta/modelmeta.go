@@ -233,12 +233,11 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// ref carries only the bare CLI alias ("opus"); the `claude`
-		// binary resolves it itself, even to a different window for the
-		// same alias (live-verified: "haiku" resolves 200k, "haiku[1m]"
-		// resolves 1M). 0 keeps RequireContextWindow's non-refusal
-		// (ok=true) without guessing; ClaudeCodeResolvedWindow replaces it
-		// once the CLI self-reports its resolved model.
+		// ref is a bare CLI alias, not a resolved model or window; the
+		// running `claude` binary reports both live (see
+		// engine/claude_code_backend.go's get_context_usage query). 0
+		// keeps RequireContextWindow's non-refusal (ok=true) without
+		// guessing.
 		tokens, ok = 0, true
 	}
 	return tokens, ok
@@ -260,37 +259,12 @@ const claudeCodeProvider = "claude-code"
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
 
-// claudeCodeOneMillionSuffix marks a `claude` CLI model string as running
-// the CLI's 1M-context beta — live-verified: it forces 1,000,000 tokens
-// regardless of the base model's own baseline.
-const claudeCodeOneMillionSuffix = "[1m]"
-
-// ClaudeCodeResolvedWindow reports the context window for resolvedModel,
-// the model a running `claude` CLI's "system"/"init" event names — not
-// the bare alias harness invoked it with. false means unknown.
-func ClaudeCodeResolvedWindow(resolvedModel string) (tokens int, ok bool) {
-	if resolvedModel == "" {
-		return 0, false
-	}
-	if strings.HasSuffix(resolvedModel, claudeCodeOneMillionSuffix) {
-		return 1_000_000, true
-	}
-	tokens, ok = anthropicContextWindows[resolvedModel]
-	return tokens, ok
-}
-
 // SuppressUsageGauge reports whether ref's session must never render a
-// used/window percentage. claude-code's Session.LastUsage is a whole-turn
-// AGGREGATE, not one prompt's occupancy; firerouter's denominator is a
-// floor across whichever model actually served the request.
+// used/window percentage: only bifrost's firerouter, whose denominator is
+// a floor across whichever model actually served the request, never an
+// exact figure for it.
 func SuppressUsageGauge(ref message.ModelRef) bool {
-	if ref.Provider == claudeCodeProvider {
-		return true
-	}
-	if ref.Provider != "bifrost" {
-		return false
-	}
-	return lastPathSegment(ref.Model) == "firerouter"
+	return ref.Provider == "bifrost" && lastPathSegment(ref.Model) == "firerouter"
 }
 
 // lastPathSegment returns the substring of model after its last '/', or

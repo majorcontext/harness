@@ -290,24 +290,30 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	}
 }
 
-// contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
-// the exact sum maybeAutoCompact (engine/compact.go) compares against
-// WindowTokens, so this gauge and auto-compaction never disagree.
-// WindowTokens is 0 when compaction is disarmed, or when
-// Session.ContextWindowTokens has a real floor SuppressUsageGauge still
-// marks untrustworthy to render — a caller must treat 0 as "unknown".
+// contextJSON is the Session/StatusEntry context sub-object. WindowTokens
+// is 0 when compaction is disarmed or the window is untrustworthy to
+// render — a caller must treat 0 as "unknown".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession.
+// contextJSONForSession mirrors usageJSONForSession. sessionContextUsedTokens
+// prefers a live claude-code reading over LastUsage's per-request sum,
+// which maybeAutoCompact also uses so the two never disagree on the native
+// lane.
 func contextJSONForSession(sess *engine.Session) contextJSON {
-	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
-	if last, ok := sess.LastUsage(); ok {
-		out.UsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	return contextJSON{WindowTokens: sess.ContextWindowTokens(), UsedTokens: sessionContextUsedTokens(sess)}
+}
+
+func sessionContextUsedTokens(sess *engine.Session) int {
+	if used, ok := sess.ContextUsedTokens(); ok {
+		return used
 	}
-	return out
+	if last, ok := sess.LastUsage(); ok {
+		return last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	}
+	return 0
 }
 
 // contextJSONForInfo mirrors usageJSONForInfo.

@@ -238,32 +238,25 @@ func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
 	}
 }
 
-// TestReportObservedContextWindow: a live resolved model updates the
-// internal arming field (display stays 0, SuppressUsageGauge covers
-// claude-code unconditionally); an unresolved model clears a stale guess
-// back to unknown; explicit config always wins.
-func TestReportObservedContextWindow(t *testing.T) {
-	cases := []struct {
-		name          string
-		explicit      int
-		tokens        int
-		ok            bool
-		wantCfgTokens int
-	}{
-		{"resolved model arms the internal window", 0, 1_000_000, true, 1_000_000},
-		{"unrecognized model reports unknown", 0, 0, false, 0},
-		{"explicit config wins over any report", 42_000, 1_000_000, true, 42_000},
+// TestSetClaudeCodeContextUsage: a live reading makes ContextWindowTokens
+// and ContextUsedTokens authoritative, and a switch away from claude-code
+// clears it rather than leaving a stale reading for the new model.
+func TestSetClaudeCodeContextUsage(t *testing.T) {
+	s := NewSession(Config{
+		Model:     claudeCodeRef,
+		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
+	})
+	s.setClaudeCodeContextUsage(15_554, 1_000_000)
+
+	if got := s.ContextWindowTokens(); got != 1_000_000 {
+		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: c.explicit})
-			s.reportObservedContextWindow(c.tokens, c.ok, "test")
-			if s.cfg.ContextWindowTokens != c.wantCfgTokens {
-				t.Fatalf("cfg.ContextWindowTokens = %d, want %d", s.cfg.ContextWindowTokens, c.wantCfgTokens)
-			}
-			if got := s.ContextWindowTokens(); got != 0 {
-				t.Errorf("ContextWindowTokens() = %d, want 0", got)
-			}
-		})
+	if used, ok := s.ContextUsedTokens(); !ok || used != 15_554 {
+		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
+	}
+
+	s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
+	if _, ok := s.ContextUsedTokens(); ok {
+		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
 	}
 }
