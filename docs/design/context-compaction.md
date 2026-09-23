@@ -549,10 +549,17 @@ this section's trigger check compares: `used_tokens` is
 `InputTokens + CacheReadTokens + CacheWriteTokens` from the most recent
 completed turn, the identical expression `maybeAutoCompact` evaluates
 against `window_tokens`, so a console gauge and automatic compaction agree
-whenever the provider reported usage for that turn. They part company in one
-case: when every input component is zero, `maybeAutoCompact` falls back to
+whenever the provider reported usage for that turn. They part company in two
+cases: when every input component is zero, `maybeAutoCompact` falls back to
 `estimatePromptTokensFromHistory`, so compaction can act while `used_tokens`
-still reads 0.
+still reads 0; and on a lane `modelmeta.SuppressUsageGauge` covers (bifrost's
+firerouter), where `window_tokens` reports 0 even though automatic
+compaction stays armed against a real internal floor — see `server/
+openapi.yaml`'s `Context` schema. A claude-code session's `used_tokens` is
+the CLI's own live `get_context_usage` reading when one exists, not this
+section's `InputTokens + CacheReadTokens + CacheWriteTokens` expression,
+since a delegated turn's `Session.LastUsage` is a whole-turn aggregate
+across every internal call and subagent, never one prompt's occupancy.
 
 ## 5. Non-goals
 

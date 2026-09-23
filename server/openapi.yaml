@@ -502,8 +502,10 @@ components:
         used_tokens:
           type: integer
           description: >
-            The most recent completed turn's provider-reported input_tokens
-            plus cache_read_tokens plus cache_write_tokens — the full prompt
+            For a claude-code session with a live get_context_usage reading,
+            the CLI's own exact occupancy. Otherwise the most recent
+            completed turn's provider-reported input_tokens plus
+            cache_read_tokens plus cache_write_tokens — the full prompt
             size, not input_tokens alone (which under prompt caching can be
             a small fraction of it). 0 until a turn completes, or when the
             provider reported no usage for it; automatic compaction can
@@ -514,10 +516,14 @@ components:
           description: >
             The session's resolved context window, in tokens. 0 when
             automatic compaction is disarmed for this session — the model
-            has no known window, or the operator disabled it — and a
-            caller must treat 0 as "unknown", never as "full". A session
-            whose journal predates this field reports the model's own
-            window on a cold read, which can differ from an explicit
+            has no known window, or the operator disabled it — OR when the
+            session's used_tokens/window_tokens pairing is not trustworthy
+            to render as a percentage even though automatic compaction can
+            still be armed against a real internal window (bifrost's
+            firerouter, whose served model varies per request). A caller
+            must treat 0 as "unknown" in every case, never as "full". A
+            session whose journal predates this field reports the model's
+            own window on a cold read, which can differ from an explicit
             operator override the journal never recorded.
 
     LastTurn:
@@ -2092,10 +2098,10 @@ components:
           type: integer
           description: >
             Carried on turn.end only: the same value as
-            Context.window_tokens. Absent (0) both when automatic
-            compaction is disarmed for this session and when the server
-            had no live session to read at settle time — a client must
-            treat either as "unknown", never as "full".
+            Context.window_tokens (see that schema for the full list of
+            cases 0 covers). Also 0 when the server had no live session to
+            read at settle time — a client must treat every 0 case as
+            "unknown", never as "full".
 
     JournalResponse:
       type: object

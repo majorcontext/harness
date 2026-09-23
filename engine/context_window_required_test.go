@@ -260,3 +260,30 @@ func TestSetClaudeCodeContextUsage(t *testing.T) {
 		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
 	}
 }
+
+// TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit: a control_response
+// from an OLD claude-code turn must not apply after SetModel has already
+// moved the session off claude-code, and an operator's explicit window (or
+// opt-out) must never be overridden by a live reading.
+func TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit(t *testing.T) {
+	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
+
+	stale := NewSession(Config{Model: claudeCodeRef, Providers: prov})
+	stale.SetModel(message.ModelRef{Provider: "test", Model: "x"})
+	stale.setClaudeCodeContextUsage(15_554, 1_000_000)
+	if _, ok := stale.ContextUsedTokens(); ok {
+		t.Error("stale: ContextUsedTokens() ok after the session already switched away")
+	}
+
+	explicit := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov})
+	explicit.setClaudeCodeContextUsage(15_554, 1_000_000)
+	if _, ok := explicit.ContextUsedTokens(); ok {
+		t.Error("explicit: ContextUsedTokens() ok despite an operator-pinned window")
+	}
+
+	optOut := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov})
+	optOut.setClaudeCodeContextUsage(15_554, 1_000_000)
+	if _, ok := optOut.ContextUsedTokens(); ok {
+		t.Error("opt-out: ContextUsedTokens() ok despite an operator opt-out")
+	}
+}

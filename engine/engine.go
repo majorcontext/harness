@@ -1855,6 +1855,12 @@ type claudeCodeUsageSnapshot struct {
 func (s *Session) setClaudeCodeContextUsage(usedTokens, windowTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A concurrent SetModel may have already moved this session off
+	// claude-code, or onto an explicit/opted-out window, by the time a
+	// stream reader for an OLD turn's control_response reaches here.
+	if s.model.Provider != ClaudeCodeProviderFamily || s.contextWindowExplicit || s.contextWindowSource == contextWindowSourceOptOut {
+		return
+	}
 	s.contextUsage = &claudeCodeUsageSnapshot{usedTokens: usedTokens, windowTokens: windowTokens}
 }
 
