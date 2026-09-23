@@ -298,14 +298,12 @@ type contextJSON struct {
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession. sessionContextUsedTokens
-// prefers a live claude-code reading over LastUsage's per-request sum,
-// which maybeAutoCompact also uses so the two never disagree on the native
-// lane.
+// contextJSONForSession mirrors usageJSONForSession.
 func contextJSONForSession(sess *engine.Session) contextJSON {
 	return contextJSON{WindowTokens: sess.ContextWindowTokens(), UsedTokens: sessionContextUsedTokens(sess)}
 }
 
+// sessionContextUsedTokens prefers a live claude-code reading, the same expression maybeAutoCompact uses.
 func sessionContextUsedTokens(sess *engine.Session) int {
 	if used, ok := sess.ContextUsedTokens(); ok {
 		return used

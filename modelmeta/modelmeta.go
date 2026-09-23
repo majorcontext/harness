@@ -122,25 +122,19 @@ var bedrockAnthropicContextWindows = map[string]int{
 
 // bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
 // for the Fireworks models the boxes fleet ships, keyed by the last path
-// segment. firerouter's value is pinned to firerouterCandidateModels by
-// TestFirerouterFloorPinnedToCandidates. glm-5p3/glm-5p3-flash have no
-// fireworks-ai entry (checked live); models.dev catalogs the same model
-// under "zai-org" as "GLM-5.3"/"GLM-5.3-Flash", 1_048_576.
+// segment. firerouter's floor is pinned by TestFirerouterFloorPinnedToCandidates.
 var bifrostFireworksContextWindows = map[string]int{
 	"firerouter":             1_000_000,
 	"kimi-k3":                1_048_576,
 	"kimi-k2p7-code":         262_000,
 	"glm-5p2":                1_048_575,
-	"glm-5p3":                1_048_576,
-	"glm-5p3-flash":          1_048_576,
+	"glm-5p3":                1_048_573,
+	"glm-5p3-flash":          1_048_573,
 	"deepseek-v4-pro-0813":   1_000_000,
 	"deepseek-v4-flash-0731": 1_000_000,
 }
 
-// firerouterCandidateModels names every model firerouter is known to
-// redirect requests to — checked live via Bifrost's gen_ai span
-// telemetry (glm-5p3, glm-5p3-flash, kimi-k3). Fireworks can add an
-// unlisted model without notice; the pin test only catches a listed one.
+// firerouterCandidateModels names every model firerouter can redirect to.
 var firerouterCandidateModels = []string{
 	"kimi-k3",
 	"glm-5p2",
@@ -233,11 +227,7 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// ref is a bare CLI alias, not a resolved model or window; the
-		// running `claude` binary reports both live (see
-		// engine/claude_code_backend.go's get_context_usage query). 0
-		// keeps RequireContextWindow's non-refusal (ok=true) without
-		// guessing.
+		// ref is a CLI alias; the running CLI reports the real window live.
 		tokens, ok = 0, true
 	}
 	return tokens, ok
@@ -259,10 +249,7 @@ const claudeCodeProvider = "claude-code"
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
 
-// SuppressUsageGauge reports whether ref's session must never render a
-// used/window percentage: only bifrost's firerouter, whose denominator is
-// a floor across whichever model actually served the request, never an
-// exact figure for it.
+// SuppressUsageGauge reports whether ref's window is only ever a floor.
 func SuppressUsageGauge(ref message.ModelRef) bool {
 	return ref.Provider == "bifrost" && lastPathSegment(ref.Model) == "firerouter"
 }

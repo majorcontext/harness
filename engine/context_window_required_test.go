@@ -206,16 +206,11 @@ func TestSetModelToUnknownModelIsRefused(t *testing.T) {
 	}
 }
 
-// firerouterRef and claudeCodeRef exercise SuppressUsageGauge's two lanes
-// through the REAL modelmeta table.
 var (
 	firerouterRef = message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/routers/firerouter"}
 	claudeCodeRef = message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"}
 )
 
-// TestSessionContextWindowTokensHidesGauge: firerouter's internal window
-// still arms (compaction must not disarm), but neither ref may ever
-// display a percentage, and a fresh claude-code session must never refuse.
 func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
 	cases := []struct {
 		ref          message.ModelRef
@@ -238,9 +233,6 @@ func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
 	}
 }
 
-// TestSetClaudeCodeContextUsage: a live reading makes ContextWindowTokens
-// and ContextUsedTokens authoritative, and a switch away from claude-code
-// clears it rather than leaving a stale reading for the new model.
 func TestSetClaudeCodeContextUsage(t *testing.T) {
 	s := NewSession(Config{
 		Model:     claudeCodeRef,
@@ -261,29 +253,20 @@ func TestSetClaudeCodeContextUsage(t *testing.T) {
 	}
 }
 
-// TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit: a control_response
-// from an OLD claude-code turn must not apply after SetModel has already
-// moved the session off claude-code, and an operator's explicit window (or
-// opt-out) must never be overridden by a live reading.
 func TestSetClaudeCodeContextUsageIgnoresStaleAndExplicit(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
 
 	stale := NewSession(Config{Model: claudeCodeRef, Providers: prov})
 	stale.SetModel(message.ModelRef{Provider: "test", Model: "x"})
 	stale.setClaudeCodeContextUsage(15_554, 1_000_000)
-	if _, ok := stale.ContextUsedTokens(); ok {
-		t.Error("stale: ContextUsedTokens() ok after the session already switched away")
-	}
-
 	explicit := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov})
 	explicit.setClaudeCodeContextUsage(15_554, 1_000_000)
-	if _, ok := explicit.ContextUsedTokens(); ok {
-		t.Error("explicit: ContextUsedTokens() ok despite an operator-pinned window")
-	}
-
 	optOut := NewSession(Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov})
 	optOut.setClaudeCodeContextUsage(15_554, 1_000_000)
-	if _, ok := optOut.ContextUsedTokens(); ok {
-		t.Error("opt-out: ContextUsedTokens() ok despite an operator opt-out")
+
+	for name, s := range map[string]*Session{"stale": stale, "explicit": explicit, "opt-out": optOut} {
+		if _, ok := s.ContextUsedTokens(); ok {
+			t.Errorf("%s: ContextUsedTokens() ok, want not ok", name)
+		}
 	}
 }

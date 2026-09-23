@@ -145,9 +145,7 @@ func ResolveModelContextWindow(model message.ModelRef) int {
 	return tokens
 }
 
-// displayContextWindow projects the internal, compaction-arming tokens to
-// what a caller may safely render as a percentage's denominator: 0 when
-// modelmeta.SuppressUsageGauge(model) is true, tokens unchanged otherwise.
+// displayContextWindow returns 0 when modelmeta.SuppressUsageGauge(model) is true, tokens otherwise.
 func displayContextWindow(model message.ModelRef, tokens int) int {
 	if modelmeta.SuppressUsageGauge(model) {
 		return 0

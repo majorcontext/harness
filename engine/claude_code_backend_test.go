@@ -2418,10 +2418,8 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 		t.Error("session history has no user message carrying the queued prompt's text — mid-turn delivery did not append into the transcript")
 	}
 
-	// The actual bytes reached the CLI's stdin as a genuine SECOND user
-	// line, not just harness-side bookkeeping. Filters out the per-turn
-	// get_context_usage control_request line (writeClaudeCodeContextUsageRequest),
-	// which is not a user input line.
+	// The actual bytes reached the CLI's stdin as a genuine SECOND line,
+	// not just harness-side bookkeeping.
 	stdinBytes, err := os.ReadFile(stdinLog)
 	if err != nil {
 		t.Fatalf("reading captured CLI stdin: %v", err)
@@ -2435,8 +2433,7 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	}
 }
 
-// userInputLines returns stdin's own "user" input lines, filtering out a
-// protocol line like the per-turn get_context_usage control_request.
+// userInputLines filters out a non-user protocol line like a control_request.
 func userInputLines(stdin string) []string {
 	var out []string
 	for _, line := range strings.Split(stdin, "\n") {
@@ -2901,24 +2898,17 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 	}
 }
 
-// TestWriteClaudeCodeContextUsageRequest pins the control_request wire
-// shape verified against a running `claude` 2.1.280 binary.
 func TestWriteClaudeCodeContextUsageRequest(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeClaudeCodeContextUsageRequest(&buf); err != nil {
 		t.Fatalf("writeClaudeCodeContextUsageRequest: %v", err)
 	}
-	want := `{"request":{"subtype":"get_context_usage"},"request_id":"harness-context-usage","type":"control_request"}` + "\n"
+	want := `{"request":{"detail":"summary","subtype":"get_context_usage"},"request_id":"harness-context-usage","type":"control_request"}` + "\n"
 	if buf.String() != want {
 		t.Errorf("wrote %q, want %q", buf.String(), want)
 	}
 }
 
-// TestClaudeCodeContextUsageQueryUpdatesGauge is the red-first test for
-// the reported defect: the CLI's own get_context_usage response (fakeclaude's
-// FAKE_CLAUDE_CONTEXT_USAGE stands in for it) must become the session's
-// window AND occupancy, not the old 200_000 stand-in or LastUsage's
-// whole-turn aggregate.
 func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
 	bin := buildFakeClaude(t)
 	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")

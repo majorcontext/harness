@@ -1493,10 +1493,7 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
-	// contextUsage is the claude-code lane's live get_context_usage
-	// reading (claude_code_backend.go), nil until one arrives. Cleared on
-	// SetModel away from claude-code so a stale reading never survives a
-	// switch to a different model.
+	// contextUsage is nil until a reading arrives; SetModel clears it off claude-code.
 	contextUsage *claudeCodeUsageSnapshot
 
 	// contextWindowErr is the refusal a registry MISS produces when
@@ -1844,28 +1841,20 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	s.emit(Event{Type: EventModelChanged, Model: ref})
 }
 
-// claudeCodeUsageSnapshot is a live get_context_usage reading — see
-// Session.contextUsage.
 type claudeCodeUsageSnapshot struct {
 	usedTokens, windowTokens int
 }
 
-// setClaudeCodeContextUsage records a live get_context_usage reading (see
-// applyClaudeCodeContextUsageResponse) as s.contextUsage.
 func (s *Session) setClaudeCodeContextUsage(usedTokens, windowTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A concurrent SetModel may have already moved this session off
-	// claude-code, or onto an explicit/opted-out window, by the time a
-	// stream reader for an OLD turn's control_response reaches here.
+	// A concurrent SetModel may already have moved off claude-code or onto an explicit window.
 	if s.model.Provider != ClaudeCodeProviderFamily || s.contextWindowExplicit || s.contextWindowSource == contextWindowSourceOptOut {
 		return
 	}
 	s.contextUsage = &claudeCodeUsageSnapshot{usedTokens: usedTokens, windowTokens: windowTokens}
 }
 
-// ContextUsedTokens reports a live, exact occupancy reading when one
-// exists — currently only the claude-code lane's get_context_usage query.
 func (s *Session) ContextUsedTokens() (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2340,11 +2329,8 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
-// ContextWindowTokens returns this session's DISPLAY-safe context window: a
-// live claude-code get_context_usage reading when one exists, else 0 when
-// compaction is disarmed or displayContextWindow marks the usage/window
-// pairing untrustworthy. Compaction arms off s.cfg.ContextWindowTokens
-// directly (compact.go), never through this.
+// ContextWindowTokens returns this session's display-safe context window;
+// compaction arms off s.cfg.ContextWindowTokens directly (compact.go).
 func (s *Session) ContextWindowTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

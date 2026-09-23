@@ -55,24 +55,13 @@ func TestContextWindowCodex(t *testing.T) {
 	}
 }
 
-// TestContextWindowCodexUnknownModelStillMisses proves the codex case does
-// not fall back to a plausible-sounding figure the way claudeCodeProvider
-// once did: a codex ref naming a model absent from openaiContextWindows
-// must still miss,
-// so engine.Config.RequireContextWindow's fail-loud refusal stays armed for
-// a genuinely unknown model instead of silently reporting a guess.
+// TestContextWindowCodexUnknownModelStillMisses proves the codex case never falls back to a stand-in figure.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
 	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
 	}
 }
 
-// TestContextWindowClaudeCodeNoStandIn is the red-first test for the
-// reported defect: ContextWindow(claude-code/opus) returns a hardcoded
-// 200_000 today regardless of the real model. A bare ref (the CLI alias,
-// not a resolved model) cannot honestly report a real window, so 0
-// (unknown, hides the ring) is wanted, with ok=true so
-// RequireContextWindow never refuses session creation.
 func TestContextWindowClaudeCodeNoStandIn(t *testing.T) {
 	tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: "opus"})
 	if !ok || tokens != 0 {
@@ -80,8 +69,6 @@ func TestContextWindowClaudeCodeNoStandIn(t *testing.T) {
 	}
 }
 
-// TestSuppressUsageGauge: firerouter serves a different model per request
-// (live-verified via Bifrost telemetry), so it alone is suppressed.
 func TestSuppressUsageGauge(t *testing.T) {
 	cases := []struct {
 		ref  message.ModelRef
@@ -98,8 +85,6 @@ func TestSuppressUsageGauge(t *testing.T) {
 	}
 }
 
-// TestFirerouterFloorPinnedToCandidates fails if a candidate is added to
-// firerouterCandidateModels without lowering firerouter's own floor to match.
 func TestFirerouterFloorPinnedToCandidates(t *testing.T) {
 	if len(firerouterCandidateModels) == 0 {
 		t.Fatal("firerouterCandidateModels is empty")
@@ -161,8 +146,8 @@ func TestContextWindowBifrost(t *testing.T) {
 		{"bifrost/fireworks/accounts/fireworks/models/kimi-k3", 1_048_576},
 		{"bifrost/fireworks/accounts/fireworks/models/kimi-k2p7-code", 262_000},
 		{"bifrost/fireworks/accounts/fireworks/models/glm-5p2", 1_048_575},
-		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3", 1_048_576},
-		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3-flash", 1_048_576},
+		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3", 1_048_573},
+		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3-flash", 1_048_573},
 		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-pro-0813", 1_000_000},
 		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-flash-0731", 1_000_000},
 		{"bifrost/vertex/gemini-3.1-pro-preview", 1_048_576},

@@ -131,9 +131,7 @@ func main() {
 	// first turn is still open, exactly the mid-turn steering window this
 	// stand-in exists to prove.
 	stdinR := bufio.NewReader(os.Stdin)
-	// readStdinLine skips a "control_request" line (the driver sends one
-	// unconditionally per turn, see writeClaudeCodeContextUsageRequest)
-	// rather than handing it to a mode expecting the next queued prompt.
+	// readStdinLine skips the driver's per-turn control_request line.
 	readStdinLine := func() (line string, ok bool) {
 		for {
 			b, err := stdinR.ReadString('\n')
