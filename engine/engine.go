@@ -2830,8 +2830,7 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	// A "/compact" prompt is a command, not model input — see
-	// RunCompactCommand.
+	// A "/compact" prompt is a command, not model input.
 	if isExplicitCompactCommand(text, blobs) {
 		res, err := s.RunCompactCommand(ctx, CompactOptions{})
 		if err != nil {
@@ -2910,11 +2909,9 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	return s.runAgenticLoop(ctx)
 }
 
-// dispatchClaudeCodeTurn appends text as a user message and runs it through
-// the Claude Code CLI. Shared by promptWithOrigin's ordinary delegated
-// dispatch and RunCompactCommand's harness-issued "/compact" — the latter
-// must not re-enter promptWithOrigin, which would recheck
-// isExplicitCompactCommand and recurse.
+// dispatchClaudeCodeTurn appends text and runs it through the Claude Code
+// CLI. RunCompactCommand calls this directly rather than promptWithOrigin,
+// which would recheck isExplicitCompactCommand and recurse.
 func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
@@ -2928,7 +2925,24 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origi
 		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
 	}
 	s.append(msg)
-	return s.runAgenticLoop(ctx)
+	return s.runDelegatedTurn(ctx)
+}
+
+// runDelegatedTurn runs one Claude Code CLI turn. Callers that already
+// checked claudeCodeDelegated call this directly, not runAgenticLoop, so a
+// model switch in between cannot send their text to the wrong lane.
+func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error) {
+	s.emitStatus("busy")
+	defer s.emitStatus("idle")
+	defer s.snapshotOnIdle()
+	msg, err := s.runClaudeCodeTurn(ctx)
+	if err != nil {
+		s.requeueTaskNotifications()
+		s.emitSessionError(err)
+		return nil, err
+	}
+	s.commitTaskNotifications()
+	return msg, nil
 }
 
 // runAgenticLoop drives the agentic loop — stream a turn, execute any tool
@@ -2966,34 +2980,7 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origi
 // loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
 	if s.claudeCodeDelegated() {
-		s.emitStatus("busy")
-		defer s.emitStatus("idle")
-		defer s.snapshotOnIdle()
-		msg, err := s.runClaudeCodeTurn(ctx)
-		if err != nil {
-			// Mirrors the native path's own error handling below
-			// (emitSessionError before returning) — a plugin host
-			// watching for session errors must see a delegated turn's
-			// failure exactly like a native one's.
-			//
-			// requeueTaskNotifications mirrors the native branch's own
-			// failure-path call (below, in the s.streamTurnWithRetry
-			// err != nil case): whatever runClaudeCodeTurn's own
-			// checkoutTaskNotificationsSegment call (claude_code_backend.go)
-			// checked out for this attempt never reached a request that
-			// survived, so return it to pending rather than lose it —
-			// see requeueTaskNotifications' doc comment.
-			s.requeueTaskNotifications()
-			s.emitSessionError(err)
-			return nil, err
-		}
-		// This attempt succeeded and msg is about to be returned as the
-		// turn's real result: whatever was checked out for it really was
-		// delivered in the CLI input that produced msg. Commit BEFORE
-		// returning, mirroring the native branch's own commit-before-append
-		// ordering (below) — see commitTaskNotifications' doc comment.
-		s.commitTaskNotifications()
-		return msg, nil
+		return s.runDelegatedTurn(ctx)
 	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")

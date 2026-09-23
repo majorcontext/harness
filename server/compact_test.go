@@ -595,9 +595,6 @@ func TestCompactEndpointUnknownSessionIs404(t *testing.T) {
 // slot or calling Session.Compact, rather than a 200 that accomplishes
 // nothing or (worse) a 500 from a native-provider transcoder choking on
 // claude-code-produced history.
-// TestCompactEndpointDelegatesToClaudeCodeCLI: POST /session/{id}/compact
-// on a claude-code-delegated session used to refuse with 409 instead of
-// issuing the CLI's own compact command.
 func TestCompactEndpointDelegatesToClaudeCodeCLI(t *testing.T) {
 	bin := buildFakeClaudeForServer(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")

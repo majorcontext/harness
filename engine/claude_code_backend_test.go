@@ -426,9 +426,6 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 	}
 }
 
-// TestPromptCompactCommandIssuedAsEngineOriginNotUserPassthrough: harness
-// must issue the CLI's compact command itself, not forward the caller's own
-// origin ("" here, from a plain Prompt call).
 func TestPromptCompactCommandIssuedAsEngineOriginNotUserPassthrough(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "compact_turn")
 

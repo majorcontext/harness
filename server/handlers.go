@@ -3760,8 +3760,7 @@ type compactResponseJSON struct {
 	LastID      string           `json:"last_id,omitempty"`
 	Summary     *message.Message `json:"summary,omitempty"`
 	SkipReason  string           `json:"skip_reason,omitempty"`
-	// ClaudeCodeDelegated is true when this call issued the Claude Code
-	// CLI's own compact command; every other field is then zero.
+	// See engine.CompactResult.ClaudeCodeDelegated.
 	ClaudeCodeDelegated bool `json:"claude_code_delegated,omitempty"`
 }
 

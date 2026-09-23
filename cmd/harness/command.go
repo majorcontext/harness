@@ -84,7 +84,7 @@ func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolut
 			}
 			opts.KeepTurns = n
 		}
-		result, err := s.Compact(ctx, opts)
+		result, err := s.RunCompactCommand(ctx, opts)
 		if err != nil {
 			return err
 		}

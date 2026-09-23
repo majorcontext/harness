@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2373,9 +2374,6 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
-// TestPromptCompactCommandRunsCompactInsteadOfModelTurn: a native-lane
-// "/compact" prompt used to be appended as an ordinary user message with no
-// compaction event ever fired.
 func TestPromptCompactCommandRunsCompactInsteadOfModelTurn(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactTurn("one", provider.Usage{InputTokens: 10}),
@@ -2403,17 +2401,11 @@ func TestPromptCompactCommandRunsCompactInsteadOfModelTurn(t *testing.T) {
 	if msg == nil || !strings.Contains(msg.Parts.Text(), "SUMMARY") {
 		t.Fatalf("Prompt(/compact) returned %+v, want the compaction summary", msg)
 	}
-	var sawStarted, sawCompacted bool
-	for _, ev := range events {
-		switch ev.Type {
-		case EventCompactionStarted:
-			sawStarted = true
-		case EventHistoryCompacted:
-			sawCompacted = true
-		}
+	has := func(typ string) bool {
+		return slices.ContainsFunc(events, func(ev Event) bool { return ev.Type == typ })
 	}
-	if !sawStarted || !sawCompacted {
-		t.Fatalf("sawStarted=%v sawCompacted=%v, want both true", sawStarted, sawCompacted)
+	if !has(EventCompactionStarted) || !has(EventHistoryCompacted) {
+		t.Fatalf("events = %+v, want EventCompactionStarted and EventHistoryCompacted", events)
 	}
 }
 

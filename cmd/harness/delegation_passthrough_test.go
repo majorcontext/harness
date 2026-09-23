@@ -315,6 +315,40 @@ func TestRunCmdUnknownCommandResumedDelegatedReachesPromptUnchanged(t *testing.T
 	}
 }
 
+func TestRunCmdCompactResumedDelegatedIssuesCLICommand(t *testing.T) {
+	bin := buildFakeClaudeForHarness(t)
+	workDir := t.TempDir()
+	home := t.TempDir()
+	sessDir := t.TempDir()
+	t.Chdir(workDir)
+	t.Setenv("HOME", home)
+	t.Setenv("HARNESS_SESSION_DIR", sessDir)
+
+	writeDelegatedConfig(t, workDir, bin)
+	t.Setenv("FAKE_CLAUDE_MODE", "normal")
+	var seedErr error
+	captureStdout(t, func() {
+		seedErr = runCmd([]string{"-p", "hello"})
+	})
+	if seedErr != nil {
+		t.Fatalf("seeding delegated session: %v", seedErr)
+	}
+	infos, err := engine.ListSessions(sessDir)
+	if err != nil {
+		t.Fatalf("engine.ListSessions: %v", err)
+	}
+	id := infos[0].ID
+
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
+	var runErr error
+	captureStdout(t, func() {
+		runErr = runCmd([]string{"-p", "/compact", "-resume", id})
+	})
+	if runErr != nil {
+		t.Fatalf("runCmd(/compact) on a delegated session = %v, want nil", runErr)
+	}
+}
+
 // TestRunCmdUnknownCommandResumedExplicitNativeModelRefusesNoModelPersist
 // is the regression for the finding on this branch's second round:
 // resolveSession's own doc comment says an explicit -model on resume wins

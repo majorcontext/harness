@@ -80,9 +80,11 @@ provider WAS called and billed but returned nothing usable (see
 follow-up on PR #136, Finding C — a single `turns_folded: 0` used to
 collapse all three distinct situations into one indistinguishable shape).
 
-Both paths funnel through one `Session.Compact(ctx, CompactOptions)` method;
-the automatic path just calls it with defaults before `streamTurn`, and it
-takes the same run-slot discipline described in §4.
+The automatic path calls `Session.Compact(ctx, CompactOptions)` directly,
+with defaults, before `streamTurn`. The explicit path funnels through
+`Session.RunCompactCommand` instead, which calls `Compact` on a native
+session — see below for the delegated lane, where it does not. Either way
+it takes the same run-slot discipline described in §4.
 
 **A session delegated to the Claude Code CLI, and a switch away from it.**
 `PromptWithOrigin` skips this whole section — `ensureInstructions`,
