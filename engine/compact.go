@@ -300,6 +300,9 @@ func isExplicitCompactCommand(text string, blobs []*message.Blob) bool {
 // and an explicit "/compact" prompt call.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
 	if s.claudeCodeDelegated() {
+		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
+			return CompactResult{}, errors.New("engine: keep_turns/model are not applicable to a session delegated to the Claude Code CLI, which owns its own context")
+		}
 		if _, err := s.dispatchClaudeCodeTurn(ctx, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
 			return CompactResult{}, err
 		}

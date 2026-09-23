@@ -2290,7 +2290,10 @@ components:
       type: object
       description: >
         Optional body for POST /session/{id}/compact. An absent/empty body
-        uses Config.CompactionKeepTurns/CompactionModel.
+        uses Config.CompactionKeepTurns/CompactionModel. Neither field
+        applies to a claude-code-delegated session, which owns its own
+        context: sending either on that lane is a 500, not a silently
+        ignored override.
       properties:
         keep_turns:
           type: integer

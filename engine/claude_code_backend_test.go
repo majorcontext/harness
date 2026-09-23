@@ -442,6 +442,21 @@ func TestPromptCompactCommandIssuedAsEngineOriginNotUserPassthrough(t *testing.T
 	}
 }
 
+func TestRunCompactCommandRejectsOptionsOnDelegatedSession(t *testing.T) {
+	for _, opts := range []CompactOptions{
+		{KeepTurns: 1},
+		{Model: message.ModelRef{Provider: "test", Model: "m1"}},
+	} {
+		s, _ := claudeCodeTestSession(t, "compact_turn")
+		if _, err := s.RunCompactCommand(context.Background(), opts); err == nil {
+			t.Errorf("RunCompactCommand(%+v) on a delegated session returned nil, want a rejection", opts)
+		}
+		if len(s.History()) != 0 {
+			t.Errorf("RunCompactCommand(%+v) appended history despite rejecting: %+v", opts, s.History())
+		}
+	}
+}
+
 // TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification is the
 // regression test for the claude-code delegated lane's own bypass of the
 // task-notification delivery/commit machinery — root-caused live as an
