@@ -1888,24 +1888,24 @@ func (s *Session) Model() message.ModelRef {
 	return s.model
 }
 
-// configSnapshot returns a copy of s.cfg taken under s.mu, with Model
-// overridden to the session's LIVE current model (s.model — see Model's
-// doc comment: SetModel updates s.model, never s.cfg.Model, which stays
-// pinned to whatever the session's ORIGINAL construction-time model was
-// forever). It exists for SessionManager.Spawn, which needs to build a
-// child's Config from its parent's: reading parent.session.cfg directly,
-// unsynchronized, races SetModel's own writes under s.mu to
+// configSnapshot returns a copy of s.cfg taken under s.mu, with Model and
+// Effort overridden to the session's LIVE values. SetModel and SetEffort
+// update session state, not their construction-time Config fields. It exists
+// for SessionManager.Spawn, which needs to build a child's Config from its
+// parent's: reading parent.session.cfg directly, unsynchronized, races
+// SetModel's own writes under s.mu to
 // s.cfg.ContextWindowTokens/contextWindowSource (see SetModel) — caught
 // live by go test -race — and would have inherited the parent's STALE
 // construction-time model besides, contradicting the design doc's
 // "children inherit the parent's ... model" precedence. Every other
-// Config field copies by value as a normal struct copy would; only Model
-// gets the live override.
+// Config field copies by value as a normal struct copy would; Model and
+// Effort get the live override.
 func (s *Session) configSnapshot() Config {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cfg := s.cfg
 	cfg.Model = s.model
+	cfg.Effort = s.effort
 	return cfg
 }
 

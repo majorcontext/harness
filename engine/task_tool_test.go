@@ -171,12 +171,14 @@ func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
 
 func TestRunTaskToolSpawnEffort(t *testing.T) {
 	for _, tc := range []struct {
-		name, effort string
-		want         message.Effort
-		invalid      bool
+		name, effort    string
+		want            message.Effort
+		invalid         bool
+		setParentEffort bool
 	}{
 		{name: "override", effort: "high", want: message.EffortHigh},
 		{name: "omitted", want: message.EffortLow},
+		{name: "omitted after parent effort change", want: message.EffortHigh, setParentEffort: true},
 		{name: "invalid", effort: "extreme", invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,6 +186,9 @@ func TestRunTaskToolSpawnEffort(t *testing.T) {
 			cfg := managedConfig("root", scriptedTurns("root", nil), scriptedTurns(AgentExplore, doneTurn("done")))
 			cfg.Effort = message.EffortLow
 			root := mgr.NewRoot(cfg)
+			if tc.setParentEffort {
+				root.SetEffort(message.EffortHigh)
+			}
 			args := map[string]string{"action": "spawn", "agent": AgentExplore, "prompt": "go"}
 			if tc.effort != "" {
 				args["effort"] = tc.effort
