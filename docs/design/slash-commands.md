@@ -236,11 +236,15 @@ dispatches its own. `GET /commands` returns them with no `method` and no
 
 ## 5. Dispatch
 
-The engine does not INTERPRET a control command. `Session.Prompt`
-(`engine/engine.go`) keeps its signature and never learns a control verb.
-The engine still performs the operation: `Session.Compact`
-(`engine/compact.go`) is the implementation. Only the command string stops
-at the frontend.
+The engine does not interpret a control command, with one exception.
+`Session.Prompt` (`engine/engine.go`) keeps its signature and never learns
+most control verbs; the command string stops at the frontend for those.
+`/compact` is the exception: `promptWithOrigin` matches the exact text and
+calls `Session.RunCompactCommand` (`engine/compact.go`) instead of sending
+it to the model, so a caller that skips `Resolve` still compacts the
+session instead of prompting it. `RunCompactCommand` calls `Session.Compact`
+on a native session. A claude-code-delegated session has no journal to
+fold, so `RunCompactCommand` issues the CLI's own compact command instead.
 
 Three reasons, in order of weight.
 
@@ -270,10 +274,10 @@ existing guard would need a re-audit against the new path.
 
 Defense in depth already exists and is not the argument here.
 `Session.Compact` carries its own Claude Code delegation guard, and
-`engine/compact.go` names it the authoritative one;
-`rejectClaudeCodeDelegatedCompact` is an explicitly advisory pre-claim
-check that buys a cheaper, clearer error. The engine is not missing
-guards. It is missing the session registry and the routing rules.
+`engine/compact.go` names it the authoritative one. `RunCompactCommand`
+routes a delegated session around that guard, to the CLI's own compact
+command. The engine is not missing guards. It is missing the session
+registry and the routing rules.
 
 ### Two dispatchers, one registry
 
@@ -287,14 +291,15 @@ two composition points, and each maps `Op` its own way.
 | Session resolution | One session, already in hand | Residency map, cold load, eviction |
 | Managed-child rejection | Not reachable: the root is adopted, never a child | `rejectManagedChildTurn` |
 | Run slot | No contention to arbitrate | `claimForPrompt` |
-| `OpCompact` maps to | `Session.Compact` | `POST /session/{id}/compact` |
+| `OpCompact` maps to | `Session.RunCompactCommand` (native: `Session.Compact`) | `POST /session/{id}/compact` -> `Session.RunCompactCommand` |
 
-A direct `Session.Compact` call from `cmd/harness` is safe because the two
-server-only concerns above do not exist in run mode — there is one
-session, and it is a root — AND because `Session.Compact` itself carries
-the authoritative Claude Code delegation guard (`engine/compact.go`): the
-mutator refuses on its own, so a caller needs no separate check before it
-calls Compact.
+Both dispatchers call `Session.RunCompactCommand`. It calls `Session.Compact`
+on a native session, and issues the Claude Code CLI's own compact command
+on a delegated one. A direct call from `cmd/harness` is safe because the
+two server-only concerns above do not exist in run mode — there is one
+session, and it is a root — and because `RunCompactCommand` handles the
+Claude Code lane itself: a caller needs no separate check before it calls
+the function.
 
 Not every mutator guards itself this way. `Session.SetModel` has no
 internal guard at all; it persists unconditionally. `Session.ModelSupported`
@@ -310,7 +315,7 @@ This is why `Resolution` names an `Op` and not a route. A route is one
 dispatcher's answer, not the operation.
 
 The two dispatchers do NOT cover the same `Op` set. Run mode maps an `Op`
-to a setter the engine already exports: `Session.Compact`,
+to a method the engine already exports: `Session.RunCompactCommand`,
 `Session.SetModel`, `Session.SetEffort`, `Session.SetServiceTier`.
 `/abort`, `/goal`, and `/queue` have no such shape there — abort arbitrates
 a run slot, `Session.PursueGoal` is a long call and not a setter, and the
@@ -327,7 +332,7 @@ reason. Silence is the failure to avoid.
   control command there reports a clear error.
 
 Every error a route returns today becomes the command's error in serve
-mode. A `409` from a delegated session reaches the user with its existing
+mode. A `409` from a busy session reaches the user with its existing
 text. In run mode the engine's own error text surfaces instead.
 
 ## 6. `GET /commands`
