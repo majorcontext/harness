@@ -503,7 +503,8 @@ components:
           type: integer
           description: >
             For a claude-code session with a live get_context_usage reading,
-            the CLI's own exact occupancy. Otherwise the most recent
+            the CLI's own reported estimate (a "summary"-detail query, not a
+            full recount). Otherwise the most recent
             completed turn's provider-reported input_tokens plus
             cache_read_tokens plus cache_write_tokens — the full prompt
             size, not input_tokens alone (which under prompt caching can be

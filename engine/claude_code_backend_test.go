@@ -2908,6 +2908,30 @@ func TestWriteClaudeCodeContextUsageRequest(t *testing.T) {
 	}
 }
 
+func TestApplyClaudeCodeContextUsageResponseRejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name     string
+		response string
+	}{
+		{"missing totalTokens", `{"rawMaxTokens":1000000}`},
+		{"missing rawMaxTokens", `{"totalTokens":15554}`},
+		{"negative totalTokens", `{"totalTokens":-1,"rawMaxTokens":1000000}`},
+		{"negative rawMaxTokens", `{"totalTokens":15554,"rawMaxTokens":-1}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSession(Config{Model: claudeCodeRef, Providers: provider.Registry{"test": &scriptedProvider{name: "test"}}})
+			gen := s.beginClaudeCodeContextUsageTurn()
+			raw := json.RawMessage(fmt.Sprintf(
+				`{"subtype":"success","request_id":"harness-context-usage-%d","response":%s}`, gen, c.response))
+			applyClaudeCodeContextUsageResponse(s, raw)
+			if _, ok := s.ContextUsedTokens(); ok {
+				t.Error("ContextUsedTokens() ok, want rejected")
+			}
+		})
+	}
+}
+
 func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
 	bin := buildFakeClaude(t)
 	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")

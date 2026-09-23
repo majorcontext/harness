@@ -1533,13 +1533,19 @@ type claudeCodeControlResponse struct {
 }
 
 type claudeCodeContextUsageResult struct {
-	TotalTokens  int `json:"totalTokens"`
-	RawMaxTokens int `json:"rawMaxTokens"`
+	TotalTokens  *int `json:"totalTokens"`
+	RawMaxTokens *int `json:"rawMaxTokens"`
 }
 
+// A missing or negative field is rejected, not zero-valued: either would
+// otherwise pass a malformed reply off as a real zero-usage snapshot.
 func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
 	var cr claudeCodeControlResponse
 	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.Response == nil {
+		return
+	}
+	res := cr.Response
+	if res.TotalTokens == nil || res.RawMaxTokens == nil || *res.TotalTokens < 0 || *res.RawMaxTokens < 0 {
 		return
 	}
 	genStr, ok := strings.CutPrefix(cr.RequestID, claudeCodeContextUsageRequestIDPrefix)
@@ -1547,7 +1553,7 @@ func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
 	if !ok || err != nil {
 		return
 	}
-	s.setClaudeCodeContextUsage(gen, cr.Response.TotalTokens, cr.Response.RawMaxTokens)
+	s.setClaudeCodeContextUsage(gen, *res.TotalTokens, *res.RawMaxTokens)
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own

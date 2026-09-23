@@ -26,7 +26,7 @@ import (
 // refolds — never guesses — when a stored index carries any other value, so
 // a field added here needs no migration: bump this and every stale sidecar
 // is rebuilt on its next read.
-const sessionIndexVersion = 2
+const sessionIndexVersion = 3
 
 // sessionIndexSuffix is appended to a session id to name its sidecar. It
 // deliberately does NOT end in ".jsonl", so ListSessionIndexes' own scan for
