@@ -1046,3 +1046,17 @@ rewritten to match.
   drain) forwarding an attachment-bearing message through `enqueue` for any
   box that was not mid-turn-live got rejected at the wire, with no
   degrade-and-retry path at this layer.
+- **`EnqueuePromptDurable` gained a `messageID` parameter.** The current
+  signature is `EnqueuePromptDurable(text, messageID, seq, prov, blobs...)`
+  — `messageID` sits right after `text`, ahead of `seq`, `prov`, and
+  `blobs...` above. It is resolved via `ResolveMessageID` exactly like
+  `EnqueuePrompt`'s own `messageID` parameter, but the resolved value is
+  NOT returned: a duplicate call (`seq <= watermark`) resolves a value that
+  is never stored, since the original accepting call's own id already
+  stands as the durable one. `handleEnqueue`'s body correspondingly gained
+  an optional `id` field, resolved once via `engine.ResolveMessageID`
+  before either handler branch (idle or busy) calls
+  `EnqueuePromptDurable`, and echoed back as `enqueueResponse.MessageID`
+  (`message_id` on the wire) on every accepted response — omitted on a
+  `duplicate` response for the same reason the parameter itself is not
+  returned.
