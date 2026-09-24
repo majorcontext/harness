@@ -1603,9 +1603,15 @@ func TestClaudeCodeThinkingBlockDecodesToReasoningPart(t *testing.T) {
 	for _, ev := range events {
 		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
 			sawReasoningDelta = true
+			if ev.ID != asst.ID {
+				t.Errorf("reasoning delta ID = %q, want the merged message's ID %q", ev.ID, asst.ID)
+			}
 		}
 		if ev.Type == EventTextDelta && ev.Text == "Here is my answer." {
 			sawTextDelta = true
+			if ev.ID != asst.ID {
+				t.Errorf("text delta ID = %q, want the merged message's ID %q", ev.ID, asst.ID)
+			}
 		}
 	}
 	if !sawReasoningDelta {

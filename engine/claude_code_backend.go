@@ -1223,6 +1223,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					merged = append(merged, pendingReasoning...)
 					merged = append(merged, msg.Parts...)
 					msg.Parts = merged
+					// The reasoning delta already streamed under
+					// pendingReasoningUpstream — keep the merged
+					// message's own ID equal to it rather than the
+					// second, independent mint this envelope's own
+					// claudeCodeAssistantMessage call just produced.
+					msg.ID = pendingReasoningUpstream
 					alreadyStreamed = len(pendingReasoning)
 				} else {
 					// A different parent thread interrupted the buffered
