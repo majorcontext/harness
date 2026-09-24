@@ -8,21 +8,25 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// TestCommandTerminalWritesLandOnLiveSessionAfterEviction: the accepted
-// record's own *engine.Session object can be evicted from residency in the
-// gap between writeCommand's own lookup and the route handler's independent
-// one (the object is not running, so it is an ordinary LRU eviction
-// candidate). Failure mode this guards: the terminal record lands on the
-// stale, now-orphaned object instead of whatever *engine.Session the
-// server currently holds resident for id — invisible to a live reader,
-// which keeps seeing the command stuck "accepted" forever.
+// TestCommandTerminalWritesLandOnLiveSessionAfterEviction: id's own
+// *engine.Session is pinned for the whole dispatch, from writeCommand's
+// lookup through the terminal write, so a concurrent eviction sweep in the
+// gap between them (commandDispatchRace) must skip it instead of unloading
+// it. Failure mode this guards: the terminal record lands on a second,
+// freshly cold-loaded object for id instead of the one writeCommand's own
+// accepted record landed on — invisible to a live reader, which keeps
+// seeing the command stuck "accepted" forever.
 func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 	dir := t.TempDir()
 	prov := newCapturingProvider()
-	// MaxResident=1: any second resident session evicts the first idle one.
+	// MaxResident=1: any second resident session would evict the first idle
+	// one, if id's own entry were not pinned.
 	h := newHarnessOpts(t, dir, prov, 1)
 
 	id := h.createSession("test/m1")
+	h.srv.mu.Lock()
+	original := h.srv.sessions[id].sess
+	h.srv.mu.Unlock()
 
 	raced := false
 	h.srv.commandDispatchRace = func() {
@@ -30,9 +34,10 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 			return
 		}
 		raced = true
-		// Force a real concurrent eviction of id's own (idle, non-running)
-		// resident object right here, in the gap this seam exists to open
-		// — see commandDispatchRace's own doc comment (server.go).
+		// Attempt a real concurrent eviction of id's own resident object
+		// right here, in the gap this seam exists to open — see
+		// commandDispatchRace's own doc comment (server.go). The pin held
+		// across this whole dispatch must make it a no-op for id.
 		h.createSession("test/m1")
 	}
 
@@ -56,18 +61,62 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 		t.Fatal("commandDispatchRace never ran; this test proves nothing")
 	}
 
-	// The session object the server CURRENTLY holds resident for id — the
-	// freshly cold-loaded one the eviction above forced, not the one
-	// writeCommand originally resolved — must show the terminal status.
 	h.srv.mu.Lock()
 	st := h.srv.sessions[id]
 	h.srv.mu.Unlock()
 	if st == nil {
 		t.Fatal("session is not resident after dispatch completed")
 	}
+	if st.sess != original {
+		t.Fatal("a second *engine.Session was created for id during dispatch, want the pin to keep the original resident")
+	}
+	if st.pins != 0 {
+		t.Fatalf("pins = %d after dispatch completed, want 0 (released)", st.pins)
+	}
 	cmds := st.sess.Commands()
-	if len(cmds) != 1 || cmds[0].Status != message.CommandSucceeded {
-		t.Fatalf("live resident session's Commands() = %+v, want one succeeded command", cmds)
+	if len(cmds) != 1 || cmds[0].Status != message.CommandSucceeded || cmds[0].CreatedAt.IsZero() {
+		t.Fatalf("live resident session's Commands() = %+v, want one succeeded command with a non-zero created_at", cmds)
+	}
+}
+
+// TestMutableSessionPinReleasedAfterCommand: the pin mutableSession takes for
+// a dispatched command's session is released once the command reaches its
+// terminal write, so the session becomes an ordinary eviction candidate
+// again. Failure: a leaked pin permanently exempts a session from
+// MaxResident eviction.
+func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
+	dir := t.TempDir()
+	prov := newCapturingProvider()
+	h := newHarnessOpts(t, dir, prov, 2)
+
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/status"}},
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	sse.waitFor(t, "command") // accepted
+	sse.waitFor(t, "command") // succeeded (terminal)
+
+	h.srv.mu.Lock()
+	pins := h.srv.sessions[id].pins
+	h.srv.opts.MaxResident = 1
+	// id is now the longest-idle resident; a pin left behind would exempt
+	// it from this sweep. Two more sessions push the count past the cap.
+	h.srv.mu.Unlock()
+	if pins != 0 {
+		t.Fatalf("pins = %d after command finished, want 0", pins)
+	}
+
+	h.createSession("test/m1")
+	h.srv.mu.Lock()
+	_, resident := h.srv.sessions[id]
+	h.srv.mu.Unlock()
+	if resident {
+		t.Fatal("id still resident after MaxResident pressure, want evicted (pin was released)")
 	}
 }
 

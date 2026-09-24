@@ -254,7 +254,7 @@ func typedCommandName(line string) string {
 // goroutine. Always returns true: every path through this function writes
 // a response.
 func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id string, seq int64, rec message.CommandRecord, res *command.Resolution) bool {
-	sess, ok := s.mutableSession(id)
+	sess, releaseSess, ok := s.mutableSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return true
@@ -263,11 +263,12 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 	dispatching := res != nil
 	if dispatching {
 		if !s.admitCommand() {
+			releaseSess()
 			writeErr(w, http.StatusServiceUnavailable, "server shutting down")
 			return true
 		}
 	}
-	release := func() {
+	releaseAdmit := func() {
 		if dispatching {
 			s.wg.Done()
 		}
@@ -276,19 +277,28 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 	if route == promptRouteEnqueue {
 		dup, err := sess.RecordCommandDurable(rec, seq)
 		if dup {
-			release()
+			releaseAdmit()
+			releaseSess()
 			writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
 			return true
 		}
 		if err != nil {
-			release()
+			releaseAdmit()
+			releaseSess()
 			writeErr(w, http.StatusInternalServerError, "command not durable: "+err.Error())
 			return true
 		}
 	} else if err := sess.RecordCommand(rec); err != nil {
-		release()
+		releaseAdmit()
+		releaseSess()
 		writeErr(w, http.StatusInternalServerError, "command not recorded: "+err.Error())
 		return true
+	}
+	// Not dispatching: the pin's job ends with this first record. A
+	// dispatched command instead carries it into runCommand, which releases
+	// it after the terminal write (see runCommand's own doc comment).
+	if !dispatching {
+		releaseSess()
 	}
 
 	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status}
@@ -301,7 +311,7 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		writeJSON(w, http.StatusAccepted, enqueueResponse{Status: "command", Watermark: sess.EnqueueSeq(), Command: receipt})
 	}
 	if dispatching {
-		go s.runCommand(id, rec, *res)
+		go s.runCommand(id, sess, releaseSess, rec, *res)
 	}
 	return true
 }
@@ -316,17 +326,29 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 // doc comment for why two *engine.Session for one log must never both be
 // mutated. Used only by resolvePromptCommand and its own callees; every
 // other handler keeps its own copy.
-func (s *Server) mutableSession(id string) (*engine.Session, bool) {
+//
+// For a root, it pins the resolved sessionState (sessionState.pins, under
+// the same s.mu critical section that finds or inserts it) so
+// evictResidentLocked cannot unload it before the caller calls release —
+// otherwise a command's accepted and terminal records could land on two
+// different *engine.Session for the same id (see writeCommand and
+// runCommand). release decrements the pin and is safe to call more than
+// once. A managed child has no residency entry to pin; its release is a
+// no-op.
+func (s *Server) mutableSession(id string) (sess *engine.Session, release func(), ok bool) {
 	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
-		return child, true
+		return child, func() {}, true
 	}
 	s.mu.Lock()
 	st := s.sessions[id]
+	if st != nil {
+		st.pins++
+	}
 	s.mu.Unlock()
 	if st == nil {
 		loaded, err := s.opts.LoadSession(id)
 		if err != nil {
-			return nil, false
+			return nil, nil, false
 		}
 		s.mu.Lock()
 		var evicted []*engine.Session
@@ -337,10 +359,21 @@ func (s *Server) mutableSession(id string) (*engine.Session, bool) {
 			s.sessions[id] = st
 			evicted = s.evictResidentLocked()
 		}
+		st.pins++
 		s.mu.Unlock()
 		releaseEvicted(evicted)
 	}
-	return st.sess, true
+	released := false
+	release = func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if released {
+			return
+		}
+		released = true
+		st.pins--
+	}
+	return st.sess, release, true
 }
 
 // admitCommand claims one Drain-visible slot for a dispatched command's

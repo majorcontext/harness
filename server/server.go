@@ -831,6 +831,12 @@ type sessionState struct {
 	running  bool
 	cancel   context.CancelFunc
 	lastUsed time.Time
+	// pins counts outstanding residency holds a command dispatch takes
+	// through mutableSession: while positive, evictResidentLocked skips this
+	// entry exactly as it skips running, so the accepted and terminal
+	// records of one dispatched command always land on the same
+	// *engine.Session.
+	pins int
 	// shareWorkdir opts this session out of the workdir-busy exclusivity rule
 	// in claimForPrompt (see workdir.go): set from POST /session's
 	// share_workdir, in memory only (a reloaded/cold session defaults back to

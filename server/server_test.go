@@ -1550,6 +1550,38 @@ func TestListStatusErrorOnBadSessionDir(t *testing.T) {
 	}
 }
 
+// TestEvictResidentLockedSkipsPinnedEntry: a pinned resident survives an
+// eviction sweep exactly like a running one, even when it is also the
+// longest-idle candidate — eviction instead falls to the next, unpinned
+// candidate. Failure: eviction unloads a session while a command dispatch
+// still holds a reference to its *engine.Session.
+func TestEvictResidentLockedSkipsPinnedEntry(t *testing.T) {
+	prov := &scriptedProvider{name: "test"}
+	h := newHarnessOpts(t, t.TempDir(), prov, 3) // headroom: no auto-eviction while both are created
+
+	pinnedID := h.createSession("test/m1")
+	otherID := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	h.srv.sessions[pinnedID].pins = 1
+	h.srv.sessions[pinnedID].lastUsed = time.Now().Add(-time.Hour) // oldest: first pick if not pinned
+	h.srv.opts.MaxResident = 1
+	evicted := h.srv.evictResidentLocked()
+	_, pinnedResident := h.srv.sessions[pinnedID]
+	_, otherResident := h.srv.sessions[otherID]
+	h.srv.mu.Unlock()
+
+	if len(evicted) != 1 || evicted[0].ID != otherID {
+		t.Fatalf("evicted = %+v, want exactly the unpinned session %s", evicted, otherID)
+	}
+	if !pinnedResident {
+		t.Fatal("pinned session evicted, want retained")
+	}
+	if otherResident {
+		t.Fatal("unpinned session still resident, want evicted in the pinned session's place")
+	}
+}
+
 // TestMaxResidentEvictsLongestIdle verifies that resident sessions are capped:
 // with MaxResident=2, prompting three sessions unloads the longest-idle one
 // from memory while it stays listable, status-reportable, and promptable from

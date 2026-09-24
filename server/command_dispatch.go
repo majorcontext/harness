@@ -89,16 +89,18 @@ func (w *commandResponseWriter) Write(b []byte) (int, error) {
 func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 
 // runCommand runs one dispatched command's route call and records its
-// terminal outcome. The caller holds the admitCommand slot, and the
-// deferred wg.Done releases it.
-//
-// The terminal write resolves the session again: the handler does its own
-// lookup, and eviction can replace the object that recorded "accepted".
+// terminal outcome on sess, the same *engine.Session writeCommand recorded
+// the accepted record on and pinned for this whole call. The caller holds
+// the admitCommand slot and sess's pin; the deferred wg.Done and
+// releaseSess release them, in that order, strictly after every terminal
+// write below — including the panic path's — so the pin never lifts before
+// the object it protects has taken its last write.
 //
 // net/http recovers a handler panic only on the request goroutine, so the
 // deferred recover records a failed outcome instead of crashing the process.
-func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Resolution) {
+func (s *Server) runCommand(id string, sess *engine.Session, releaseSess func(), rec message.CommandRecord, res command.Resolution) {
 	defer s.wg.Done()
+	defer releaseSess()
 
 	typed := typedCommandName(rec.Line)
 	defer func() {
@@ -108,7 +110,7 @@ func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Re
 			rec.Text = fmt.Sprintf("/%s failed: internal error", typed)
 			rec.Result = nil
 			rec.ResultTruncated = false
-			s.recordCommandTerminal(id, rec)
+			s.recordCommandTerminal(sess, rec)
 		}
 	}()
 
@@ -126,7 +128,7 @@ func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Re
 		s.reportError(fmt.Errorf("command %s: build request: %w", rec.ID, err))
 		rec.Status = message.CommandFailed
 		rec.Text = err.Error()
-		s.recordCommandTerminal(id, rec)
+		s.recordCommandTerminal(sess, rec)
 		return
 	}
 	req.SetPathValue("id", id)
@@ -139,22 +141,15 @@ func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Re
 	serveOpHandlers[res.Spec.Op](s, cw, req)
 
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining())
-	s.recordCommandTerminal(id, rec)
+	s.recordCommandTerminal(sess, rec)
 }
 
-// recordCommandTerminal writes rec's terminal status through id's CURRENT
-// *engine.Session, resolved fresh via mutableSession rather than the
-// object runCommand's own caller looked up before the route handler ran
-// (see runCommand's doc comment for the eviction gap this closes). A
-// session no longer resolvable (evicted and then removed, or a load
-// failure) reports through reportError and writes nothing — never mutate
-// a stale object to force the write through.
-func (s *Server) recordCommandTerminal(id string, rec message.CommandRecord) {
-	sess, ok := s.mutableSession(id)
-	if !ok {
-		s.reportError(fmt.Errorf("command %s: session %s is no longer resolvable for its terminal record", rec.ID, id))
-		return
-	}
+// recordCommandTerminal writes rec's terminal status to sess, the pinned
+// object runCommand's caller resolved for id — no re-resolve: the pin held
+// across the whole dispatch guarantees sess is still the one resident
+// object for id, so a fresh mutableSession lookup would only ever return
+// the same object.
+func (s *Server) recordCommandTerminal(sess *engine.Session, rec message.CommandRecord) {
 	if err := sess.RecordCommand(rec); err != nil {
 		s.reportError(fmt.Errorf("command %s: record terminal status: %w", rec.ID, err))
 	}

@@ -3520,10 +3520,11 @@ func (s *Server) handleSetServiceTier(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setServiceTierResponseJSON{ServiceTier: sess.ServiceTier()})
 }
 
-// evictResidentLocked unloads the longest-idle non-busy sessions from
+// evictResidentLocked unloads the longest-idle eligible sessions from
 // s.sessions (this server's OWN residency bookkeeping) when the resident
-// count exceeds Options.MaxResident. Busy sessions are never evicted;
-// s.seen is retained so journal idempotency survives the unload.
+// count exceeds Options.MaxResident. A running session or one with a
+// positive sessionState.pins is never evicted; s.seen is retained so
+// journal idempotency survives the unload.
 //
 // This frees s.sessions' own entry, but not necessarily the *Session object
 // itself: a root is adopted into sessMgr (AdoptRoot) and never reaped
@@ -3554,8 +3555,8 @@ func (s *Server) evictResidentLocked() (evicted []*engine.Session) {
 	}
 	cands := make([]cand, 0, len(s.sessions))
 	for id, st := range s.sessions {
-		if st.running {
-			continue // busy sessions hold an in-flight prompt; keep them resident
+		if st.running || st.pins > 0 {
+			continue // busy or pinned sessions must stay resident
 		}
 		cands = append(cands, cand{id, st.lastUsed})
 	}
