@@ -501,10 +501,9 @@ func TestTypedCommandOnAllThreeRoutes(t *testing.T) {
 				t.Error("result is empty, want the /status route's body")
 			}
 
-			// task-7-review.md Important 2: a terminal status update for
-			// an already-folded ID must carry the SAME CreatedAt/
-			// AfterMessageID the accepted record minted, never a zero
-			// created_at or an emptied anchor.
+			// A terminal status update for an already-folded ID must carry
+			// the SAME CreatedAt/AfterMessageID the accepted record minted,
+			// never a zero created_at or an emptied anchor.
 			if terminal.Command.CreatedAt.IsZero() {
 				t.Error("terminal command event has a zero created_at")
 			}
@@ -561,8 +560,8 @@ func TestCommandOutcomeInvalidBodyOmitsResult(t *testing.T) {
 
 // TestCommandOutcomeDrainingNon2xxIsInterrupted: a route's non-2xx result
 // while the server is draining maps to interrupted with the drain wording,
-// never failed — the global-constraints.md status/text table's own
-// draining row, which nothing else in this package exercised.
+// never failed — the one status/text row nothing else in this package
+// exercised.
 func TestCommandOutcomeDrainingNon2xxIsInterrupted(t *testing.T) {
 	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusInternalServerError, []byte(`{"error":"boom"}`), true)
 	if status != message.CommandInterrupted {

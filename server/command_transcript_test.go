@@ -98,12 +98,12 @@ func fourTurnProvider() *scriptedProvider {
 	}}
 }
 
-// TestTranscriptBootstrapCarriesCommands_Resident is Task 8's red-first test
-// for the resident bootstrap path: GET /session/{id}/message?stream_from=1
-// must carry every folded command anchored inside the returned window,
-// including an empty-anchored command only when that window starts at the
-// session's first message. Failure: a reload of a resident session loses
-// every command outcome the console rendered before it.
+// TestTranscriptBootstrapCarriesCommands_Resident covers the resident
+// bootstrap path: GET /session/{id}/message?stream_from=1 must carry every
+// folded command anchored inside the returned window, including an
+// empty-anchored command only when that window starts at the session's
+// first message. Failure: a reload of a resident session loses every
+// command outcome the console rendered before it.
 func TestTranscriptBootstrapCarriesCommands_Resident(t *testing.T) {
 	h := newHarness(t, fourTurnProvider())
 	id := h.createSession("")
@@ -233,7 +233,7 @@ func TestTranscriptBootstrapCarriesCommands_Cold(t *testing.T) {
 	}
 }
 
-// TestMessagePageCarriesCommands is Task 8's red-first test for
+// TestMessagePageCarriesCommands covers
 // GET /session/{id}/message?before_seq=N&limit=K: each page must carry
 // exactly the folded commands anchored inside its own window, from
 // engine.ReadMessagePage's own MessagePage.Commands.
@@ -290,8 +290,8 @@ func TestMessagePageCarriesCommands(t *testing.T) {
 	}
 }
 
-// TestMessagePageFallbackCarriesCommands is Task 8's red-first test for
-// messagePageFallback: a page answered from resident history (no readable
+// TestMessagePageFallbackCarriesCommands covers messagePageFallback: a page
+// answered from resident history (no readable
 // journal) must still carry the live session's own folded commands, from
 // engine.CommandsInWindow over the window messagePageFallback computes
 // itself.

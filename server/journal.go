@@ -1095,10 +1095,9 @@ func (s *Server) syncMessages(sessionID string) {
 // from a real anchor on its FIRST "load older" request instead of
 // re-fetching this same newest page to merely discover one.
 //
-// sess is a FIFTH, additive result: the *engine.Session lookupSession
-// resolved, returned so a caller building the bootstrap envelope's commands
-// field (handleTranscriptBootstrap) can call sess.Commands() without a
-// second lookup.
+// sess is a FIFTH, additive result: the resolved *engine.Session, so a
+// caller building the bootstrap envelope's commands field can call
+// sess.Commands() without a second lookup.
 func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, sess *engine.Session, ok bool) {
 	sess, ok = s.lookupSession(id)
 	if !ok {

@@ -1401,9 +1401,7 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 //
 // Commands is a FIFTH, additive field: the folded message.CommandRecord
 // values whose anchor sits inside the returned window (engine.
-// CommandsInWindow), always present and never nil — [] for a window with
-// none. A caller that reads only Messages/StreamFrom/LiveFrom/Seqs is
-// unaffected.
+// CommandsInWindow). Always present, [] for a window with none.
 type transcriptJSON struct {
 	Messages   []json.RawMessage       `json:"messages"`
 	StreamFrom int64                   `json:"stream_from"`

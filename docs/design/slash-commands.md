@@ -261,17 +261,17 @@ resolution" below for the full rule.
 > **Two exceptions to the `//x` escape.** Rule 3 promises literal text
 > for `//name`. Two paths still act on that text anyway.
 >
-> 1. **The engine's exact `/compact` intercept, on any session, while
->    Task 9 stays held.** `resolvePromptCommand` unescapes a typed
->    `//compact` to the text `/compact` (rule 3), but that text is not a
->    command — `Resolve` returns `ErrNotCommand` for it — so it is sent
->    on as an ordinary prompt. The engine's own exact-text match (above)
->    then fires and compacts the session anyway, with no `CommandRecord`
->    at all. So today, a typed `/compact` (one slash) is the only
->    reliable, recorded path; a typed `//compact` (two slashes), like a
->    non-typed `/compact` from any source, still compacts — through the
->    OLD, unrecorded mechanism. Removing the engine's own intercept
->    (Task 9) removes this case in one edit.
+> 1. **The engine's exact `/compact` intercept, on any session, until #319
+>    removes it.** `resolvePromptCommand` unescapes a typed `//compact`
+>    to the text `/compact` (rule 3), but that text is not a command — `Resolve`
+>    returns `ErrNotCommand` for it — so it is sent on as an ordinary
+>    prompt. The engine's own exact-text match (above) then fires and
+>    compacts the session anyway, with no `CommandRecord` at all. So
+>    today, a typed `/compact` (one slash) is the only reliable, recorded
+>    path; a typed `//compact` (two slashes), like a non-typed `/compact`
+>    from any source, still compacts — through the OLD, unrecorded
+>    mechanism. Removing the intercept (#319) removes this case in one
+>    edit.
 > 2. **A delegated session's own CLI vocabulary, permanently.** The
 >    Claude Code CLI reads a leading `/name` in the text it receives as
 >    one of ITS OWN slash commands (`/cost`, `/context`, `/usage`, and
@@ -385,24 +385,28 @@ The server returns the resolved registry for the current configuration:
 ]}
 ```
 
-A frontend renders the menu and the argument hints from this response
-alone. It does not carry its own table. `method` and `path` are the
-serve-mode mapping, present so an HTTP client needs no route knowledge of
-its own; `cmd/harness` ignores both and dispatches on `op`.
+A frontend builds its slash-menu autocomplete from this response — plus
+`serve_support` below, when it resolves commands itself — rather than
+carrying its own table. The menu only fills the input; harness resolves
+the typed line server-side, so a frontend never re-implements `Resolve`.
+`method` and `path` are the serve-mode mapping, present so an HTTP client
+needs no route knowledge of its own; `cmd/harness` ignores both and
+dispatches on `op`.
 
 `serve_support` is a second, additive map, keyed by the same canonical
-`name`, for a client that resolves commands itself — `harness serve`'s
-own console, notably — rather than proxying through a frontend that owns
-the operation. Each entry reads `{"supported": true}` or
+`name`, for a client that resolves commands itself — the Boxes console,
+notably; harness has no console of its own — rather than proxying through
+a frontend that owns the operation. Each entry reads
+`{"supported": true}` or
 `{"supported": false, "reason": "Not available in this client."}`. A
 frontend command (`new` — aliased `/clear` —, `resume`, and `quit`) is
 unsupported because the frontend owns the session pointer, not serve
-mode; `queue-clear` is unsupported because it is out of scope for this
-plan (`DELETE /session/{id}/queue` already exists, and a later change can
-wire it). The reason string names no route and no internal term — it is
-exactly what serve mode returns to the person who typed the command. A
-response carrying no `serve_support` key at all means serve mode resolves
-nothing — an older server, notably.
+mode; `queue-clear` is unsupported because `DELETE /session/{id}/queue`
+already exists but nothing dispatches it through serve mode yet. The
+reason string names no route and no internal term — it is exactly what
+serve mode returns to the person who typed the command. A response
+carrying no `serve_support` key at all means serve mode resolves nothing
+— an older server, notably.
 
 Add the entry to `server/openapi.yaml`, which stays authoritative.
 
@@ -466,8 +470,8 @@ A typed line goes to `command.Registry.Resolve`. Four outcomes follow.
   unresolved non-typed line.
 - **Bad arguments** (`command.ArgsError`): a `failed` record is
   journaled at once, with `Resolve`'s own error text. Nothing runs.
-- **A known command**: a record is journaled, then one of four things
-  happens, checked in this order:
+- **A known command**: the checks below run first, in order, and settle
+  the one record this branch journals:
   1. The request carries an attachment: `failed`, and nothing runs.
   2. `serve_support` reports the command unsupported: `unsupported`,
      and nothing runs.
@@ -511,8 +515,9 @@ itself was wrong".
 Every resolution that reaches a `CommandRecord` at all journals
 `message.CommandRecord`, in the same shape whichever route resolved it:
 `id`, `line`, `name`, `source`, `status`, `created_at`, and `updated_at`
-are always present; `args`, `text`, `result`, and `after_message_id` are
-present only when non-empty. `result` is the dispatched route's own 2xx
+are always present; `args`, `source_id`, `source_label`, `text`, `result`,
+`result_truncated`, and `after_message_id` are present only when non-empty.
+`result` is the dispatched route's own 2xx
 JSON body, capped at 16 KiB; over the cap, `result` is omitted and
 `result_truncated` is `true` instead. `after_message_id` anchors the
 command to the last durable message at the moment of its first record —

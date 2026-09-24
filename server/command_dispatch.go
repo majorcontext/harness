@@ -172,17 +172,17 @@ func (s *Server) recordCommandTerminal(id string, rec message.CommandRecord) {
 }
 
 // commandResultCap bounds a dispatched command's Result field — the
-// route's own 2xx JSON body — at 16 KiB (see global-constraints.md's
-// wire-shapes section). Over the cap, Result is omitted and
-// ResultTruncated is true instead of journaling an unbounded response body.
+// route's own 2xx JSON body — at 16 KiB (see message.CommandRecord's own
+// doc comment). Over the cap, Result is omitted and ResultTruncated is true
+// instead of journaling an unbounded response body.
 const commandResultCap = 16 << 10
 
 // commandOutcome maps one route call's HTTP result to a terminal
-// CommandRecord status/text/result, per global-constraints.md's status/
-// text table: a 2xx with a non-empty compact skip_reason is "failed" with
-// the skip sentence; any other 2xx is "succeeded"; a non-2xx while
-// draining is "interrupted" with the drain wording; any other non-2xx is
-// "failed" with the route's own error text.
+// CommandRecord status/text/result, per docs/design/slash-commands.md's
+// "Status and text" table: a 2xx with a non-empty compact skip_reason is
+// "failed" with the skip sentence; any other 2xx is "succeeded"; a non-2xx
+// while draining is "interrupted" with the drain wording; any other non-2xx
+// is "failed" with the route's own error text.
 func commandOutcome(op command.Op, typed string, code int, body []byte, draining bool) (status message.CommandStatus, text string, result json.RawMessage, truncated bool) {
 	if code >= 200 && code < 300 {
 		if op == command.OpCompact {

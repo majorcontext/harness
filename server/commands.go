@@ -39,10 +39,9 @@ var opRoutes = map[command.Op]route{
 // serveModeOps declares which control Ops serve mode resolves through
 // its own routes, total over every command.Op: a new Op with no entry
 // here fails TestServeModeOpsTotal instead of silently reaching a
-// client as supported. queue-clear stays false because it is out of
-// scope for this plan; DELETE /session/{id}/queue already exists and a
-// future task can flip it. See docs/design/slash-commands.md's
-// "Serve-mode resolution" section.
+// client as supported. queue-clear stays false: DELETE /session/{id}/queue
+// already exists, but nothing dispatches it through serve mode yet. See
+// docs/design/slash-commands.md's "Serve-mode resolution" section.
 var serveModeOps = map[command.Op]bool{
 	command.OpCompact:        true,
 	command.OpSetModel:       true,
@@ -104,11 +103,10 @@ type serveSupportJSON struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// handleCommands returns the resolved registry. A frontend renders its
-// menu and its argument hints from this response alone, but a client
-// that resolves commands itself, such as serve mode's console, also
-// needs serve_support to know which entries it can run without a
-// frontend in front of it.
+// handleCommands returns the resolved registry. A frontend builds its
+// slash-menu autocomplete from this response; a client that resolves
+// commands itself, such as the Boxes console, also needs serve_support to
+// know which entries it can run without a frontend in front of it.
 func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 	specs := command.NewRegistry().All()
 	out := make([]commandEntryJSON, 0, len(specs))
@@ -166,14 +164,11 @@ type commandReceiptJSON struct {
 // whether text is a TYPED slash command and, if so, resolves, records, and
 // (for a dispatchable Op) runs it entirely in process — nothing reaches
 // the model. See docs/design/slash-commands.md's "Serve-mode resolution"
-// section and this plan's global-constraints.md for the status/text
-// table this follows exactly.
+// section for the status/text table this follows exactly.
 //
-// The typed check below filters on the source a CALLER DECLARES on this
-// request — it is not a security boundary against anything that already
-// holds the run token, which could just as easily declare "typed" itself.
-// It exists only to keep an untagged programmatic caller's literal "/foo"
-// text from being silently reinterpreted as a control command.
+// The typed check filters on the source the caller declares. Any holder of
+// the run token can declare `typed`. The check only keeps an untagged
+// caller's `/foo` text a prompt.
 //
 // reports whether text was a command and was handled (response already
 // written). When handled is false, the caller sends promptText, which is
@@ -243,7 +238,8 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 // typedCommandName extracts the name (or alias) the caller actually typed
 // from a line Resolve just accepted — e.g. "clear" for a line whose
 // canonical Resolution.Spec.Name is "new". Every status text uses this,
-// never Spec.Name (see global-constraints.md's text table).
+// never Spec.Name (see docs/design/slash-commands.md's "Status and text"
+// table).
 func typedCommandName(line string) string {
 	body := strings.TrimPrefix(line, "/")
 	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {

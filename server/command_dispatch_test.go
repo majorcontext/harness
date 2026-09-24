@@ -8,10 +8,9 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// TestCommandTerminalWritesLandOnLiveSessionAfterEviction is the named-
-// failure test for task-7-review.md's Important 1: the accepted record's
-// own *engine.Session object can be evicted from residency in the gap
-// between writeCommand's own lookup and the route handler's independent
+// TestCommandTerminalWritesLandOnLiveSessionAfterEviction: the accepted
+// record's own *engine.Session object can be evicted from residency in the
+// gap between writeCommand's own lookup and the route handler's independent
 // one (the object is not running, so it is an ordinary LRU eviction
 // candidate). Failure mode this guards: the terminal record lands on the
 // stale, now-orphaned object instead of whatever *engine.Session the
