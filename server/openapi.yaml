@@ -502,9 +502,12 @@ components:
         used_tokens:
           type: integer
           description: >
-            For a claude-code session with a live get_context_usage reading,
-            the CLI's own reported estimate (a "summary"-detail query, not a
-            full recount). Otherwise the most recent
+            For a claude-code session, the CLI's own reported estimate from
+            a live get_context_usage reading (a "summary"-detail query, not
+            a full recount), and 0 with no such reading — including every
+            cold read after a restart. That lane's persisted per-turn figure
+            is a whole-turn aggregate, not prompt occupancy, so it is never
+            reported here. For every other lane, the most recent
             completed turn's provider-reported input_tokens plus
             cache_read_tokens plus cache_write_tokens — the full prompt
             size, not input_tokens alone (which under prompt caching can be
@@ -521,7 +524,9 @@ components:
             session's used_tokens/window_tokens pairing is not trustworthy
             to render as a percentage even though automatic compaction can
             still be armed against a real internal window (bifrost's
-            firerouter, whose served model varies per request). A caller
+            firerouter, whose served model varies per request) — OR when a
+            claude-code session has no live get_context_usage reading, which
+            suppresses both fields together. A caller
             must treat 0 as "unknown" in every case, never as "full". A
             session whose journal predates this field reports the model's
             own window on a cold read, which can differ from an explicit
