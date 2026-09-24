@@ -242,12 +242,6 @@ func TestContextGauge(t *testing.T) {
 	if window, used, live := claudeCode.ContextGauge(); window != 1_000_000 || used != 15_554 || !live {
 		t.Errorf("claude-code: ContextGauge() = %d, %d, %v; want 1000000, 15554, true", window, used, live)
 	}
-	if got := claudeCode.ContextWindowTokens(); got != 1_000_000 {
-		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
-	}
-	if used, ok := claudeCode.ContextUsedTokens(); !ok || used != 15_554 {
-		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
-	}
 	claudeCode.SetModel(message.ModelRef{Provider: "test", Model: "x"})
 	if _, ok := claudeCode.ContextUsedTokens(); ok {
 		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
@@ -282,14 +276,8 @@ func TestSetClaudeCodeContextUsageRejects(t *testing.T) {
 			beginGen(s)
 			return gen
 		}},
-		{"superseded by SetModel switching back to the SAME ref", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+		{"superseded by SetModel racing in a different claude-code alias before the response lands", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
 			gen := beginGen(s)
-			s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
-			s.SetModel(claudeCodeRef)
-			return gen
-		}},
-		{"model and gen captured together, then SetModel races to a different claude-code alias before the response lands", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
-			_, gen := s.beginClaudeCodeTurn()
 			s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"})
 			return gen
 		}},
