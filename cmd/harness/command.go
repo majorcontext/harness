@@ -36,23 +36,6 @@ func resName(res command.Resolution) string {
 	return string(res.Op)
 }
 
-// compactSkipMessage renders a CompactResult.SkipReason as a sentence a
-// person at a terminal can act on. A skip is not success: run mode has no
-// server response to carry skip_reason silently, so the reason must reach
-// the user through the command's own error text instead (§5).
-func compactSkipMessage(reason string) string {
-	switch reason {
-	case engine.SkipReasonNotEnoughTurns:
-		return "the session does not have enough turns yet to fold"
-	case engine.SkipReasonLoneExistingSummary:
-		return "the session's history is already a single summary with nothing left to fold"
-	case engine.SkipReasonSummarizerEmpty:
-		return "the summarizer returned no usable summary"
-	default:
-		return reason
-	}
-}
-
 // checkRunModeSupport reports whether harness run can act on res at all: a
 // frontend command owns no route here, and an Op with no true entry in
 // runModeOps has no dispatch case below. It performs no I/O, so a caller
@@ -89,7 +72,7 @@ func dispatchCommand(ctx context.Context, s *engine.Session, res command.Resolut
 			return err
 		}
 		if result.SkipReason != "" {
-			return fmt.Errorf("/compact did nothing: %s", compactSkipMessage(result.SkipReason))
+			return fmt.Errorf("/compact did nothing: %s", engine.CompactSkipMessage(result.SkipReason))
 		}
 		return nil
 	case command.OpSetModel:

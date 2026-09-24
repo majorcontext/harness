@@ -233,6 +233,23 @@ const (
 	SkipReasonSummarizerEmpty = "summarizer_empty"
 )
 
+// CompactSkipMessage renders a CompactResult.SkipReason as a sentence a
+// person can act on — shared by cmd/harness's own dispatcher and
+// server's serve-mode command dispatch (§5), so a skip reads identically
+// however the caller reached it.
+func CompactSkipMessage(reason string) string {
+	switch reason {
+	case SkipReasonNotEnoughTurns:
+		return "the session does not have enough turns yet to fold"
+	case SkipReasonLoneExistingSummary:
+		return "the session's history is already a single summary with nothing left to fold"
+	case SkipReasonSummarizerEmpty:
+		return "the summarizer returned no usable summary"
+	default:
+		return reason
+	}
+}
+
 // effectiveKeepTurns resolves CompactOptions.KeepTurns/Config.
 // CompactionKeepTurns down to one concrete, floored value.
 func (s *Session) effectiveKeepTurns(optKeepTurns int) int {
