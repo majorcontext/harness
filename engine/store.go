@@ -1511,14 +1511,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 
 	// The command trail folds through foldCommand (command.go), seeded from
 	// this fresh session's own state — or the snapshot's restored commands —
-	// exactly like qf above. cSeqs must be non-nil before any record with a
-	// positive Seq folds: newSession/restoreSnapshot always leave
-	// s.commandSeqs non-nil, so this only guards a nil from an old snapshot
-	// written before the field existed.
+	// exactly like qf above.
 	cmds, cSeqs := s.commands, s.commandSeqs
-	if cSeqs == nil {
-		cSeqs = map[string]int64{}
-	}
 
 	// apply is the switch every fold below writes into a Session field
 	// through. A snapshot-anchored load (snapshotStartAfter above) SKIPS

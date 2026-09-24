@@ -177,11 +177,11 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
-// TestCommandReanchoredOnCompact is Task 4's red-first test: a command
-// recorded against a message compaction later folds away must follow the
-// summary instead — live, after LoadSession, and in the sidecar index —
-// never an anchor a compacted history can no longer resolve. Failure: a
-// command vanishes from every page once its anchor is folded away.
+// TestCommandReanchoredOnCompact: a command recorded against a message
+// compaction later folds away must follow the summary instead — live, after
+// LoadSession, and on a message page — never an anchor a compacted history
+// can no longer resolve. Failure: a command vanishes from every page once
+// its anchor is folded away.
 func TestCommandReanchoredOnCompact(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
@@ -232,12 +232,12 @@ func TestCommandReanchoredOnCompact(t *testing.T) {
 		t.Fatalf("LoadSession Commands() anchor = %q, want %q", got, summaryID)
 	}
 
-	ix, err := ReadSessionIndex(dir, s.ID)
+	page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
 	if err != nil {
-		t.Fatalf("ReadSessionIndex: %v", err)
+		t.Fatalf("ReadMessagePage: %v", err)
 	}
-	if len(ix.Commands) != 1 || ix.Commands[0].AfterMessageID != summaryID {
-		t.Fatalf("index Commands = %+v, want one record anchored to %q", ix.Commands, summaryID)
+	if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != summaryID {
+		t.Fatalf("page Commands = %+v, want one record anchored to %q", page.Commands, summaryID)
 	}
 }
 

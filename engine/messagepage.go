@@ -185,12 +185,13 @@ func readMessagePage(dir, id string, beforeSeq, limit int) (MessagePage, error) 
 func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit int) (MessagePage, error) {
 	page := MessagePage{Total: ix.DurableMessages}
 	lo, hi, _ := MessagePageWindow(ix.DurableMessages, beforeSeq, limit)
-	if hi < lo {
-		// Empty page. It "starts at the first message" — and so carries an
-		// empty-anchored command — only for a session with no durable
-		// messages at all; any other empty result (an out-of-range
-		// beforeSeq) names no window and gets none.
-		page.Commands = CommandsInWindow(ix.Commands, nil, ix.DurableMessages == 0)
+	if hi < lo && ix.DurableMessages != 0 {
+		// Empty page: an out-of-range beforeSeq names no window, so no
+		// command can match it either. A session with NO durable messages
+		// at all also takes hi < lo (MessagePageWindow's own empty-page
+		// return), but that case still needs the scan below — a command
+		// can be recorded before any message exists.
+		page.Commands = CommandsInWindow(nil, nil, false)
 		return page, nil
 	}
 
@@ -219,7 +220,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		return MessagePage{}, ErrStaleMessagePage
 	}
 
-	msgs, ok, err := tailPage(f, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
+	msgs, cmds, ok, err := tailPage(f, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
 	if err != nil {
 		return MessagePage{}, pageError(f, id, ix, err)
 	}
@@ -239,7 +240,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		if _, err := io.ReadFull(f, data); err != nil {
 			return MessagePage{}, pageError(f, id, ix, err)
 		}
-		if msgs, err = foldedPage(data, lo, hi); err != nil {
+		if msgs, cmds, err = foldedPage(data, lo, hi); err != nil {
 			return MessagePage{}, pageError(f, id, ix, err)
 		}
 	}
@@ -249,7 +250,11 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		page.LastSeq = hi
 		page.HasMore = page.FirstSeq > 1
 	}
-	page.Commands = CommandsInWindow(ix.Commands, page.Messages, page.FirstSeq == 1)
+	// fromFirst also holds for a session with no durable messages at all
+	// (page.FirstSeq stays 0 then): a command recorded before any message
+	// exists is, by definition, "before every message" for such a session.
+	fromFirst := page.FirstSeq == 1 || ix.DurableMessages == 0
+	page.Commands = CommandsInWindow(cmds, page.Messages, fromFirst)
 	return page, nil
 }
 
@@ -304,9 +309,24 @@ func pageError(f *os.File, id string, ix SessionIndex, cause error) error {
 // that in reverse is exactly the kind of second, subtly different
 // implementation of a fold this repository forbids, so the general path
 // below reuses the forward fold instead.
-func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]message.Message, bool, error) {
+//
+// It also gathers every command record the scan passes over, decoding it in
+// full — a command record is small (message.CommandRecord's own cap is
+// 16 KiB), so this costs nothing like a large message body would. A
+// command's own anchor message is always earlier in the log than the
+// command's record (RecordCommand computes it from history at record time),
+// so every command anchored inside [lo,hi] is written after message lo and
+// is therefore scanned before the walk can stop at lo. lo == 1 is the one
+// case that needs more: a command recorded before the session's first
+// durable message (an empty anchor) sits EARLIER in the log than message
+// 1's own record, so the walk keeps going past message 1 to the start of
+// the file to find it. The gathered records come back in the order the
+// backward scan found them — newest first — and the caller folds them
+// after reversing to log order.
+func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]message.Message, []message.CommandRecord, bool, error) {
 	cur := total
 	var out []message.Message
+	var cmds []commandRecord
 	compacted := false
 
 	err := scanLogBackward(src, logSize, size, func(line logLine, isTail bool) (bool, error) {
@@ -324,6 +344,10 @@ func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]messag
 		case recCompact:
 			compacted = true
 			return false, nil
+		case recCommand:
+			if head.Command != nil {
+				cmds = append(cmds, *head.Command)
+			}
 		case recMessage:
 			if !head.hasMessage {
 				// A message record with no body. No fold counts one: the
@@ -357,29 +381,52 @@ func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]messag
 			}
 			cur--
 		}
+		if lo == 1 {
+			return true, nil
+		}
 		return cur >= lo, nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if compacted {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	if len(out) != hi-lo+1 {
 		// The walk ran out of journal before it produced the page it was
 		// numbered for: the index and the records disagree. Report it
 		// rather than serve messages under seqs that do not describe them.
-		return nil, false, fmt.Errorf("message page [%d,%d]: journal holds %d of those messages", lo, hi, len(out))
+		return nil, nil, false, fmt.Errorf("message page [%d,%d]: journal holds %d of those messages", lo, hi, len(out))
 	}
 	reverseMessages(out)
-	return out, true, nil
+	return out, foldCommandsBackward(cmds), true, nil
+}
+
+// foldCommandsBackward folds cmds — command records a backward scan
+// collected NEWEST FIRST — into the by-ID, torn-seq result LoadSession's own
+// forward fold produces (foldCommand), with a fresh seq map local to this
+// one page read. Walking cmds back to front visits them in LOG order without
+// a separate reverse pass.
+func foldCommandsBackward(cmds []commandRecord) []message.CommandRecord {
+	if len(cmds) == 0 {
+		return nil
+	}
+	seqs := map[string]int64{}
+	var folded []message.CommandRecord
+	for i := len(cmds) - 1; i >= 0; i-- {
+		folded = foldCommand(folded, seqs, cmds[i].CommandRecord, cmds[i].Seq)
+	}
+	return folded
 }
 
 // recordHead is what a page walk needs to know about a record it is not
-// going to carry: its type, and whether a message record has a body.
+// going to carry in full: its type, whether a message record has a body,
+// and — decoded in full, since it costs little — a command record's own
+// payload.
 type recordHead struct {
 	Type       string
 	hasMessage bool
+	Command    *commandRecord
 }
 
 // classifyRecord decides what a line is, reading as little of it as it can
@@ -455,7 +502,7 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 	if err := json.Unmarshal(bytes.TrimSpace(raw), &rec); err != nil {
 		return recordHead{}, false
 	}
-	return recordHead{Type: rec.Type, hasMessage: rec.Message != nil}, true
+	return recordHead{Type: rec.Type, hasMessage: rec.Message != nil, Command: rec.Command}, true
 }
 
 // foldedPage is the general path, for a journal that carries at least one
@@ -482,8 +529,18 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 // line into a full record to find the wanted ones. That decoded every
 // message body in the file, which is the cost this whole endpoint exists to
 // avoid — a review caught it. The raw-line map is what removes it.
-func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
+//
+// It folds the command trail alongside, sharing this same pass: a
+// recCommand line folds into cmds through foldCommand, keyed by a seq map
+// local to this one call, and a recCompact line re-anchors cmds through
+// reanchorCommands BEFORE fold.applyIndexRecord splices the range away —
+// exactly the order LoadSession's own replay uses (store.go), so a command
+// anchored inside a folded range still resolves against the summary that
+// replaced it.
+func foldedPage(data []byte, lo, hi int) ([]message.Message, []message.CommandRecord, error) {
 	var fold indexFold
+	var cmds []message.CommandRecord
+	seqs := map[string]int64{}
 	// lineByOrdinal aliases data; it never copies a record. Ordinals are the
 	// fold's own occurrence identity, not user/provider-controlled message IDs.
 	lineByOrdinal := make(map[int][]byte)
@@ -499,6 +556,17 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 			// Same rule as the fold and the tail walk: a final line that is
 			// not a whole record was never completely written.
 			return errTruncatedFinalRecord
+		}
+		if rec.Type == recCompact && rec.Compact != nil {
+			if start, end, err := compactRecordBounds(fold.messages, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded); err == nil {
+				reanchorCommands(cmds, fold.messages[start:end+1], rec.Compact.Summary.ID)
+			}
+			// A bounds error here means fold.applyIndexRecord below fails or
+			// marks the fold broken over the identical computation — either
+			// way this call reports it, so skipping the reanchor is harmless.
+		}
+		if rec.Type == recCommand && rec.Command != nil {
+			cmds = foldCommand(cmds, seqs, rec.Command.CommandRecord, rec.Command.Seq)
 		}
 		if err := fold.applyIndexRecord(rec, isLast); err != nil {
 			return fmt.Errorf("%w at line %d", err, n)
@@ -518,16 +586,16 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if fold.broken {
-		return nil, errors.New("message page: journal fold is not usable")
+		return nil, nil, errors.New("message page: journal fold is not usable")
 	}
 	if hi > len(fold.messages) {
-		return nil, fmt.Errorf("message page [%d,%d]: journal folds to %d messages", lo, hi, len(fold.messages))
+		return nil, nil, fmt.Errorf("message page [%d,%d]: journal folds to %d messages", lo, hi, len(fold.messages))
 	}
 	if len(fold.messageRecordOrdinals) != len(fold.messages) {
-		return nil, errors.New("message page: journal fold lost record provenance")
+		return nil, nil, errors.New("message page: journal fold lost record provenance")
 	}
 	out := make([]message.Message, hi-lo+1)
 	for seq := lo; seq <= hi; seq++ {
@@ -535,11 +603,11 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 		ordinal := fold.messageRecordOrdinals[seq-1]
 		line, ok := lineByOrdinal[ordinal]
 		if !ok {
-			return nil, fmt.Errorf("message page [%d,%d]: no record %d for message %q at seq %d", lo, hi, ordinal, id, seq)
+			return nil, nil, fmt.Errorf("message page [%d,%d]: no record %d for message %q at seq %d", lo, hi, ordinal, id, seq)
 		}
 		var rec record
 		if err := json.Unmarshal(line, &rec); err != nil {
-			return nil, fmt.Errorf("message page [%d,%d]: message %q: %v", lo, hi, id, err)
+			return nil, nil, fmt.Errorf("message page [%d,%d]: message %q: %v", lo, hi, id, err)
 		}
 		var msg *message.Message
 		switch {
@@ -549,10 +617,10 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 			msg = &rec.Compact.Summary
 		}
 		if msg == nil {
-			return nil, fmt.Errorf("message page [%d,%d]: record for message %q carries no message", lo, hi, id)
+			return nil, nil, fmt.Errorf("message page [%d,%d]: record for message %q carries no message", lo, hi, id)
 		}
 		if msg.ID != id {
-			return nil, fmt.Errorf("message page [%d,%d]: record %d carries message %q, want %q", lo, hi, ordinal, msg.ID, id)
+			return nil, nil, fmt.Errorf("message page [%d,%d]: record %d carries message %q, want %q", lo, hi, ordinal, msg.ID, id)
 		}
 		m := *msg
 		// The same ingest-time repair LoadSession applies to every message
@@ -560,7 +628,7 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, error) {
 		m.Normalize()
 		out[seq-lo] = m
 	}
-	return out, nil
+	return out, cmds, nil
 }
 
 // reverseMessages flips a newest-first slice into the oldest-first order

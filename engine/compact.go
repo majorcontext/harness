@@ -235,8 +235,9 @@ const (
 
 // CompactSkipMessage renders a CompactResult.SkipReason as a sentence a
 // person can act on — shared by cmd/harness's own dispatcher and
-// server's serve-mode command dispatch (§5), so a skip reads identically
-// however the caller reached it.
+// server's serve-mode command dispatch (docs/design/slash-commands.md's
+// "Dispatch" section), so a skip reads identically however the caller
+// reached it.
 func CompactSkipMessage(reason string) string {
 	switch reason {
 	case SkipReasonNotEnoughTurns:

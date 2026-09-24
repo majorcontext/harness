@@ -40,9 +40,9 @@ func pagedSession(t *testing.T, dir string, n int) *Session {
 // endpoint publishes, restated here in full: read the records in order;
 // each message record appends its id; each compact record removes the ids
 // from first_id through last_id and puts its summary id in their place.
-// Deriving it from LoadSession instead would share applyCompactRecord with
-// the implementation under test, and a fold defect would then agree with
-// itself (AGENTS.md's oracle rule).
+// Deriving it from LoadSession instead would share compactRecordBounds and
+// spliceCompactBounds with the implementation under test, and a fold defect
+// would then agree with itself (AGENTS.md's oracle rule).
 func wholeSequence(t *testing.T, dir, id string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
@@ -393,11 +393,11 @@ func TestReadMessagePageEmptySession(t *testing.T) {
 	}
 }
 
-// TestMessagePageCarriesCommandsInWindow is Task 4's red-first test for
-// CommandsInWindow: a page must carry exactly the folded commands whose
-// anchor sits inside its window, plus an empty-anchored command only on the
-// page that starts at the session's first message. Failure: a command is
-// missing from a page it belongs on, or leaks onto one it does not.
+// TestMessagePageCarriesCommandsInWindow: a page must carry exactly the
+// folded commands whose anchor sits inside its window, plus an
+// empty-anchored command only on the page that starts at the session's
+// first message. Failure: a command is missing from a page it belongs on,
+// or leaks onto one it does not.
 func TestMessagePageCarriesCommandsInWindow(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
@@ -472,6 +472,83 @@ func commandIDsOf(cmds []message.CommandRecord) []string {
 		out = append(out, c.ID)
 	}
 	return out
+}
+
+// TestMessagePageShowsLatestFoldedCommandStatus: a command's terminal record
+// can land after messages the requested page never carries. The page must
+// still show the command's LATEST status, folded by ID — never the earlier
+// "accepted" record a backward scan happens to reach first inside the
+// window. Failure: an older page reports a command still "accepted" long
+// after it succeeded.
+func TestMessagePageShowsLatestFoldedCommandStatus(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+
+	appendMsg := func(id string) {
+		s.append(message.Message{ID: id, Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "x"}}})
+	}
+	appendMsg("m1")
+	appendMsg("m2")
+
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/model", Name: "model",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand accepted: %v", err)
+	}
+
+	appendMsg("m3")
+	appendMsg("m4")
+	appendMsg("m5")
+
+	cmd.Status = message.CommandSucceeded
+	cmd.Text = "/model succeeded"
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand succeeded: %v", err)
+	}
+
+	appendMsg("m6")
+	appendMsg("m7")
+	appendMsg("m8")
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	// before_seq=4, limit=2: messages m2, m3 — well before the terminal
+	// record's own position in the log.
+	page, err := ReadMessagePage(dir, s.ID, 4, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m2", "m3"}) {
+		t.Fatalf("page messages = %v, want m2,m3", got)
+	}
+	if len(page.Commands) != 1 || page.Commands[0].Status != message.CommandSucceeded {
+		t.Fatalf("page.Commands = %+v, want one succeeded record", page.Commands)
+	}
+}
+
+// TestMessagePageTornSeqFoldsToLatestCommand: two hand-written command
+// records sharing one seq but carrying different IDs fold to the SECOND one
+// on a page read, exactly like TestCommandFoldTornSeqLastWriterWins proves
+// for Session.Commands(). Failure: a page shows both torn-write records, or
+// keeps the abandoned one.
+func TestMessagePageTornSeqFoldsToLatestCommand(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000002"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000002","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"command","command":{"id":"cmd_first","line":"/compact","name":"compact","source":"typed","status":"accepted","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z","seq":3}}`,
+		`{"type":"command","command":{"id":"cmd_second","line":"/compact","name":"compact","source":"typed","status":"accepted","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z","seq":3}}`,
+	)
+	page, err := ReadMessagePage(dir, id, 0, DefaultMessagePageLimit)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if len(page.Commands) != 1 || page.Commands[0].ID != "cmd_second" {
+		t.Fatalf("page.Commands = %+v, want exactly one entry, ID cmd_second", page.Commands)
+	}
 }
 
 // TestReadMessagePageCapsLimit: the ENGINE API bounds a read rather than
@@ -1157,7 +1234,7 @@ func TestTailPageReadsItsSpanOnce(t *testing.T) {
 	}
 	counter := &pageByteCounter{f: jf}
 	// The two OLDEST messages: the walk crosses the whole journal.
-	msgs, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, 1, 2)
+	msgs, _, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, 1, 2)
 	if err != nil || !ok {
 		t.Fatalf("tailPage = ok %v, err %v", ok, err)
 	}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1395,5 +1396,32 @@ func TestListSessionsPinsTheFilenameID(t *testing.T) {
 	}
 	if info.ID != named {
 		t.Errorf("ReadSessionInfo reported %q, want the filename id %q", info.ID, named)
+	}
+}
+
+// TestSessionIndexSidecarCarriesNoCommandData: the sidecar is a cache of the
+// journal fold, sized for GET /session's own fields — never O(command
+// bytes). A command's own id and result must never reach it. Failure: the
+// sidecar grows with every command a session records.
+func TestSessionIndexSidecarCarriesNoCommandData(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	if err := s.RecordCommand(message.CommandRecord{
+		ID: NewCommandID(), Line: "/status", Name: "status",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+		Result: json.RawMessage(`{"ok":true}`),
+	}); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	data, err := os.ReadFile(sessionIndexPath(dir, s.ID))
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	if strings.Contains(string(data), "cmd_") {
+		t.Fatalf("sidecar carries command data: %s", data)
 	}
 }

@@ -1,7 +1,3 @@
-// Resolved slash commands are journaled beside history, never inside it: a
-// command never becomes a recMessage and never reaches a provider request
-// (see message.CommandRecord's own doc comment and docs/design/
-// slash-commands.md's "Serve-mode resolution" section).
 package engine
 
 import (
@@ -11,10 +7,13 @@ import (
 )
 
 // commandRecord carries the durable payload of a recCommand record (see
-// store.go). Seq is set only on the first record of a command whose
-// dispatch was accepted via RecordCommandDurable (an /enqueue command) —
-// zero/omitted on every other record, including a later status update for
-// the same ID.
+// store.go). Resolved slash commands are journaled beside history, never
+// inside it: a command never becomes a recMessage and never reaches a
+// provider request (see message.CommandRecord's own doc comment and
+// docs/design/slash-commands.md's "Serve-mode resolution" section). Seq is
+// set only on the first record of a command whose dispatch was accepted via
+// RecordCommandDurable (an /enqueue command) — zero/omitted on every other
+// record, including a later status update for the same ID.
 type commandRecord struct {
 	message.CommandRecord
 	Seq int64 `json:"seq,omitempty"`
@@ -36,7 +35,8 @@ func NewCommandID() string { return newID("cmd") }
 // failure, followed by its successful retry under a fresh ID, and live
 // memory only ever held the retry's entry. seqs maps a folded command's ID
 // to the durable seq its first record carried; each caller owns its own map
-// (the Session's commandSeqs, and the index fold's own — Task 4).
+// (Session.commandSeqs, and each page-read fold's own local map — see
+// engine/messagepage.go).
 //
 // Otherwise c is appended, in first-appearance order.
 func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.CommandRecord, seq int64) []message.CommandRecord {
@@ -123,13 +123,10 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit b
 	now := s.cfg.Now()
 	c.UpdatedAt = now
 	if existing, ok := s.findCommandLocked(c.ID); ok {
-		// A status update (accepted -> succeeded/failed/...) for an ID
-		// already folded: copy the original CreatedAt/AfterMessageID onto
-		// c BEFORE the write and the emit below, so the persisted record,
-		// the emitted event, and foldCommand's own copy-forward all agree
-		// — foldCommand only fixes up cmds[i] itself, which is too late
-		// for the record already written to disk or the cp emitted above
-		// it.
+		// A status update for an already-folded ID: copy the original
+		// CreatedAt/AfterMessageID onto c before the write and the emit
+		// below, so the persisted record, the emitted event, and the fold
+		// all agree.
 		c.CreatedAt = existing.CreatedAt
 		c.AfterMessageID = existing.AfterMessageID
 	} else {
@@ -224,8 +221,8 @@ func (s *Session) Commands() []message.CommandRecord {
 // command whose dispatch never reached a terminal status because the
 // process restarted or stopped mid-flight. text renders the per-name
 // interrupted message; the caller supplies the boot-vs-drain wording (see
-// the global constraints' status/text table). Returns the number of
-// commands repaired. Only boot reconcile calls this.
+// docs/design/slash-commands.md's "Status and text" table). Returns the
+// number of commands repaired. Only boot reconcile calls this.
 //
 // It persists and folds each repaired record WITHOUT emitting an
 // EventCommand: reconcile calls this from inside server.New, a window where
