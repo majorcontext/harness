@@ -134,6 +134,14 @@ func TestColdContextSuppressesClaudeCodeAggregate(t *testing.T) {
 		cfg.Providers = provider.Registry{prov.name: prov}
 		cfg.Model = message.ModelRef{Provider: prov.name, Model: "m1"}
 	})
+	switchedSess := coldSession(t, dir, func(cfg *engine.Config) {
+		cfg.Model = message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+		cfg.ClaudeCode = engine.ClaudeCodeConfig{BinaryPath: bin}
+	})
+	switchedSess.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+	if err := switchedSess.PersistErr(); err != nil {
+		t.Fatalf("PersistErr after model switch: %v", err)
+	}
 
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
 
@@ -145,6 +153,7 @@ func TestColdContextSuppressesClaudeCodeAggregate(t *testing.T) {
 	}{
 		{"claude-code aggregate suppressed", claudeSess.ID, 0, 0},
 		{"native real value kept", nativeSess.ID, 200 + 30 + 5, 0},
+		{"claude-code aggregate suppressed after switch to native", switchedSess.ID, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/GET session", func(t *testing.T) {

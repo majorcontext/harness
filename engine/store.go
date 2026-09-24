@@ -586,8 +586,9 @@ type SessionInfo struct {
 	// LastPromptTokens mirrors SessionIndex.LastPromptTokens.
 	LastPromptTokens int
 	WindowTokens     int
-	// Model mirrors SessionIndex.Model, letting a cold context projection
-	// spot a claude-code session's untrustworthy LastPromptTokens.
+	// LastPromptTokensDelegated mirrors SessionIndex.LastPromptTokensDelegated.
+	LastPromptTokensDelegated bool
+	// Model mirrors SessionIndex.Model.
 	Model message.ModelRef
 }
 
@@ -2259,14 +2260,15 @@ func ReadSessionInfo(dir, id string) (SessionInfo, error) {
 func sessionInfoAt(dir, id string) (SessionInfo, error) {
 	if ix, err := readSessionIndexAt(dir, id, false); err == nil {
 		return SessionInfo{
-			ID:               ix.ID,
-			CreatedAt:        ix.CreatedAt,
-			Messages:         ix.Messages,
-			Usage:            ix.Usage,
-			LastInputTokens:  ix.LastInputTokens,
-			LastPromptTokens: ix.LastPromptTokens,
-			WindowTokens:     ix.WindowTokens,
-			Model:            ix.Model,
+			ID:                        ix.ID,
+			CreatedAt:                 ix.CreatedAt,
+			Messages:                  ix.Messages,
+			Usage:                     ix.Usage,
+			LastInputTokens:           ix.LastInputTokens,
+			LastPromptTokens:          ix.LastPromptTokens,
+			WindowTokens:              ix.WindowTokens,
+			LastPromptTokensDelegated: ix.LastPromptTokensDelegated,
+			Model:                     ix.Model,
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
@@ -2339,10 +2341,12 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.addUsage(*rec.Usage)
 				info.LastInputTokens = rec.Usage.InputTokens
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+				info.LastPromptTokensDelegated = false
 			}
 		case recClaudeCodeUsage:
 			if rec.Usage != nil {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+				info.LastPromptTokensDelegated = true
 			}
 		case recModel:
 			info.Model = rec.Model

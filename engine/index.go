@@ -26,7 +26,7 @@ import (
 // refolds — never guesses — when a stored index carries any other value, so
 // a field added here needs no migration: bump this and every stale sidecar
 // is rebuilt on its next read.
-const sessionIndexVersion = 3
+const sessionIndexVersion = 4
 
 // sessionIndexSuffix is appended to a session id to name its sidecar. It
 // deliberately does NOT end in ".jsonl", so ListSessionIndexes' own scan for
@@ -83,6 +83,12 @@ type SessionIndex struct {
 	// prompt size maybeAutoCompact compares against the window (compact.go).
 	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
 	WindowTokens     int `json:"window_tokens,omitempty"`
+	// LastPromptTokensDelegated mirrors Session.lastUsageDelegated: whether
+	// LastPromptTokens was last written by a claude-code usage record
+	// rather than a completed native turn, regardless of the session's
+	// CURRENT model — the provenance a cold context projection needs, not
+	// derivable from Model alone once a session switches provider.
+	LastPromptTokensDelegated bool `json:"last_prompt_tokens_delegated,omitempty"`
 
 	// GoalActive and GoalCondition are the durable goal state LoadSession
 	// restores (store.go's recGoalSet fold): the condition of a goal set
@@ -328,10 +334,12 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			f.addUsage(*rec.Usage)
 			f.ix.LastInputTokens = rec.Usage.InputTokens
 			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			f.ix.LastPromptTokensDelegated = false
 		}
 	case recClaudeCodeUsage:
 		if rec.Usage != nil {
 			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			f.ix.LastPromptTokensDelegated = true
 		}
 	case recModel:
 		f.ix.Model = rec.Model
