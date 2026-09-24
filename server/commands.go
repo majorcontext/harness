@@ -259,46 +259,43 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		writeErr(w, http.StatusNotFound, "no such session")
 		return true
 	}
+	// handedOff is set only right before the dispatch goroutine takes over
+	// the pin (and the admit slot). Until then, these defers own both, so a
+	// panic anywhere below — a RecordCommand/RecordCommandDurable panic, or
+	// one from writeJSON/writeErr — releases them instead of leaking them.
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			releaseSess()
+		}
+	}()
 
 	dispatching := res != nil
 	if dispatching {
 		if !s.admitCommand() {
-			releaseSess()
 			writeErr(w, http.StatusServiceUnavailable, "server shutting down")
 			return true
 		}
-	}
-	releaseAdmit := func() {
-		if dispatching {
-			s.wg.Done()
-		}
+		defer func() {
+			if !handedOff {
+				s.wg.Done()
+			}
+		}()
 	}
 
 	if route == promptRouteEnqueue {
 		dup, err := sess.RecordCommandDurable(rec, seq)
 		if dup {
-			releaseAdmit()
-			releaseSess()
 			writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
 			return true
 		}
 		if err != nil {
-			releaseAdmit()
-			releaseSess()
 			writeErr(w, http.StatusInternalServerError, "command not durable: "+err.Error())
 			return true
 		}
 	} else if err := sess.RecordCommand(rec); err != nil {
-		releaseAdmit()
-		releaseSess()
 		writeErr(w, http.StatusInternalServerError, "command not recorded: "+err.Error())
 		return true
-	}
-	// Not dispatching: the pin's job ends with this first record. A
-	// dispatched command instead carries it into runCommand, which releases
-	// it after the terminal write (see runCommand's own doc comment).
-	if !dispatching {
-		releaseSess()
 	}
 
 	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status}
@@ -311,6 +308,9 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		writeJSON(w, http.StatusAccepted, enqueueResponse{Status: "command", Watermark: sess.EnqueueSeq(), Command: receipt})
 	}
 	if dispatching {
+		// Ownership of the pin and the admit slot moves to runCommand here;
+		// the defers above become no-ops.
+		handedOff = true
 		go s.runCommand(id, sess, releaseSess, rec, *res)
 	}
 	return true
@@ -357,9 +357,14 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 		} else {
 			st = &sessionState{sess: loaded, lastUsed: time.Now()}
 			s.sessions[id] = st
+		}
+		// Pin before the sweep: otherwise a freshly inserted entry, still at
+		// pins == 0, is its own sweep's eviction candidate whenever every
+		// other resident is running or pinned.
+		st.pins++
+		if st.sess == loaded {
 			evicted = s.evictResidentLocked()
 		}
-		st.pins++
 		s.mu.Unlock()
 		releaseEvicted(evicted)
 	}

@@ -241,13 +241,13 @@ func TestCommandReanchoredOnCompact(t *testing.T) {
 	}
 }
 
-// TestHistoryAndCommandsOneSnapshot: HistoryAndCommands returns history and
-// commands from the same s.mu hold, so a command reanchored by compaction
-// always comes back paired with the history that contains its new anchor.
-// Two separate History()/Commands() calls cannot make this promise: a
-// compaction between them can reanchor commands to a summary the earlier
-// history read never saw. Failure: the command's AfterMessageID names a
-// summary absent from the paired history.
+// TestHistoryAndCommandsOneSnapshot is a contract test: after a compaction
+// reanchors a command, HistoryAndCommands' two return values still agree —
+// the command's AfterMessageID names a summary present in the same call's
+// history. It does not exercise concurrency and cannot detect two separate
+// lock holds; that guarantee rests on HistoryAndCommands' single s.mu hold
+// by construction. Failure: the command's AfterMessageID names a summary
+// absent from the paired history.
 func TestHistoryAndCommandsOneSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{

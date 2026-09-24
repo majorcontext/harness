@@ -91,10 +91,10 @@ func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 // runCommand runs one dispatched command's route call and records its
 // terminal outcome on sess, the same *engine.Session writeCommand recorded
 // the accepted record on and pinned for this whole call. The caller holds
-// the admitCommand slot and sess's pin; the deferred wg.Done and
-// releaseSess release them, in that order, strictly after every terminal
-// write below — including the panic path's — so the pin never lifts before
-// the object it protects has taken its last write.
+// the admitCommand slot and sess's pin; the deferred releaseSess and
+// wg.Done release them, in that order (defers run LIFO), strictly after
+// every terminal write below — including the panic path's — so Drain can
+// never observe wg.Done before the pin it protected has lifted.
 //
 // net/http recovers a handler panic only on the request goroutine, so the
 // deferred recover records a failed outcome instead of crashing the process.
