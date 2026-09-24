@@ -258,21 +258,29 @@ fold, so `RunCompactCommand` issues the CLI's own compact command instead.
 every op serve mode supports — not `/compact` alone. See "Serve-mode
 resolution" below for the full rule.
 
-> **Known gap while the engine's `/compact` intercept above stays held
-> (Task 9 undecided):** the engine's own exact-text match still runs for
-> every prompt that reaches `Session.Prompt` unresolved as a command —
-> `harness run`, any `harness serve` prompt whose declared source is not
-> `typed`, AND a typed `//compact` line. `resolvePromptCommand` unescapes
-> `//compact` to the text `/compact` (rule 3), but that text is not a
-> command — `Resolve` returns `ErrNotCommand` for it — so it is sent on
-> as an ordinary prompt, where the engine's match fires and compacts the
-> session anyway, with no `CommandRecord` at all. So today, a typed
-> `/compact` (one slash) is the only reliable, recorded path; a typed
-> `//compact` (two slashes), like a non-typed `/compact` from any
-> source, still compacts, just through the OLD unrecorded mechanism, not
-> this document's `//x` promise. Removing the engine's own intercept
-> (Task 9) removes this whole callout in one edit; nothing else in this
-> document depends on it.
+> **Two exceptions to the `//x` escape.** Rule 3 promises literal text
+> for `//name`. Two paths still act on that text anyway.
+>
+> 1. **The engine's exact `/compact` intercept, on any session, while
+>    Task 9 stays held.** `resolvePromptCommand` unescapes a typed
+>    `//compact` to the text `/compact` (rule 3), but that text is not a
+>    command — `Resolve` returns `ErrNotCommand` for it — so it is sent
+>    on as an ordinary prompt. The engine's own exact-text match (above)
+>    then fires and compacts the session anyway, with no `CommandRecord`
+>    at all. So today, a typed `/compact` (one slash) is the only
+>    reliable, recorded path; a typed `//compact` (two slashes), like a
+>    non-typed `/compact` from any source, still compacts — through the
+>    OLD, unrecorded mechanism. Removing the engine's own intercept
+>    (Task 9) removes this case in one edit.
+> 2. **A delegated session's own CLI vocabulary, permanently.** The
+>    Claude Code CLI reads a leading `/name` in the text it receives as
+>    one of ITS OWN slash commands (`/cost`, `/context`, `/usage`, and
+>    more — section 2). A typed `//x` on a session delegated to that CLI
+>    (`Session.ClaudeCodeDelegated`) still unescapes to `/x`, and that
+>    text still reaches the CLI as this turn's own input
+>    (`dispatchClaudeCodeTurn`), in `harness run` and `harness serve`
+>    alike. Harness cannot keep it literal there: the CLI owns that
+>    name, not harness.
 
 Three reasons, in order of weight.
 
@@ -450,9 +458,9 @@ A typed line goes to `command.Registry.Resolve`. Four outcomes follow.
 - **Not a command** (`command.ErrNotCommand`): no record is journaled;
   the line is sent on as an ordinary prompt. `//x` becomes the literal
   text `/x` here, and only here — a non-typed `//x` is never resolved,
-  and reaches the model, or the queue, exactly as typed. `//compact` is
-  the one case where that unresolved text can still trigger a side
-  effect downstream: see the "Known gap" callout in section 5.
+  and reaches the model, or the queue, exactly as typed. Two cases still
+  act on that unresolved text downstream: see the "Two exceptions"
+  callout in section 5.
 - **Unknown name** (`command.UnknownCommandError`): no record is
   journaled; the line stays a prompt, sent on unchanged, exactly like an
   unresolved non-typed line.
@@ -681,9 +689,8 @@ Name the failure first.
 - A typed `//x` resolves to `handled=false` and the literal text `/x`,
   never a `CommandRecord` (`server/command_resolve_test.go`'s `//model x`
   case). A non-typed `//x` reaches the model, or the queue, unchanged.
-  For `//compact` specifically, whether the resulting text `/compact`
-  then compacts through the engine is the separate "Known gap" callout
-  in section 5, not this rule.
+  Whether that unescaped text then acts as a command downstream is the
+  separate "Two exceptions" callout in section 5, not this rule.
 - A typed `/queue-clear` records `unsupported` with
   `"Not available in this client."` and the queue is untouched.
   Red-verify against `serveModeOps`.
