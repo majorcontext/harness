@@ -118,15 +118,9 @@ func TestGetSessionColdAnswersFromIndex(t *testing.T) {
 	}
 }
 
-// TestColdContextSuppressesClaudeCodeAggregate is the round 11 finding
-// (server/handlers.go:302): contextJSONForInfo and contextJSONForIndex
-// copied LastPromptTokens straight through, and for a claude-code session
-// that value is recClaudeCodeUsage's whole-turn aggregate, not prompt
-// occupancy — the same untrustworthy number ContextGauge already refuses
-// to report for a resident session with no live get_context_usage
-// reading. A wake reads GET /session/status or a cold GET /session/{id}
-// first, so both must report the resident gauge's own unknown (0, 0) pair
-// for claude-code, while a native session's real usage is unaffected.
+// A claude-code session's persisted LastPromptTokens is a whole-turn
+// aggregate, not prompt occupancy, so both cold reads must report the
+// unknown pair the resident gauge reports.
 func TestColdContextSuppressesClaudeCodeAggregate(t *testing.T) {
 	bin := buildFakeClaudeForServer(t)
 	dir := t.TempDir()

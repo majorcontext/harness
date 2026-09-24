@@ -2932,46 +2932,40 @@ func TestApplyClaudeCodeContextUsageResponseRejectsMalformed(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
-	bin := buildFakeClaude(t)
-	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
-
-	s := NewSession(Config{
-		SessionDir: t.TempDir(),
-		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
-		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
-	})
-
-	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
-		t.Fatalf("Prompt: %v", err)
+func TestClaudeCodeContextGaugeFromCLI(t *testing.T) {
+	cases := []struct {
+		name     string
+		mode     string
+		prompt   string
+		wantUsed int
+	}{
+		{"get_context_usage reply", "", "hi", 15_554},
+		{"compact_boundary post_tokens", "compact_boundary", "keep going", 7_000},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := buildFakeClaude(t)
+			if c.mode != "" {
+				t.Setenv("FAKE_CLAUDE_MODE", c.mode)
+			}
+			t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
 
-	if got := s.ContextWindowTokens(); got != 1_000_000 {
-		t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
-	}
-	if used, ok := s.ContextUsedTokens(); !ok || used != 15_554 {
-		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
-	}
-}
+			s := NewSession(Config{
+				SessionDir: t.TempDir(),
+				Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+				ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+			})
 
-// compact_metadata.post_tokens must reach the gauge once a live window is
-// known, not stay decoded-but-unused.
-func TestClaudeCodeCompactBoundaryFeedsPostTokensIntoGauge(t *testing.T) {
-	bin := buildFakeClaude(t)
-	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
-	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
+			if _, err := s.Prompt(context.Background(), c.prompt); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
 
-	s := NewSession(Config{
-		SessionDir: t.TempDir(),
-		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
-		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
-	})
-
-	if _, err := s.Prompt(context.Background(), "keep going"); err != nil {
-		t.Fatalf("Prompt: %v", err)
-	}
-
-	if window, used, live := s.ContextGauge(); window != 1_000_000 || used != 7_000 || !live {
-		t.Errorf("ContextGauge() = %d, %d, %v; want 1000000, 7000, true", window, used, live)
+			if got := s.ContextWindowTokens(); got != 1_000_000 {
+				t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
+			}
+			if used, ok := s.ContextUsedTokens(); !ok || used != c.wantUsed {
+				t.Errorf("ContextUsedTokens() = %d, %v; want %d, true", used, ok, c.wantUsed)
+			}
+		})
 	}
 }
