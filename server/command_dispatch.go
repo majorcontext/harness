@@ -93,17 +93,35 @@ func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 // own goroutine, already holding the admitCommand slot this function's
 // deferred wg.Done releases.
 //
-// sess is the object the command's "accepted" record was already written
-// through — it is NOT reused for the terminal write. serveOpHandlers[op]
-// performs its own independent session lookup/cold-load, and residency
-// eviction can happen in the gap between the two (sess is not running, so
-// it is an ordinary LRU eviction candidate — see mutableSession and
-// evictResidentLocked). Writing the terminal record through a stale sess
-// would split one on-disk log across two live *engine.Session objects, the
-// exact hazard handleSetModel's own doc comment names. recordCommandTerminal
-// re-resolves fresh instead.
-func (s *Server) runCommand(sess *engine.Session, id string, rec message.CommandRecord, res command.Resolution) {
+// The accepted record's own *engine.Session is NOT passed in for the
+// terminal write. serveOpHandlers[op] performs its own independent session
+// lookup/cold-load, and residency eviction can happen in the gap between
+// the two (that object is not running, so it is an ordinary LRU eviction
+// candidate — see mutableSession and evictResidentLocked). Writing the
+// terminal record through a stale reference would split one on-disk log
+// across two live *engine.Session objects, the exact hazard
+// handleSetModel's own doc comment names. recordCommandTerminal re-resolves
+// fresh instead.
+//
+// A deferred recover guards serveOpHandlers[op]: net/http recovers a
+// per-request handler panic itself, but this call runs off the request
+// goroutine, so an unrecovered panic here would crash the process instead
+// of failing one command. Recovering writes a failed terminal record rather
+// than leaving the command "accepted" forever, and never re-panics.
+func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Resolution) {
 	defer s.wg.Done()
+
+	typed := typedCommandName(rec.Line)
+	defer func() {
+		if r := recover(); r != nil {
+			s.reportError(fmt.Errorf("command %s: handler panic: %v", rec.ID, r))
+			rec.Status = message.CommandFailed
+			rec.Text = fmt.Sprintf("/%s failed: internal error", typed)
+			rec.Result = nil
+			rec.ResultTruncated = false
+			s.recordCommandTerminal(id, rec)
+		}
+	}()
 
 	rt := opRoutes[res.Spec.Op]
 	body := commandRouteBody(res.Spec.Op, res.Args)
@@ -131,7 +149,6 @@ func (s *Server) runCommand(sess *engine.Session, id string, rec message.Command
 	cw := newCommandResponseWriter()
 	serveOpHandlers[res.Spec.Op](s, cw, req)
 
-	typed := typedCommandName(rec.Line)
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining())
 	s.recordCommandTerminal(id, rec)
 }
@@ -181,7 +198,11 @@ func commandOutcome(op command.Op, typed string, code int, body []byte, draining
 		if len(body) > commandResultCap {
 			return message.CommandSucceeded, text, nil, true
 		}
-		if len(body) > 0 {
+		// A handler that never calls writeJSON (none does today) could hand
+		// back a non-JSON 2xx body; embedding it verbatim as Result would
+		// fail writeRecord's own marshal (json.RawMessage validates on
+		// encode) and strand the command "accepted" until the next boot.
+		if len(body) > 0 && json.Valid(body) {
 			result = json.RawMessage(body)
 		}
 		return message.CommandSucceeded, text, result, false

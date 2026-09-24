@@ -221,8 +221,7 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 		SourceID:    prov.SourceID,
 		SourceLabel: prov.SourceLabel,
 	}
-	switch {
-	case len(blobs) > 0:
+	if len(blobs) > 0 {
 		rec.Status = message.CommandFailed
 		rec.Text = fmt.Sprintf("/%s takes no attachments; nothing ran", typed)
 		return "", s.writeCommand(w, route, id, seq, rec, nil)
@@ -306,7 +305,7 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		writeJSON(w, http.StatusAccepted, enqueueResponse{Status: "command", Watermark: sess.EnqueueSeq(), Command: receipt})
 	}
 	if dispatching {
-		go s.runCommand(sess, id, rec, *res)
+		go s.runCommand(id, rec, *res)
 	}
 	return true
 }

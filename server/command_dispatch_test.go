@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/message"
 )
 
@@ -68,5 +69,43 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 	cmds := st.sess.Commands()
 	if len(cmds) != 1 || cmds[0].Status != message.CommandSucceeded {
 		t.Fatalf("live resident session's Commands() = %+v, want one succeeded command", cmds)
+	}
+}
+
+// TestRunCommandHandlerPanicRecordsFailed: a serveOpHandlers panic must not
+// crash the process — runCommand runs off the request goroutine, so
+// net/http's own per-request recover never reaches it. Failure: the
+// goroutine's panic propagates unrecovered and takes the whole process down
+// instead of leaving one command "failed".
+func TestRunCommandHandlerPanicRecordsFailed(t *testing.T) {
+	prov := newCapturingProvider()
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+
+	orig := serveOpHandlers[command.OpStatus]
+	serveOpHandlers[command.OpStatus] = func(*Server, http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}
+	t.Cleanup(func() { serveOpHandlers[command.OpStatus] = orig })
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/status"}},
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	accepted := sse.waitFor(t, "command")
+	if accepted.Command == nil || accepted.Command.Status != message.CommandAccepted {
+		t.Fatalf("first command event = %+v, want accepted", accepted.Command)
+	}
+	terminal := sse.waitFor(t, "command")
+	if terminal.Command == nil || terminal.Command.Status != message.CommandFailed {
+		t.Fatalf("terminal command event = %+v, want failed", terminal.Command)
+	}
+	want := "/status failed: internal error"
+	if terminal.Command.Text != want {
+		t.Errorf("terminal text = %q, want %q", terminal.Command.Text, want)
 	}
 }

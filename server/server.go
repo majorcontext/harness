@@ -430,13 +430,11 @@ type Server struct {
 	// bounded by the number of message IDs, which are small, so retaining it for
 	// unloaded sessions is cheap and keeps replay/reconcile correct.
 	seen map[string]map[string]bool
-	// commandSeen maps session ID -> "id\x00status" (see commandSeenKey) for
-	// every durable "command" event this process has journaled: the
-	// dedupe that lets a resident session's own Publish call (the live
-	// path) and reconcile's boot-time backfill (the crash-recovery path)
-	// agree without ever double-journaling the same (session, command id,
-	// status) record — see commandSeenKey's own doc comment. Never evicted,
-	// same rationale as seen above.
+	// commandSeen maps session ID -> "id\x00status" (see commandSeenKey):
+	// reconcile's own dedupe against records loadJournal already replayed at
+	// boot, so its backfill loop journals a session's own repaired/pending
+	// commands exactly once — see commandSeenKey's own doc comment. Never
+	// evicted, same rationale as seen above.
 	commandSeen map[string]map[string]bool
 	sessions    map[string]*sessionState // in-memory (resident) sessions
 

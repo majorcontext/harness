@@ -497,14 +497,11 @@ func (s *Server) Publish(ev engine.Event) {
 		})
 	case engine.EventCommand:
 		// Journal every live command record unconditionally — this call site
-		// IS the first sighting for a resident session's own dispatch. Mark
-		// it seen afterward so reconcile's backfill (a LATER boot's reload of
-		// this same command) recognizes it already journaled and skips it —
-		// see commandSeen's own doc comment.
+		// IS the first sighting for a resident session's own dispatch.
+		// commandSeen is not marked here: nothing reads it again before the
+		// next boot's own loadJournal rebuilds it from the durable journal
+		// this call just wrote to (see commandSeen's own doc comment).
 		s.emitDurable(Event{Type: evtCommand, SessionID: ev.SessionID, Command: ev.Command})
-		s.mu.Lock()
-		s.markCommandSeenLocked(ev.SessionID, ev.Command.ID, ev.Command.Status)
-		s.mu.Unlock()
 	}
 }
 
@@ -1710,9 +1707,10 @@ func (s *Server) reconcile() error {
 		// (see Session.RepairInterruptedCommands's own doc comment). Never
 		// fail boot on this: report and continue, exactly like an unreadable
 		// session log above.
-		if _, err := sess.RepairInterruptedCommands(func(name string) string {
+		n, err := sess.RepairInterruptedCommands(func(name string) string {
 			return fmt.Sprintf("harness restarted before /%s finished; it will not run again", name)
-		}); err != nil {
+		})
+		if err != nil {
 			s.reportError(fmt.Errorf("session %s repair interrupted commands: %w", id, err))
 		}
 		for _, c := range sess.Commands() {
@@ -1722,6 +1720,13 @@ func (s *Server) reconcile() error {
 			s.markCommandSeenLocked(id, c.ID, c.Status)
 			cp := c
 			s.emitDurableLocked(&Event{Type: evtCommand, SessionID: id, Command: &cp})
+		}
+		if n > 0 {
+			// The repair wrote through this LoadSession's own handles, opened
+			// only for this pass. Release them now rather than leaving a
+			// second append handle on the log open for the rest of the
+			// process's life — this session is not otherwise resident yet.
+			sess.ReleaseFiles()
 		}
 	}
 	return nil
