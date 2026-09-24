@@ -38,7 +38,10 @@ type Event struct {
 	RecordedAt time.Time        `json:"recorded_at,omitzero"`
 	Status     string           `json:"status,omitempty"`
 	Message    *message.Message `json:"message,omitempty"`
-	Model      message.ModelRef `json:"model,omitzero"`
+	// Command is carried by the durable "command" record only, mirroring
+	// engine.Event.Command — see evtCommand's own doc comment.
+	Command *message.CommandRecord `json:"command,omitempty"`
+	Model   message.ModelRef       `json:"model,omitzero"`
 	// Effort is a *message.Effort, not a bare message.Effort with omitempty,
 	// for the same reason QueueLen below is a *int: an "effort" record must
 	// tell "cleared to the provider default" (EffortUnset, an explicit
@@ -317,6 +320,12 @@ const (
 	// the session that a tab connecting later must be able to learn — see
 	// engine.EventClaudeCodeCompacted's own doc comment.
 	evtClaudeCodeCompacted = "compaction.claude_code"
+	// evtCommand mirrors engine.EventCommand: the durable record of a
+	// resolved slash command's dispatch or status change (see
+	// message.CommandRecord). Publish journals it directly on every live
+	// EventCommand, and reconcile backfills any record a resident session's
+	// own OnEvent never reached (see commandSeen).
+	evtCommand = "command"
 )
 
 const journalName = "events.jsonl"
@@ -486,6 +495,16 @@ func (s *Server) Publish(ev engine.Event) {
 			PreTokens:  ev.ClaudeCodeCompactPreTokens,
 			PostTokens: ev.ClaudeCodeCompactPostTokens,
 		})
+	case engine.EventCommand:
+		// Journal every live command record unconditionally — this call site
+		// IS the first sighting for a resident session's own dispatch. Mark
+		// it seen afterward so reconcile's backfill (a LATER boot's reload of
+		// this same command) recognizes it already journaled and skips it —
+		// see commandSeen's own doc comment.
+		s.emitDurable(Event{Type: evtCommand, SessionID: ev.SessionID, Command: ev.Command})
+		s.mu.Lock()
+		s.markCommandSeenLocked(ev.SessionID, ev.Command.ID, ev.Command.Status)
+		s.mu.Unlock()
 	}
 }
 
@@ -1593,6 +1612,34 @@ func (s *Server) isSeenLocked(sessionID, msgID string) bool {
 	return s.seen[sessionID][msgID]
 }
 
+// commandSeenKey composes commandSeen's inner-map key: a command ID alone
+// dedupes only the FIRST record of a command's life (its accepted record) —
+// a later terminal record for the same ID is a distinct fact that must still
+// journal, so status joins ID in the key. NUL cannot occur in either part
+// (an ID is engine's own newID output; status is one of the fixed
+// CommandStatus constants), so it makes a safe, unambiguous separator.
+func commandSeenKey(id string, status message.CommandStatus) string {
+	return id + "\x00" + string(status)
+}
+
+// markCommandSeenLocked records that sessionID's command id has already
+// journaled a durable "command" event at status — see commandSeenKey and
+// Server.commandSeen's own doc comment. Caller holds s.mu.
+func (s *Server) markCommandSeenLocked(sessionID, id string, status message.CommandStatus) {
+	m := s.commandSeen[sessionID]
+	if m == nil {
+		m = make(map[string]bool)
+		s.commandSeen[sessionID] = m
+	}
+	m[commandSeenKey(id, status)] = true
+}
+
+// isCommandSeenLocked reports whether sessionID's command id already
+// journaled a durable "command" event at status. Caller holds s.mu.
+func (s *Server) isCommandSeenLocked(sessionID, id string, status message.CommandStatus) bool {
+	return s.commandSeen[sessionID][commandSeenKey(id, status)]
+}
+
 // sessionSeqLocked returns the highest durable seq recorded for a session, or 0.
 // Caller holds s.mu.
 func (s *Server) sessionSeqLocked(sessionID string) int64 {
@@ -1651,6 +1698,26 @@ func (s *Server) reconcile() error {
 			s.markSeenLocked(id, m.ID)
 			s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
 		}
+
+		// A command still "accepted" never reached a terminal status before
+		// this session's process died or restarted — its dispatch will not
+		// resume, so mark it interrupted rather than leave it stuck forever
+		// (see Session.RepairInterruptedCommands's own doc comment). Never
+		// fail boot on this: report and continue, exactly like an unreadable
+		// session log above.
+		if _, err := sess.RepairInterruptedCommands(func(name string) string {
+			return fmt.Sprintf("harness restarted before /%s finished; it will not run again", name)
+		}); err != nil {
+			s.reportError(fmt.Errorf("session %s repair interrupted commands: %w", id, err))
+		}
+		for _, c := range sess.Commands() {
+			if s.isCommandSeenLocked(id, c.ID, c.Status) {
+				continue
+			}
+			s.markCommandSeenLocked(id, c.ID, c.Status)
+			cp := c
+			s.emitDurableLocked(&Event{Type: evtCommand, SessionID: id, Command: &cp})
+		}
 	}
 	return nil
 }
@@ -1699,6 +1766,9 @@ func (s *Server) loadJournal(data []byte) {
 		}
 		if ev.Type == evtMessage && ev.Message != nil {
 			s.markSeenLocked(ev.SessionID, ev.Message.ID)
+		}
+		if ev.Type == evtCommand && ev.Command != nil {
+			s.markCommandSeenLocked(ev.SessionID, ev.Command.ID, ev.Command.Status)
 		}
 		if ev.Type == evtTurnEnd {
 			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}

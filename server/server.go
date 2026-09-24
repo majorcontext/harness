@@ -429,8 +429,16 @@ type Server struct {
 	// never evicted when resident sessions are unloaded for MaxResident. It is
 	// bounded by the number of message IDs, which are small, so retaining it for
 	// unloaded sessions is cheap and keeps replay/reconcile correct.
-	seen     map[string]map[string]bool
-	sessions map[string]*sessionState // in-memory (resident) sessions
+	seen map[string]map[string]bool
+	// commandSeen maps session ID -> "id\x00status" (see commandSeenKey) for
+	// every durable "command" event this process has journaled: the
+	// dedupe that lets a resident session's own Publish call (the live
+	// path) and reconcile's boot-time backfill (the crash-recovery path)
+	// agree without ever double-journaling the same (session, command id,
+	// status) record — see commandSeenKey's own doc comment. Never evicted,
+	// same rationale as seen above.
+	commandSeen map[string]map[string]bool
+	sessions    map[string]*sessionState // in-memory (resident) sessions
 
 	// lastRequest holds the latest fully-assembled model request per session,
 	// in memory only (never persisted): GET /session/{id}/request reads it, and
@@ -883,6 +891,7 @@ func New(opts Options) (*Server, error) {
 		sinkTypes:         eventSinkTypeSet(opts.EventSinkIncludeTypes),
 		subs:              make(map[*subscriber]struct{}),
 		seen:              make(map[string]map[string]bool),
+		commandSeen:       make(map[string]map[string]bool),
 		sessions:          make(map[string]*sessionState),
 		lastRequest:       make(map[string]*requestSnapshot),
 		lastReqHash:       make(map[string]string),
