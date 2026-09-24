@@ -142,3 +142,84 @@ func TestOpRoutesMatchTheMux(t *testing.T) {
 		}
 	}
 }
+
+// TestServeModeOpsTotal pins the support matrix in both directions,
+// mirroring cmd/harness/command_test.go's TestRunModeOpsAreDeclared:
+// every Op named by a registry KindControl spec is a key in
+// serveModeOps, and no key names an Op outside the registry. A new Op
+// that nobody declares fails here instead of reaching GET /commands as
+// silently unsupported.
+func TestServeModeOpsTotal(t *testing.T) {
+	registry := command.NewRegistry()
+	control := map[command.Op]bool{}
+	for _, s := range registry.All() {
+		if s.Kind == command.KindControl {
+			control[s.Op] = true
+		}
+	}
+	for op := range serveModeOps {
+		if !control[op] {
+			t.Errorf("serveModeOps names %q, which is not a control Op", op)
+		}
+	}
+	for op := range control {
+		if _, ok := serveModeOps[op]; !ok {
+			t.Errorf("control Op %q is neither supported nor refused by serveModeOps", op)
+		}
+	}
+}
+
+// TestCommandsServeSupportTotal pins GET /commands' serve_support: a
+// key for every registry entry name and no other key, with new,
+// resume, quit, and queue-clear reported unsupported with the exact
+// published reason. Failure here means the console dims a command that
+// works, or offers one that does not.
+func TestCommandsServeSupportTotal(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, data := h.do("GET", "/commands", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /commands status %d: %s", resp.StatusCode, data)
+	}
+	var body struct {
+		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	registry := command.NewRegistry()
+	wantUnsupported := map[string]bool{
+		"new": true, "resume": true, "quit": true, "queue-clear": true,
+	}
+
+	got := map[string]serveSupportJSON{}
+	for k, v := range body.ServeSupport {
+		got[k] = v
+	}
+	for _, s := range registry.All() {
+		entry, ok := got[s.Name]
+		if !ok {
+			t.Errorf("serve_support missing %q", s.Name)
+			continue
+		}
+		delete(got, s.Name)
+		if wantUnsupported[s.Name] {
+			if entry.Supported {
+				t.Errorf("serve_support[%q].supported = true, want false", s.Name)
+			}
+			if entry.Reason != serveUnsupportedReason {
+				t.Errorf("serve_support[%q].reason = %q, want %q", s.Name, entry.Reason, serveUnsupportedReason)
+			}
+			continue
+		}
+		if !entry.Supported {
+			t.Errorf("serve_support[%q].supported = false, want true", s.Name)
+		}
+		if entry.Reason != "" {
+			t.Errorf("serve_support[%q].reason = %q, want empty", s.Name, entry.Reason)
+		}
+	}
+	for name := range got {
+		t.Errorf("serve_support has surplus entry %q", name)
+	}
+}

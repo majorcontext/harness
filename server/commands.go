@@ -28,6 +28,43 @@ var opRoutes = map[command.Op]route{
 	command.OpProcessList:    {"GET", "/process"},
 }
 
+// serveModeOps declares which control Ops serve mode resolves through
+// its own routes, total over every command.Op: a new Op with no entry
+// here fails TestServeModeOpsTotal instead of silently reaching a
+// client as supported. queue-clear stays false because it is out of
+// scope for this plan; DELETE /session/{id}/queue already exists and a
+// future task can flip it. See docs/design/slash-commands.md §5.
+var serveModeOps = map[command.Op]bool{
+	command.OpCompact:        true,
+	command.OpSetModel:       true,
+	command.OpSetThinking:    true,
+	command.OpSetServiceTier: true,
+	command.OpAbort:          true,
+	command.OpSetGoal:        true,
+	command.OpClearGoal:      true,
+	command.OpQueueList:      true,
+	command.OpQueueClear:     false,
+	command.OpStatus:         true,
+	command.OpProcessList:    true,
+}
+
+// serveUnsupportedReason is published verbatim to the person typing. It
+// names no route and no internal term.
+const serveUnsupportedReason = "Not available in this client."
+
+// serveSupport reports whether serve mode resolves spec. A frontend
+// command names no route: the frontend owns the session pointer, not
+// serve mode.
+func serveSupport(spec *command.Spec) (supported bool, reason string) {
+	if spec.Kind == command.KindFrontend {
+		return false, serveUnsupportedReason
+	}
+	if !serveModeOps[spec.Op] {
+		return false, serveUnsupportedReason
+	}
+	return true, ""
+}
+
 type commandArgJSON struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
@@ -53,12 +90,23 @@ type commandEntryJSON struct {
 	Path                string `json:"path,omitempty"`
 }
 
+type serveSupportJSON struct {
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // handleCommands returns the resolved registry. A frontend renders its
-// menu and its argument hints from this response alone.
+// menu and its argument hints from this response alone, but a client
+// that resolves commands itself, such as serve mode's console, also
+// needs serve_support to know which entries it can run without a
+// frontend in front of it.
 func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 	specs := command.NewRegistry().All()
 	out := make([]commandEntryJSON, 0, len(specs))
+	serveSupportOut := make(map[string]serveSupportJSON, len(specs))
 	for _, spec := range specs {
+		supported, reason := serveSupport(spec)
+		serveSupportOut[spec.Name] = serveSupportJSON{Supported: supported, Reason: reason}
 		e := commandEntryJSON{
 			Name:        spec.Name,
 			Aliases:     spec.Aliases,
@@ -80,6 +128,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Commands []commandEntryJSON `json:"commands"`
-	}{Commands: out})
+		Commands     []commandEntryJSON          `json:"commands"`
+		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
+	}{Commands: out, ServeSupport: serveSupportOut})
 }
