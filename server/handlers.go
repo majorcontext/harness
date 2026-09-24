@@ -1265,19 +1265,27 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		// residency race in coldWindowedBootstrap: fall through to the
 		// always-correct path below, windowed to the same tail limit names.
 	}
-	msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
+	msgs, seq, liveFrom, seqs, sess, ok := s.transcriptSyncedThrough(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
+	// fromFirst is true exactly when the window below still starts at
+	// history's own first message: windowTranscriptTail returns msgs
+	// unchanged whenever limit does not truncate it, and limit == 0 never
+	// windows at all.
+	fromFirst := true
 	if limit > 0 {
+		before := len(msgs)
 		msgs, seqs = windowTranscriptTail(msgs, seqs, limit)
+		fromFirst = len(msgs) == before
 	}
 	writeJSON(w, http.StatusOK, transcriptJSON{
 		Messages:   marshalMessages(msgs),
 		StreamFrom: seq,
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
+		Commands:   engine.CommandsInWindow(sess.Commands(), msgs, fromFirst),
 	})
 }
 
@@ -1353,6 +1361,7 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 		StreamFrom: seq,
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
+		Commands:   page.Commands,
 	}, true
 }
 
@@ -1389,11 +1398,18 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 // and docs/design/transcript-tail-seqs.md for the caller this exists for
 // and why the two numbering spaces must never be confused). A caller that
 // reads only Messages/StreamFrom/LiveFrom is unaffected.
+//
+// Commands is a FIFTH, additive field: the folded message.CommandRecord
+// values whose anchor sits inside the returned window (engine.
+// CommandsInWindow), always present and never nil — [] for a window with
+// none. A caller that reads only Messages/StreamFrom/LiveFrom/Seqs is
+// unaffected.
 type transcriptJSON struct {
-	Messages   []json.RawMessage `json:"messages"`
-	StreamFrom int64             `json:"stream_from"`
-	LiveFrom   int64             `json:"live_from"`
-	Seqs       []int64           `json:"seqs,omitempty"`
+	Messages   []json.RawMessage       `json:"messages"`
+	StreamFrom int64                   `json:"stream_from"`
+	LiveFrom   int64                   `json:"live_from"`
+	Seqs       []int64                 `json:"seqs,omitempty"`
+	Commands   []message.CommandRecord `json:"commands"`
 }
 
 // marshalMessages renders messages for the wire, one at a time, replacing
@@ -1446,6 +1462,10 @@ type messagePageJSON struct {
 	Total int `json:"total"`
 	// HasMore reports whether older messages exist before FirstSeq.
 	HasMore bool `json:"has_more"`
+	// Commands holds the folded message.CommandRecord values whose anchor
+	// sits inside this page (engine.CommandsInWindow), always present and
+	// never nil — [] for a page with none.
+	Commands []message.CommandRecord `json:"commands"`
 }
 
 // handleMessagePage answers GET /session/{id}/message?before_seq=N&limit=K:
@@ -1491,6 +1511,7 @@ func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id s
 		LastSeq:  page.LastSeq,
 		Total:    page.Total,
 		HasMore:  page.HasMore,
+		Commands: page.Commands,
 	})
 }
 
@@ -1539,15 +1560,18 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 	// depending on which path answered it.
 	lo, hi, _ := engine.MessagePageWindow(total, beforeSeq, limit)
 	if hi < lo {
-		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total})
+		commands := engine.CommandsInWindow(sess.Commands(), nil, total == 0)
+		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total, Commands: commands})
 		return
 	}
+	window := msgs[lo-1 : hi]
 	writeJSON(w, http.StatusOK, messagePageJSON{
-		Messages: marshalMessages(msgs[lo-1 : hi]),
+		Messages: marshalMessages(window),
 		FirstSeq: lo,
 		LastSeq:  hi,
 		Total:    total,
 		HasMore:  lo > 1,
+		Commands: engine.CommandsInWindow(sess.Commands(), window, lo == 1),
 	})
 }
 

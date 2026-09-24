@@ -1097,10 +1097,15 @@ func (s *Server) syncMessages(sessionID string) {
 // which durable ordinal its own kept window starts at, and page backward
 // from a real anchor on its FIRST "load older" request instead of
 // re-fetching this same newest page to merely discover one.
-func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, ok bool) {
-	sess, ok := s.lookupSession(id)
+//
+// sess is a FIFTH, additive result: the *engine.Session lookupSession
+// resolved, returned so a caller building the bootstrap envelope's commands
+// field (handleTranscriptBootstrap) can call sess.Commands() without a
+// second lookup.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, sess *engine.Session, ok bool) {
+	sess, ok = s.lookupSession(id)
 	if !ok {
-		return nil, 0, 0, nil, false
+		return nil, 0, 0, nil, nil, false
 	}
 	// Sampled first, before anything else this function does — see the
 	// doc comment above for why tipAtStart must precede sess.History().
@@ -1125,7 +1130,7 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
-	return history, seq, liveFrom, seqs, true
+	return history, seq, liveFrom, seqs, sess, true
 }
 
 // transcriptCursorLocked is transcriptSyncedThrough's own lock section,
