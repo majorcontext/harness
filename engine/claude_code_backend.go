@@ -635,7 +635,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = proc.Kill()
 	}()
 
-	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model)
+	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model, contextUsageGen)
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
 	// goroutine's own doc comment above): signal it to stop, THEN close
@@ -961,7 +961,7 @@ func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []
 // child's process group: that would kill the very background session
 // --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
 // its subsequent cmd.Wait() does not reintroduce this wait.
-func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
+func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, contextUsageGen uint64) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
 	var compactBoundarySeen, compactUnsettled bool
 	settleCompaction := func() {
 		if compactUnsettled {
@@ -1193,6 +1193,15 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					ClaudeCodeCompactPreTokens:  preTokens,
 					ClaudeCodeCompactPostTokens: postTokens,
 				})
+				// Record real post-compaction occupancy against the window
+				// a live get_context_usage snapshot already established
+				// this turn — never invent one. setClaudeCodeContextUsage's
+				// own gen/provider/explicit-window guards apply unchanged.
+				if postTokens > 0 {
+					if window, _, live := s.ContextGauge(); live {
+						s.setClaudeCodeContextUsage(contextUsageGen, postTokens, window)
+					}
+				}
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.

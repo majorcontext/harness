@@ -2953,3 +2953,34 @@ func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
 		t.Errorf("ContextUsedTokens() = %d, %v; want 15554, true", used, ok)
 	}
 }
+
+// TestClaudeCodeCompactBoundaryFeedsPostTokensIntoGauge is the red-first
+// test for Fix 2: with Fix 1 in place, ContextGauge goes blank the moment
+// a claude-code turn compacts, because the CLI's own compact_metadata.
+// post_tokens (the authoritative post-compaction occupancy,
+// claude_code_backend.go's "compact_boundary" case) was decoded and
+// forwarded as an event but never fed back into the session's own
+// contextUsage. This turn's get_context_usage query answers FIRST (fixture
+// order: FAKE_CLAUDE_CONTEXT_USAGE responds ahead of the mode switch),
+// establishing a live window, then the same turn's compact_boundary
+// envelope carries post_tokens:7000 — the gauge must show that occupancy
+// against the already-known window, not zero.
+func TestClaudeCodeCompactBoundaryFeedsPostTokensIntoGauge(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
+	t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
+
+	s := NewSession(Config{
+		SessionDir: t.TempDir(),
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+	})
+
+	if _, err := s.Prompt(context.Background(), "keep going"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	if window, used, live := s.ContextGauge(); window != 1_000_000 || used != 7_000 || !live {
+		t.Errorf("ContextGauge() = %d, %d, %v; want 1000000, 7000, true", window, used, live)
+	}
+}

@@ -325,8 +325,9 @@ func main() {
 			"type":    "system",
 			"subtype": "compact_boundary",
 			"compact_metadata": map[string]any{
-				"trigger":    "auto",
-				"pre_tokens": 123456,
+				"trigger":     "auto",
+				"pre_tokens":  123456,
+				"post_tokens": 7000,
 			},
 			"session_id": sessionID,
 		})

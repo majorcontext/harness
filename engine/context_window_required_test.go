@@ -259,6 +259,24 @@ func TestContextGauge(t *testing.T) {
 	if window, used, live := native.ContextGauge(); window != 500_000 || used != 125 || live {
 		t.Errorf("native: ContextGauge() = %d, %d, %v; want 500000, 125, false", window, used, live)
 	}
+
+	// A claude-code session with an explicit configured window and a
+	// LastUsage carried over from the CLI's own whole-turn aggregate, but
+	// no live get_context_usage snapshot: the gauge must report unknown,
+	// never the aggregate — LastUsage is not prompt occupancy for a
+	// delegated session (applyClaudeCodeUsage's own doc comment).
+	explicitClaudeCode := NewSession(Config{
+		Model:               claudeCodeRef,
+		Providers:           prov,
+		ContextWindowTokens: 42_000,
+	})
+	explicitClaudeCode.mu.Lock()
+	explicitClaudeCode.lastUsage = provider.Usage{InputTokens: 1_700_000}
+	explicitClaudeCode.haveLastUsage = true
+	explicitClaudeCode.mu.Unlock()
+	if window, used, live := explicitClaudeCode.ContextGauge(); window != 0 || used != 0 || live {
+		t.Errorf("claude-code explicit window + stale LastUsage: ContextGauge() = %d, %d, %v; want 0, 0, false", window, used, live)
+	}
 }
 
 func TestSetClaudeCodeContextUsageRejects(t *testing.T) {

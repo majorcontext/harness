@@ -560,6 +560,16 @@ the CLI's own live `get_context_usage` reading when one exists, not this
 section's `InputTokens + CacheReadTokens + CacheWriteTokens` expression,
 since a delegated turn's `Session.LastUsage` is a whole-turn aggregate
 across every internal call and subagent, never one prompt's occupancy.
+`ContextGauge` never falls back to `LastUsage` for a claude-code session:
+with no live reading, it reports the unknown pair `(0, 0)` rather than the
+CLI's aggregate, which can exceed any real window or read near-zero right
+after the CLI's own turn happens to compact. A `compact_boundary`
+envelope's `post_tokens` feeds that live reading directly — the CLI's own
+authoritative post-compaction occupancy — so the gauge shows real occupancy
+the moment compaction settles instead of going blank; it is recorded only
+against a window a prior live snapshot already established this turn, and
+only through the same generation/provider/explicit-window guards
+`setClaudeCodeContextUsage` already enforces.
 
 ## 5. Non-goals
 
