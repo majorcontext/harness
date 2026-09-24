@@ -1,7 +1,7 @@
 // Resolved slash commands are journaled beside history, never inside it: a
 // command never becomes a recMessage and never reaches a provider request
-// (see message.CommandRecord's own doc comment and docs/design/serve-
-// commands.md).
+// (see message.CommandRecord's own doc comment and docs/design/
+// slash-commands.md's "Serve-mode resolution" section).
 package engine
 
 import (

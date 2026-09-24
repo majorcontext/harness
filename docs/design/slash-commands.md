@@ -117,8 +117,11 @@ spaces are the same condition, and keeping the difference would make them
 look different in a log.
 
 A line that does not start with `/` is not a command. `Resolve` reports
-that, and the caller sends the line unchanged. An unknown `/name` is an
-error. A frontend must not send it to the model as literal text.
+that, and the caller sends the line unchanged. For `harness run`, an
+unknown `/name` is an error: a frontend must not send it to the model as
+literal text, with one exception below. `harness serve` differs: a typed
+unknown `/name` stays a prompt, sent on unchanged, for every session —
+see "Serve-mode resolution"'s "Resolving the line" section.
 
 One case sends an unknown `/name` on as literal text, on purpose: a
 session delegated to the Claude Code CLI (`engine.Session.ClaudeCodeDelegated`).
@@ -253,12 +256,23 @@ fold, so `RunCompactCommand` issues the CLI's own compact command instead.
 `Session.Prompt` is ever called: `resolvePromptCommand`
 (`server/commands.go`) runs first, on every prompt-landing route, for
 every op serve mode supports — not `/compact` alone. See "Serve-mode
-resolution" below for the full rule. The engine's own exact-text
-`/compact` match above still runs, unchanged, for every other path into
-`Session.Prompt`: `harness run`, and any `harness serve` prompt whose
-declared source is not `typed`. Removing that intercept from the engine
-is a separate, undecided change; this document names the exception, not
-a decision to drop it.
+resolution" below for the full rule.
+
+> **Known gap while the engine's `/compact` intercept above stays held
+> (Task 9 undecided):** the engine's own exact-text match still runs for
+> every prompt that reaches `Session.Prompt` unresolved as a command —
+> `harness run`, any `harness serve` prompt whose declared source is not
+> `typed`, AND a typed `//compact` line. `resolvePromptCommand` unescapes
+> `//compact` to the text `/compact` (rule 3), but that text is not a
+> command — `Resolve` returns `ErrNotCommand` for it — so it is sent on
+> as an ordinary prompt, where the engine's match fires and compacts the
+> session anyway, with no `CommandRecord` at all. So today, a typed
+> `/compact` (one slash) is the only reliable, recorded path; a typed
+> `//compact` (two slashes), like a non-typed `/compact` from any
+> source, still compacts, just through the OLD unrecorded mechanism, not
+> this document's `//x` promise. Removing the engine's own intercept
+> (Task 9) removes this whole callout in one edit; nothing else in this
+> document depends on it.
 
 Three reasons, in order of weight.
 
@@ -433,13 +447,15 @@ typed the line.
 
 A typed line goes to `command.Registry.Resolve`. Four outcomes follow.
 
-- **Not a command** (`command.ErrNotCommand`): the line is sent on
-  unchanged. `//x` becomes the literal text `/x` here, and only here — a
-  non-typed `//x` is never resolved, and reaches the model, or the
-  queue, exactly as typed.
-- **Unknown name** (`command.UnknownCommandError`): the line stays a
-  prompt, sent on unchanged, exactly like an unresolved non-typed line.
-  No record is journaled.
+- **Not a command** (`command.ErrNotCommand`): no record is journaled;
+  the line is sent on as an ordinary prompt. `//x` becomes the literal
+  text `/x` here, and only here — a non-typed `//x` is never resolved,
+  and reaches the model, or the queue, exactly as typed. `//compact` is
+  the one case where that unresolved text can still trigger a side
+  effect downstream: see the "Known gap" callout in section 5.
+- **Unknown name** (`command.UnknownCommandError`): no record is
+  journaled; the line stays a prompt, sent on unchanged, exactly like an
+  unresolved non-typed line.
 - **Bad arguments** (`command.ArgsError`): a `failed` record is
   journaled at once, with `Resolve`'s own error text. Nothing runs.
 - **A known command**: a record is journaled, then one of four things
@@ -497,9 +513,10 @@ it to the fold's own summary id, so the anchor survives however many
 compactions later.
 
 A dispatched command produces exactly two records sharing one `id`:
-`accepted`, then one terminal status. Every other outcome — not a
-command, unknown, bad arguments, an attachment, unsupported, refused —
-produces exactly one. `POST /session/{id}/enqueue`'s own idempotency
+`accepted`, then one terminal status. Bad arguments, an attachment,
+unsupported, and refused each produce exactly one record. Not a command
+and unknown name produce none — see "Resolving the line" above.
+`POST /session/{id}/enqueue`'s own idempotency
 `seq` covers a command exactly like an ordinary prompt: a duplicate
 `seq` answers a clean `{"status": "duplicate", "watermark": N}`, and
 nothing runs a second time.
@@ -513,8 +530,10 @@ A resolved command reaches a client three ways:
   — replayable from any `from=<seq>` like every other durable event.
 - `commands` on `GET /session/{id}/message`'s bootstrap (`stream_from`)
   and page (`before_seq`/`limit`) responses: the folded records whose
-  `after_message_id` anchor falls inside the returned window, always
-  present, `[]` when empty.
+  `after_message_id` anchor falls inside the returned window. When that
+  window starts at the session's first message, this also holds every
+  record with an empty `after_message_id`. Always present, `[]` when
+  empty.
 - `GET /session/{id}/journal`, as metadata beside its own record:
   `command_id`, `command_name`, and `command_status` — never the full
   record, matching every other journal field's sanitized-metadata rule.
@@ -659,8 +678,12 @@ Name the failure first.
 - A `prompt_async`/`enqueue`/`send` request with an empty or `api`
   source and text `/compact` stays a plain prompt through
   `resolvePromptCommand`; only `source: "typed"` resolves it.
-- A typed `//compact` resolves to the literal text `/compact`, never a
-  command. A non-typed `//compact` reaches the model unchanged.
+- A typed `//x` resolves to `handled=false` and the literal text `/x`,
+  never a `CommandRecord` (`server/command_resolve_test.go`'s `//model x`
+  case). A non-typed `//x` reaches the model, or the queue, unchanged.
+  For `//compact` specifically, whether the resulting text `/compact`
+  then compacts through the engine is the separate "Known gap" callout
+  in section 5, not this rule.
 - A typed `/queue-clear` records `unsupported` with
   `"Not available in this client."` and the queue is untouched.
   Red-verify against `serveModeOps`.

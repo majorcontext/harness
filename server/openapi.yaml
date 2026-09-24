@@ -239,10 +239,9 @@ components:
             A human-readable outcome sentence. Omitted while `status` is
             `accepted`; present on every terminal status.
         result:
-          type: object
-          additionalProperties: true
           description: >
-            The dispatched route's own 2xx JSON body, capped at 16 KiB.
+            The dispatched route's own 2xx JSON body, capped at 16 KiB —
+            an object for most commands, an array for `/processes`.
             Omitted when the command never dispatched a route, or when
             the body exceeded the cap — see `result_truncated`.
         result_truncated:
@@ -1070,7 +1069,11 @@ components:
           items: { $ref: "#/components/schemas/CommandRecord" }
           description: >
             The folded command records whose `after_message_id` anchor
-            falls inside this page. Always present, `[]` when none — see
+            falls inside this page. When the page starts at the
+            session's first message (`first_seq` is 1), this also holds
+            every record with an empty `after_message_id` — a command
+            recorded before the session's first durable message. Always
+            present, `[]` when none — see
             docs/session-storage-and-queue.md's "Command records" section.
 
     Transcript:
@@ -1177,11 +1180,15 @@ components:
           items: { $ref: "#/components/schemas/CommandRecord" }
           description: >
             The folded command records whose `after_message_id` anchor
-            falls inside the returned window — every folded record, on the
-            unwindowed default call. Always present, `[]` when none — see
-            docs/session-storage-and-queue.md's "Command records" section.
-            A client that only ever reads `messages`/`stream_from`/
-            `live_from`/`seqs` is unaffected.
+            falls inside the returned window. When that window starts at
+            the session's first message (no `limit`, or a `limit` that
+            did not truncate `messages`), this also holds every record
+            with an empty `after_message_id` — a command recorded before
+            the session's first durable message — so it is every folded
+            record on the unwindowed default call. Always present, `[]`
+            when none — see docs/session-storage-and-queue.md's "Command
+            records" section. A client that only ever reads
+            `messages`/`stream_from`/`live_from`/`seqs` is unaffected.
 
     Part:
       type: object

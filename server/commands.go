@@ -15,7 +15,8 @@ import (
 
 // route is the serve-mode answer to one Op. A route is this dispatcher's
 // mapping, not the operation: cmd/harness maps the same Op to a method
-// call. See docs/design/slash-commands.md §5.
+// call. See docs/design/slash-commands.md's "Serve-mode resolution"
+// section.
 type route struct {
 	method string
 	path   string
@@ -164,8 +165,9 @@ type commandReceiptJSON struct {
 // parsePromptProvenance succeeds, before any other branch: it decides
 // whether text is a TYPED slash command and, if so, resolves, records, and
 // (for a dispatchable Op) runs it entirely in process — nothing reaches
-// the model. See docs/design/slash-commands.md §5 and this plan's
-// global-constraints.md for the status/text table this follows exactly.
+// the model. See docs/design/slash-commands.md's "Serve-mode resolution"
+// section and this plan's global-constraints.md for the status/text
+// table this follows exactly.
 //
 // The typed check below filters on the source a CALLER DECLARES on this
 // request — it is not a security boundary against anything that already
