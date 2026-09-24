@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,20 +82,11 @@ func commandIDsOf(cmds []message.CommandRecord) []string {
 	return out
 }
 
+// sameCommandIDs checks fold order too, not just membership:
+// CommandsInWindow promises fold order, and a duplicate can hide a missing
+// record that plain membership would miss.
 func sameCommandIDs(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	seen := make(map[string]bool, len(want))
-	for _, id := range want {
-		seen[id] = true
-	}
-	for _, id := range got {
-		if !seen[id] {
-			return false
-		}
-	}
-	return true
+	return slices.Equal(got, want)
 }
 
 // fourTurnProvider is four scripted assistant turns: enough for a resident

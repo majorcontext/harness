@@ -76,15 +76,16 @@ func TestTypedCompactNeverAppendsUserMessage(t *testing.T) {
 	if terminal.Command == nil {
 		t.Fatal("terminal command event carries no Command")
 	}
-	switch terminal.Command.Status {
-	case message.CommandSucceeded:
-	case message.CommandFailed:
-		want := "/compact did nothing: " + engine.CompactSkipMessage(engine.SkipReasonNotEnoughTurns)
-		if terminal.Command.Text != want {
-			t.Errorf("failed text = %q, want %q", terminal.Command.Text, want)
-		}
-	default:
-		t.Fatalf("terminal command status = %q, want succeeded or failed", terminal.Command.Status)
+	// A fresh session has no turns to fold, so /compact always skips — never
+	// succeeds. Asserting the exact failed text (rather than tolerating
+	// succeeded too) is what makes this test able to catch a regression that
+	// drops commandOutcome's skip_reason -> failed mapping.
+	if terminal.Command.Status != message.CommandFailed {
+		t.Fatalf("terminal command status = %q, want failed", terminal.Command.Status)
+	}
+	want := "/compact did nothing: " + engine.CompactSkipMessage(engine.SkipReasonNotEnoughTurns)
+	if terminal.Command.Text != want {
+		t.Errorf("failed text = %q, want %q", terminal.Command.Text, want)
 	}
 
 	if len(prov.requests) != 0 {
@@ -536,6 +537,46 @@ func TestStatusResultTruncatedOverCap(t *testing.T) {
 	}
 }
 
+// TestCommandOutcomeInvalidBodyOmitsResult: a non-JSON 2xx body must never
+// become Result. Every current handler calls writeJSON, so this cannot
+// happen today, but json.RawMessage validates its bytes when the record it
+// sits inside is marshaled — an invalid Result would fail that marshal and
+// strand the command "accepted" until the next boot. Failure: Result holds
+// bytes that are not valid JSON.
+func TestCommandOutcomeInvalidBodyOmitsResult(t *testing.T) {
+	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusOK, []byte("not json"), false)
+	if status != message.CommandSucceeded {
+		t.Errorf("status = %q, want succeeded", status)
+	}
+	if text != "/status succeeded" {
+		t.Errorf("text = %q, want %q", text, "/status succeeded")
+	}
+	if result != nil {
+		t.Errorf("result = %q, want nil (invalid JSON must never be journaled as a result)", result)
+	}
+	if truncated {
+		t.Error("truncated = true, want false")
+	}
+}
+
+// TestCommandOutcomeDrainingNon2xxIsInterrupted: a route's non-2xx result
+// while the server is draining maps to interrupted with the drain wording,
+// never failed — the global-constraints.md status/text table's own
+// draining row, which nothing else in this package exercised.
+func TestCommandOutcomeDrainingNon2xxIsInterrupted(t *testing.T) {
+	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusInternalServerError, []byte(`{"error":"boom"}`), true)
+	if status != message.CommandInterrupted {
+		t.Errorf("status = %q, want interrupted", status)
+	}
+	want := "harness stopped before /status finished; it will not run again"
+	if text != want {
+		t.Errorf("text = %q, want %q", text, want)
+	}
+	if result != nil || truncated {
+		t.Errorf("result = %q truncated = %v, want nil/false", result, truncated)
+	}
+}
+
 // TestServeOpHandlersCoverSupportedOps keeps serveOpHandlers and opRoutes
 // total over every Op serveModeOps marks supported, and proves the one
 // deliberately unsupported control Op (queue_list's sibling, queue_clear)
@@ -556,5 +597,33 @@ func TestServeOpHandlersCoverSupportedOps(t *testing.T) {
 	}
 	if _, ok := serveOpHandlers[command.OpQueueClear]; ok {
 		t.Error("serveOpHandlers[OpQueueClear] present, want absent")
+	}
+}
+
+// TestTypedCommandRefusedWhileDraining: admitCommand's 503 refusal for a
+// dispatchable typed command while the server drains — driven directly by
+// setting draining, the same admission claimForPrompt's own prompt turns
+// get. Failure: a command still dispatches during drain, or a record lands
+// on the session despite the 503.
+func TestTypedCommandRefusedWhileDraining(t *testing.T) {
+	prov := newCapturingProvider()
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.srv.mu.Lock()
+	h.srv.draining = true
+	h.srv.mu.Unlock()
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("prompt_async status %d, want 503: %s", resp.StatusCode, data)
+	}
+
+	sess := h.sessionDirect(id)
+	if cmds := sess.Commands(); len(cmds) != 0 {
+		t.Fatalf("Commands() = %+v, want none: a 503 refusal must not record anything", cmds)
 	}
 }
