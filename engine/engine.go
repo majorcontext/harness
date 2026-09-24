@@ -257,6 +257,13 @@ type Event struct {
 	QueueSource      string `json:"queue_source,omitempty"`
 	QueueSourceID    string `json:"queue_source_id,omitempty"`
 	QueueSourceLabel string `json:"queue_source_label,omitempty"`
+
+	// Command is carried by EventCommand only: the folded
+	// message.CommandRecord a RecordCommand/RecordCommandDurable call just
+	// wrote (see command.go). A dispatched command emits this twice with the
+	// same Command.ID — once accepted, once terminal — and every other
+	// status once.
+	Command *message.CommandRecord `json:"command,omitempty"`
 }
 
 // Event types.
@@ -328,6 +335,11 @@ const (
 	// whatever the reason (delivered/injected/cleared).
 	EventPromptQueued   = "prompt.queued"
 	EventPromptDequeued = "prompt.dequeued"
+
+	// EventCommand fires on every RecordCommand/RecordCommandDurable call
+	// (see command.go): a resolved slash command's accepted record, then its
+	// terminal status. It carries the folded record in Event.Command.
+	EventCommand = "command"
 )
 
 // SessionSyncFsync and SessionSyncVolume are the two accepted values of
@@ -1574,7 +1586,23 @@ type Session struct {
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
 	// below it is a duplicate no-op. Rebuilt on replay by LoadSession.
+	// RecordCommandDurable (command.go) shares this exact watermark: a
+	// dispatched command and a durably-enqueued prompt draw from the same
+	// per-session seq space, so a caller can dedupe either kind of retry
+	// against one number.
 	enqueueSeq int64
+
+	// commands is the session's folded slash-command trail (see
+	// message.CommandRecord and command.go): one entry per command ID, in
+	// first-appearance order, never s.history. Rebuilt on resume by
+	// LoadSession's recCommand fold (foldCommand). Guarded by mu.
+	commands []message.CommandRecord
+	// commandSeqs maps a folded command's ID to the durable seq its first
+	// record carried (see commandRecord.Seq and foldCommand) — the
+	// torn-write last-writer-wins state RecordCommandDurable needs, mirroring
+	// promptQueueFold's own Seq bookkeeping for the prompt queue. Guarded by
+	// mu.
+	commandSeqs map[string]int64
 
 	// toolResults maps a retained tool result's handle (trh_N) to its
 	// metadata (see toolresult.go). Content is NOT held here — the bytes
@@ -1719,6 +1747,7 @@ func newSession(cfg Config) *Session {
 		contextWindowErr:      contextWindowErr,
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
+		commandSeqs:           make(map[string]int64),
 		toolConcurrency:       resolveToolConcurrency(cfg.ToolConcurrency),
 		readBudget:            newToolReadBudget(cfg.ToolReadBudgetBytes),
 		readHashes:            make(map[string][sha256.Size]byte),

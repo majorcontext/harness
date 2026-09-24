@@ -1,0 +1,211 @@
+// Resolved slash commands are journaled beside history, never inside it: a
+// command never becomes a recMessage and never reaches a provider request
+// (see message.CommandRecord's own doc comment and docs/design/serve-
+// commands.md).
+package engine
+
+import (
+	"errors"
+
+	"github.com/majorcontext/harness/message"
+)
+
+// commandRecord carries the durable payload of a recCommand record (see
+// store.go). Seq is set only on the first record of a command whose
+// dispatch was accepted via RecordCommandDurable (an /enqueue command) —
+// zero/omitted on every other record, including a later status update for
+// the same ID.
+type commandRecord struct {
+	message.CommandRecord
+	Seq int64 `json:"seq,omitempty"`
+}
+
+// NewCommandID mints a fresh, time-sortable ID for a new CommandRecord.
+func NewCommandID() string { return newID("cmd") }
+
+// foldCommand folds one command record into cmds, by ID.
+//
+// An existing ID is replaced in place, keeping the original CreatedAt and
+// AfterMessageID: a status update (accepted -> succeeded/failed/...) must
+// not move the anchor a reader already resolved the command against.
+//
+// A NEW id carrying seq > 0 that matches an earlier folded record's own seq
+// (via seqs) replaces that record instead — the same torn-write
+// last-writer-wins rule promptQueueFold.queued applies to the prompt queue:
+// a failed fsync can leave a torn record on disk whose write reported
+// failure, followed by its successful retry under a fresh ID, and live
+// memory only ever held the retry's entry. seqs maps a folded command's ID
+// to the durable seq its first record carried; each caller owns its own map
+// (the Session's commandSeqs, and the index fold's own — Task 4).
+//
+// Otherwise c is appended, in first-appearance order.
+func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.CommandRecord, seq int64) []message.CommandRecord {
+	for i, existing := range cmds {
+		if existing.ID == c.ID {
+			c.CreatedAt = existing.CreatedAt
+			c.AfterMessageID = existing.AfterMessageID
+			cmds[i] = c
+			if seq > 0 {
+				seqs[c.ID] = seq
+			}
+			return cmds
+		}
+	}
+	if seq > 0 {
+		for i, existing := range cmds {
+			if seqs[existing.ID] == seq {
+				cmds = append(cmds[:i], cmds[i+1:]...)
+				delete(seqs, existing.ID)
+				break
+			}
+		}
+		seqs[c.ID] = seq
+	}
+	return append(cmds, c)
+}
+
+// hasCommandLocked reports whether id already has a folded record — RecordCommand/
+// RecordCommandDurable's own test for "is this the first record of this ID"
+// (CreatedAt/AfterMessageID are set only then; foldCommand keeps the
+// original for every later record regardless). Caller holds s.mu.
+func (s *Session) hasCommandLocked(id string) bool {
+	for _, c := range s.commands {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// lastDurableMessageIDLocked is the anchor RecordCommand/RecordCommandDurable
+// compute for a command's first record: the ID of the last element of
+// s.history for which !message.IsSyntheticOrphanID(id), or "" when history
+// holds nothing else. Caller holds s.mu.
+func (s *Session) lastDurableMessageIDLocked() string {
+	for i := len(s.history) - 1; i >= 0; i-- {
+		if !message.IsSyntheticOrphanID(s.history[i].ID) {
+			return s.history[i].ID
+		}
+	}
+	return ""
+}
+
+// recordCommandLocked is RecordCommand/RecordCommandDurable's shared write:
+// stamp timestamps and the anchor, persist (unless Config.SessionDir is
+// empty), fold, and emit — all under s.mu, mirroring EnqueuePromptDurable's
+// own persist-then-fold-then-emit shape (queue.go). Caller holds s.mu.
+func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64) error {
+	now := s.cfg.Now()
+	c.UpdatedAt = now
+	if !s.hasCommandLocked(c.ID) {
+		c.CreatedAt = now
+		c.AfterMessageID = s.lastDurableMessageIDLocked()
+	}
+	if s.cfg.SessionDir != "" {
+		if err := s.ensureLog(); err != nil {
+			s.lastPersistErr = err
+			return err
+		}
+		s.flushQueueRecordsLocked()
+		rec := record{Type: recCommand, Command: &commandRecord{CommandRecord: c, Seq: seq}}
+		if err := s.writeRecord(rec); err != nil {
+			s.lastPersistErr = err
+			return err
+		}
+		if !s.volumeSync() {
+			if err := s.logFile.Sync(); err != nil {
+				s.lastPersistErr = err
+				return err
+			}
+		}
+	}
+	s.commands = foldCommand(s.commands, s.commandSeqs, c, seq)
+	cp := c
+	// Emit while still holding s.mu (see EnqueuePrompt in queue.go): keeps
+	// event order matching log order under a concurrent read. OnEvent must
+	// not call back into this Session — that would deadlock on s.mu, held
+	// here.
+	s.emit(Event{Type: EventCommand, Command: &cp})
+	return nil
+}
+
+// RecordCommand journals c beside history (never inside it — see this
+// file's own doc comment) and folds it into Session.Commands(), all under
+// s.mu. With Config.SessionDir == "" the disk write is skipped; the fold and
+// EventCommand emission still happen, matching Session's memory-only mode
+// elsewhere.
+func (s *Session) RecordCommand(c message.CommandRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordCommandLocked(c, 0)
+}
+
+// RecordCommandDurable is RecordCommand's durable, idempotent-by-seq
+// sibling, for an /enqueue-dispatched command whose caller's own upstream
+// ack rides on this call's success — see EnqueuePromptDurable's own doc
+// comment (queue.go) for the identical contract this mirrors:
+//
+//   - seq is a caller-issued, session-monotonic idempotency sequence, drawn
+//     from the SAME watermark (Session.enqueueSeq) EnqueuePromptDurable
+//     shares with the durable prompt queue. At or below the current
+//     high-water mark the call is a clean duplicate no-op: nothing
+//     persisted, folded, or emitted.
+//   - seq < 1 is a caller error.
+//   - Config.SessionDir == "" is an error, unlike RecordCommand's silent
+//     memory-only skip: a durable caller's ack contract requires an actual
+//     durable write.
+//   - On success, the high-water mark advances to seq.
+func (s *Session) RecordCommandDurable(c message.CommandRecord, seq int64) (duplicate bool, err error) {
+	if seq < 1 {
+		return false, errors.New("engine: RecordCommandDurable requires seq >= 1")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seq <= s.enqueueSeq {
+		return true, nil
+	}
+	if s.cfg.SessionDir == "" {
+		return false, errors.New("engine: RecordCommandDurable requires Config.SessionDir")
+	}
+	if err := s.recordCommandLocked(c, seq); err != nil {
+		return false, err
+	}
+	s.enqueueSeq = seq
+	return false, nil
+}
+
+// Commands returns a copy of the session's folded command records, in
+// first-appearance order (see foldCommand).
+func (s *Session) Commands() []message.CommandRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]message.CommandRecord(nil), s.commands...)
+}
+
+// RepairInterruptedCommands rewrites every folded command still in the
+// CommandAccepted state as CommandInterrupted: a boot-time repair for a
+// command whose dispatch never reached a terminal status because the
+// process restarted or stopped mid-flight. text renders the per-name
+// interrupted message; the caller supplies the boot-vs-drain wording (see
+// the global constraints' status/text table). Returns the number of
+// commands repaired. Only boot reconcile calls this.
+func (s *Session) RepairInterruptedCommands(text func(name string) string) (int, error) {
+	s.mu.Lock()
+	var pending []message.CommandRecord
+	for _, c := range s.commands {
+		if c.Status == message.CommandAccepted {
+			pending = append(pending, c)
+		}
+	}
+	s.mu.Unlock()
+	n := 0
+	for _, c := range pending {
+		c.Status = message.CommandInterrupted
+		c.Text = text(c.Name)
+		if err := s.RecordCommand(c); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

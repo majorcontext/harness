@@ -169,6 +169,17 @@ func (f *promptQueueFold) queued(p promptRecord) {
 	}
 }
 
+// observeSeq advances f.seq to at least seq — the recCommand replay case's
+// (store.go) hook into this SAME watermark: a command record's Seq
+// (commandRecord.Seq, command.go) draws from the identical durable-enqueue
+// seq space a prompt.queued record's own Seq does, so a resumed session's
+// enqueueSeq must reflect whichever kind saw the higher value.
+func (f *promptQueueFold) observeSeq(seq int64) {
+	if seq > f.seq {
+		f.seq = seq
+	}
+}
+
 // dequeued folds one prompt.dequeued record: it removes the matching queued
 // entry by ID, not by position (see promptRecord's doc comment), so the
 // folded queue ends up exactly the undelivered set however many other
