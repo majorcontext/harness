@@ -302,14 +302,23 @@ func contextJSONForSession(sess *engine.Session) contextJSON {
 	return contextJSON{WindowTokens: windowTokens, UsedTokens: usedTokens}
 }
 
+// contextJSONForModel suppresses a claude-code session's persisted
+// LastPromptTokens aggregate, mirroring ContextGauge's resident case.
+func contextJSONForModel(model message.ModelRef, usedTokens, windowTokens int) contextJSON {
+	if model.Provider == engine.ClaudeCodeProviderFamily {
+		return contextJSON{}
+	}
+	return contextJSON{UsedTokens: usedTokens, WindowTokens: windowTokens}
+}
+
 // contextJSONForInfo mirrors usageJSONForInfo.
 func contextJSONForInfo(info engine.SessionInfo) contextJSON {
-	return contextJSON{UsedTokens: info.LastPromptTokens, WindowTokens: info.WindowTokens}
+	return contextJSONForModel(info.Model, info.LastPromptTokens, info.WindowTokens)
 }
 
 // contextJSONForIndex mirrors buildSessionFromIndex's cold projections.
 func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
-	return contextJSON{UsedTokens: ix.LastPromptTokens, WindowTokens: ix.WindowTokens}
+	return contextJSONForModel(ix.Model, ix.LastPromptTokens, ix.WindowTokens)
 }
 
 // lastTurnJSON is the openapi LastTurn shape.

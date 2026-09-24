@@ -586,6 +586,9 @@ type SessionInfo struct {
 	// LastPromptTokens mirrors SessionIndex.LastPromptTokens.
 	LastPromptTokens int
 	WindowTokens     int
+	// Model mirrors SessionIndex.Model, letting a cold context projection
+	// spot a claude-code session's untrustworthy LastPromptTokens.
+	Model message.ModelRef
 }
 
 // addUsage accumulates one record's usage into a listing summary.
@@ -2261,6 +2264,7 @@ func sessionInfoAt(dir, id string) (SessionInfo, error) {
 			LastInputTokens:  ix.LastInputTokens,
 			LastPromptTokens: ix.LastPromptTokens,
 			WindowTokens:     ix.WindowTokens,
+			Model:            ix.Model,
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
@@ -2339,6 +2343,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 			}
 		case recModel:
+			info.Model = rec.Model
 			info.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens, rec.ContextWindowExplicit)
 		case recCompact:
 			if rec.Usage != nil {

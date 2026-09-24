@@ -569,7 +569,11 @@ authoritative post-compaction occupancy — so the gauge shows real occupancy
 the moment compaction settles instead of going blank; it is recorded only
 against a window a prior live snapshot already established this turn, and
 only through the same generation/provider/explicit-window guards
-`setClaudeCodeContextUsage` already enforces.
+`setClaudeCodeContextUsage` already enforces. `contextJSONForInfo` and
+`contextJSONForIndex` (`server/handlers.go`) apply the identical
+suppression to the cold `GET /session/status` and cold `GET
+/session/{id}` paths, so a session read right after a wake — before any
+live reading exists — never surfaces the persisted aggregate either.
 
 ## 5. Non-goals
 

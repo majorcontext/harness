@@ -719,6 +719,7 @@ func TestListSessionsMatchesIndex(t *testing.T) {
 		LastInputTokens:  ix.LastInputTokens,
 		LastPromptTokens: ix.LastPromptTokens,
 		WindowTokens:     ix.WindowTokens,
+		Model:            ix.Model,
 	}
 	if mustJSON(t, got) != mustJSON(t, want) {
 		t.Errorf("ListSessions entry = %s, want %s", mustJSON(t, got), mustJSON(t, want))
