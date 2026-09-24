@@ -110,11 +110,14 @@ func (s *Session) lastDurableMessageIDLocked() string {
 	return ""
 }
 
-// recordCommandLocked is RecordCommand/RecordCommandDurable's shared write:
-// stamp timestamps and the anchor, persist (unless Config.SessionDir is
-// empty), fold, and emit — all under s.mu, mirroring EnqueuePromptDurable's
-// own persist-then-fold-then-emit shape (queue.go). Caller holds s.mu.
-func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64) error {
+// recordCommandLocked is RecordCommand/RecordCommandDurable/
+// RepairInterruptedCommands' shared write: stamp timestamps and the anchor,
+// persist (unless Config.SessionDir is empty), fold, and — when emit is true
+// — emit, all under s.mu, mirroring EnqueuePromptDurable's own persist-then-
+// fold-then-emit shape (queue.go). emit is false only for
+// RepairInterruptedCommands' boot-time call (see its own doc comment for
+// why). Caller holds s.mu.
+func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit bool) error {
 	now := s.cfg.Now()
 	c.UpdatedAt = now
 	if !s.hasCommandLocked(c.ID) {
@@ -140,12 +143,14 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64) error 
 		}
 	}
 	s.commands = foldCommand(s.commands, s.commandSeqs, c, seq)
-	cp := c
-	// Emit while still holding s.mu (see EnqueuePrompt in queue.go): keeps
-	// event order matching log order under a concurrent read. OnEvent must
-	// not call back into this Session — that would deadlock on s.mu, held
-	// here.
-	s.emit(Event{Type: EventCommand, Command: &cp})
+	if emit {
+		cp := c
+		// Emit while still holding s.mu (see EnqueuePrompt in queue.go): keeps
+		// event order matching log order under a concurrent read. OnEvent must
+		// not call back into this Session — that would deadlock on s.mu, held
+		// here.
+		s.emit(Event{Type: EventCommand, Command: &cp})
+	}
 	return nil
 }
 
@@ -157,7 +162,7 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64) error 
 func (s *Session) RecordCommand(c message.CommandRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.recordCommandLocked(c, 0)
+	return s.recordCommandLocked(c, 0, true)
 }
 
 // RecordCommandDurable is RecordCommand's durable, idempotent-by-seq
@@ -187,7 +192,7 @@ func (s *Session) RecordCommandDurable(c message.CommandRecord, seq int64) (dupl
 	if s.cfg.SessionDir == "" {
 		return false, errors.New("engine: RecordCommandDurable requires Config.SessionDir")
 	}
-	if err := s.recordCommandLocked(c, seq); err != nil {
+	if err := s.recordCommandLocked(c, seq, true); err != nil {
 		return false, err
 	}
 	s.enqueueSeq = seq
@@ -209,20 +214,30 @@ func (s *Session) Commands() []message.CommandRecord {
 // interrupted message; the caller supplies the boot-vs-drain wording (see
 // the global constraints' status/text table). Returns the number of
 // commands repaired. Only boot reconcile calls this.
+//
+// It persists and folds each repaired record WITHOUT emitting an
+// EventCommand: reconcile calls this from inside server.New, a window where
+// production's OnEvent closure (cmd/harness/main.go's mkCfg) relies on
+// nothing emitting before the server it closes over is assigned. Reconcile's
+// own backfill loop journals each folded record it has not already seen, so
+// the repair still reaches the durable server journal exactly once.
+//
+// Holds s.mu across the whole scan-and-repair pass (not just the read), so
+// no caller can observe or fold a command between the read and its repair.
 func (s *Session) RepairInterruptedCommands(text func(name string) string) (int, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	var pending []message.CommandRecord
 	for _, c := range s.commands {
 		if c.Status == message.CommandAccepted {
 			pending = append(pending, c)
 		}
 	}
-	s.mu.Unlock()
 	n := 0
 	for _, c := range pending {
 		c.Status = message.CommandInterrupted
 		c.Text = text(c.Name)
-		if err := s.RecordCommand(c); err != nil {
+		if err := s.recordCommandLocked(c, 0, false); err != nil {
 			return n, err
 		}
 		n++

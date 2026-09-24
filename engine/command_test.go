@@ -159,6 +159,62 @@ func TestRepairInterruptedCommands(t *testing.T) {
 	}
 }
 
+// TestRepairInterruptedCommandsEmitsNothing: the boot repair must persist and
+// fold its interrupted record without ever calling Config.OnEvent — server
+// reconcile calls this from inside server.New, before the caller's own
+// OnEvent closure (cmd/harness's mkCfg) is safe to invoke (see
+// RepairInterruptedCommands' own doc comment). Failure: an emitted event
+// during that window reaches a nil *server.Server and panics in production.
+func TestRepairInterruptedCommandsEmitsNothing(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	id := NewCommandID()
+	if err := s.RecordCommand(message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+	}); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+
+	var events []Event
+	loaded, err := LoadSession(Config{
+		SessionDir: dir,
+		OnEvent:    func(ev Event) { events = append(events, ev) },
+	}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+
+	before := len(events)
+	text := func(name string) string {
+		return "harness restarted before /" + name + " finished; it will not run again"
+	}
+	n, err := loaded.RepairInterruptedCommands(text)
+	if err != nil {
+		t.Fatalf("RepairInterruptedCommands: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("RepairInterruptedCommands count = %d, want 1", n)
+	}
+	if len(events) != before {
+		t.Fatalf("events emitted by RepairInterruptedCommands = %+v, want none", events[before:])
+	}
+
+	cmds := loaded.Commands()
+	if len(cmds) != 1 || cmds[0].Status != message.CommandInterrupted {
+		t.Fatalf("Commands() = %+v, want one interrupted command", cmds)
+	}
+
+	reloaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("second LoadSession: %v", err)
+	}
+	cmds = reloaded.Commands()
+	if len(cmds) != 1 || cmds[0].Status != message.CommandInterrupted {
+		t.Fatalf("after second LoadSession: Commands() = %+v, want one interrupted (persisted) command", cmds)
+	}
+}
+
 // TestCommandAnchorSkipsSyntheticOrphan: AfterMessageID names the last
 // history message that is not a synthetic orphan tool result.
 func TestCommandAnchorSkipsSyntheticOrphan(t *testing.T) {

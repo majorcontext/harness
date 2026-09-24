@@ -162,21 +162,8 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 			Providers:  provider.Registry{prov.Name(): prov},
 			Model:      m,
 			SessionDir: dir,
-			// srv is nil here whenever this Config backs a session reconcile()
-			// loads WHILE still inside New (a boot-time command repair — see
-			// Session.RepairInterruptedCommands's caller in journal.go — is the
-			// first thing that ever emits synchronously from that cold load):
-			// srv is a local variable this closure captures by reference, and
-			// New's own caller below does not assign it until New returns. Guard
-			// rather than let that reach Publish and deref a nil *Server —
-			// mirrors production's identical hazard (cmd/harness/main.go's mkCfg
-			// doc comment).
-			OnEvent: func(ev engine.Event) {
-				if srv != nil {
-					srv.Publish(ev)
-				}
-			},
-			GoalTool: !opts.GoalEvaluator.IsZero(),
+			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+			GoalTool:   !opts.GoalEvaluator.IsZero(),
 			// Processes mirrors production's own mkCfg (cmd/harness/main.go):
 			// every session gets the SAME Options.Processes a mutate func
 			// may have set, so a session created live (handleCreate) or
