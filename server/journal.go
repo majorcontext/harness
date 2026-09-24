@@ -1095,19 +1095,20 @@ func (s *Server) syncMessages(sessionID string) {
 // from a real anchor on its FIRST "load older" request instead of
 // re-fetching this same newest page to merely discover one.
 //
-// sess is a FIFTH, additive result: the resolved *engine.Session, so a
-// caller building the bootstrap envelope's commands field can call
-// sess.Commands() without a second lookup.
-func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, sess *engine.Session, ok bool) {
-	sess, ok = s.lookupSession(id)
+// commands is a FIFTH, additive result: sess.HistoryAndCommands()'s command
+// half, from the same s.mu hold as history — never a second sess.Commands()
+// call, which could observe a compaction that reanchors a command to a
+// summary this history snapshot does not contain.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, commands []message.CommandRecord, ok bool) {
+	sess, ok := s.lookupSession(id)
 	if !ok {
 		return nil, 0, 0, nil, nil, false
 	}
 	// Sampled first, before anything else this function does — see the
-	// doc comment above for why tipAtStart must precede sess.History().
+	// doc comment above for why tipAtStart must precede sess.HistoryAndCommands().
 	tipAtStart := s.currentSeq()
 
-	history = sess.History()
+	history, commands = sess.HistoryAndCommands()
 	persistErr := sess.PersistErr()
 	// A pure function of this exact history snapshot -- no s.journal, no
 	// s.mu, so it needs neither the lock below nor a place inside it.
@@ -1126,7 +1127,7 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
-	return history, seq, liveFrom, seqs, sess, true
+	return history, seq, liveFrom, seqs, commands, true
 }
 
 // transcriptCursorLocked is transcriptSyncedThrough's own lock section,

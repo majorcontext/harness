@@ -1265,7 +1265,7 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		// residency race in coldWindowedBootstrap: fall through to the
 		// always-correct path below, windowed to the same tail limit names.
 	}
-	msgs, seq, liveFrom, seqs, sess, ok := s.transcriptSyncedThrough(id)
+	msgs, seq, liveFrom, seqs, cmds, ok := s.transcriptSyncedThrough(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
@@ -1285,7 +1285,7 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		StreamFrom: seq,
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
-		Commands:   engine.CommandsInWindow(sess.Commands(), msgs, fromFirst),
+		Commands:   engine.CommandsInWindow(cmds, msgs, fromFirst),
 	})
 }
 
@@ -1551,14 +1551,15 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 	// today — the repair runs at load, and this session was never loaded —
 	// but filtering makes the two paths agree by CONSTRUCTION rather than
 	// by an argument about which shapes can reach here.
-	msgs := durableOnly(sess.History())
+	history, cmds := sess.HistoryAndCommands()
+	msgs := durableOnly(history)
 	total := len(msgs)
 	// The same window arithmetic the journal path uses, from the same
 	// helper: two copies would give one session two different paginations
 	// depending on which path answered it.
 	lo, hi, _ := engine.MessagePageWindow(total, beforeSeq, limit)
 	if hi < lo {
-		commands := engine.CommandsInWindow(sess.Commands(), nil, total == 0)
+		commands := engine.CommandsInWindow(cmds, nil, total == 0)
 		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total, Commands: commands})
 		return
 	}
@@ -1569,7 +1570,7 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 		LastSeq:  hi,
 		Total:    total,
 		HasMore:  lo > 1,
-		Commands: engine.CommandsInWindow(sess.Commands(), window, lo == 1),
+		Commands: engine.CommandsInWindow(cmds, window, lo == 1),
 	})
 }
 

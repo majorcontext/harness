@@ -2465,6 +2465,17 @@ func (s *Session) History() []message.Message {
 	return append([]message.Message(nil), s.history...)
 }
 
+// HistoryAndCommands returns copies of the session's message history and
+// folded command records from one s.mu hold — the pairing History() and
+// Commands() cannot promise when called separately, since a compaction
+// between the two calls can reanchor a command to a summary the earlier
+// history read never saw.
+func (s *Session) HistoryAndCommands() ([]message.Message, []message.CommandRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]message.Message(nil), s.history...), append([]message.CommandRecord(nil), s.commands...)
+}
+
 func (s *Session) append(m message.Message) {
 	s.appendWithUsage(m, nil)
 }

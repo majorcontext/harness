@@ -241,6 +241,60 @@ func TestCommandReanchoredOnCompact(t *testing.T) {
 	}
 }
 
+// TestHistoryAndCommandsOneSnapshot: HistoryAndCommands returns history and
+// commands from the same s.mu hold, so a command reanchored by compaction
+// always comes back paired with the history that contains its new anchor.
+// Two separate History()/Commands() calls cannot make this promise: a
+// compaction between them can reanchor commands to a summary the earlier
+// history read never saw. Failure: the command's AfterMessageID names a
+// summary absent from the paired history.
+func TestHistoryAndCommandsOneSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	runTurns(t, s, 1)
+
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+
+	runTurns(t, s, 2)
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	summaryID := res.Summary.ID
+
+	history, cmds := s.HistoryAndCommands()
+	if len(cmds) != 1 || cmds[0].AfterMessageID != summaryID {
+		t.Fatalf("HistoryAndCommands() commands = %+v, want one record anchored to %q", cmds, summaryID)
+	}
+	found := false
+	for _, m := range history {
+		if m.ID == summaryID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("HistoryAndCommands() history %+v does not contain the command's anchor %q", history, summaryID)
+	}
+}
+
 // TestCompactPreservesRetainedResultsIndex is review finding F3(a)'s red
 // test. The retention ceiling (Config.ToolResultRetainedBytes) is monotonic
 // — only ever incremented, nothing evicts or reclaims it — and
