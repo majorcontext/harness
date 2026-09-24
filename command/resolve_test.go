@@ -232,3 +232,21 @@ func TestResolveUnknownIsNotText(t *testing.T) {
 		t.Errorf("UnknownCommandError.Name = %q, want %q", unknown.Name, "nope")
 	}
 }
+
+// TestResolveArgErrorNamesSpec is the named-failure test: a failed record
+// cannot name the command, because Resolve returns an untyped error for
+// bad arguments.
+func TestResolveArgErrorNamesSpec(t *testing.T) {
+	r := NewRegistry()
+	for _, line := range []string{"/compact abc", "/status now", "/model", "/model a b"} {
+		_, err := r.Resolve(line)
+		var ae *ArgsError
+		if !errors.As(err, &ae) || ae.Spec == nil {
+			t.Fatalf("%q: err %v is not *ArgsError", line, err)
+		}
+	}
+	_, err := r.Resolve("/compact abc")
+	if want := `command: /compact keep_turns must be a number, got "abc"`; err.Error() != want {
+		t.Fatalf("text changed: %q", err)
+	}
+}

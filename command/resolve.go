@@ -21,6 +21,16 @@ func (e *UnknownCommandError) Error() string {
 	return fmt.Sprintf("command: unknown command %q", e.Name)
 }
 
+// ArgsError reports a bad argument line for a known command. Spec and
+// Typed let a caller name the command in a failed CommandRecord.
+type ArgsError struct {
+	Spec  *Spec
+	Typed string
+	msg   string
+}
+
+func (e *ArgsError) Error() string { return e.msg }
+
 // Resolution is what one input line resolves to.
 type Resolution struct {
 	Kind Kind
@@ -89,7 +99,7 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 	args := map[string]any{}
 	if len(spec.Args) == 0 {
 		if rest != "" {
-			return nil, fmt.Errorf("command: /%s takes no arguments, got %q", typedName, rest)
+			return nil, argsErrorf(spec, typedName, "command: /%s takes no arguments, got %q", typedName, rest)
 		}
 		return args, nil
 	}
@@ -99,7 +109,7 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 				if a.Optional {
 					return args, nil
 				}
-				return nil, fmt.Errorf("command: /%s needs %s", typedName, a.Name)
+				return nil, argsErrorf(spec, typedName, "command: /%s needs %s", typedName, a.Name)
 			}
 			args[a.Name] = rest
 			return args, nil
@@ -111,13 +121,13 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 			if a.Optional {
 				continue
 			}
-			return nil, fmt.Errorf("command: /%s needs %s", typedName, a.Name)
+			return nil, argsErrorf(spec, typedName, "command: /%s needs %s", typedName, a.Name)
 		}
 		switch a.Type {
 		case ArgInt:
 			n, err := strconv.Atoi(field)
 			if err != nil {
-				return nil, fmt.Errorf("command: /%s %s must be a number, got %q", typedName, a.Name, field)
+				return nil, argsErrorf(spec, typedName, "command: /%s %s must be a number, got %q", typedName, a.Name, field)
 			}
 			args[a.Name] = n
 		default:
@@ -125,7 +135,13 @@ func bindArgs(spec *Spec, typedName, rest string) (map[string]any, error) {
 		}
 	}
 	if rest != "" {
-		return nil, fmt.Errorf("command: /%s takes %d argument(s), got extra %q", typedName, len(spec.Args), rest)
+		return nil, argsErrorf(spec, typedName, "command: /%s takes %d argument(s), got extra %q", typedName, len(spec.Args), rest)
 	}
 	return args, nil
+}
+
+// argsErrorf builds an *ArgsError with the same text fmt.Errorf(format,
+// a...) would produce.
+func argsErrorf(spec *Spec, typedName, format string, a ...any) *ArgsError {
+	return &ArgsError{Spec: spec, Typed: typedName, msg: fmt.Sprintf(format, a...)}
 }
