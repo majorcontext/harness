@@ -88,26 +88,15 @@ func (w *commandResponseWriter) Write(b []byte) (int, error) {
 
 func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 
-// runCommand performs one dispatched command's in-process route call and
-// records its terminal outcome. resolvePromptCommand starts this in its
-// own goroutine, already holding the admitCommand slot this function's
-// deferred wg.Done releases.
+// runCommand runs one dispatched command's route call and records its
+// terminal outcome. The caller holds the admitCommand slot, and the
+// deferred wg.Done releases it.
 //
-// The accepted record's own *engine.Session is NOT passed in for the
-// terminal write. serveOpHandlers[op] performs its own independent session
-// lookup/cold-load, and residency eviction can happen in the gap between
-// the two (that object is not running, so it is an ordinary LRU eviction
-// candidate — see mutableSession and evictResidentLocked). Writing the
-// terminal record through a stale reference would split one on-disk log
-// across two live *engine.Session objects, the exact hazard
-// handleSetModel's own doc comment names. recordCommandTerminal re-resolves
-// fresh instead.
+// The terminal write resolves the session again: the handler does its own
+// lookup, and eviction can replace the object that recorded "accepted".
 //
-// A deferred recover guards serveOpHandlers[op]: net/http recovers a
-// per-request handler panic itself, but this call runs off the request
-// goroutine, so an unrecovered panic here would crash the process instead
-// of failing one command. Recovering writes a failed terminal record rather
-// than leaving the command "accepted" forever, and never re-panics.
+// net/http recovers a handler panic only on the request goroutine, so the
+// deferred recover records a failed outcome instead of crashing the process.
 func (s *Server) runCommand(id string, rec message.CommandRecord, res command.Resolution) {
 	defer s.wg.Done()
 
