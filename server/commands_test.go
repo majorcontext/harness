@@ -207,8 +207,9 @@ func TestCommandsServeSupportTotal(t *testing.T) {
 			if entry.Supported {
 				t.Errorf("serve_support[%q].supported = true, want false", s.Name)
 			}
-			if entry.Reason != serveUnsupportedReason {
-				t.Errorf("serve_support[%q].reason = %q, want %q", s.Name, entry.Reason, serveUnsupportedReason)
+			const wantReason = "Not available in this client."
+			if entry.Reason != wantReason {
+				t.Errorf("serve_support[%q].reason = %q, want %q", s.Name, entry.Reason, wantReason)
 			}
 			continue
 		}
