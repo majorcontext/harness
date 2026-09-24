@@ -557,6 +557,10 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	text, handled := s.resolvePromptCommand(w, promptRouteSend, id, text, blobs, prov, 0)
+	if handled {
+		return
+	}
 	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc
 	// comment for why every branch below must report and use this SAME
 	// value rather than resolving a second, possibly different, id later.

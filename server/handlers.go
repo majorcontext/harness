@@ -1779,8 +1779,14 @@ type promptAsyncResponse struct {
 	// minted one when `id` was empty or a reserved-prefix collision (see
 	// engine.ResolveMessageID) — so a caller that pre-minted an id for its
 	// own optimistic render can confirm which id to reconcile against,
-	// whether this prompt started immediately or is still queued.
-	MessageID string `json:"message_id"`
+	// whether this prompt started immediately or is still queued. Omitted
+	// (empty) when Status is "command": a resolved command never becomes a
+	// user message, so there is no id to report — see resolvePromptCommand.
+	MessageID string `json:"message_id,omitempty"`
+	// Command carries the resolved command's receipt when Status is
+	// "command" — see resolvePromptCommand (command_dispatch.go/commands.go).
+	// Nil, and so omitted, otherwise.
+	Command *commandReceiptJSON `json:"command,omitempty"`
 }
 
 // handlePrompt is POST /session/{id}/prompt_async (see docs/plans/2026-07-19-
@@ -1854,6 +1860,10 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	prov, code, err := parsePromptProvenance(body.promptSourceInput)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, prov, 0)
+	if handled {
 		return
 	}
 	// Resolved ONCE, here, regardless of which branch below actually ends
@@ -2158,9 +2168,12 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 // duplicate). Queued mirrors promptAsyncResponse's rule: depth including
 // this prompt, only when status is "queued".
 type enqueueResponse struct {
-	Status    string `json:"status"` // "started" | "queued" | "duplicate"
+	Status    string `json:"status"` // "started" | "queued" | "duplicate" | "command"
 	Watermark int64  `json:"watermark"`
 	Queued    int    `json:"queued,omitempty"`
+	// Command carries the resolved command's receipt when Status is
+	// "command" — see resolvePromptCommand. Nil, and so omitted, otherwise.
+	Command *commandReceiptJSON `json:"command,omitempty"`
 }
 
 // handleEnqueue is POST /session/{id}/enqueue (see docs/plans/2026-07-21-
@@ -2244,6 +2257,10 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	prov, code, err := parsePromptProvenance(body.promptSourceInput)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq)
+	if handled {
 		return
 	}
 

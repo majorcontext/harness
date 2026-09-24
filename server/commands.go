@@ -1,9 +1,16 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
 )
 
 // route is the serve-mode answer to one Op. A route is this dispatcher's
@@ -131,4 +138,233 @@ func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 		Commands     []commandEntryJSON          `json:"commands"`
 		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
 	}{Commands: out, ServeSupport: serveSupportOut})
+}
+
+// promptRoute selects which prompt-landing response shape
+// resolvePromptCommand writes for a resolved command.
+type promptRoute int
+
+const (
+	promptRouteAsync promptRoute = iota
+	promptRouteEnqueue
+	promptRouteSend
+)
+
+// commandReceiptJSON is the small "command" block every prompt-landing
+// route's response carries when the request resolved to a command instead
+// of an ordinary prompt.
+type commandReceiptJSON struct {
+	ID     string                `json:"id"`
+	Status message.CommandStatus `json:"status"`
+}
+
+// resolvePromptCommand is the single entry point every prompt-landing
+// route (prompt_async, enqueue, send) calls directly after
+// parsePromptProvenance succeeds, before any other branch: it decides
+// whether text is a TYPED slash command and, if so, resolves, records, and
+// (for a dispatchable Op) runs it entirely in process — nothing reaches
+// the model. See docs/design/slash-commands.md §5 and this plan's
+// global-constraints.md for the status/text table this follows exactly.
+//
+// The typed check below filters on the source a CALLER DECLARES on this
+// request — it is not a security boundary against anything that already
+// holds the run token, which could just as easily declare "typed" itself.
+// It exists only to keep an untagged programmatic caller's literal "/foo"
+// text from being silently reinterpreted as a control command.
+//
+// reports whether text was a command and was handled (response already
+// written). When handled is false, the caller sends promptText, which is
+// res.Text for an escaped "//x" and text otherwise.
+func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, id, text string,
+	blobs []*message.Blob, prov engine.PromptProvenance, seq int64) (promptText string, handled bool) {
+	if prov.Source.Normalized() != message.PromptSourceTyped {
+		return text, false
+	}
+
+	res, err := command.NewRegistry().Resolve(text)
+	if err != nil {
+		if errors.Is(err, command.ErrNotCommand) {
+			return res.Text, false
+		}
+		var unknown *command.UnknownCommandError
+		if errors.As(err, &unknown) {
+			return text, false
+		}
+		var argsErr *command.ArgsError
+		if errors.As(err, &argsErr) {
+			rec := message.CommandRecord{
+				ID:          engine.NewCommandID(),
+				Line:        text,
+				Name:        argsErr.Spec.Name,
+				Source:      prov.Source,
+				SourceID:    prov.SourceID,
+				SourceLabel: prov.SourceLabel,
+				Status:      message.CommandFailed,
+				Text:        err.Error(),
+			}
+			return "", s.writeCommand(w, route, id, seq, rec, nil)
+		}
+		// Resolve returns only the three error shapes handled above.
+		return text, false
+	}
+
+	typed := typedCommandName(text)
+	rec := message.CommandRecord{
+		ID:          engine.NewCommandID(),
+		Line:        text,
+		Name:        res.Spec.Name,
+		Args:        res.Args,
+		Source:      prov.Source,
+		SourceID:    prov.SourceID,
+		SourceLabel: prov.SourceLabel,
+	}
+	switch {
+	case len(blobs) > 0:
+		rec.Status = message.CommandFailed
+		rec.Text = fmt.Sprintf("/%s takes no attachments; nothing ran", typed)
+		return "", s.writeCommand(w, route, id, seq, rec, nil)
+	}
+	if supported, _ := serveSupport(res.Spec); !supported {
+		rec.Status = message.CommandUnsupported
+		rec.Text = fmt.Sprintf("/%s is not available in this client", typed)
+		return "", s.writeCommand(w, route, id, seq, rec, nil)
+	}
+	if !res.Spec.AvailableDuringTask && s.resolveLive(id).status() == "busy" {
+		rec.Status = message.CommandRefused
+		rec.Text = fmt.Sprintf("/%s cannot run while a turn is running; send it again after the turn ends", typed)
+		return "", s.writeCommand(w, route, id, seq, rec, nil)
+	}
+	rec.Status = message.CommandAccepted
+	return "", s.writeCommand(w, route, id, seq, rec, &res)
+}
+
+// typedCommandName extracts the name (or alias) the caller actually typed
+// from a line Resolve just accepted — e.g. "clear" for a line whose
+// canonical Resolution.Spec.Name is "new". Every status text uses this,
+// never Spec.Name (see global-constraints.md's text table).
+func typedCommandName(line string) string {
+	body := strings.TrimPrefix(line, "/")
+	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {
+		return body[:i]
+	}
+	return body
+}
+
+// writeCommand resolves the mutable session, admits and records rec as the
+// command's first durable record, writes the route's response, and — when
+// res is non-nil (rec.Status is CommandAccepted) — starts the dispatch
+// goroutine. Always returns true: every path through this function writes
+// a response.
+func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id string, seq int64, rec message.CommandRecord, res *command.Resolution) bool {
+	sess, ok := s.mutableSession(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return true
+	}
+
+	dispatching := res != nil
+	if dispatching {
+		if !s.admitCommand() {
+			writeErr(w, http.StatusServiceUnavailable, "server shutting down")
+			return true
+		}
+	}
+	release := func() {
+		if dispatching {
+			s.wg.Done()
+		}
+	}
+
+	if route == promptRouteEnqueue {
+		dup, err := sess.RecordCommandDurable(rec, seq)
+		if dup {
+			release()
+			writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
+			return true
+		}
+		if err != nil {
+			release()
+			writeErr(w, http.StatusInternalServerError, "command not durable: "+err.Error())
+			return true
+		}
+	} else if err := sess.RecordCommand(rec); err != nil {
+		release()
+		writeErr(w, http.StatusInternalServerError, "command not recorded: "+err.Error())
+		return true
+	}
+
+	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status}
+	switch route {
+	case promptRouteAsync:
+		writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: s.currentSeq(), Status: "command", Command: receipt})
+	case promptRouteSend:
+		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": id, "status": "command", "command": receipt})
+	case promptRouteEnqueue:
+		writeJSON(w, http.StatusAccepted, enqueueResponse{Status: "command", Watermark: sess.EnqueueSeq(), Command: receipt})
+	}
+	if dispatching {
+		go s.runCommand(sess, id, rec, *res)
+	}
+	return true
+}
+
+// mutableSession resolves the one *engine.Session id's next durable
+// mutation must land on: a managed CHILD comes straight from
+// SessionManager's own resident node, never a second cold-loaded object
+// over the same on-disk log; a root goes through the ordinary s.sessions
+// residency map, cold-loading and racing exactly like claimForPrompt's own
+// cold path (an insert race against a concurrent request, and eviction).
+// Extracted from handleSetModel's identical selection block — see its own
+// doc comment for why two *engine.Session for one log must never both be
+// mutated. Used only by resolvePromptCommand and its own callees; every
+// other handler keeps its own copy.
+func (s *Server) mutableSession(id string) (*engine.Session, bool) {
+	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
+		return child, true
+	}
+	s.mu.Lock()
+	st := s.sessions[id]
+	s.mu.Unlock()
+	if st == nil {
+		loaded, err := s.opts.LoadSession(id)
+		if err != nil {
+			return nil, false
+		}
+		s.mu.Lock()
+		var evicted []*engine.Session
+		if ex := s.sessions[id]; ex != nil {
+			st = ex // a resident appeared while we loaded; use the winner
+		} else {
+			st = &sessionState{sess: loaded, lastUsed: time.Now()}
+			s.sessions[id] = st
+			evicted = s.evictResidentLocked()
+		}
+		s.mu.Unlock()
+		releaseEvicted(evicted)
+	}
+	return st.sess, true
+}
+
+// admitCommand claims one Drain-visible slot for a dispatched command's
+// background goroutine, the same admission claimForPrompt performs for an
+// ordinary prompt turn: under s.mu, refuse once draining has started,
+// otherwise wg.Add(1) before releasing the lock, so Drain's wg.Wait can
+// never observe an Add that raced past draining=true.
+func (s *Server) admitCommand() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.draining {
+		return false
+	}
+	s.wg.Add(1)
+	return true
+}
+
+// isDraining reports whether Drain has begun, for runCommand's terminal
+// outcome mapping (a non-2xx route error during drain is "interrupted",
+// not "failed").
+func (s *Server) isDraining() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.draining
 }
