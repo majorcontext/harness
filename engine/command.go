@@ -84,17 +84,19 @@ func reanchorCommands(cmds []message.CommandRecord, folded []message.Message, su
 	}
 }
 
-// hasCommandLocked reports whether id already has a folded record — RecordCommand/
-// RecordCommandDurable's own test for "is this the first record of this ID"
-// (CreatedAt/AfterMessageID are set only then; foldCommand keeps the
-// original for every later record regardless). Caller holds s.mu.
-func (s *Session) hasCommandLocked(id string) bool {
+// findCommandLocked returns id's already-folded record, if any —
+// recordCommandLocked's own test for "is this the first record of this
+// ID" (CreatedAt/AfterMessageID are minted only then; every later record
+// for the same ID copies them from the record this returns, so the
+// persisted record, the emitted event, and the fold agree). Caller holds
+// s.mu.
+func (s *Session) findCommandLocked(id string) (message.CommandRecord, bool) {
 	for _, c := range s.commands {
 		if c.ID == id {
-			return true
+			return c, true
 		}
 	}
-	return false
+	return message.CommandRecord{}, false
 }
 
 // lastDurableMessageIDLocked is the anchor RecordCommand/RecordCommandDurable
@@ -120,7 +122,17 @@ func (s *Session) lastDurableMessageIDLocked() string {
 func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit bool) error {
 	now := s.cfg.Now()
 	c.UpdatedAt = now
-	if !s.hasCommandLocked(c.ID) {
+	if existing, ok := s.findCommandLocked(c.ID); ok {
+		// A status update (accepted -> succeeded/failed/...) for an ID
+		// already folded: copy the original CreatedAt/AfterMessageID onto
+		// c BEFORE the write and the emit below, so the persisted record,
+		// the emitted event, and foldCommand's own copy-forward all agree
+		// — foldCommand only fixes up cmds[i] itself, which is too late
+		// for the record already written to disk or the cp emitted above
+		// it.
+		c.CreatedAt = existing.CreatedAt
+		c.AfterMessageID = existing.AfterMessageID
+	} else {
 		c.CreatedAt = now
 		c.AfterMessageID = s.lastDurableMessageIDLocked()
 	}

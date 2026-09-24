@@ -671,6 +671,16 @@ type Server struct {
 	// production.
 	coldWindowBootstrapRace func()
 
+	// commandDispatchRace is a test-only seam: when non-nil, runCommand
+	// (command_dispatch.go) invokes it right before calling
+	// serveOpHandlers[op], after the command's own "accepted" record is
+	// already durable — letting a test force a real concurrent eviction of
+	// the accepted record's own *engine.Session to land deterministically
+	// in the gap between that record's own session lookup and the route
+	// handler's independent one, instead of relying on an unobserved
+	// goroutine-scheduling coin flip. Always nil in production.
+	commandDispatchRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime

@@ -499,6 +499,22 @@ func TestTypedCommandOnAllThreeRoutes(t *testing.T) {
 			if len(terminal.Command.Result) == 0 {
 				t.Error("result is empty, want the /status route's body")
 			}
+
+			// task-7-review.md Important 2: a terminal status update for
+			// an already-folded ID must carry the SAME CreatedAt/
+			// AfterMessageID the accepted record minted, never a zero
+			// created_at or an emptied anchor.
+			if terminal.Command.CreatedAt.IsZero() {
+				t.Error("terminal command event has a zero created_at")
+			}
+			if !terminal.Command.CreatedAt.Equal(accepted.Command.CreatedAt) {
+				t.Errorf("terminal command event CreatedAt = %v, want %v (the accepted record's own)",
+					terminal.Command.CreatedAt, accepted.Command.CreatedAt)
+			}
+			if terminal.Command.AfterMessageID != accepted.Command.AfterMessageID {
+				t.Errorf("terminal command event AfterMessageID = %q, want %q (the accepted record's own)",
+					terminal.Command.AfterMessageID, accepted.Command.AfterMessageID)
+			}
 		})
 	}
 }

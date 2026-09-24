@@ -92,6 +92,16 @@ func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 // records its terminal outcome. resolvePromptCommand starts this in its
 // own goroutine, already holding the admitCommand slot this function's
 // deferred wg.Done releases.
+//
+// sess is the object the command's "accepted" record was already written
+// through — it is NOT reused for the terminal write. serveOpHandlers[op]
+// performs its own independent session lookup/cold-load, and residency
+// eviction can happen in the gap between the two (sess is not running, so
+// it is an ordinary LRU eviction candidate — see mutableSession and
+// evictResidentLocked). Writing the terminal record through a stale sess
+// would split one on-disk log across two live *engine.Session objects, the
+// exact hazard handleSetModel's own doc comment names. recordCommandTerminal
+// re-resolves fresh instead.
 func (s *Server) runCommand(sess *engine.Session, id string, rec message.CommandRecord, res command.Resolution) {
 	defer s.wg.Done()
 
@@ -109,18 +119,36 @@ func (s *Server) runCommand(sess *engine.Session, id string, rec message.Command
 		s.reportError(fmt.Errorf("command %s: build request: %w", rec.ID, err))
 		rec.Status = message.CommandFailed
 		rec.Text = err.Error()
-		if recErr := sess.RecordCommand(rec); recErr != nil {
-			s.reportError(fmt.Errorf("command %s: record terminal status: %w", rec.ID, recErr))
-		}
+		s.recordCommandTerminal(id, rec)
 		return
 	}
 	req.SetPathValue("id", id)
+
+	if s.commandDispatchRace != nil {
+		s.commandDispatchRace() // test-only seam, see its own doc comment
+	}
 
 	cw := newCommandResponseWriter()
 	serveOpHandlers[res.Spec.Op](s, cw, req)
 
 	typed := typedCommandName(rec.Line)
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining())
+	s.recordCommandTerminal(id, rec)
+}
+
+// recordCommandTerminal writes rec's terminal status through id's CURRENT
+// *engine.Session, resolved fresh via mutableSession rather than the
+// object runCommand's own caller looked up before the route handler ran
+// (see runCommand's doc comment for the eviction gap this closes). A
+// session no longer resolvable (evicted and then removed, or a load
+// failure) reports through reportError and writes nothing — never mutate
+// a stale object to force the write through.
+func (s *Server) recordCommandTerminal(id string, rec message.CommandRecord) {
+	sess, ok := s.mutableSession(id)
+	if !ok {
+		s.reportError(fmt.Errorf("command %s: session %s is no longer resolvable for its terminal record", rec.ID, id))
+		return
+	}
 	if err := sess.RecordCommand(rec); err != nil {
 		s.reportError(fmt.Errorf("command %s: record terminal status: %w", rec.ID, err))
 	}

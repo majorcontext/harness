@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -212,6 +213,114 @@ func TestRepairInterruptedCommandsEmitsNothing(t *testing.T) {
 	cmds = reloaded.Commands()
 	if len(cmds) != 1 || cmds[0].Status != message.CommandInterrupted {
 		t.Fatalf("after second LoadSession: Commands() = %+v, want one interrupted (persisted) command", cmds)
+	}
+}
+
+// TestRecordCommandTerminalKeepsCreatedAtAndAnchor: a terminal status
+// update (accepted -> succeeded) for an existing command ID must carry the
+// SAME CreatedAt and AfterMessageID the accepted record minted — both in
+// the event recordCommandLocked emits and in the record it persists.
+// Failure: a caller that constructs a fresh CommandRecord for the
+// terminal status (server's runCommand does exactly this) gets back a
+// zero CreatedAt and an emptied anchor, on the wire and on disk, because
+// recordCommandLocked only stamps those fields for a brand-new ID.
+func TestRecordCommandTerminalKeepsCreatedAtAndAnchor(t *testing.T) {
+	dir := t.TempDir()
+	var events []Event
+	s := NewSession(Config{
+		SessionDir: dir,
+		OnEvent:    func(ev Event) { events = append(events, ev) },
+	})
+	s.mu.Lock()
+	s.history = []message.Message{
+		{ID: "msg_durable", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}},
+	}
+	s.mu.Unlock()
+
+	id := NewCommandID()
+	accepted := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+	}
+	if err := s.RecordCommand(accepted); err != nil {
+		t.Fatalf("RecordCommand accepted: %v", err)
+	}
+	if len(events) != 1 || events[0].Command == nil {
+		t.Fatalf("events after accepted = %+v, want one command event", events)
+	}
+	wantCreatedAt := events[0].Command.CreatedAt
+	wantAnchor := events[0].Command.AfterMessageID
+	if wantCreatedAt.IsZero() {
+		t.Fatal("accepted event's own CreatedAt is zero, cannot assert against it")
+	}
+	if wantAnchor != "msg_durable" {
+		t.Fatalf("accepted event AfterMessageID = %q, want msg_durable", wantAnchor)
+	}
+
+	// A fresh CommandRecord value for the SAME id, exactly as
+	// server.runCommand builds its terminal record (never read back from
+	// Commands()) — CreatedAt/AfterMessageID are their zero values here on
+	// purpose, so this test fails if recordCommandLocked ever stops
+	// filling them in from the folded original.
+	succeeded := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded, Text: "/compact succeeded",
+	}
+	if err := s.RecordCommand(succeeded); err != nil {
+		t.Fatalf("RecordCommand succeeded: %v", err)
+	}
+	if len(events) != 2 || events[1].Command == nil {
+		t.Fatalf("events after succeeded = %+v, want two command events", events)
+	}
+	if got := events[1].Command.CreatedAt; !got.Equal(wantCreatedAt) {
+		t.Errorf("terminal event CreatedAt = %v, want %v (the original accepted CreatedAt)", got, wantCreatedAt)
+	}
+	if got := events[1].Command.AfterMessageID; got != wantAnchor {
+		t.Errorf("terminal event AfterMessageID = %q, want %q", got, wantAnchor)
+	}
+
+	// The raw on-disk bytes, not Commands() — foldCommand's own
+	// copy-forward would mask a recordCommandLocked regression at replay
+	// time, so only the literal persisted record proves the WRITE itself
+	// carried the right values (see this test's own doc comment).
+	data, err := os.ReadFile(sessionPath(dir, s.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type rawCommandLine struct {
+		Type    string `json:"type"`
+		Command struct {
+			Status         string `json:"status"`
+			CreatedAt      string `json:"created_at"`
+			AfterMessageID string `json:"after_message_id"`
+		} `json:"command"`
+	}
+	var acceptedRaw, succeededRaw *rawCommandLine
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var rl rawCommandLine
+		if err := json.Unmarshal([]byte(line), &rl); err != nil || rl.Type != "command" {
+			continue
+		}
+		switch rl.Command.Status {
+		case "accepted":
+			rl := rl
+			acceptedRaw = &rl
+		case "succeeded":
+			rl := rl
+			succeededRaw = &rl
+		}
+	}
+	if acceptedRaw == nil || succeededRaw == nil {
+		t.Fatalf("raw journal missing accepted or succeeded command line: %s", data)
+	}
+	if succeededRaw.Command.CreatedAt == "" || succeededRaw.Command.CreatedAt == "0001-01-01T00:00:00Z" {
+		t.Fatalf("on-disk terminal record CreatedAt = %q, want the original accepted timestamp", succeededRaw.Command.CreatedAt)
+	}
+	if succeededRaw.Command.CreatedAt != acceptedRaw.Command.CreatedAt {
+		t.Errorf("on-disk terminal record CreatedAt = %q, want %q (the accepted record's own)", succeededRaw.Command.CreatedAt, acceptedRaw.Command.CreatedAt)
+	}
+	if succeededRaw.Command.AfterMessageID != "msg_durable" {
+		t.Errorf("on-disk terminal record AfterMessageID = %q, want msg_durable", succeededRaw.Command.AfterMessageID)
 	}
 }
 
