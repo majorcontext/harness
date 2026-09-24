@@ -385,13 +385,12 @@ The server returns the resolved registry for the current configuration:
 ]}
 ```
 
-A frontend builds its slash-menu autocomplete from this response — plus
-`serve_support` below, when it resolves commands itself — rather than
-carrying its own table. The menu only fills the input; harness resolves
-the typed line server-side, so a frontend never re-implements `Resolve`.
-`method` and `path` are the serve-mode mapping, present so an HTTP client
-needs no route knowledge of its own; `cmd/harness` ignores both and
-dispatches on `op`.
+A frontend builds its slash-menu autocomplete from this response, rather
+than carrying its own table. The menu only fills the input; harness
+resolves the typed line server-side, so a frontend never re-implements
+`Resolve`. `method` and `path` are the serve-mode mapping, present so an
+HTTP client needs no route knowledge of its own; `cmd/harness` ignores
+both and dispatches on `op`.
 
 `serve_support` is a second, additive map, keyed by the same canonical
 `name`, for a client that resolves commands itself — the Boxes console,
