@@ -180,6 +180,119 @@ components:
             The HTTP path (with `{id}` path parameters) this dispatcher
             answers the op with. Present only for kind "control".
 
+    CommandStatus:
+      type: string
+      enum: [accepted, succeeded, failed, refused, unsupported, interrupted]
+      description: >
+        The outcome of a resolved slash command. Only `accepted` is
+        non-terminal: a dispatched command's SECOND, terminal record
+        always carries one of the other five. See
+        docs/design/slash-commands.md's "Serve-mode resolution" section
+        for the full status/text table.
+
+    CommandRecord:
+      type: object
+      description: >
+        A slash command a person typed, and its outcome — journaled
+        beside a session's message history, never inside it. The log is
+        append-only: a status change is a NEW record sharing the same
+        `id`, and a reader folds by `id`, the latest record winning. See
+        docs/design/slash-commands.md's "Serve-mode resolution" section
+        and docs/session-storage-and-queue.md's "Command records"
+        section.
+      required: [id, line, name, source, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          example: cmd_01k8x2q7z3f9v0m4c5b6n7p8r9
+        line:
+          type: string
+          description: The exact line the caller submitted, e.g. "/compact 5".
+        name:
+          type: string
+          description: >
+            The canonical registry name this line resolved to — never the
+            alias the caller typed.
+        args:
+          type: object
+          additionalProperties: true
+          description: >
+            The command's bound arguments, e.g. {"keep_turns": 5}. Omitted
+            when the command takes none.
+        source:
+          $ref: "#/components/schemas/PromptSource"
+        source_id:
+          type: string
+          description: >
+            Free-form identifier for `source`'s own instance. Omitted when
+            `source` names no such id, or none was given.
+        source_label:
+          type: string
+          description: >
+            Free-form, human-readable label for the same instance.
+            Omitted, display only.
+        status:
+          $ref: "#/components/schemas/CommandStatus"
+        text:
+          type: string
+          description: >
+            A human-readable outcome sentence. Omitted while `status` is
+            `accepted`; present on every terminal status.
+        result:
+          type: object
+          additionalProperties: true
+          description: >
+            The dispatched route's own 2xx JSON body, capped at 16 KiB.
+            Omitted when the command never dispatched a route, or when
+            the body exceeded the cap — see `result_truncated`.
+        result_truncated:
+          type: boolean
+          description: True when `result` was omitted for exceeding the 16 KiB cap.
+        after_message_id:
+          type: string
+          description: >
+            The durable message id this command's first record followed.
+            Omitted means "before every message". A later compaction
+            re-anchors this to the fold's own summary id.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CommandReceipt:
+      type: object
+      description: >
+        The small receipt a prompt-landing route's response carries when
+        the submitted text resolved to a command instead of an ordinary
+        prompt or message — see PromptAsyncResponse, SendResponse, and
+        EnqueueResponse's own `command` field.
+      required: [id, status]
+      properties:
+        id:
+          type: string
+          description: The same id the full CommandRecord for this command carries.
+        status:
+          $ref: "#/components/schemas/CommandStatus"
+
+    CommandServeSupportEntry:
+      type: object
+      required: [supported]
+      properties:
+        supported:
+          type: boolean
+          description: >
+            Whether `harness serve` resolves this command itself, with no
+            frontend standing in front of it.
+        reason:
+          type: string
+          description: >
+            Present only when `supported` is false. Always the literal
+            "Not available in this client." — the exact sentence serve
+            mode returns to the person who typed the command. Names no
+            route and no internal term.
+
     Session:
       type: object
       required: [id, created_at, model, status, state, messages, workdir, usage, context, last_activity_at, plugins, queued, subscription_usage]
@@ -925,7 +1038,7 @@ components:
         Compaction renumbers, so a client paging across one can see two
         pages overlap; message ids are stable and are the way to
         de-duplicate.
-      required: [messages, first_seq, last_seq, total, has_more]
+      required: [messages, first_seq, last_seq, total, has_more, commands]
       properties:
         messages:
           type: array
@@ -952,6 +1065,13 @@ components:
         has_more:
           type: boolean
           description: Whether at least one message older than `first_seq` exists.
+        commands:
+          type: array
+          items: { $ref: "#/components/schemas/CommandRecord" }
+          description: >
+            The folded command records whose `after_message_id` anchor
+            falls inside this page. Always present, `[]` when none — see
+            docs/session-storage-and-queue.md's "Command records" section.
 
     Transcript:
       type: object
@@ -1002,7 +1122,7 @@ components:
         docs/design/live-event-tip-cursor.md for the full argument. A
         client that only ever reads `stream_from` is unaffected — nothing
         about it changed.
-      required: [messages, stream_from, live_from]
+      required: [messages, stream_from, live_from, commands]
       properties:
         messages:
           type: array
@@ -1052,6 +1172,16 @@ components:
             `live_from` is unaffected.
           items:
             type: integer
+        commands:
+          type: array
+          items: { $ref: "#/components/schemas/CommandRecord" }
+          description: >
+            The folded command records whose `after_message_id` anchor
+            falls inside the returned window — every folded record, on the
+            unwindowed default call. Always present, `[]` when none — see
+            docs/session-storage-and-queue.md's "Command records" section.
+            A client that only ever reads `messages`/`stream_from`/
+            `live_from`/`seqs` is unaffected.
 
     Part:
       type: object
@@ -1150,13 +1280,16 @@ components:
           description: Seq to tail /event from.
         status:
           type: string
-          enum: [started, queued]
+          enum: [started, queued, command]
           description: >
             `started`: a turn is now running for THIS request's own prompt.
             `queued`: this prompt is durably waiting in the FIFO — see
             `queued` below for the depth. A prompt that was queued and later
             dispatched does not get a second response; its progress and
             completion arrive on /event exactly like any other turn.
+            `command`: this request's text resolved to a slash command
+            instead of a prompt — see `command` below. No user message was
+            appended and no turn ran.
         queued:
           type: integer
           description: >
@@ -1175,7 +1308,14 @@ components:
             `id` when it supplied a usable one, otherwise the server-minted
             `msg_...` id. Echoed so a client that pre-minted the id can confirm
             it, and so a client that did not can learn it. The message also
-            arrives on /event carrying this same id.
+            arrives on /event carrying this same id. Absent when status is
+            `command`: a resolved command never becomes a user message, so
+            there is no id to report.
+        command:
+          $ref: "#/components/schemas/CommandReceipt"
+          description: >
+            The resolved command's receipt. Present only when status is
+            `command`.
 
     SendRequest:
       type: object
@@ -1234,21 +1374,23 @@ components:
 
     SendResponse:
       type: object
-      required: [session_id, status, message_id]
+      required: [session_id, status]
       properties:
         session_id:
           type: string
           description: The target session's own id, echoed back.
         status:
           type: string
-          enum: [sent, queued]
+          enum: [sent, queued, command]
           description: >
             `sent`: a turn is now running for THIS request's own message
             (an idle target's own claim, or the freed-slot retry dispatching
             it). `queued`: durably waiting in the FIFO behind a busy turn —
             see `queued` below for the depth. Never `started`: this is
             session.send's own back-compat vocabulary, not prompt_async's —
-            a truthy status either way.
+            a truthy status either way. `command`: this request's text
+            resolved to a slash command instead of a message — see `command`
+            below. No user message was appended and no turn ran.
         queued:
           type: integer
           description: >
@@ -1259,7 +1401,14 @@ components:
           description: >
             The id of the user message this send created — the caller's own
             `id` when it supplied a usable one, otherwise the server-minted
-            `msg_...` id.
+            `msg_...` id. Absent when status is `command`: a resolved
+            command never becomes a user message, so there is no id to
+            report.
+        command:
+          $ref: "#/components/schemas/CommandReceipt"
+          description: >
+            The resolved command's receipt. Present only when status is
+            `command`.
 
     PromptRequest:
       type: object
@@ -1433,7 +1582,7 @@ components:
       properties:
         status:
           type: string
-          enum: [started, queued, duplicate]
+          enum: [started, queued, duplicate, command]
           description: >
             `started` (202): a turn is now running for THIS request's own
             prompt. `queued` (202): durably accepted and waiting in the
@@ -1444,7 +1593,14 @@ components:
             accept for upstream-ack purposes. A `queued` prompt that is
             later dispatched gets no second response of its own — its
             progress and completion arrive on /event exactly like any
-            other turn.
+            other turn. `command` (202): this request's text resolved to a
+            slash command instead of a prompt — see `command` below. No
+            prompt was enqueued and nothing was appended to history.
+        command:
+          $ref: "#/components/schemas/CommandReceipt"
+          description: >
+            The resolved command's receipt. Present only when status is
+            `command`.
         watermark:
           type: integer
           format: int64
@@ -1603,6 +1759,7 @@ components:
             - compaction.failed
             - compaction.started
             - compaction.claude_code
+            - command
             - text.delta
             - reasoning.delta
             - tool.start
@@ -1799,6 +1956,12 @@ components:
             particular are indistinguishable, on the wire, from a genuine
             report of 0: a consumer must render "unknown", never "0", for
             an absent key.
+            command is durable and carries the resolved slash command's
+            record (`command`, below) — one per journaled `CommandRecord`,
+            so a dispatched command's `accepted` record and its later
+            terminal record each arrive as their own "command" event
+            sharing `command.id`. See docs/design/slash-commands.md's
+            "Serve-mode resolution" section.
         session_id: { type: string }
         seq:
           type: integer
@@ -1832,6 +1995,9 @@ components:
           $ref: "#/components/schemas/SessionStatus"
         message:
           $ref: "#/components/schemas/Message"
+        command:
+          $ref: "#/components/schemas/CommandRecord"
+          description: Present only on a "command" event.
         model:
           $ref: "#/components/schemas/ModelRef"
         effort:
@@ -2634,6 +2800,17 @@ paths:
                   commands:
                     type: array
                     items: { $ref: "#/components/schemas/Command" }
+                  serve_support:
+                    type: object
+                    additionalProperties:
+                      $ref: "#/components/schemas/CommandServeSupportEntry"
+                    description: >
+                      Whether `harness serve` resolves each command itself,
+                      keyed by the same canonical `name` — total over every
+                      registry entry. Absent entirely on a server whose
+                      prompt-landing routes resolve no command at all. See
+                      docs/design/slash-commands.md's "GET /commands"
+                      section.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /session:
@@ -3018,7 +3195,11 @@ paths:
             freed-slot retry dispatching this same prompt), or `queued` when
             it is durably waiting in the FIFO for a future drain — `queued`
             then carries the current depth (including this prompt). Either
-            way, `seq` is the seq to tail /event from.
+            way, `seq` is the seq to tail /event from. `status` is `command`
+            when the submitted text resolved to a slash command instead —
+            `command` then carries the resolved command's receipt, and no
+            `message_id` is reported. See
+            docs/design/slash-commands.md's "Serve-mode resolution" section.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PromptAsyncResponse" }
@@ -3085,7 +3266,11 @@ paths:
             Accepted. `status` is `sent` when a turn is now running for
             THIS request's own message, or `queued` when it is durably
             waiting in the FIFO for a future drain — `queued` then carries
-            the current depth (including this message).
+            the current depth (including this message). `status` is
+            `command` when the submitted text resolved to a slash command
+            instead — `command` then carries the resolved command's
+            receipt, and no `message_id` is reported. See
+            docs/design/slash-commands.md's "Serve-mode resolution" section.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SendResponse" }
@@ -3184,7 +3369,11 @@ paths:
             docs/deploy-modal.md). `status` is `started` when a turn is now
             running for THIS request's own prompt, or `queued` when it is
             durably waiting in the FIFO for a future drain (see `queued` in
-            EnqueueResponse for the depth).
+            EnqueueResponse for the depth). `status` is `command` when the
+            submitted text resolved to a slash command instead — the
+            command's own record was durably accepted the same way, and
+            `command` carries its receipt. See
+            docs/design/slash-commands.md's "Serve-mode resolution" section.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/EnqueueResponse" }

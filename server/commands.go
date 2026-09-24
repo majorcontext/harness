@@ -40,7 +40,8 @@ var opRoutes = map[command.Op]route{
 // here fails TestServeModeOpsTotal instead of silently reaching a
 // client as supported. queue-clear stays false because it is out of
 // scope for this plan; DELETE /session/{id}/queue already exists and a
-// future task can flip it. See docs/design/slash-commands.md §5.
+// future task can flip it. See docs/design/slash-commands.md's
+// "Serve-mode resolution" section.
 var serveModeOps = map[command.Op]bool{
 	command.OpCompact:        true,
 	command.OpSetModel:       true,

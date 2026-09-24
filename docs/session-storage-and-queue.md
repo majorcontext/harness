@@ -463,6 +463,40 @@ death exactly like a torn fsync can, and the same last-writer-wins fold
 repairs both. See docs/deploy-modal.md for the recommended setting on Modal
 Volume v2 deployments.
 
+## Command records
+
+A resolved slash command (`docs/design/slash-commands.md`'s "Serve-mode
+resolution") is journaled beside history, never inside it:
+`Session.RecordCommand`/`RecordCommandDurable` persist a `recCommand`
+record and fold it into `Session.Commands()` by `id` — the same
+append-only, fold-by-`id` shape a status update reapplies over an
+earlier record for the same command, never a second row. A command's
+`after_message_id` anchors it to the last durable message at the moment
+of its FIRST record; a later status update (`accepted` ->
+`succeeded`/`failed`/...) keeps that same anchor and the same
+`created_at` — only `updated_at` and the terminal fields change.
+`GET /session/{id}/message`'s `MessagePage`/`Transcript` responses carry
+the folded records whose anchor falls inside the returned window
+(`commands`, `engine.CommandsInWindow`), and `GET /session/{id}/journal`
+exposes each record's `id`/`name`/`status` as metadata beside its own
+entry.
+
+`POST /session/{id}/enqueue`'s dispatched-command sibling,
+`Session.RecordCommandDurable`, shares `Session.enqueueSeq` — the SAME
+watermark `EnqueuePromptDurable` advances above — so a command and a
+prompt draw idempotency sequence numbers from one session-monotonic
+space: a duplicate `seq` for either kind is a clean no-op against the
+same high-water mark, and `GET /session/{id}/queue`'s watermark reports
+both.
+
+A resolved command never enters the prompt queue. `resolvePromptCommand`
+(`server/commands.go`) intercepts a TYPED line before `prompt_async`,
+`enqueue`, or `send` ever calls `EnqueuePrompt`/`EnqueuePromptDurable`: it
+records the `CommandRecord` and, for a dispatchable op, runs the
+command's own route in process — no `QueuedPrompt` is ever created, and a
+busy session that cannot run the command right now REFUSES it
+(`CommandRefused`) rather than queuing it for later.
+
 ## Managed processes
 
 `config.Config.Processes` (`processes` in JSON) declares named long-lived
