@@ -2921,7 +2921,7 @@ func TestApplyClaudeCodeContextUsageResponseRejectsMalformed(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			s := NewSession(Config{Model: claudeCodeRef, Providers: provider.Registry{"test": &scriptedProvider{name: "test"}}})
-			gen := s.beginClaudeCodeContextUsageTurn()
+			_, gen := s.beginClaudeCodeTurn()
 			raw := json.RawMessage(fmt.Sprintf(
 				`{"subtype":"success","request_id":"harness-context-usage-%d","response":%s}`, gen, c.response))
 			applyClaudeCodeContextUsageResponse(s, raw)

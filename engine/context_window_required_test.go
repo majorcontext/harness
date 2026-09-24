@@ -237,7 +237,8 @@ func TestContextGauge(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
 
 	claudeCode := NewSession(Config{Model: claudeCodeRef, Providers: prov})
-	claudeCode.setClaudeCodeContextUsage(claudeCode.beginClaudeCodeContextUsageTurn(), 15_554, 1_000_000)
+	_, gen := claudeCode.beginClaudeCodeTurn()
+	claudeCode.setClaudeCodeContextUsage(gen, 15_554, 1_000_000)
 	if window, used, live := claudeCode.ContextGauge(); window != 1_000_000 || used != 15_554 || !live {
 		t.Errorf("claude-code: ContextGauge() = %d, %d, %v; want 1000000, 15554, true", window, used, live)
 	}
@@ -268,22 +269,28 @@ func TestContextGauge(t *testing.T) {
 
 func TestSetClaudeCodeContextUsageRejects(t *testing.T) {
 	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
+	beginGen := func(s *Session) uint64 { _, gen := s.beginClaudeCodeTurn(); return gen }
 	cases := []struct {
 		name  string
 		cfg   Config
 		setup func(*Session) uint64 // returns the generation the late reading carries
 	}{
-		{"explicit window", Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov}, (*Session).beginClaudeCodeContextUsageTurn},
-		{"opt-out", Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov}, (*Session).beginClaudeCodeContextUsageTurn},
+		{"explicit window", Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov}, beginGen},
+		{"opt-out", Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov}, beginGen},
 		{"superseded by this session's next turn", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
-			gen := s.beginClaudeCodeContextUsageTurn()
-			s.beginClaudeCodeContextUsageTurn()
+			gen := beginGen(s)
+			beginGen(s)
 			return gen
 		}},
 		{"superseded by SetModel switching back to the SAME ref", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
-			gen := s.beginClaudeCodeContextUsageTurn()
+			gen := beginGen(s)
 			s.SetModel(message.ModelRef{Provider: "test", Model: "x"})
 			s.SetModel(claudeCodeRef)
+			return gen
+		}},
+		{"model and gen captured together, then SetModel races to a different claude-code alias before the response lands", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+			_, gen := s.beginClaudeCodeTurn()
+			s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"})
 			return gen
 		}},
 	}

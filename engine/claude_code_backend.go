@@ -274,7 +274,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if binary == "" {
 		binary = defaultClaudeCodeBinaryPath
 	}
-	model := s.Model()
+	model, contextUsageGen := s.beginClaudeCodeTurn()
 
 	appendPrompt, haveAppendPrompt := claudeCodeAppendSystemPrompt(s.cfg.AppendSystemPrompt)
 	if haveAppendPrompt {
@@ -448,9 +448,6 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("engine: claude-code: starting %q: %w", binary, err)
 	}
-	// Allocated here, not inside the pump goroutine: an async delay could
-	// let a SetModel race ahead of this turn's own first write.
-	contextUsageGen := s.beginClaudeCodeContextUsageTurn()
 
 	// Drain stderrPipe into stderr for as long as it stays open, same as
 	// Cmd's own now-avoided internal copying goroutine would have —

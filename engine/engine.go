@@ -1852,10 +1852,12 @@ func (s *Session) clearContextUsageLocked() uint64 {
 	return s.contextUsageGen
 }
 
-func (s *Session) beginClaudeCodeContextUsageTurn() uint64 {
+// beginClaudeCodeTurn binds the model to a fresh usage generation atomically,
+// so a SetModel racing the child's startup invalidates the pairing.
+func (s *Session) beginClaudeCodeTurn() (message.ModelRef, uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.clearContextUsageLocked()
+	return s.model, s.clearContextUsageLocked()
 }
 
 func (s *Session) setClaudeCodeContextUsage(gen uint64, usedTokens, windowTokens int) {
