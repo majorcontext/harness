@@ -1844,9 +1844,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// far (guaranteed present, in order, since a compact record can
 			// only be written chronologically after those messages were
 			// themselves durably appended) and splice — the identical
-			// function the live path uses (spliceCompact, compact.go), so
-			// the two can never drift apart. Not found is corruption, an
-			// explicit error, never a silent best-effort guess.
+			// bounds and splice functions the live path uses (compactBounds/
+			// spliceCompactBounds, compact.go), so the two can never drift
+			// apart. Not found is corruption, an explicit error, never a
+			// silent best-effort guess.
 			if rec.Compact == nil {
 				return fmt.Errorf("compact record without payload at line %d", line)
 			}
@@ -1881,19 +1882,21 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// error. Not a regression: main hard-fails this load every time,
 			// and a session that loads with a slightly-wrong fold beats a
 			// session that never loads again.
-			// applyCompactRecord (compact.go) runs the heal and then
-			// spliceCompact. It is shared with the metadata index's own
-			// fold (index.go), so both agree on how many messages a
-			// compact record removes. A failed heal falls through
-			// unchanged: spliceCompact looks for the original (unhealed)
-			// LastID, fails to find it exactly as before, and returns its
-			// usual loud, explicit error — never a silent best-effort
-			// guess.
-			spliced, err := applyCompactRecord(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded, rec.Compact.Summary)
+			// compactRecordBounds (compact.go) runs the heal and returns the
+			// range to splice. It is shared with the metadata index's own
+			// fold (index.go), so both agree on how many messages a compact
+			// record removes. A failed heal falls through unchanged: the
+			// splice below looks for the original (unhealed) LastID, fails
+			// to find it exactly as before, and returns its usual loud,
+			// explicit error — never a silent best-effort guess.
+			start, end, err := compactRecordBounds(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)
 			}
-			s.history = spliced
+			// Re-anchor cmds (the command trail folded so far) exactly as the
+			// live path does — see reanchorCommands.
+			reanchorCommands(cmds, s.history[start:end+1], rec.Compact.Summary.ID)
+			s.history = spliceCompactBounds(s.history, start, end, rec.Compact.Summary)
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt
 			// Cumulative usage ONLY (see record.Usage's doc comment above

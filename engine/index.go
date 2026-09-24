@@ -26,7 +26,14 @@ import (
 // refolds — never guesses — when a stored index carries any other value, so
 // a field added here needs no migration: bump this and every stale sidecar
 // is rebuilt on its next read.
-const sessionIndexVersion = 2
+//
+// 2 -> 3: added Commands. A version-2 fold already tolerated a recCommand
+// record (the switch simply had no case for it, so LogSize/LogModTime still
+// matched the journal exactly), so a stale version-2 sidecar for a session
+// that already carries command records would otherwise pass every
+// readStoredIndex check and serve as current — with Commands silently
+// empty. The bump forces one refold per such sidecar; nothing else changes.
+const sessionIndexVersion = 3
 
 // sessionIndexSuffix is appended to a session id to name its sidecar. It
 // deliberately does NOT end in ".jsonl", so ListSessionIndexes' own scan for
@@ -94,6 +101,13 @@ type SessionIndex struct {
 	// Queued is the durable prompt-queue depth (queue.go): prompts
 	// enqueued and not yet dequeued.
 	Queued int `json:"queued,omitempty"`
+
+	// Commands is the durable slash-command trail (message.CommandRecord,
+	// command.go), folded by the same foldCommand LoadSession uses and
+	// re-anchored across every compact record it has folded so far (see
+	// reanchorCommands). CommandsInWindow (messagepage.go) filters it to one
+	// page's window.
+	Commands []message.CommandRecord `json:"commands,omitempty"`
 
 	CompactionCount int       `json:"compaction_count,omitempty"`
 	LastCompactedAt time.Time `json:"last_compacted_at,omitzero"`
@@ -206,6 +220,12 @@ type indexRecord struct {
 	Prompt              *promptRecord    `json:"prompt,omitempty"`
 	TaskSpawn           *taskSpawnRecord `json:"task_spawn,omitempty"`
 	Compact             *indexCompact    `json:"compact,omitempty"`
+	// Command carries a recCommand record's payload. It is the SAME type
+	// record.Command decodes into (commandRecord, command.go) — a
+	// message.CommandRecord is small and already cheap to decode, unlike a
+	// message's parts, so there is no slimmer shape worth keeping in step
+	// with it separately.
+	Command *commandRecord `json:"command,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -230,6 +250,7 @@ func indexRecordOf(rec record) indexRecord {
 		Goal:                rec.Goal,
 		Prompt:              rec.Prompt,
 		TaskSpawn:           rec.TaskSpawn,
+		Command:             rec.Command,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)
@@ -285,6 +306,11 @@ type indexFold struct {
 	// stays constant time. See appendMessage.
 	repairs int
 	queue   promptQueueFold
+	// commandSeqs is this fold's OWN torn-write seq map for foldCommand
+	// (see foldCommand's doc comment) — never Session.commandSeqs, which
+	// belongs to a live session's own fold. Lazily initialized: a fold
+	// that never sees a recCommand record never allocates it.
+	commandSeqs map[string]int64
 	// header is set by the session header record. A journal whose first
 	// record is not a header is not a session log (events.jsonl is the one
 	// in-tree example), and snapshot refuses it.
@@ -356,6 +382,13 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		if rec.TaskSpawn != nil && rec.TaskSpawn.ChildID != "" {
 			f.ix.SpawnedChildIDs = append(f.ix.SpawnedChildIDs, rec.TaskSpawn.ChildID)
 		}
+	case recCommand:
+		if rec.Command != nil {
+			if f.commandSeqs == nil {
+				f.commandSeqs = map[string]int64{}
+			}
+			f.ix.Commands = foldCommand(f.ix.Commands, f.commandSeqs, rec.Command.CommandRecord, rec.Command.Seq)
+		}
 	case recCompact:
 		if rec.Compact == nil {
 			return errors.New("compact record without payload")
@@ -369,6 +402,11 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			f.broken = true
 			return nil
 		}
+		// Re-anchor exactly as the live and replay paths do (see
+		// reanchorCommands): the skeleton range about to be spliced away
+		// names the same message ids a folded command's AfterMessageID can
+		// carry.
+		reanchorCommands(f.ix.Commands, f.messages[start:end+1], rec.Compact.Summary.ID)
 		f.messages = spliceCompactBounds(f.messages, start, end, rec.Compact.Summary.skeleton())
 		f.messageRecordOrdinals = spliceOrdinalBounds(f.messageRecordOrdinals, start, end, f.recordOrdinal)
 		f.recountRepairs()
@@ -568,6 +606,13 @@ func (f *indexFold) snapshot(logSize int64, modTime time.Time) (SessionIndex, bo
 	}
 	if len(ix.SpawnedChildIDs) > 0 {
 		ix.SpawnedChildIDs = append([]string(nil), ix.SpawnedChildIDs...)
+	}
+	if len(ix.Commands) > 0 {
+		// The fold keeps folding after this snapshot is taken — a later
+		// recCommand or recCompact record can append to or reanchor
+		// f.ix.Commands in place — so the returned index needs its own
+		// backing array, the same reason SpawnedChildIDs copies above.
+		ix.Commands = append([]message.CommandRecord(nil), ix.Commands...)
 	}
 	return ix, true
 }

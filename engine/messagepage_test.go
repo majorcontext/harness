@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -390,6 +391,87 @@ func TestReadMessagePageEmptySession(t *testing.T) {
 	if len(page.Messages) != 0 || page.Total != 0 || page.HasMore {
 		t.Errorf("page = %+v, want an empty page", page)
 	}
+}
+
+// TestMessagePageCarriesCommandsInWindow is Task 4's red-first test for
+// CommandsInWindow: a page must carry exactly the folded commands whose
+// anchor sits inside its window, plus an empty-anchored command only on the
+// page that starts at the session's first message. Failure: a command is
+// missing from a page it belongs on, or leaks onto one it does not.
+func TestMessagePageCarriesCommandsInWindow(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+
+	newCmd := func() message.CommandRecord {
+		return message.CommandRecord{
+			ID: NewCommandID(), Line: "/status", Name: "status",
+			Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+		}
+	}
+
+	// c0 is recorded before any message exists, so its anchor is "".
+	c0 := newCmd()
+	if err := s.RecordCommand(c0); err != nil {
+		t.Fatalf("RecordCommand c0: %v", err)
+	}
+
+	var c1, c2 message.CommandRecord
+	for i := 1; i <= 10; i++ {
+		role := message.RoleUser
+		if i%2 == 0 {
+			role = message.RoleAssistant
+		}
+		s.append(message.Message{
+			ID:    fmt.Sprintf("m%d", i),
+			Role:  role,
+			Parts: message.Parts{&message.Text{Text: fmt.Sprintf("text %d", i)}},
+		})
+		switch i {
+		case 2:
+			c1 = newCmd()
+			if err := s.RecordCommand(c1); err != nil {
+				t.Fatalf("RecordCommand c1: %v", err)
+			}
+		case 9:
+			c2 = newCmd()
+			if err := s.RecordCommand(c2); err != nil {
+				t.Fatalf("RecordCommand c2: %v", err)
+			}
+		}
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	older, err := ReadMessagePage(dir, s.ID, 6, 5)
+	if err != nil {
+		t.Fatalf("ReadMessagePage(before=6, limit=5): %v", err)
+	}
+	if got := idsOf(older.Messages); !sameIDs(got, []string{"m1", "m2", "m3", "m4", "m5"}) {
+		t.Fatalf("older page messages = %v, want m1..m5", got)
+	}
+	if got := commandIDsOf(older.Commands); !sameIDs(got, []string{c0.ID, c1.ID}) {
+		t.Fatalf("older page commands = %v, want [c0, c1] (anchored \"\" and m2)", got)
+	}
+
+	newest, err := ReadMessagePage(dir, s.ID, 0, 5)
+	if err != nil {
+		t.Fatalf("ReadMessagePage(newest, limit=5): %v", err)
+	}
+	if got := idsOf(newest.Messages); !sameIDs(got, []string{"m6", "m7", "m8", "m9", "m10"}) {
+		t.Fatalf("newest page messages = %v, want m6..m10", got)
+	}
+	if got := commandIDsOf(newest.Commands); !sameIDs(got, []string{c2.ID}) {
+		t.Fatalf("newest page commands = %v, want [c2] (anchored m9) — never c0 or c1", got)
+	}
+}
+
+func commandIDsOf(cmds []message.CommandRecord) []string {
+	out := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		out = append(out, c.ID)
+	}
+	return out
 }
 
 // TestReadMessagePageCapsLimit: the ENGINE API bounds a read rather than

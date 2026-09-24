@@ -86,6 +86,10 @@ type MessagePage struct {
 	// HasMore reports whether at least one message older than FirstSeq
 	// exists. It is false for a page that starts at seq 1.
 	HasMore bool
+	// Commands holds the folded slash-command records (message.CommandRecord)
+	// whose AfterMessageID anchors them within this page's window — see
+	// CommandsInWindow. Never nil.
+	Commands []message.CommandRecord
 }
 
 // revChunkBytes is the backward scan's read granularity. It is comfortably
@@ -182,6 +186,11 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 	page := MessagePage{Total: ix.DurableMessages}
 	lo, hi, _ := MessagePageWindow(ix.DurableMessages, beforeSeq, limit)
 	if hi < lo {
+		// Empty page. It "starts at the first message" — and so carries an
+		// empty-anchored command — only for a session with no durable
+		// messages at all; any other empty result (an out-of-range
+		// beforeSeq) names no window and gets none.
+		page.Commands = CommandsInWindow(ix.Commands, nil, ix.DurableMessages == 0)
 		return page, nil
 	}
 
@@ -240,7 +249,32 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		page.LastSeq = hi
 		page.HasMore = page.FirstSeq > 1
 	}
+	page.Commands = CommandsInWindow(ix.Commands, page.Messages, page.FirstSeq == 1)
 	return page, nil
+}
+
+// CommandsInWindow returns the folded command records (in fold order) whose
+// AfterMessageID names a message in window, plus every record with an empty
+// AfterMessageID when fromFirst is true — a command recorded before the
+// session's first durable message, which only a window starting at the
+// session's own beginning can show. Never nil.
+func CommandsInWindow(cmds []message.CommandRecord, window []message.Message, fromFirst bool) []message.CommandRecord {
+	ids := make(map[string]bool, len(window))
+	for _, m := range window {
+		ids[m.ID] = true
+	}
+	out := make([]message.CommandRecord, 0, len(cmds))
+	for _, c := range cmds {
+		switch {
+		case c.AfterMessageID == "":
+			if fromFirst {
+				out = append(out, c)
+			}
+		case ids[c.AfterMessageID]:
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // pageError classifies a failure from a page scan. The check before the

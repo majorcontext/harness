@@ -64,6 +64,26 @@ func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.
 	return append(cmds, c)
 }
 
+// reanchorCommands rewrites every record in cmds whose AfterMessageID names a
+// message in folded to summaryID instead, in place. Called at every point
+// that removes a range of durable messages from a fold — live compaction
+// (compact.go's Compact), replay (store.go's recCompact case), and the
+// index's own recCompact case (index.go) — so a command's anchor stays a
+// message id the corresponding fold can still resolve, however many
+// compactions later. A record whose AfterMessageID is empty (before every
+// message) never matches, since no folded message carries an empty id.
+func reanchorCommands(cmds []message.CommandRecord, folded []message.Message, summaryID string) {
+	ids := make(map[string]bool, len(folded))
+	for _, m := range folded {
+		ids[m.ID] = true
+	}
+	for i := range cmds {
+		if ids[cmds[i].AfterMessageID] {
+			cmds[i].AfterMessageID = summaryID
+		}
+	}
+}
+
 // hasCommandLocked reports whether id already has a folded record — RecordCommand/
 // RecordCommandDurable's own test for "is this the first record of this ID"
 // (CreatedAt/AfterMessageID are set only then; foldCommand keeps the

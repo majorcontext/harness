@@ -177,6 +177,70 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
+// TestCommandReanchoredOnCompact is Task 4's red-first test: a command
+// recorded against a message compaction later folds away must follow the
+// summary instead — live, after LoadSession, and in the sidecar index —
+// never an anchor a compacted history can no longer resolve. Failure: a
+// command vanishes from every page once its anchor is folded away.
+func TestCommandReanchoredOnCompact(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	runTurns(t, s, 1) // m1 (user), m2 (assistant)
+
+	anchor := s.History()[1].ID // m2
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+	if got := s.Commands()[0].AfterMessageID; got != anchor {
+		t.Fatalf("test setup: command anchor = %q, want %q (m2)", got, anchor)
+	}
+
+	runTurns(t, s, 2) // m3..m6
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.TurnsFolded != 2 {
+		t.Fatalf("TurnsFolded = %d, want 2 (folds m1..m4 into the summary)", res.TurnsFolded)
+	}
+	summaryID := res.Summary.ID
+
+	if got := s.Commands()[0].AfterMessageID; got != summaryID {
+		t.Fatalf("live Commands() anchor after compact = %q, want summary id %q", got, summaryID)
+	}
+
+	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got := loaded.Commands()[0].AfterMessageID; got != summaryID {
+		t.Fatalf("LoadSession Commands() anchor = %q, want %q", got, summaryID)
+	}
+
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if len(ix.Commands) != 1 || ix.Commands[0].AfterMessageID != summaryID {
+		t.Fatalf("index Commands = %+v, want one record anchored to %q", ix.Commands, summaryID)
+	}
+}
+
 // TestCompactPreservesRetainedResultsIndex is review finding F3(a)'s red
 // test. The retention ceiling (Config.ToolResultRetainedBytes) is monotonic
 // — only ever incremented, nothing evicts or reclaims it — and
