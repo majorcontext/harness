@@ -2917,6 +2917,7 @@ func TestApplyClaudeCodeContextUsageResponseRejectsMalformed(t *testing.T) {
 		{"missing rawMaxTokens", `{"totalTokens":15554}`},
 		{"negative totalTokens", `{"totalTokens":-1,"rawMaxTokens":1000000}`},
 		{"negative rawMaxTokens", `{"totalTokens":15554,"rawMaxTokens":-1}`},
+		{"zero rawMaxTokens", `{"totalTokens":15554,"rawMaxTokens":0}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

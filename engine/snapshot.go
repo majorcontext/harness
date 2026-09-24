@@ -139,6 +139,16 @@ type sessionSnapshot struct {
 	// a load failure.
 	ForceCompactionCheck bool `json:"force_compaction_check,omitempty"`
 
+	// LastUsageDelegated mirrors Session.lastUsageDelegated: whether
+	// LastUsage above came from a claude-code turn, not a completed
+	// native one. Omitting it would let a snapshot-anchored load right
+	// after a claude-code-to-native switch report the CLI's aggregate as
+	// the new model's usage — the same stale reading ForceCompactionCheck
+	// exists to guard, on a wider window (see that field's own doc
+	// comment). False on an OLD snapshot written before this field
+	// existed — the same pre-fix behavior, not a load failure.
+	LastUsageDelegated bool `json:"last_usage_delegated,omitempty"`
+
 	GoalActive    bool   `json:"goal_active,omitempty"`
 	GoalCondition string `json:"goal_condition,omitempty"`
 
@@ -499,6 +509,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		LastUsage:            s.lastUsage,
 		HaveLastUsage:        s.haveLastUsage,
 		ForceCompactionCheck: s.forceCompactionCheck,
+		LastUsageDelegated:   s.lastUsageDelegated,
 		GoalActive:           s.goalActive,
 		GoalCondition:        s.goalCondition,
 		CompactCount:         s.compactCount,
@@ -566,6 +577,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.lastUsage = snap.LastUsage
 	s.haveLastUsage = snap.HaveLastUsage
 	s.forceCompactionCheck = snap.ForceCompactionCheck
+	s.lastUsageDelegated = snap.LastUsageDelegated
 	s.goalActive = snap.GoalActive
 	s.goalCondition = snap.GoalCondition
 	s.compactCount = snap.CompactCount

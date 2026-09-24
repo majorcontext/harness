@@ -307,3 +307,26 @@ func TestSetClaudeCodeContextUsageRejects(t *testing.T) {
 		})
 	}
 }
+
+// TestContextGaugeSuppressesStaleAggregateBeforeFirstNativeTurn pins a
+// timing gap: forceCompactionCheck clears at maybeAutoCompact's own
+// under-threshold verdict, before the native call it precedes even runs —
+// not "when the first native turn completes." ContextGauge must stay
+// suppressed past that clear until real native usage lands.
+func TestContextGaugeSuppressesStaleAggregateBeforeFirstNativeTurn(t *testing.T) {
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:               claudeCodeRef,
+		ContextWindowTokens: 500_000,
+	})
+	seedDelegatedTurn(s, "hello")
+	s.applyClaudeCodeUsage(provider.Usage{InputTokens: 100_000}, 0)
+	s.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+
+	if err := s.maybeAutoCompact(context.Background()); err != nil {
+		t.Fatalf("maybeAutoCompact: %v", err)
+	}
+	if _, used, live := s.ContextGauge(); live || used != 0 {
+		t.Errorf("ContextGauge() before the first native turn completes = used %d, live %v; want 0, false", used, live)
+	}
+}

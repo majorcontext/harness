@@ -211,6 +211,7 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage, costUSD float64) {
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.lastUsage = usage
 	s.haveLastUsage = true
+	s.lastUsageDelegated = true
 	s.claudeCodeSessionCostUSD += costUSD
 	s.haveClaudeCodeCost = true
 	s.persistClaudeCodeUsage(usage, costUSD)
@@ -1542,14 +1543,16 @@ type claudeCodeContextUsageResult struct {
 }
 
 // A missing or negative field is rejected, not zero-valued: either would
-// otherwise pass a malformed reply off as a real zero-usage snapshot.
+// otherwise pass a malformed reply off as a real zero-usage snapshot. Zero
+// RawMaxTokens is rejected too: it is the gauge's denominator, and a zero
+// denominator beside a nonzero TotalTokens is unusable, not a real reading.
 func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
 	var cr claudeCodeControlResponse
 	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.Response == nil {
 		return
 	}
 	res := cr.Response
-	if res.TotalTokens == nil || res.RawMaxTokens == nil || *res.TotalTokens < 0 || *res.RawMaxTokens < 0 {
+	if res.TotalTokens == nil || res.RawMaxTokens == nil || *res.TotalTokens < 0 || *res.RawMaxTokens <= 0 {
 		return
 	}
 	genStr, ok := strings.CutPrefix(cr.RequestID, claudeCodeContextUsageRequestIDPrefix)

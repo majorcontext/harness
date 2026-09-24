@@ -1053,6 +1053,14 @@ type Session struct {
 	// before any turn ever ran against it in any process).
 	lastUsage     provider.Usage
 	haveLastUsage bool
+	// lastUsageDelegated is true when lastUsage was last written by a
+	// claude-code turn (applyClaudeCodeUsage), not a completed native one
+	// (appendWithUsage) — see ContextGauge, which must not treat that
+	// aggregate as the current native model's usage. Unlike
+	// forceCompactionCheck, this is NOT cleared by maybeAutoCompact's own
+	// verdict: that clear can land before the native provider call even
+	// runs, well before real native usage exists to replace this number.
+	lastUsageDelegated bool
 
 	// subscriptionUsage is this session's most recently captured
 	// subscription-lane rate-limit/quota snapshot (see
@@ -2360,7 +2368,7 @@ func (s *Session) ContextGauge() (windowTokens, usedTokens int, live bool) {
 		return 0, 0, false
 	}
 	windowTokens = displayContextWindow(s.model, s.cfg.ContextWindowTokens)
-	if s.haveLastUsage {
+	if s.haveLastUsage && !s.lastUsageDelegated {
 		usedTokens = s.lastUsage.InputTokens + s.lastUsage.CacheReadTokens + s.lastUsage.CacheWriteTokens
 	}
 	return windowTokens, usedTokens, false
@@ -2531,6 +2539,7 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.usage.CacheWriteTokens += usage.CacheWriteTokens
 		s.lastUsage = *usage
 		s.haveLastUsage = true
+		s.lastUsageDelegated = false
 		// This path is exclusively a native turn's real usage — a
 		// delegated turn's usage folds through applyClaudeCodeUsage
 		// instead (see that method's own doc comment), never here — so

@@ -1555,6 +1555,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				s.lastUsageDelegated = false
 				// A recMessage record only ever carries Usage for a
 				// native turn (a delegated turn's usage folds through
 				// recClaudeCodeUsage below, never here) — mirrors
@@ -1645,6 +1646,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				s.lastUsageDelegated = true
 			}
 			// See record.ClaudeCodeCostUSD's own doc comment: nil means a
 			// record written before cost tracking existed, not a
