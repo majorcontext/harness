@@ -1008,6 +1008,9 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// "final assistant message reasoning-only, no text, no tool call").
 	var pendingReasoning message.Parts
 	var pendingReasoningParent string
+	// pendingReasoningUpstream is this buffer's resolved id, reused by
+	// flushPendingReasoning so a streamed delta's id always matches it.
+	var pendingReasoningUpstream string
 
 	// pendingAssistant assembles the ONE message.Message for one upstream
 	// API response. The CLI streams each content block of a response as
@@ -1035,19 +1038,19 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// emitClaudeCodeParts streams one envelope's parts, always AHEAD of the
 	// message they belong to (see the EventMessage emit for why that order
 	// is load-bearing).
-	emitClaudeCodeParts := func(parts message.Parts) {
+	emitClaudeCodeParts := func(parts message.Parts, id string) {
 		for _, p := range parts {
 			switch part := p.(type) {
 			case *message.Text:
 				if part.Text != "" {
-					s.emit(Event{Type: EventTextDelta, Text: part.Text})
+					s.emit(Event{Type: EventTextDelta, Text: part.Text, ID: id})
 				}
 			case *message.Reasoning:
 				if part.Text != "" {
-					s.emit(Event{Type: EventReasoningDelta, Text: part.Text})
+					s.emit(Event{Type: EventReasoningDelta, Text: part.Text, ID: id})
 				}
 			case *message.ToolCall:
-				s.emit(Event{Type: EventToolStart, ToolCall: part})
+				s.emit(Event{Type: EventToolStart, ToolCall: part, ID: id})
 			}
 		}
 	}
@@ -1089,7 +1092,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			return
 		}
 		msg := message.Message{
-			ID:              newID("msg"),
+			ID:              pendingReasoningUpstream,
 			Role:            message.RoleAssistant,
 			Parts:           pendingReasoning,
 			Model:           model,
@@ -1102,6 +1105,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		finalMsg = &msg
 		pendingReasoning = nil
 		pendingReasoningParent = ""
+		pendingReasoningUpstream = ""
 	}
 
 	for scanner.Scan() {
@@ -1229,6 +1233,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				}
 				pendingReasoning = nil
 				pendingReasoningParent = ""
+				pendingReasoningUpstream = ""
 			}
 			// The id boundary is checked BEFORE the reasoning-only branch
 			// below: a thinking block opening the NEXT response would
@@ -1251,9 +1256,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				// streaming UX is unaffected by the buffering.
 				pendingReasoning = msg.Parts
 				pendingReasoningParent = env.ParentToolUseID
+				pendingReasoningUpstream = msg.ID
 				for _, p := range msg.Parts {
 					if r, ok := p.(*message.Reasoning); ok && r.Text != "" {
-						s.emit(Event{Type: EventReasoningDelta, Text: r.Text})
+						s.emit(Event{Type: EventReasoningDelta, Text: r.Text, ID: msg.ID})
 					}
 				}
 				continue
@@ -1264,7 +1270,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// stream immediately. Any mismatch already flushed above, so
 			// a surviving pendingAssistant here IS this envelope's own.
 			if pendingAssistant != nil && upstream != "" {
-				emitClaudeCodeParts(msg.Parts[alreadyStreamed:])
+				emitClaudeCodeParts(msg.Parts[alreadyStreamed:], pendingAssistant.ID)
 				pendingAssistant.Parts = append(pendingAssistant.Parts, msg.Parts...)
 				continue
 			}
@@ -1287,7 +1293,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// reloaded. Reported twice against the boxes console
 			// (meetneptune/boxes#599 fixed a different orphan shape; this
 			// is the one that produced the plain-text repro).
-			emitClaudeCodeParts(msg.Parts[alreadyStreamed:])
+			emitClaudeCodeParts(msg.Parts[alreadyStreamed:], msg.ID)
 			pendingAssistant = &msg
 			pendingAssistantUpstream = upstream
 			pendingAssistantParent = env.ParentToolUseID
@@ -1654,8 +1660,8 @@ type claudeCodeMessage struct {
 	// one API response this envelope carries a single content block of.
 	// Several consecutive "assistant" envelopes share it whenever a
 	// response holds more than one block, which is what
-	// consumeClaudeCodeStream groups on; harness mints its own id for the
-	// message it assembles and never persists this one.
+	// consumeClaudeCodeStream groups on; claudeCodeAssistantMessage adopts
+	// it verbatim (via ResolveMessageID) as the assembled message's own ID.
 	ID      string          `json:"id,omitempty"`
 	Content json.RawMessage `json:"content"`
 }
@@ -1769,7 +1775,8 @@ type claudeCodeReasoningData struct {
 // ParentToolUseID's own doc comment) — empty for a top-level delegated
 // turn's own messages. A decode failure or a message with no recognized
 // blocks yields a Message with a nil Parts, which consumeClaudeCodeStream's
-// caller treats as "nothing to append".
+// caller treats as "nothing to append". The returned Message.ID is cm.ID
+// resolved through ResolveMessageID.
 func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef, parentToolUseID string) message.Message {
 	var cm claudeCodeMessage
 	_ = json.Unmarshal(raw, &cm) // best-effort; a failure just yields no blocks below
@@ -1795,7 +1802,7 @@ func claudeCodeAssistantMessage(raw json.RawMessage, model message.ModelRef, par
 		}
 	}
 	return message.Message{
-		ID:              newID("msg"),
+		ID:              ResolveMessageID(cm.ID),
 		Role:            message.RoleAssistant,
 		Parts:           parts,
 		Model:           model,

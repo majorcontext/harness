@@ -207,7 +207,12 @@ type RequestMetadata struct {
 
 // Event is one streaming event from a model call.
 type Event struct {
-	Type       EventType
+	Type EventType
+	// ID is the upstream response id, captured on the stream's first frame
+	// (e.g. Anthropic's message_start) and stamped on every delta from then
+	// on. It is the SAME id EventDone's own Message.ID carries. Empty
+	// before the id arrives.
+	ID         string
 	Text       string
 	ToolCall   *message.ToolCall
 	Message    *message.Message

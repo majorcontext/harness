@@ -105,8 +105,12 @@ type Tool struct {
 // Event is one entry in the session's event stream. Event types follow ACP
 // naming where a choice is arbitrary (see docs/plugins-and-protocols.md).
 type Event struct {
-	Type       string              `json:"type"`
-	SessionID  string              `json:"session_id"`
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	// ID, on EventTextDelta/EventReasoningDelta/EventToolStart only, is the
+	// id the turn's own EventMessage will carry — see provider.Event.ID and
+	// claudeCodeUpstreamID. Empty until known.
+	ID         string              `json:"id,omitempty"`
 	Text       string              `json:"text,omitempty"`
 	Message    *message.Message    `json:"message,omitempty"`
 	ToolCall   *message.ToolCall   `json:"tool_call,omitempty"`
@@ -3413,9 +3417,9 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text.WriteString(ev.Text)
-			s.emit(Event{Type: EventTextDelta, Text: ev.Text})
+			s.emit(Event{Type: EventTextDelta, Text: ev.Text, ID: ev.ID})
 		case provider.EventReasoningDelta:
-			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text})
+			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text, ID: ev.ID})
 		case provider.EventToolCall:
 			// A complete tool_use/tool_call block: the provider has
 			// finished emitting its arguments (see

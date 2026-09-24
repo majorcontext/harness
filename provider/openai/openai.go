@@ -790,7 +790,7 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		it.text.WriteString(ev.Delta)
 		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta, ID: s.respID})
 
 	case "response.reasoning_summary_text.delta":
 		var ev struct {
@@ -824,7 +824,7 @@ func (s *stream) handle(name string, data []byte) error {
 		s.reasoningSummary = ev.SummaryIndex
 		s.reasoningStreamed = true
 		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta, ID: s.respID})
 
 	case "response.output_item.done":
 		var ev struct {

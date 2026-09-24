@@ -65,7 +65,7 @@ func TestTurnMetricsComputesLatencyAndUsage(t *testing.T) {
 	}
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		{
-			{Type: provider.EventTextDelta, Text: "hi"},
+			{Type: provider.EventTextDelta, Text: "hi", ID: "msg_a"},
 			{
 				Type:       provider.EventDone,
 				Message:    &message.Message{ID: "msg_a", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "hi"}}},
@@ -76,16 +76,27 @@ func TestTurnMetricsComputesLatencyAndUsage(t *testing.T) {
 	}}
 
 	var recorded []TurnMetrics
+	var deltaID string
 	s := NewSession(Config{
 		Providers:     provider.Registry{"test": prov},
 		Model:         message.ModelRef{Provider: "test", Model: "m1"},
 		System:        []string{"base system prompt"},
 		Now:           clock.now,
 		OnTurnMetrics: func(m TurnMetrics) { recorded = append(recorded, m) },
+		OnEvent: func(ev Event) {
+			if ev.Type == EventTextDelta {
+				deltaID = ev.ID
+			}
+		},
 	})
 
 	if _, err := s.Prompt(context.Background(), "go"); err != nil {
 		t.Fatalf("Prompt err = %v", err)
+	}
+	// EventTextDelta's own ID (a native adapter's provider.Event.ID) must
+	// match the id EventDone's Message.ID carries.
+	if deltaID != "msg_a" {
+		t.Errorf("EventTextDelta.ID = %q, want %q", deltaID, "msg_a")
 	}
 	if len(recorded) != 1 {
 		t.Fatalf("OnTurnMetrics calls = %d, want 1", len(recorded))

@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/typeid"
 )
 
 // fakeClaudeBin is the path to the compiled fakeclaude stand-in (see
@@ -310,6 +311,9 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 		}
 		if got := msg.Parts.Text(); got != "second" {
 			t.Errorf("final message text = %q, want %q", got, "second")
+		}
+		if tid, err := typeid.Parse(msg.ID); err != nil || tid.Prefix() != "msg" {
+			t.Errorf("final message ID = %q, want a minted \"msg\" TypeID (the fixture's own envelope carries no upstream id)", msg.ID)
 		}
 		if len(metrics) != 1 {
 			t.Fatalf("OnTurnMetrics called %d times, want 1 (the placeholder must not emit its own): %+v", len(metrics), metrics)
@@ -1307,6 +1311,8 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 // result is held behind the assembled message and lands after it.
 func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "parallel_tools")
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 	if _, err := s.Prompt(context.Background(), "run both"); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -1343,6 +1349,15 @@ func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	if _, ok := asst.Parts[0].(*message.Reasoning); !ok {
 		t.Errorf("hist[1].Parts[0] = %T, want the response's own Reasoning first", asst.Parts[0])
 	}
+	if asst.ID != "msg_011FAKEPARALLEL" {
+		t.Errorf("hist[1].ID = %q, want the upstream response id verbatim, not a minted id", asst.ID)
+	}
+	for _, ev := range events {
+		isGroupDelta := ev.Type == EventToolStart || ev.Type == EventReasoningDelta
+		if isGroupDelta && ev.ID != asst.ID {
+			t.Errorf("delta event %+v carries ID %q, want %q", ev, ev.ID, asst.ID)
+		}
+	}
 
 	// Both results follow the message that carries their calls, in arrival
 	// order, and the NEXT response's own id ends the group rather than
@@ -1359,6 +1374,9 @@ func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	}
 	if got := hist[4].Parts.Text(); got != "done" {
 		t.Errorf("hist[4] text = %q, want the separate response %q", got, "done")
+	}
+	if hist[4].ID != "msg_011FAKEFINAL" {
+		t.Errorf("hist[4].ID = %q, want the separate response's own upstream id, distinct from hist[1]'s", hist[4].ID)
 	}
 }
 

@@ -513,12 +513,12 @@ func (s *stream) handle(name string, data []byte) error {
 		switch ev.Delta.Type {
 		case "text_delta":
 			b.text.WriteString(ev.Delta.Text)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta.Text})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta.Text, ID: s.msgID})
 		case "input_json_delta":
 			b.inputJSON.WriteString(ev.Delta.PartialJSON)
 		case "thinking_delta":
 			b.text.WriteString(ev.Delta.Thinking)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta.Thinking})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta.Thinking, ID: s.msgID})
 		case "signature_delta":
 			b.signature += ev.Delta.Signature
 		}
