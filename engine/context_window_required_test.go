@@ -260,11 +260,8 @@ func TestContextGauge(t *testing.T) {
 		t.Errorf("native: ContextGauge() = %d, %d, %v; want 500000, 125, false", window, used, live)
 	}
 
-	// A claude-code session with an explicit configured window and a
-	// LastUsage carried over from the CLI's own whole-turn aggregate, but
-	// no live get_context_usage snapshot: the gauge must report unknown,
-	// never the aggregate — LastUsage is not prompt occupancy for a
-	// delegated session (applyClaudeCodeUsage's own doc comment).
+	// Explicit window + stale LastUsage, no live snapshot: must report
+	// unknown, not the aggregate.
 	explicitClaudeCode := NewSession(Config{
 		Model:               claudeCodeRef,
 		Providers:           prov,

@@ -2954,17 +2954,8 @@ func TestClaudeCodeContextUsageQueryUpdatesGauge(t *testing.T) {
 	}
 }
 
-// TestClaudeCodeCompactBoundaryFeedsPostTokensIntoGauge is the red-first
-// test for Fix 2: with Fix 1 in place, ContextGauge goes blank the moment
-// a claude-code turn compacts, because the CLI's own compact_metadata.
-// post_tokens (the authoritative post-compaction occupancy,
-// claude_code_backend.go's "compact_boundary" case) was decoded and
-// forwarded as an event but never fed back into the session's own
-// contextUsage. This turn's get_context_usage query answers FIRST (fixture
-// order: FAKE_CLAUDE_CONTEXT_USAGE responds ahead of the mode switch),
-// establishing a live window, then the same turn's compact_boundary
-// envelope carries post_tokens:7000 — the gauge must show that occupancy
-// against the already-known window, not zero.
+// compact_metadata.post_tokens must reach the gauge once a live window is
+// known, not stay decoded-but-unused.
 func TestClaudeCodeCompactBoundaryFeedsPostTokensIntoGauge(t *testing.T) {
 	bin := buildFakeClaude(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")

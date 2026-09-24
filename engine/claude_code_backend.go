@@ -1193,10 +1193,8 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, c
 					ClaudeCodeCompactPreTokens:  preTokens,
 					ClaudeCodeCompactPostTokens: postTokens,
 				})
-				// Record real post-compaction occupancy against the window
-				// a live get_context_usage snapshot already established
-				// this turn — never invent one. setClaudeCodeContextUsage's
-				// own gen/provider/explicit-window guards apply unchanged.
+				// Feed real occupancy into the gauge, only against a window
+				// a live snapshot already established this turn.
 				if postTokens > 0 {
 					if window, _, live := s.ContextGauge(); live {
 						s.setClaudeCodeContextUsage(contextUsageGen, postTokens, window)

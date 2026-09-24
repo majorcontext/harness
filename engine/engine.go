@@ -2346,14 +2346,10 @@ func (s *Session) ContextWindowTokens() int {
 	return window
 }
 
-// ContextGauge: live reports whether usedTokens came from a claude-code reading.
-//
-// A claude-code session with no live contextUsage reports unknown (0, 0,
-// false) rather than falling back to LastUsage: applyClaudeCodeUsage stores
-// the CLI's own whole-turn aggregate there, not prompt occupancy, so the
-// fallback below would render a plausible but wrong percentage. The
-// LastUsage fallback stays for native lanes, where it IS the last real
-// request's own usage.
+// ContextGauge: live reports whether usedTokens came from a claude-code
+// reading. A claude-code session with no live reading reports unknown
+// (0, 0, false) rather than LastUsage's whole-turn aggregate; native lanes
+// keep the LastUsage fallback below.
 func (s *Session) ContextGauge() (windowTokens, usedTokens int, live bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
