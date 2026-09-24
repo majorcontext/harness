@@ -326,7 +326,7 @@ func TestEnqueuePromptDropsUnusableBlobs(t *testing.T) {
 func TestEnqueuePromptDurablePersistsAttachments(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir, Model: message.ModelRef{Provider: "test", Model: "m1"}})
-	if _, dup, err := s.EnqueuePromptDurable("with a picture", 1, PromptProvenance{}, testBlob()); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("with a picture", "", 1, PromptProvenance{}, testBlob()); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 
@@ -366,10 +366,10 @@ func TestEnqueuePromptDurablePersistsAttachments(t *testing.T) {
 // empty one, whether it arrives via the best-effort queue or the durable one.
 func TestEnqueuePromptDurableAllowsAttachmentOnlyPrompt(t *testing.T) {
 	s := NewSession(Config{SessionDir: t.TempDir(), Model: message.ModelRef{Provider: "test", Model: "m1"}})
-	if _, dup, err := s.EnqueuePromptDurable("  ", 1, PromptProvenance{}, testBlob()); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("  ", "", 1, PromptProvenance{}, testBlob()); err != nil || dup {
 		t.Fatalf("attachment-only durable enqueue: dup=%v err=%v, want it accepted", dup, err)
 	}
-	if _, _, err := s.EnqueuePromptDurable("  ", 2, PromptProvenance{}); err != ErrEmptyPromptText {
+	if _, _, err := s.EnqueuePromptDurable("  ", "", 2, PromptProvenance{}); err != ErrEmptyPromptText {
 		t.Fatalf("empty durable enqueue error = %v, want ErrEmptyPromptText", err)
 	}
 }
@@ -383,7 +383,7 @@ func TestEnqueuePromptDurableAllowsAttachmentOnlyPrompt(t *testing.T) {
 func TestEnqueuePromptDurableDropsUnusableBlobs(t *testing.T) {
 	s := NewSession(Config{SessionDir: t.TempDir()})
 
-	if _, _, err := s.EnqueuePromptDurable("", 1, PromptProvenance{}, nil, &message.Blob{MediaType: "image/png"}); !errors.Is(err, ErrEmptyPromptText) {
+	if _, _, err := s.EnqueuePromptDurable("", "", 1, PromptProvenance{}, nil, &message.Blob{MediaType: "image/png"}); !errors.Is(err, ErrEmptyPromptText) {
 		t.Fatalf("EnqueuePromptDurable with only unusable blobs: err = %v, want ErrEmptyPromptText", err)
 	}
 	if q := s.QueuedPrompts(); len(q) != 0 {
@@ -391,7 +391,7 @@ func TestEnqueuePromptDurableDropsUnusableBlobs(t *testing.T) {
 	}
 
 	real := &message.Blob{MediaType: "image/png", Data: []byte("\x89PNG\r\n\x1a\n")}
-	if _, dup, err := s.EnqueuePromptDurable("look", 1, PromptProvenance{}, nil, real); err != nil || dup {
+	if _, dup, err := s.EnqueuePromptDurable("look", "", 1, PromptProvenance{}, nil, real); err != nil || dup {
 		t.Fatalf("EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 	q := s.QueuedPrompts()

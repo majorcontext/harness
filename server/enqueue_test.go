@@ -36,6 +36,19 @@ func (h *harness) enqueueParts(id string, parts []any, seq int64) (*http.Respons
 	})
 }
 
+// enqueueWithID is enqueue's counterpart carrying a caller-supplied message
+// id (see server/prompt_message_id_test.go's identical prompt_async
+// helpers) — this file's tests use it to prove POST /session/{id}/enqueue
+// grants the same id contract prompt_async already has.
+func (h *harness) enqueueWithID(id, text, msgID string, seq int64) (*http.Response, []byte) {
+	h.t.Helper()
+	return h.do("POST", "/session/"+id+"/enqueue", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": text}},
+		"seq":   seq,
+		"id":    msgID,
+	})
+}
+
 // waitIdle blocks (via GET /session/{id}/wait?until=idle) until the session's
 // composite state reads idle, returning the final wait snapshot.
 func (h *harness) waitIdle(id string) waitJSON {
@@ -260,7 +273,7 @@ func TestEnqueueDuplicateOnIdleWithQueueDrainsHead(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, dup, err := st.sess.EnqueuePromptDurable("queued before duplicate", 1, engine.PromptProvenance{}); err != nil || dup {
+	if _, dup, err := st.sess.EnqueuePromptDurable("queued before duplicate", "", 1, engine.PromptProvenance{}); err != nil || dup {
 		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 
@@ -415,6 +428,52 @@ func TestQueueGetReturnsWatermarkAndPending(t *testing.T) {
 	h.waitIdle(id)
 }
 
+// TestQueueGetIncludesMessageID is the RED test for a second viewer's own
+// reconciliation path: GET /session/{id}/queue exposed no message_id on a
+// pending entry, so a client with no live optimistic state of its own (a
+// fresh tab, a reconnect) had nothing but exact text to key a "Queued"
+// placeholder on. The entry's message_id must match the caller-supplied id
+// exactly — the same id GET /session/{id}/queue's later durable echo will
+// carry once delivered.
+func TestQueueGetIncludesMessageID(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		turns:   [][]provider.Event{asstTurn("occupant done")},
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "occupant"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("occupant prompt status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	resp, data = h.enqueueWithID(id, "pending", "other-viewer-id", 4)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue status %d: %s", resp.StatusCode, data)
+	}
+
+	resp, data = h.do("GET", "/session/"+id+"/queue", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET queue status %d: %s", resp.StatusCode, data)
+	}
+	var q queueGetResponse
+	if err := json.Unmarshal(data, &q); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.Queued) != 1 || q.Queued[0].MessageID != "other-viewer-id" {
+		t.Fatalf("queue read = %+v, want exactly one entry with message_id=other-viewer-id", q)
+	}
+
+	close(prov.release)
+	h.waitIdle(id)
+}
+
 // TestQueueGetNonResidentReadsFromDisk is TestQueueGetReturnsWatermarkAndPending's
 // cold-session counterpart: seed the durable queue on a resident session
 // (same technique TestQueueRestartRefoldNoAutoDispatch and
@@ -438,7 +497,7 @@ func TestQueueGetNonResidentReadsFromDisk(t *testing.T) {
 	if st == nil {
 		t.Fatal("session not resident right after creation")
 	}
-	if _, dup, err := st.sess.EnqueuePromptDurable("pending", 4, engine.PromptProvenance{}); err != nil || dup {
+	if _, dup, err := st.sess.EnqueuePromptDurable("pending", "", 4, engine.PromptProvenance{}); err != nil || dup {
 		t.Fatalf("seed EnqueuePromptDurable: dup=%v err=%v", dup, err)
 	}
 
@@ -783,5 +842,153 @@ func TestEnqueueOversizeBodyRejectedBeforeDecode(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("limit")) {
 		t.Errorf("error = %s, want it to name the request limit", data)
+	}
+}
+
+// TestEnqueueUsesSuppliedMessageID is the RED test for durable enqueue's own
+// version of TestPromptAsyncUsesSuppliedMessageID (prompt_message_id_test.go):
+// prompt_async already used a caller-supplied `id` verbatim, but POST
+// /session/{id}/enqueue — the ONLY route the boxes control plane's
+// delivery pipeline actually calls (internal/api/pending_delivery.go) — had
+// no `id` field at all, so every boxes-originated prompt got a harness-
+// minted id the console never learned before the durable echo arrived.
+func TestEnqueueUsesSuppliedMessageID(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("done")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	const supplied = "console-optimistic-1"
+	resp, data := h.enqueueWithID(id, "hello", supplied, 1)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue status %d: %s", resp.StatusCode, data)
+	}
+	var er enqueueResponse
+	if err := json.Unmarshal(data, &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.MessageID != supplied {
+		t.Fatalf("response message_id = %q, want the supplied id %q", er.MessageID, supplied)
+	}
+
+	h.waitIdle(id)
+
+	users := h.userMessages(id)
+	if len(users) != 1 || users[0].ID != supplied {
+		t.Fatalf("user messages = %+v, want exactly one whose id is %q", users, supplied)
+	}
+}
+
+// TestEnqueueNoSuppliedIDMintsLikeBefore is the rollout-compatibility RED
+// test: a caller that omits `id` on POST /session/{id}/enqueue — every
+// existing boxes control-plane call, before this feature — still enqueues
+// and delivers exactly as it did before this change, with harness minting
+// the id.
+func TestEnqueueNoSuppliedIDMintsLikeBefore(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("done")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.enqueue(id, "hello", 1)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue status %d: %s", resp.StatusCode, data)
+	}
+	var er enqueueResponse
+	if err := json.Unmarshal(data, &er); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(er.MessageID, "msg_") {
+		t.Fatalf("response message_id = %q, want a msg_-prefixed minted id", er.MessageID)
+	}
+
+	h.waitIdle(id)
+
+	users := h.userMessages(id)
+	if len(users) != 1 || users[0].ID != er.MessageID {
+		t.Fatalf("user messages = %+v, want exactly one whose id matches response message_id %q", users, er.MessageID)
+	}
+}
+
+// TestQueuedEnqueueIdenticalTextDistinctIDsReconcileSeparately is the named
+// regression test this whole feature exists to fix: two prompts enqueued
+// with IDENTICAL text while the session is busy used to be indistinguishable
+// to a client reconciling by text — the exact defect that caused two live
+// consoles incidents (fixed only by narrowing a text matcher, never by an
+// id). Each of the two durable messages must carry its OWN caller-supplied
+// id, not collide or swap.
+func TestQueuedEnqueueIdenticalTextDistinctIDsReconcileSeparately(t *testing.T) {
+	prov := &queueProv{
+		name:    "test",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		turns:   [][]provider.Event{asstTurn("second done")},
+	}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.enqueueWithID(id, "same text", "first-id", 1)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first enqueue status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+
+	resp, data = h.enqueueWithID(id, "same text", "second-id", 2)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second enqueue status %d: %s", resp.StatusCode, data)
+	}
+	var er enqueueResponse
+	if err := json.Unmarshal(data, &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Status != "queued" || er.MessageID != "second-id" {
+		t.Fatalf("second enqueue response = %+v, want status=queued message_id=second-id", er)
+	}
+
+	close(prov.release)
+	h.waitIdle(id)
+
+	users := h.userMessages(id)
+	if len(users) != 2 {
+		t.Fatalf("user messages = %d, want 2: %+v", len(users), users)
+	}
+	if users[0].ID != "first-id" || users[1].ID != "second-id" {
+		t.Fatalf("user message ids = [%q, %q], want [first-id, second-id] — identical text must never make the two prompts indistinguishable",
+			users[0].ID, users[1].ID)
+	}
+	if users[0].Parts.Text() != "same text" || users[1].Parts.Text() != "same text" {
+		t.Fatalf("user message text = [%q, %q], want both to be %q", users[0].Parts.Text(), users[1].Parts.Text(), "same text")
+	}
+}
+
+// TestEnqueueDuplicateRetryOmitsMessageID is the RED test naming a subtle
+// failure: a duplicate-seq retry (EnqueueSeq's idempotent no-op) never
+// stored ITS OWN id resolution — only the ORIGINAL accepting call's id is
+// durable — so the "duplicate" response must not claim a message_id at all,
+// which would misrepresent this retry's own (possibly different, if its
+// caller omitted `id` and a fresh mint would differ) resolution as the
+// durably recorded one.
+func TestEnqueueDuplicateRetryOmitsMessageID(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("done")}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	resp, data := h.enqueueWithID(id, "hello", "original-id", 1)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first enqueue status %d: %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+
+	resp, data = h.enqueue(id, "hello", 1) // retry with the same seq, no id
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("duplicate retry status %d: %s", resp.StatusCode, data)
+	}
+	var er enqueueResponse
+	if err := json.Unmarshal(data, &er); err != nil {
+		t.Fatal(err)
+	}
+	if er.Status != "duplicate" {
+		t.Fatalf("retry status = %q, want duplicate", er.Status)
+	}
+	if er.MessageID != "" {
+		t.Fatalf("duplicate response message_id = %q, want empty — this retry's own resolution was never stored", er.MessageID)
 	}
 }

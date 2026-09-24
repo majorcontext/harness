@@ -205,6 +205,10 @@ type Event struct {
 	QueueSource      string `json:"queue_source,omitempty"`
 	QueueSourceID    string `json:"queue_source_id,omitempty"`
 	QueueSourceLabel string `json:"queue_source_label,omitempty"`
+	// QueueMessageID mirrors engine.Event.QueueMessageID: the queued
+	// prompt's own resolved message id, set on prompt.queued ONLY. See that
+	// field's own doc comment.
+	QueueMessageID string `json:"queue_message_id,omitempty"`
 
 	// ParentSessionID is set only on a session.spawned record: the parent
 	// of Event.SessionID. It is what makes events.jsonl self-contained —
@@ -739,6 +743,7 @@ func (s *Server) publishQueue(ev engine.Event) {
 		QueueSource:      ev.QueueSource,
 		QueueSourceID:    ev.QueueSourceID,
 		QueueSourceLabel: ev.QueueSourceLabel,
+		QueueMessageID:   ev.QueueMessageID,
 	})
 }
 

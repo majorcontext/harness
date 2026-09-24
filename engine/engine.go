@@ -257,6 +257,14 @@ type Event struct {
 	QueueSource      string `json:"queue_source,omitempty"`
 	QueueSourceID    string `json:"queue_source_id,omitempty"`
 	QueueSourceLabel string `json:"queue_source_label,omitempty"`
+	// QueueMessageID is the queued prompt's own resolved message id (see
+	// QueuedPrompt.MessageID/ResolveMessageID) — set on EventPromptQueued
+	// ONLY, mirroring QueueSource's Queued-only scope. Lets a client key a
+	// still-queued placeholder it did not itself send (another viewer's
+	// tab, a GET /session/{id}/queue poll) on the SAME id its eventual
+	// durable message will carry, rather than on QueueID (this session's
+	// internal, harness-assigned queue position) or exact text.
+	QueueMessageID string `json:"queue_message_id,omitempty"`
 }
 
 // Event types.

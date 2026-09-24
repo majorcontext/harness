@@ -2137,6 +2137,12 @@ type enqueueResponse struct {
 	Status    string `json:"status"` // "started" | "queued" | "duplicate"
 	Watermark int64  `json:"watermark"`
 	Queued    int    `json:"queued,omitempty"`
+	// MessageID mirrors promptAsyncResponse.MessageID: the id this
+	// request's own prompt was (or will be) recorded under. Omitted on a
+	// "duplicate" response — this call's own resolution was never stored;
+	// only the original accepting call's id is durable, and this handler
+	// has no cheap way to look it back up.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // handleEnqueue is POST /session/{id}/enqueue (see docs/plans/2026-07-21-
@@ -2173,6 +2179,11 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Parts []promptPartInput `json:"parts"`
 		Seq   int64             `json:"seq"`
+		// ID mirrors handlePrompt's own body.ID (see its doc comment): an
+		// OPTIONAL client-minted id for the user message this prompt
+		// becomes, resolved the same way (engine.ResolveMessageID) and used
+		// verbatim under the same trust caveat.
+		ID string `json:"id"`
 		// promptSourceInput: OPTIONAL provenance (source/source_id/
 		// source_label) — see parsePromptProvenance.
 		promptSourceInput
@@ -2222,6 +2233,11 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
+	// Resolved once, like handlePrompt's own msgID: this call's chosen
+	// value, reused on every response below that reports an ACCEPTED
+	// enqueue. Not reused on the "duplicate" response — see
+	// EnqueuePromptDurable's own doc comment for why.
+	msgID := engine.ResolveMessageID(body.ID)
 
 	st, ctx, _, code, holder := s.claimForPrompt(id)
 	if code != 0 {
@@ -2229,7 +2245,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		case code == http.StatusConflict && holder != "":
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
-			s.enqueueDurableBusy(w, id, text, body.Seq, prov, blobs...)
+			s.enqueueDurableBusy(w, id, text, msgID, body.Seq, prov, blobs...)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
@@ -2241,7 +2257,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	// Idle: we hold the run slot. Durable-first, then dispatch the queue
 	// HEAD — not necessarily this request's prompt (global FIFO, same rule
 	// as handlePrompt's idle-with-queue branch).
-	ourID, dup, err := st.sess.EnqueuePromptDurable(text, body.Seq, prov, blobs...)
+	ourID, dup, err := st.sess.EnqueuePromptDurable(text, msgID, body.Seq, prov, blobs...)
 	if dup {
 		s.releasePromptClaim(st)
 		// Stranded-head liveness fix: THIS request's prompt was a no-op,
@@ -2281,11 +2297,11 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		// the prompt WAS durably accepted (watermark advanced), which is
 		// exactly what the response must attest.
 		writeJSON(w, http.StatusAccepted, enqueueResponse{
-			Status: "queued", Watermark: st.sess.EnqueueSeq(), Queued: len(st.sess.QueuedPrompts()),
+			Status: "queued", Watermark: st.sess.EnqueueSeq(), Queued: len(st.sess.QueuedPrompts()), MessageID: msgID,
 		})
 		return
 	}
-	resp := enqueueResponse{Status: "queued", Watermark: st.sess.EnqueueSeq()}
+	resp := enqueueResponse{Status: "queued", Watermark: st.sess.EnqueueSeq(), MessageID: msgID}
 	if head.ID == ourID {
 		resp.Status = "started"
 	} else {
@@ -2302,7 +2318,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 // failure — never a silent 2xx), then ONE claim retry to close the
 // freed-slot race. See enqueueOrDispatch's doc comment for the race
 // analysis; only the enqueue call and response shape differ.
-func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text string, seq int64, prov engine.PromptProvenance, blobs ...*message.Blob) {
+func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text string, msgID string, seq int64, prov engine.PromptProvenance, blobs ...*message.Blob) {
 	sess := s.residentSession(id)
 	if sess == nil {
 		// Same benign race window as enqueueOrDispatch: busy occupant
@@ -2311,7 +2327,7 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 		writeErr(w, http.StatusConflict, "session is busy with another prompt")
 		return
 	}
-	ourID, dup, err := sess.EnqueuePromptDurable(text, seq, prov, blobs...)
+	ourID, dup, err := sess.EnqueuePromptDurable(text, msgID, seq, prov, blobs...)
 	if dup {
 		writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: sess.EnqueueSeq()})
 		return
@@ -2326,18 +2342,18 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 	st, ctx, _, code, _ := s.claimForPrompt(id)
 	if code != 0 {
 		writeJSON(w, http.StatusAccepted, enqueueResponse{
-			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()),
+			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()), MessageID: msgID,
 		})
 		return
 	}
 	head, remaining, ok := s.dispatchQueueHead(id, st, ctx)
 	if !ok {
 		writeJSON(w, http.StatusAccepted, enqueueResponse{
-			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()),
+			Status: "queued", Watermark: sess.EnqueueSeq(), Queued: len(sess.QueuedPrompts()), MessageID: msgID,
 		})
 		return
 	}
-	resp := enqueueResponse{Status: "queued", Watermark: sess.EnqueueSeq()}
+	resp := enqueueResponse{Status: "queued", Watermark: sess.EnqueueSeq(), MessageID: msgID}
 	if head.ID == ourID {
 		resp.Status = "started"
 	} else {
@@ -3636,6 +3652,12 @@ type queuedItemJSON struct {
 	Source      string `json:"source"`
 	SourceID    string `json:"source_id,omitempty"`
 	SourceLabel string `json:"source_label,omitempty"`
+	// MessageID mirrors QueuedPrompt.MessageID: the id this entry's
+	// eventual durable message will carry, already resolved at enqueue
+	// time. Lets a caller with no live state of its own (a fresh viewer, a
+	// reconnect) key a placeholder it renders for this still-pending entry
+	// on the same id the entry resolves to once delivered.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // handleQueueGet is the reconciliation read surface for durable enqueue
@@ -3666,6 +3688,7 @@ func (s *Server) handleQueueGet(w http.ResponseWriter, r *http.Request) {
 		resp.Queued = append(resp.Queued, queuedItemJSON{
 			ID: p.ID, Text: p.Text, Seq: p.Seq,
 			Source: string(p.Source.Normalized()), SourceID: p.SourceID, SourceLabel: p.SourceLabel,
+			MessageID: p.MessageID,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

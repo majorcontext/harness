@@ -255,7 +255,7 @@ func (m *sessionModel) DurableEnqueue(t *rapid.T) {
 		seq = 1
 	}
 	text := fmt.Sprintf("durable-%d", rapid.IntRange(0, 1<<20).Draw(t, "textSeed"))
-	if _, _, err := m.s.EnqueuePromptDurable(text, seq, PromptProvenance{}); err != nil {
+	if _, _, err := m.s.EnqueuePromptDurable(text, "", seq, PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePromptDurable(seq=%d): %v", seq, err)
 	}
 }

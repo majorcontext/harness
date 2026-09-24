@@ -238,7 +238,7 @@ func TestSnapshotCarriesEveryFoldedField(t *testing.T) {
 	if _, _, err := s.EnqueuePrompt("queued one", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
-	if _, _, err := s.EnqueuePromptDurable("queued two", 7, PromptProvenance{}); err != nil {
+	if _, _, err := s.EnqueuePromptDurable("queued two", "", 7, PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePromptDurable: %v", err)
 	}
 	drive(t, s, 2)

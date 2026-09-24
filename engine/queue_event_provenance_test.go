@@ -22,7 +22,7 @@ func TestEventPromptQueuedCarriesProvenance(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
-	if _, _, err := s.EnqueuePromptDurable("durable enqueue", 1, PromptProvenance{
+	if _, _, err := s.EnqueuePromptDurable("durable enqueue", "", 1, PromptProvenance{
 		Source: message.PromptSourceSchedule, SourceID: "sched_9", SourceLabel: "nightly",
 	}); err != nil {
 		t.Fatalf("EnqueuePromptDurable: %v", err)
