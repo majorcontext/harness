@@ -1614,13 +1614,14 @@ components:
           description: >
             The session's durable-enqueue high-water mark (see GET
             /session/{id}/queue) AFTER this call: this request's own seq on
-            `started`/`queued`, the pre-existing mark on `duplicate`. Only a
-            2xx (`started`/`queued`) response authorizes the caller to ack
-            its own upstream — the prompt.queued record was durably accepted
-            into the session journal before this response was written, per
-            the configured `session_sync` mode: fsynced (default) or
-            delegated to the volume layer's continuous sync (`session_sync:
-            "volume"`; see docs/deploy-modal.md).
+            `started`/`queued`/`command`, the pre-existing mark on
+            `duplicate`. Only a 2xx (`started`/`queued`/`command`) response
+            authorizes the caller to ack its own upstream — the
+            prompt.queued or command record was durably accepted into the
+            session journal before this response was written, per the
+            configured `session_sync` mode: fsynced (default) or delegated
+            to the volume layer's continuous sync (`session_sync: "volume"`;
+            see docs/deploy-modal.md).
         queued:
           type: integer
           description: >
@@ -2329,6 +2330,7 @@ components:
             - task.notify_delivered
             - child_turn.settled
             - task.outcome_committed
+            - command
         created_at:
           type: string
           format: date-time
@@ -2413,7 +2415,23 @@ components:
           description: "Only on prompt.dequeued: delivered, injected, or cleared."
         prompt_seq:
           type: integer
-          description: Only on a durably-enqueued prompt.queued.
+          description: >-
+            Only on a durably-enqueued prompt.queued, or a command
+            dispatched through `POST /session/{id}/enqueue`: its own durable
+            enqueue seq, on that command's first (`accepted`) record only.
+        command_id:
+          type: string
+          description: Only on `command` records.
+        command_name:
+          type: string
+          description: >-
+            Only on `command` records. The registry's canonical name, never
+            the alias the caller typed.
+        command_status:
+          type: string
+          description: >-
+            Only on `command` records: accepted, succeeded, failed, refused,
+            unsupported, or interrupted.
         child_id:
           type: string
           description: >
