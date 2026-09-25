@@ -584,6 +584,44 @@ func TestStatusResultTruncatedOverCap(t *testing.T) {
 	}
 }
 
+// TestCommandResponseWriterCapsBufferedBody: a handler that writes an
+// unbounded 2xx body — GET /session/{id}/queue serializing every queued
+// prompt, for instance — must never grow commandResponseWriter's buffer past
+// commandResultCap+1 bytes. Failure: the buffer grows to the full 1 MiB
+// written, proving the cap was applied only after the fact in commandOutcome
+// rather than in the writer itself.
+func TestCommandResponseWriterCapsBufferedBody(t *testing.T) {
+	cw := newCommandResponseWriter()
+	chunk := bytes.Repeat([]byte("a"), 4096)
+	total := 1 << 20 // 1 MiB, written in several calls
+	written := 0
+	for written < total {
+		n, err := cw.Write(chunk)
+		if err != nil {
+			t.Fatalf("Write returned error %v, want nil", err)
+		}
+		if n != len(chunk) {
+			t.Fatalf("Write returned n = %d, want %d (len(p))", n, len(chunk))
+		}
+		written += n
+	}
+
+	if cw.body.Len() > commandResultCap+1 {
+		t.Fatalf("buffered body = %d bytes, want at most %d (commandResultCap+1)", cw.body.Len(), commandResultCap+1)
+	}
+
+	status, _, result, truncated := commandOutcome(command.OpQueueList, "queue", cw.code, cw.body.Bytes(), false)
+	if status != message.CommandSucceeded {
+		t.Errorf("status = %q, want succeeded", status)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true")
+	}
+	if result != nil {
+		t.Errorf("result = %q, want nil", result)
+	}
+}
+
 // TestCommandOutcomeInvalidBodyOmitsResult: a non-JSON 2xx body must never
 // become Result. Every current handler calls writeJSON, so this cannot
 // happen today, but json.RawMessage validates its bytes when the record it

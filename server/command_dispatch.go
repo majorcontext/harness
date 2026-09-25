@@ -67,10 +67,18 @@ func commandRouteBody(op command.Op, args map[string]any) []byte {
 // hands serveOpHandlers[op]: a header map, the written status code
 // (defaulting to 200, matching net/http's own WriteHeader contract, on a
 // handler that never calls WriteHeader explicitly), and a buffered body.
+//
+// Write caps the buffer at commandResultCap+1 bytes so a handler with an
+// unbounded 2xx body — GET /session/{id}/queue on a long queue, for
+// instance — never grows the buffer past that bound. It still reports the
+// caller's full byte count with a nil error, matching io.Writer's contract,
+// so a handler that checks its own Write result behaves exactly as it does
+// against a real http.ResponseWriter.
 type commandResponseWriter struct {
-	header http.Header
-	code   int
-	body   bytes.Buffer
+	header     http.Header
+	code       int
+	body       bytes.Buffer
+	overflowed bool
 }
 
 func newCommandResponseWriter() *commandResponseWriter {
@@ -83,7 +91,17 @@ func (w *commandResponseWriter) Write(b []byte) (int, error) {
 	if w.code == 0 {
 		w.code = http.StatusOK
 	}
-	return w.body.Write(b)
+	if room := commandResultCap + 1 - w.body.Len(); room > 0 {
+		keep := b
+		if len(keep) > room {
+			keep = keep[:room]
+		}
+		w.body.Write(keep)
+	}
+	if w.body.Len() > commandResultCap {
+		w.overflowed = true
+	}
+	return len(b), nil
 }
 
 func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
