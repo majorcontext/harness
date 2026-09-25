@@ -22,46 +22,63 @@ type commandRecord struct {
 // NewCommandID mints a fresh, time-sortable ID for a new CommandRecord.
 func NewCommandID() string { return newID("cmd") }
 
-// foldCommand folds one command record into cmds, by ID.
+// foldCommandInto applies the by-ID and torn-seq fold rule shared by every
+// command fold: Session's own full-record fold (foldCommand, below) and a
+// message page read's lighter head fold (engine/messagepage.go), which folds
+// a recCommand record's identity and anchor without its line, args, text, or
+// result. One rule, two callers — see foldCommand's own doc comment for what
+// the rule means. id and copyAnchor let each caller supply its own type's
+// field access; the decision they implement is identical for both.
 //
-// An existing ID is replaced in place, keeping the original CreatedAt and
-// AfterMessageID: a status update (accepted -> succeeded/failed/...) must
-// not move the anchor a reader already resolved the command against.
+// An existing ID is replaced in place, after copyAnchor moves the existing
+// entry's CreatedAt/AfterMessageID onto c: a status update (accepted ->
+// succeeded/failed/...) must not move the anchor a reader already resolved
+// the command against.
 //
-// A NEW id carrying seq > 0 that matches an earlier folded record's own seq
-// (via seqs) replaces that record instead — the same torn-write
+// A NEW id carrying seq > 0 that matches an earlier folded entry's own seq
+// (via seqs) replaces that entry instead — the same torn-write
 // last-writer-wins rule promptQueueFold.queued applies to the prompt queue:
 // a failed fsync can leave a torn record on disk whose write reported
 // failure, followed by its successful retry under a fresh ID, and live
 // memory only ever held the retry's entry. seqs maps a folded command's ID
 // to the durable seq its first record carried; each caller owns its own map
-// (Session.commandSeqs, and each page-read fold's own local map — see
-// engine/messagepage.go).
+// (Session.commandSeqs, and each page-read fold's own local map).
 //
 // Otherwise c is appended, in first-appearance order.
-func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.CommandRecord, seq int64) []message.CommandRecord {
+func foldCommandInto[T any](cmds []T, seqs map[string]int64, c T, seq int64, id func(T) string, copyAnchor func(dst *T, existing T)) []T {
+	newID := id(c)
 	for i, existing := range cmds {
-		if existing.ID == c.ID {
-			c.CreatedAt = existing.CreatedAt
-			c.AfterMessageID = existing.AfterMessageID
+		if id(existing) == newID {
+			copyAnchor(&c, existing)
 			cmds[i] = c
 			if seq > 0 {
-				seqs[c.ID] = seq
+				seqs[newID] = seq
 			}
 			return cmds
 		}
 	}
 	if seq > 0 {
 		for i, existing := range cmds {
-			if seqs[existing.ID] == seq {
+			if seqs[id(existing)] == seq {
 				cmds = append(cmds[:i], cmds[i+1:]...)
-				delete(seqs, existing.ID)
+				delete(seqs, id(existing))
 				break
 			}
 		}
-		seqs[c.ID] = seq
+		seqs[newID] = seq
 	}
 	return append(cmds, c)
+}
+
+// foldCommand folds one command record into cmds, by ID. See
+// foldCommandInto for the rule.
+func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.CommandRecord, seq int64) []message.CommandRecord {
+	return foldCommandInto(cmds, seqs, c, seq,
+		func(r message.CommandRecord) string { return r.ID },
+		func(dst *message.CommandRecord, existing message.CommandRecord) {
+			dst.CreatedAt = existing.CreatedAt
+			dst.AfterMessageID = existing.AfterMessageID
+		})
 }
 
 // reanchorCommands rewrites every record in cmds whose AfterMessageID names a
@@ -82,6 +99,16 @@ func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.
 // matches, since no folded message carries an empty id. Caller passes the
 // full pre-splice history; this never mutates it.
 func reanchorCommands(cmds []message.CommandRecord, history []message.Message, start, end int, summaryID string) {
+	reanchorCommandsInto(cmds, history, start, end, summaryID,
+		func(c message.CommandRecord) string { return c.AfterMessageID },
+		func(c *message.CommandRecord, v string) { c.AfterMessageID = v })
+}
+
+// reanchorCommandsInto is reanchorCommands' rule, shared with a message page
+// read's head fold (engine/messagepage.go) the same way foldCommandInto
+// shares the fold rule: afterID and setAfterID let each caller supply its
+// own type's field access to the identical decision.
+func reanchorCommandsInto[T any](cmds []T, history []message.Message, start, end int, summaryID string, afterID func(T) string, setAfterID func(dst *T, v string)) {
 	folded := make(map[string]bool, end-start+1)
 	for _, m := range history[start : end+1] {
 		folded[m.ID] = true
@@ -93,8 +120,8 @@ func reanchorCommands(cmds []message.CommandRecord, history []message.Message, s
 		delete(folded, m.ID)
 	}
 	for i := range cmds {
-		if folded[cmds[i].AfterMessageID] {
-			cmds[i].AfterMessageID = summaryID
+		if folded[afterID(cmds[i])] {
+			setAfterID(&cmds[i], summaryID)
 		}
 	}
 }

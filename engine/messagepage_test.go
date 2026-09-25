@@ -551,6 +551,72 @@ func TestMessagePageTornSeqFoldsToLatestCommand(t *testing.T) {
 	}
 }
 
+// TestTailPageIgnoresAMalformedCommandOutsideTheWindow: the tail walk must
+// decode a command record's head — id, after_message_id, created_at, seq —
+// without ever decoding its line, args, text, or result. cmd_bad sits
+// between m4 and m5 in the log, so the backward walk for the [m4,m5] window
+// passes it (and gathers its head) before it can stop at m4, but cmd_bad's
+// own anchor (m1) is outside that window. Its "line" field is a JSON number,
+// which a full CommandRecord decode rejects. Failure: the page fails on
+// cmd_bad even though the window never asked for it.
+func TestTailPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000005"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000005","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m2","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m3","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m4","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
+		`{"type":"command","command":{"id":"cmd_good","line":"/status","name":"status","source":"typed","status":"succeeded","after_message_id":"m4","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z"}}`,
+		`{"type":"message","message":{"id":"m5","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+	)
+
+	page, err := ReadMessagePage(dir, id, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m4", "m5"}) {
+		t.Fatalf("page messages = %v, want m4,m5", got)
+	}
+	if got := commandIDsOf(page.Commands); !sameIDs(got, []string{"cmd_good"}) {
+		t.Fatalf("page commands = %v, want [cmd_good] — cmd_bad is anchored outside the window and must never be decoded", got)
+	}
+}
+
+// TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow is
+// TestTailPageIgnoresAMalformedCommandOutsideTheWindow's counterpart for the
+// compacted-log fold path: a compact record (folding m3 alone into s3)
+// forces tailPage to bail before it ever reaches m4, so foldedPage's own
+// forward fold must apply the identical restraint.
+func TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000006"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000006","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m2","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m3","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m4","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"compact","compact":{"first_id":"m3","last_id":"m3","turns_folded":1,"summary":{"id":"s3","role":"user","parts":[{"type":"text","text":"summary"}]}}}`,
+		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
+		`{"type":"command","command":{"id":"cmd_good","line":"/status","name":"status","source":"typed","status":"succeeded","after_message_id":"m4","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z"}}`,
+		`{"type":"message","message":{"id":"m5","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+	)
+
+	page, err := ReadMessagePage(dir, id, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m4", "m5"}) {
+		t.Fatalf("page messages = %v, want m4,m5", got)
+	}
+	if got := commandIDsOf(page.Commands); !sameIDs(got, []string{"cmd_good"}) {
+		t.Fatalf("page commands = %v, want [cmd_good] — cmd_bad is anchored outside the window and must never be decoded", got)
+	}
+}
+
 // TestReadMessagePageCapsLimit: the ENGINE API bounds a read rather than
 // erroring, for a caller with no schema to honor. The HTTP boundary is
 // stricter — see TestMessagePageRejectsAnOversizedLimit.
