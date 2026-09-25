@@ -2209,9 +2209,6 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		Parts []promptPartInput `json:"parts"`
 		Seq   int64             `json:"seq"`
@@ -2271,6 +2268,9 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq)
 	if handled {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	// Resolved once, like handlePrompt's own msgID: this call's chosen
