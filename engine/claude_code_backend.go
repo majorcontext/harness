@@ -1212,8 +1212,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// twice, and a consumer that APPENDS deltas would show it
 			// twice until EventMessage replaced the row.
 			alreadyStreamed := 0
+			upstream := claudeCodeUpstreamID(env.Message)
 			if len(pendingReasoning) > 0 {
-				if env.ParentToolUseID == pendingReasoningParent {
+				if env.ParentToolUseID == pendingReasoningParent &&
+					(upstream == "" || upstream == pendingReasoningUpstream) {
 					// The common case: this envelope is the rest of the
 					// turn segment the buffered thinking block started —
 					// reattach it to the front rather than flush it as
@@ -1229,10 +1231,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					msg.ID = pendingReasoningUpstream
 					alreadyStreamed = len(pendingReasoning)
 				} else {
-					// A different parent thread interrupted the buffered
-					// thinking block: flush it standalone rather than
-					// merge reasoning from one thread onto content from
-					// another.
+					// A different parent, or a disagreeing upstream id:
+					// a different response interrupted the buffered
+					// thinking block. Flush it standalone rather than
+					// merge reasoning across two different responses.
 					flushPendingReasoning()
 				}
 				pendingReasoning = nil
@@ -1246,7 +1248,6 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// boundary it has nothing to do with — a longer hold than the
 			// one this grouping justifies, and a different flush order on
 			// a truncated stream.
-			upstream := claudeCodeUpstreamID(env.Message)
 			if pendingAssistant != nil &&
 				(upstream == "" || upstream != pendingAssistantUpstream ||
 					env.ParentToolUseID != pendingAssistantParent) {

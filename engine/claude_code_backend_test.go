@@ -1798,6 +1798,32 @@ func TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary(t *testing.T
 	}
 }
 
+// TestClaudeCodeReasoningFlushesStandaloneOnDivergingUpstreamID proves a
+// buffered thinking envelope (upstream id A) does not merge into a
+// same-parent envelope carrying a DIFFERENT upstream id B: each stays its
+// own message, under its own id.
+func TestClaudeCodeReasoningFlushesStandaloneOnDivergingUpstreamID(t *testing.T) {
+	s := NewSession(Config{SessionDir: t.TempDir(), Model: message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"}})
+	stream := `{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"thinking","thinking":"reasoning for A","signature":"sig-a"}]}}
+{"type":"assistant","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"text for B"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"text for B"}
+`
+	if _, _, err, _ := s.consumeClaudeCodeStream(strings.NewReader(stream), s.model); err != nil {
+		t.Fatalf("consumeClaudeCodeStream: %v", err)
+	}
+
+	hist := s.History()
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	if hist[0].ID != "msg_A" || len(hist[0].Parts) != 1 {
+		t.Errorf("hist[0] = %+v, want a standalone Reasoning message with id msg_A", hist[0])
+	}
+	if hist[1].ID != "msg_B" || hist[1].Parts.Text() != "text for B" {
+		t.Errorf("hist[1] = %+v, want a Text(%q) message with id msg_B, distinct from hist[0]'s", hist[1], "text for B")
+	}
+}
+
 // TestClaudeCodeParentToolUseIDCarriedOntoMessage proves the envelope's own
 // parent_tool_use_id (null at top level, set to the spawning tool_use id
 // inside a subagent's own turn) rides onto Message.ParentToolUseID for
