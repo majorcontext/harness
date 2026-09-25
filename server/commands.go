@@ -283,6 +283,14 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		}()
 	}
 
+	// Sampled before this command's first durable record is written, so a
+	// prompt_async caller that resumes GET /event?from=fromSeq replays the
+	// accepted "command" event RecordCommand/RecordCommandDurable is about
+	// to journal (see claimForPrompt's identical fromSeq-before-work rule).
+	// A seq sampled after would equal or pass that event's own seq, and the
+	// resuming client would skip it.
+	fromSeq := s.currentSeq()
+
 	if route == promptRouteEnqueue {
 		dup, err := sess.RecordCommandDurable(rec, seq)
 		if dup {
@@ -301,7 +309,7 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status}
 	switch route {
 	case promptRouteAsync:
-		writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: s.currentSeq(), Status: "command", Command: receipt})
+		writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "command", Command: receipt})
 	case promptRouteSend:
 		writeJSON(w, http.StatusAccepted, map[string]any{"session_id": id, "status": "command", "command": receipt})
 	case promptRouteEnqueue:
