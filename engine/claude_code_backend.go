@@ -1008,9 +1008,13 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// "final assistant message reasoning-only, no text, no tool call").
 	var pendingReasoning message.Parts
 	var pendingReasoningParent string
-	// pendingReasoningUpstream is this buffer's resolved id, reused by
-	// flushPendingReasoning so a streamed delta's id always matches it.
+	// pendingReasoningUpstream is the buffer's RAW upstream id, compared
+	// against claudeCodeUpstreamID's own raw return value below — never a
+	// resolved one, so a reserved-prefix id still groups (mirrors
+	// pendingAssistantUpstream). pendingReasoningID is the resolved id,
+	// minted once and reused so every delta and the final message agree.
 	var pendingReasoningUpstream string
+	var pendingReasoningID string
 
 	// pendingAssistant assembles the ONE message.Message for one upstream
 	// API response. The CLI streams each content block of a response as
@@ -1092,7 +1096,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			return
 		}
 		msg := message.Message{
-			ID:              pendingReasoningUpstream,
+			ID:              pendingReasoningID,
 			Role:            message.RoleAssistant,
 			Parts:           pendingReasoning,
 			Model:           model,
@@ -1106,6 +1110,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 		pendingReasoning = nil
 		pendingReasoningParent = ""
 		pendingReasoningUpstream = ""
+		pendingReasoningID = ""
 	}
 
 	for scanner.Scan() {
@@ -1226,9 +1231,9 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					merged = append(merged, msg.Parts...)
 					msg.Parts = merged
 					// The reasoning delta already streamed under
-					// pendingReasoningUpstream; this envelope's own
-					// mint would leave the two disagreeing.
-					msg.ID = pendingReasoningUpstream
+					// pendingReasoningID; this envelope's own mint would
+					// leave the two disagreeing.
+					msg.ID = pendingReasoningID
 					alreadyStreamed = len(pendingReasoning)
 				} else {
 					// A different parent, or a disagreeing upstream id:
@@ -1240,6 +1245,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				pendingReasoning = nil
 				pendingReasoningParent = ""
 				pendingReasoningUpstream = ""
+				pendingReasoningID = ""
 			}
 			// The id boundary is checked BEFORE the reasoning-only branch
 			// below: a thinking block opening the NEXT response would
@@ -1261,7 +1267,8 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 				// streaming UX is unaffected by the buffering.
 				pendingReasoning = msg.Parts
 				pendingReasoningParent = env.ParentToolUseID
-				pendingReasoningUpstream = msg.ID
+				pendingReasoningUpstream = upstream
+				pendingReasoningID = msg.ID
 				for _, p := range msg.Parts {
 					if r, ok := p.(*message.Reasoning); ok && r.Text != "" {
 						s.emit(Event{Type: EventReasoningDelta, Text: r.Text, ID: msg.ID})

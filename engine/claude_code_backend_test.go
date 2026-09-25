@@ -1410,6 +1410,49 @@ func TestClaudeCodeBufferedReasoningStreamsOnce(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeReservedUpstreamIDStillMergesReasoning proves the
+// reasoning-buffer merge groups on the RAW upstream id from
+// claudeCodeUpstreamID, not one already resolved through ResolveMessageID.
+// Before the fix, the buffered thinking block's comparison id was the
+// RESOLVED id (a fresh mint, since "cmpsum..." is reserved), so the next
+// envelope's own raw "cmpsum..." id never matched it and the two envelopes
+// wrongly flushed as two separate messages instead of merging into one.
+func TestClaudeCodeReservedUpstreamIDStillMergesReasoning(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_reserved_id")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.Prompt(context.Background(), "think under a reserved id"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	hist := s.History()
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2 (user, one merged assistant message): %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if len(asst.Parts) != 2 {
+		t.Fatalf("hist[1].Parts = %+v, want [Reasoning, Text] merged into one message", asst.Parts)
+	}
+	if _, ok := asst.Parts[0].(*message.Reasoning); !ok {
+		t.Errorf("hist[1].Parts[0] = %T, want Reasoning", asst.Parts[0])
+	}
+	if _, ok := asst.Parts[1].(*message.Text); !ok {
+		t.Errorf("hist[1].Parts[1] = %T, want Text", asst.Parts[1])
+	}
+	if strings.HasPrefix(asst.ID, "cmpsum") {
+		t.Errorf("hist[1].ID = %q, want a minted id, not the reserved upstream id verbatim", asst.ID)
+	}
+	for _, ev := range events {
+		if ev.Type == EventReasoningDelta || ev.Type == EventTextDelta {
+			if ev.ID != asst.ID {
+				t.Errorf("delta event %+v carries ID %q, want %q (the merged message's own id)", ev, ev.ID, asst.ID)
+			}
+		}
+	}
+}
+
 // TestClaudeCodeGroupingRespectsResponseAndThreadBoundaries proves the two
 // boundaries the grouping must not cross, both found by review of #240.
 //

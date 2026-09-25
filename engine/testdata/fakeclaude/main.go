@@ -10,7 +10,11 @@
 // Beyond "normal"/"hang"/"error", a handful of narrower modes each cover
 // exactly one of the gaps claude_code_backend.go closes: "thinking" (a
 // thinking content block plus the result event's own ttft_ms/duration_ms
-// timing fields), "thinking_interleaved" (text, then thinking, then the
+// timing fields), "thinking_reserved_id" (a thinking block and its
+// completing text share one upstream id engine itself reserves for a
+// synthetic message — proves the reasoning-buffer merge compares the RAW
+// upstream id, not one already resolved through ResolveMessageID),
+// "thinking_interleaved" (text, then thinking, then the
 // text that completes THAT thinking block's own turn segment — proves the
 // reasoning-buffer merge in consumeClaudeCodeStream attaches only forward,
 // never sweeping in an unrelated, already-flushed text message),
@@ -628,6 +632,46 @@ func main() {
 			},
 			"ttft_ms":     120,
 			"duration_ms": 800,
+		})
+		return
+	case "thinking_reserved_id":
+		// A thinking block and the text that completes its own turn
+		// segment, both carrying the SAME upstream id — but one engine
+		// itself reserves for a synthetic message (compactionSummaryIDTag,
+		// "cmpsum"). Proves the reasoning-buffer merge groups on the RAW
+		// upstream id, not a resolved one: two calls to ResolveMessageID
+		// on the same reserved id mint two DIFFERENT ids, so comparing a
+		// resolved id against this envelope's raw one would never match.
+		const reservedID = "cmpsum_fakeupstream"
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   reservedID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "thinking", "thinking": "Reasoning under a reserved id.", "signature": "sig-reserved"},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"id":   reservedID,
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "Answer under the same reserved id."},
+				},
+			},
+		})
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   "Answer under the same reserved id.",
+			"usage": map[string]any{
+				"input_tokens":  18,
+				"output_tokens": 9,
+			},
 		})
 		return
 	case "parallel_tools":

@@ -3506,12 +3506,18 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 // adapter's own assemble (e.g. provider/anthropic/anthropic.go's
 // stream.assemble) would produce for the same partial content: any
 // accumulated text first, then the tool calls in emission order. id is
-// streamTurn's latched streamID, resolved through ResolveMessageID so the
-// salvaged message reuses the id its own deltas already streamed under
-// rather than disagreeing with them.
+// streamTurn's latched streamID, used verbatim so the salvaged message
+// reuses the id its own deltas already streamed under — the same rule
+// every native adapter's own assemble (e.g. provider/anthropic/
+// anthropic.go's stream.assemble) applies to Message.ID, never
+// ResolveMessageID's reserved-prefix rewrite. Empty only mints, matching
+// streamTurn never latching an id when the provider sent none.
 func (s *Session) assemblePartial(id, text string, toolCalls []*message.ToolCall) *message.Message {
+	if id == "" {
+		id = newID("msg")
+	}
 	msg := &message.Message{
-		ID:        ResolveMessageID(id),
+		ID:        id,
 		Role:      message.RoleAssistant,
 		Model:     s.Model(),
 		CreatedAt: time.Now().UTC(),
