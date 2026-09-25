@@ -1425,3 +1425,27 @@ func TestSessionIndexSidecarCarriesNoCommandData(t *testing.T) {
 		t.Fatalf("sidecar carries command data: %s", data)
 	}
 }
+
+// TestSessionIndexRefoldIgnoresCommandPayloadShape: the index refold must
+// not decode a command record's own payload at all. Failure: a command line
+// whose command field carries a JSON type commandRecord cannot decode (here,
+// a number) breaks ReadSessionIndex instead of only the page reads that
+// actually need that payload.
+func TestSessionIndexRefoldIgnoresCommandPayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000009"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000009","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"model","model":"test/m1"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"command","command":7}`,
+		`{"type":"message","message":{"id":"m2","role":"assistant","parts":[{"type":"text","text":"hi"}]}}`,
+	)
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if ix.DurableMessages != 2 {
+		t.Fatalf("DurableMessages = %d, want 2", ix.DurableMessages)
+	}
+}

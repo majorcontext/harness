@@ -206,13 +206,6 @@ type indexRecord struct {
 	Prompt              *promptRecord    `json:"prompt,omitempty"`
 	TaskSpawn           *taskSpawnRecord `json:"task_spawn,omitempty"`
 	Compact             *indexCompact    `json:"compact,omitempty"`
-	// Command carries a recCommand record's payload. It is the SAME type
-	// record.Command decodes into (commandRecord, command.go). This fold
-	// itself ignores it; engine/messagepage.go's own forward fold reads it
-	// directly to collect a page's command trail. A message.CommandRecord is
-	// small and already cheap to decode, unlike a message's parts, so there
-	// is no slimmer shape worth keeping in step with it separately.
-	Command *commandRecord `json:"command,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -237,7 +230,6 @@ func indexRecordOf(rec record) indexRecord {
 		Goal:                rec.Goal,
 		Prompt:              rec.Prompt,
 		TaskSpawn:           rec.TaskSpawn,
-		Command:             rec.Command,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)

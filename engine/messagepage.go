@@ -487,10 +487,13 @@ func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
 // decodeRecordHeadFull decodes a whole record line into indexRecord — the
 // SAME type the fold decodes into (see foldSessionJournal's scanLog call) —
 // so parsed is false exactly where the fold's own decode fails, and
-// hasMessage is exactly the fold's own test for a body.
+// hasMessage is exactly the fold's own test for a body. indexRecord itself
+// carries no command payload (see index.go): a command record's line is
+// decoded a second time, into commandPayload alone, so an ordinary index
+// refold never pays for it.
 //
 // The type must stay indexRecord, not a slimmer shape that happens to carry
-// the two fields this returns. The fold's tolerance is a property of EVERY
+// the fields this returns. The fold's tolerance is a property of EVERY
 // field it type-checks: a record whose usage, goal, prompt, or compact
 // payload has the wrong JSON shape fails that decode. A slimmer shape here
 // ignores those fields, accepts the record, and counts a message the index
@@ -498,11 +501,26 @@ func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
 // seq in the page. Sharing the fold's type makes the two agree by
 // construction rather than by a list of fields someone has to keep in step.
 func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
+	trimmed := bytes.TrimSpace(raw)
 	var rec indexRecord
-	if err := json.Unmarshal(bytes.TrimSpace(raw), &rec); err != nil {
+	if err := json.Unmarshal(trimmed, &rec); err != nil {
 		return recordHead{}, false
 	}
-	return recordHead{Type: rec.Type, hasMessage: rec.Message != nil, Command: rec.Command}, true
+	head := recordHead{Type: rec.Type, hasMessage: rec.Message != nil}
+	if rec.Type == recCommand {
+		var payload commandPayload
+		if err := json.Unmarshal(trimmed, &payload); err != nil {
+			return recordHead{}, false
+		}
+		head.Command = payload.Command
+	}
+	return head, true
+}
+
+// commandPayload decodes just a recCommand record's own field, kept out of
+// indexRecord so the index fold never pays for it.
+type commandPayload struct {
+	Command *commandRecord `json:"command"`
 }
 
 // foldedPage is the general path, for a journal that carries at least one
@@ -565,8 +583,17 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, []message.CommandRe
 			// marks the fold broken over the identical computation — either
 			// way this call reports it, so skipping the reanchor is harmless.
 		}
-		if rec.Type == recCommand && rec.Command != nil {
-			cmds = foldCommand(cmds, seqs, rec.Command.CommandRecord, rec.Command.Seq)
+		if rec.Type == recCommand {
+			var payload commandPayload
+			if err := json.Unmarshal(line, &payload); err != nil {
+				if isLast {
+					return errTruncatedFinalRecord
+				}
+				return fmt.Errorf("corrupt record at line %d: %v", n, err)
+			}
+			if payload.Command != nil {
+				cmds = foldCommand(cmds, seqs, payload.Command.CommandRecord, payload.Command.Seq)
+			}
 		}
 		if err := fold.applyIndexRecord(rec, isLast); err != nil {
 			return fmt.Errorf("%w at line %d", err, n)
