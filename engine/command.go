@@ -65,20 +65,35 @@ func foldCommand(cmds []message.CommandRecord, seqs map[string]int64, c message.
 }
 
 // reanchorCommands rewrites every record in cmds whose AfterMessageID names a
-// message in folded to summaryID instead, in place. Called at every point
-// that removes a range of durable messages from a fold — live compaction
-// (compact.go's Compact), replay (store.go's recCompact case), and the
-// index's own recCompact case (index.go) — so a command's anchor stays a
-// message id the corresponding fold can still resolve, however many
-// compactions later. A record whose AfterMessageID is empty (before every
-// message) never matches, since no folded message carries an empty id.
-func reanchorCommands(cmds []message.CommandRecord, folded []message.Message, summaryID string) {
-	ids := make(map[string]bool, len(folded))
-	for _, m := range folded {
-		ids[m.ID] = true
+// message in history[start:end+1] (the range a fold removes) to summaryID
+// instead, in place — UNLESS that same message ID also occurs outside the
+// range, in history[:start] or history[end+1:]. Message IDs are not
+// guaranteed unique: engine.ResolveMessageID accepts a caller-minted id
+// verbatim, so a client retry with the same id can append a second message
+// carrying it. A command anchored to a surviving occurrence of an id must
+// keep that anchor — the message it names still exists after the fold —
+// even though an earlier, folded occurrence of the same id also matches.
+// Called at every point that removes a range of durable messages from a
+// fold — live compaction (compact.go's Compact), replay (store.go's
+// recCompact case), and the message-page fold's own recCompact case
+// (messagepage.go) — so a command's anchor stays a message id the
+// corresponding fold can still resolve, however many compactions later. A
+// record whose AfterMessageID is empty (before every message) never
+// matches, since no folded message carries an empty id. Caller passes the
+// full pre-splice history; this never mutates it.
+func reanchorCommands(cmds []message.CommandRecord, history []message.Message, start, end int, summaryID string) {
+	folded := make(map[string]bool, end-start+1)
+	for _, m := range history[start : end+1] {
+		folded[m.ID] = true
+	}
+	for _, m := range history[:start] {
+		delete(folded, m.ID)
+	}
+	for _, m := range history[end+1:] {
+		delete(folded, m.ID)
 	}
 	for i := range cmds {
-		if ids[cmds[i].AfterMessageID] {
+		if folded[cmds[i].AfterMessageID] {
 			cmds[i].AfterMessageID = summaryID
 		}
 	}

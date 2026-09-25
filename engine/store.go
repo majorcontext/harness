@@ -1889,7 +1889,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 			// Re-anchor cmds (the command trail folded so far) exactly as the
 			// live path does — see reanchorCommands.
-			reanchorCommands(cmds, s.history[start:end+1], rec.Compact.Summary.ID)
+			reanchorCommands(cmds, s.history, start, end, rec.Compact.Summary.ID)
 			s.history = spliceCompactBounds(s.history, start, end, rec.Compact.Summary)
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt

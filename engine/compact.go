@@ -528,7 +528,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	// AfterMessageID names one of these messages must follow the summary
 	// instead, or its anchor becomes unresolvable the moment this range
 	// leaves history (see reanchorCommands).
-	reanchorCommands(s.commands, s.history[start:end+1], summary.ID)
+	reanchorCommands(s.commands, s.history, start, end, summary.ID)
 	s.history = spliceCompactBounds(s.history, start, end, summary)
 	// Cumulative usage only (see docs/design/context-compaction.md's "Usage
 	// accounting"): NEVER touch lastUsage/haveLastUsage here — the

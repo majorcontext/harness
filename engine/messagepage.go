@@ -577,7 +577,7 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, []message.CommandRe
 		}
 		if rec.Type == recCompact && rec.Compact != nil {
 			if start, end, err := compactRecordBounds(fold.messages, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded); err == nil {
-				reanchorCommands(cmds, fold.messages[start:end+1], rec.Compact.Summary.ID)
+				reanchorCommands(cmds, fold.messages, start, end, rec.Compact.Summary.ID)
 			}
 			// A bounds error here means fold.applyIndexRecord below fails or
 			// marks the fold broken over the identical computation — either

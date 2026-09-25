@@ -104,6 +104,17 @@ func compactSummaryTurn(text string, usage provider.Usage) []provider.Event {
 	return compactTurn(text, usage)
 }
 
+// compactTurnWithID is compactTurn with a caller-chosen message ID instead
+// of a fresh compactTurnSeq mint, for a test that needs two turns to
+// produce messages sharing one ID — a duplicate a client retry with the
+// same pre-minted id can genuinely produce (engine.ResolveMessageID accepts
+// a caller's id verbatim).
+func compactTurnWithID(id, text string, usage provider.Usage) []provider.Event {
+	msg := &message.Message{ID: id, Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}}
+	ev := provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: usage}
+	return []provider.Event{ev}
+}
+
 // runTurns drives n ordinary Prompt calls against s, failing the test on any
 // error.
 func runTurns(t *testing.T, s *Session, n int) {
@@ -237,6 +248,82 @@ func TestCommandReanchoredOnCompact(t *testing.T) {
 	}
 	if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != summaryID {
 		t.Fatalf("page Commands = %+v, want one record anchored to %q", page.Commands, summaryID)
+	}
+}
+
+// TestCommandKeepsAnchorWhenOnlyEarlierDuplicateIsFolded is the red-first
+// regression test for reanchorCommands over a duplicate message ID. Message
+// IDs are not guaranteed unique: engine.ResolveMessageID accepts a caller's
+// id verbatim, so a client retry with the same pre-minted id can append a
+// SECOND message carrying it. Here turn 1's and turn 3's assistant replies
+// share one ID (dupID) — an earlier occurrence and a later one. The command
+// is recorded once the LATER dupID is the last durable message, so its
+// anchor is that later, surviving occurrence. Compact then folds only turns
+// 1 and 2 (KeepTurns: 1 keeps turn 3, which holds the later dupID).
+//
+// Failure mode this pins: reanchorCommands used to test only "does dupID
+// appear anywhere in the folded range", which the EARLIER occurrence
+// satisfies — wrongly moving the command's anchor to the summary even
+// though the message it actually names (the later occurrence) survives the
+// fold untouched.
+func TestCommandKeepsAnchorWhenOnlyEarlierDuplicateIsFolded(t *testing.T) {
+	dir := t.TempDir()
+	const dupID = "msg_dup_anchor"
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurnWithID(dupID, "one", provider.Usage{InputTokens: 10}),   // turn 1 asst: earlier dupID
+		compactTurn("two", provider.Usage{InputTokens: 10}),                // turn 2 asst
+		compactTurnWithID(dupID, "three", provider.Usage{InputTokens: 10}), // turn 3 asst: later dupID
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	runTurns(t, s, 3)
+
+	history := s.History()
+	if len(history) != 6 || history[1].ID != dupID || history[5].ID != dupID {
+		t.Fatalf("test setup: history = %+v, want history[1] and history[5] both %q", history, dupID)
+	}
+
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+	if got := s.Commands()[0].AfterMessageID; got != dupID {
+		t.Fatalf("test setup: command anchor = %q, want %q (the later dupID)", got, dupID)
+	}
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if res.TurnsFolded != 2 {
+		t.Fatalf("TurnsFolded = %d, want 2 (folds turns 1-2, keeps turn 3 with the later dupID)", res.TurnsFolded)
+	}
+
+	if got := s.Commands()[0].AfterMessageID; got != dupID {
+		t.Fatalf("live Commands() anchor after compact = %q, want unchanged %q — the surviving later dupID, not the summary", got, dupID)
+	}
+
+	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got := loaded.Commands()[0].AfterMessageID; got != dupID {
+		t.Fatalf("LoadSession Commands() anchor = %q, want unchanged %q", got, dupID)
+	}
+
+	page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != dupID {
+		t.Fatalf("page Commands = %+v, want one record anchored to unchanged %q", page.Commands, dupID)
 	}
 }
 
