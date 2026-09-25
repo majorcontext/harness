@@ -587,20 +587,28 @@ func TestTailPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
 
 // TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow is
 // TestTailPageIgnoresAMalformedCommandOutsideTheWindow's counterpart for the
-// compacted-log fold path: a compact record (folding m3 alone into s3)
-// forces tailPage to bail before it ever reaches m4, so foldedPage's own
-// forward fold must apply the identical restraint.
+// compacted-log fold path.
+//
+// cmd_bad sits BEFORE the compact record in the log (anchored to m1, before
+// m2 and m3 exist), and the compact record sits AFTER m4 — so the backward
+// walk for the [m4,m5] window meets m5, cmd_good, then the compact record
+// and bails to foldedPage right there, never classifying cmd_bad at all.
+// foldedPage's own forward fold is what then has to pass over cmd_bad's
+// line without decoding it in full: it runs from byte 0 and reaches
+// cmd_bad before it reaches the compact record. Failure: foldedPage fails
+// on cmd_bad's malformed "line" even though cmd_bad's anchor (m1) is
+// outside the requested window.
 func TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
 	dir := t.TempDir()
 	const id = "ses_0000000000000006"
 	writeSessionLog(t, dir, id,
 		`{"type":"session","id":"ses_0000000000000006","created_at":"2026-07-21T00:00:00Z"}`,
 		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
 		`{"type":"message","message":{"id":"m2","role":"user","parts":[{"type":"text","text":"a"}]}}`,
 		`{"type":"message","message":{"id":"m3","role":"user","parts":[{"type":"text","text":"a"}]}}`,
 		`{"type":"message","message":{"id":"m4","role":"user","parts":[{"type":"text","text":"a"}]}}`,
 		`{"type":"compact","compact":{"first_id":"m3","last_id":"m3","turns_folded":1,"summary":{"id":"s3","role":"user","parts":[{"type":"text","text":"summary"}]}}}`,
-		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
 		`{"type":"command","command":{"id":"cmd_good","line":"/status","name":"status","source":"typed","status":"succeeded","after_message_id":"m4","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z"}}`,
 		`{"type":"message","message":{"id":"m5","role":"user","parts":[{"type":"text","text":"a"}]}}`,
 	)

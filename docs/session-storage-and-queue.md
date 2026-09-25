@@ -481,6 +481,17 @@ the folded records whose anchor falls inside the returned window
 exposes each record's `id`/`name`/`status` as metadata beside its own
 entry.
 
+A page read decodes a command record's own line, args, text, and result
+only for a command the requested window returns. It folds every other
+command record on the page's own scan path by a smaller head — id, anchor,
+`created_at`, and the durable enqueue seq — and never reads that larger
+payload at all. A command record OUTSIDE the window can therefore carry a
+malformed line, args, text, or result field and the page read still
+succeeds; only a malformed field on an IN-WINDOW record still fails the
+read. `LoadSession` still decodes every command record in full, so it still
+rejects such a journal on load, whether or not a page read ever asked for
+that record.
+
 `POST /session/{id}/enqueue`'s dispatched-command sibling,
 `Session.RecordCommandDurable`, shares `Session.enqueueSeq` — the SAME
 watermark `EnqueuePromptDurable` advances above — so a command and a
