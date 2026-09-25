@@ -357,6 +357,9 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 // result settles as a successful turn with no assistant message, that the
 // local_command fallback stays scoped to "compact" (or an omitted field),
 // and that a failing compact_result status still emits EventCompactionFailed.
+// Drives RunCompactCommand, the entry point POST /session/{id}/compact and
+// the serve/run dispatchers actually use — not Session.Prompt, which learns
+// no control verb from prompt text.
 func TestClaudeCodeCompactTurn(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -383,18 +386,17 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 			var events []Event
 			s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 
-			msg, err := s.Prompt(context.Background(), "/compact")
+			res, err := s.RunCompactCommand(context.Background(), CompactOptions{})
 
 			switch {
 			case tt.wantErr && err == nil:
-				t.Error("Prompt returned no error, want the no-assistant-message error")
+				t.Error("RunCompactCommand returned no error, want the no-assistant-message error")
 			case tt.wantErr && !strings.Contains(err.Error(), "turn ended with no assistant message"):
 				t.Errorf("err = %q, want it to contain %q", err.Error(), "turn ended with no assistant message")
 			case !tt.wantErr && err != nil:
-				t.Fatalf("Prompt: %v, want nil", err)
-			}
-			if msg != nil {
-				t.Errorf("Prompt returned a non-nil message: %+v, want nil", msg)
+				t.Fatalf("RunCompactCommand: %v, want nil", err)
+			case !tt.wantErr && !res.ClaudeCodeDelegated:
+				t.Errorf("CompactResult = %+v, want ClaudeCodeDelegated", res)
 			}
 
 			var sawStarted, sawCompacted bool
@@ -426,11 +428,16 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 	}
 }
 
-func TestPromptCompactCommandIssuedAsEngineOriginNotUserPassthrough(t *testing.T) {
+// TestRunCompactCommandIssuesEngineOriginOnDelegatedSession proves
+// RunCompactCommand's delegated dispatch stamps message.OriginEngine on the
+// "/compact" turn it sends to the CLI, never a caller's own origin: harness
+// decides to compact, so the appended message must never read as user
+// passthrough.
+func TestRunCompactCommandIssuesEngineOriginOnDelegatedSession(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "compact_turn")
 
-	if _, err := s.Prompt(context.Background(), "/compact"); err != nil {
-		t.Fatalf("Prompt(/compact): %v", err)
+	if _, err := s.RunCompactCommand(context.Background(), CompactOptions{}); err != nil {
+		t.Fatalf("RunCompactCommand: %v", err)
 	}
 
 	hist := s.History()

@@ -132,6 +132,54 @@ func TestUntypedSlashStaysPrompt(t *testing.T) {
 	}
 }
 
+// TestUntypedCompactStaysPrompt is the red-first regression test for
+// removing the engine's text intercept (#319): resolvePromptCommand only
+// resolves a typed "/compact" (rule "typed only"). A non-typed source
+// (including the empty/default one) and a typed "//compact" escape must
+// both reach Session.Prompt as ordinary model input, appending a literal
+// "/compact" user message and writing no CommandRecord — never compacting
+// through the engine itself. Before #319, the engine's own exact-text
+// match fired regardless of source, so this failed at HEAD.
+func TestUntypedCompactStaysPrompt(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{name: "empty source", body: map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": "/compact"}},
+		}},
+		{name: "api source", body: map[string]any{
+			"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
+			"source": "api",
+		}},
+		{name: "typed escaped //compact", body: map[string]any{
+			"parts":  []map[string]string{{"type": "text", "text": "//compact"}},
+			"source": "typed",
+		}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			prov := newCapturingProvider(asstTurn("ok"))
+			h := newHarness(t, prov)
+			id := h.createSession("test/m1")
+
+			resp, data := h.do("POST", "/session/"+id+"/prompt_async", tt.body)
+			if resp.StatusCode != http.StatusAccepted {
+				t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+			}
+			h.waitIdle(id)
+
+			users := h.userMessages(id)
+			if len(users) != 1 || users[0].Parts.Text() != "/compact" {
+				t.Fatalf("user messages = %+v, want one with text /compact", users)
+			}
+			if cmds := h.sessionDirect(id).Commands(); len(cmds) != 0 {
+				t.Errorf("Commands() = %+v, want none", cmds)
+			}
+		})
+	}
+}
+
 // TestTypedEscapedSlashSendsLiteral proves Resolve's rule 3 ("//name" is
 // the literal text "/name") only fires for a typed source, and that an
 // escaped line becomes an ordinary user message either way — never a

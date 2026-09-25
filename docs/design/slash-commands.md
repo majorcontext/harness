@@ -242,15 +242,17 @@ dispatches its own. `GET /commands` returns them with no `method` and no
 
 ## 5. Dispatch
 
-The engine does not interpret a control command, with one exception.
-`Session.Prompt` (`engine/engine.go`) keeps its signature and never learns
-most control verbs; the command string stops at the frontend for those.
-`/compact` is the exception: `promptWithOrigin` matches the exact text and
-calls `Session.RunCompactCommand` (`engine/compact.go`) instead of sending
-it to the model, so a caller that skips `Resolve` still compacts the
-session instead of prompting it. `RunCompactCommand` calls `Session.Compact`
-on a native session. A claude-code-delegated session has no journal to
-fold, so `RunCompactCommand` issues the CLI's own compact command instead.
+The engine does not interpret a control command. `Session.Prompt`
+(`engine/engine.go`) keeps its signature and learns no control verb; the
+command string stops at the frontend. A caller that skips `Resolve` and
+sends `/compact` as a prompt gets an ordinary prompt: the model sees the
+text `/compact`, and nothing compacts. `Session.RunCompactCommand`
+(`engine/compact.go`) is the one engine entry point for a resolved compact
+command, reached only through `POST /session/{id}/compact` (serve mode) or
+the `run`-mode dispatcher, never through `Session.Prompt`. It calls
+`Session.Compact` on a native session. A claude-code-delegated session has
+no journal to fold, so `RunCompactCommand` issues the CLI's own compact
+command instead.
 
 `harness serve` resolves a typed command earlier still, before
 `Session.Prompt` is ever called: `resolvePromptCommand`
@@ -258,29 +260,21 @@ fold, so `RunCompactCommand` issues the CLI's own compact command instead.
 every op serve mode supports — not `/compact` alone. See "Serve-mode
 resolution" below for the full rule.
 
-> **Two exceptions to the `//x` escape.** Rule 3 promises literal text
-> for `//name`. Two paths still act on that text anyway.
+> **One exception to the `//x` escape.** Rule 3 promises literal text
+> for `//name`. One path still acts on that text anyway.
 >
-> 1. **The engine's exact `/compact` intercept, on any session, until #319
->    removes it.** `resolvePromptCommand` unescapes a typed `//compact`
->    to the text `/compact` (rule 3), but that text is not a command — `Resolve`
->    returns `ErrNotCommand` for it — so it is sent on as an ordinary
->    prompt. The engine's own exact-text match (above) then fires and
->    compacts the session anyway, with no `CommandRecord` at all. So
->    today, a typed `/compact` (one slash) is the only reliable, recorded
->    path; a typed `//compact` (two slashes), like a non-typed `/compact`
->    from any source, still compacts — through the OLD, unrecorded
->    mechanism. Removing the intercept (#319) removes this case in one
->    edit.
-> 2. **A delegated session's own CLI vocabulary, permanently.** The
->    Claude Code CLI reads a leading `/name` in the text it receives as
->    one of ITS OWN slash commands (`/cost`, `/context`, `/usage`, and
->    more — section 2). A typed `//x` on a session delegated to that CLI
->    (`Session.ClaudeCodeDelegated`) still unescapes to `/x`, and that
->    text still reaches the CLI as this turn's own input
->    (`dispatchClaudeCodeTurn`), in `harness run` and `harness serve`
->    alike. Harness cannot keep it literal there: the CLI owns that
->    name, not harness.
+> **A delegated session's own CLI vocabulary, permanently.** The
+> Claude Code CLI reads a leading `/name` in the text it receives as
+> one of ITS OWN slash commands (`/cost`, `/context`, `/usage`, and
+> more — section 2). A typed `//x` on a session delegated to that CLI
+> (`Session.ClaudeCodeDelegated`) still unescapes to `/x`, and that
+> text still reaches the CLI as this turn's own input
+> (`dispatchClaudeCodeTurn`), in `harness run` and `harness serve`
+> alike. Harness cannot keep it literal there: the CLI owns that
+> name, not harness. A typed `//compact` on a NATIVE session, by
+> contrast, unescapes to the plain text `/compact` (rule 3) and reaches
+> the model as ordinary input: the engine learns no control verb from
+> prompt text, so nothing compacts.
 
 Three reasons, in order of weight.
 
@@ -694,7 +688,7 @@ Name the failure first.
   never a `CommandRecord` (`server/command_resolve_test.go`'s `//model x`
   case). A non-typed `//x` reaches the model, or the queue, unchanged.
   Whether that unescaped text then acts as a command downstream is the
-  separate "Two exceptions" callout in section 5, not this rule.
+  separate "One exception" callout in section 5, not this rule.
 - A typed `/queue-clear` records `unsupported` with
   `"Not available in this client."` and the queue is untouched.
   Red-verify against `serveModeOps`.

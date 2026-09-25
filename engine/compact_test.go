@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2492,38 +2491,37 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
-func TestPromptCompactCommandRunsCompactInsteadOfModelTurn(t *testing.T) {
+// TestPromptCompactTextReachesModel is the red-first regression test for
+// removing the engine's text intercept (#319): the server, not the engine,
+// resolves a typed "/compact" (server/commands.go resolvePromptCommand). A
+// native session's Session.Prompt must learn no control verb from prompt
+// text, so an exact "/compact" prompt is ordinary model input: it appends a
+// literal "/compact" user message and reaches the provider once, instead of
+// running RunCompactCommand.
+func TestPromptCompactTextReachesModel(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurn("one", provider.Usage{InputTokens: 10}),
-		compactTurn("two", provider.Usage{InputTokens: 10}),
-		compactTurn("three", provider.Usage{InputTokens: 10}),
-		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
 	}}
-	var events []Event
 	s := NewSession(Config{
 		Providers: provider.Registry{"test": prov},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
-		OnEvent:   func(ev Event) { events = append(events, ev) },
 	})
-	runTurns(t, s, 3)
 
-	msg, err := s.Prompt(context.Background(), "/compact")
-	if err != nil {
+	if _, err := s.Prompt(context.Background(), "/compact"); err != nil {
 		t.Fatalf("Prompt(/compact): %v", err)
 	}
+
+	found := false
 	for _, m := range s.History() {
-		if m.Parts.Text() == "/compact" {
-			t.Fatalf("history contains a literal /compact user message: %+v", m)
+		if m.Role == message.RoleUser && m.Parts.Text() == "/compact" {
+			found = true
 		}
 	}
-	if msg == nil || !strings.Contains(msg.Parts.Text(), "SUMMARY") {
-		t.Fatalf("Prompt(/compact) returned %+v, want the compaction summary", msg)
+	if !found {
+		t.Fatalf("history = %+v, want a literal /compact user message", s.History())
 	}
-	has := func(typ string) bool {
-		return slices.ContainsFunc(events, func(ev Event) bool { return ev.Type == typ })
-	}
-	if !has(EventCompactionStarted) || !has(EventHistoryCompacted) {
-		t.Fatalf("events = %+v, want EventCompactionStarted and EventHistoryCompacted", events)
+	if len(prov.requests) != 1 {
+		t.Fatalf("provider calls = %d, want 1 (the engine must send /compact to the model, not intercept it)", len(prov.requests))
 	}
 }
 

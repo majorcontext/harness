@@ -308,14 +308,8 @@ func isLoneExistingSummary(folded []message.Message) bool {
 
 const compactCommandText = "/compact"
 
-// isExplicitCompactCommand: an attachment means real intent to prompt the
-// model, not to run the command.
-func isExplicitCompactCommand(text string, blobs []*message.Blob) bool {
-	return len(blobs) == 0 && strings.TrimSpace(text) == compactCommandText
-}
-
-// RunCompactCommand is the one entry point both POST /session/{id}/compact
-// and an explicit "/compact" prompt call.
+// RunCompactCommand is the engine entry point for a resolved compact
+// command: POST /session/{id}/compact and the serve/run dispatchers.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
 	if s.claudeCodeDelegated() {
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {

@@ -2878,15 +2878,6 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	// A "/compact" prompt is a command, not model input.
-	if isExplicitCompactCommand(text, blobs) {
-		res, err := s.RunCompactCommand(ctx, CompactOptions{})
-		if err != nil {
-			s.emitSessionError(err)
-			return nil, err
-		}
-		return res.Summary, nil
-	}
 	if s.claudeCodeDelegated() {
 		return s.dispatchClaudeCodeTurn(ctx, text, origin, id, prov, operatorBatch, blobs...)
 	}
@@ -2959,7 +2950,8 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 
 // dispatchClaudeCodeTurn appends text and runs it through the Claude Code
 // CLI. RunCompactCommand calls this directly rather than promptWithOrigin,
-// which would recheck isExplicitCompactCommand and recurse.
+// which would redundantly recheck claudeCodeDelegated after RunCompactCommand
+// already confirmed it.
 func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
