@@ -64,13 +64,13 @@ func TestGoalTurnBoundaryDrainStampsOperatorBatch(t *testing.T) {
 	<-entered // turn 1's worker call is genuinely in flight
 
 	// No source named — must fold to PromptSourceAPI.
-	id1, _, err := s.EnqueuePrompt("first operator message", "", PromptProvenance{})
+	id1, msgID1, err := s.EnqueuePrompt("first operator message", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("EnqueuePrompt = %v", err)
 	}
 	// An explicit schedule delivery, the shape the boxes control plane's
 	// schedule_task/cron worker asserts.
-	id2, _, err := s.EnqueuePrompt("second operator message", "", PromptProvenance{
+	id2, msgID2, err := s.EnqueuePrompt("second operator message", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_456",
 		SourceLabel: "nightly goal check",
@@ -106,10 +106,10 @@ func TestGoalTurnBoundaryDrainStampsOperatorBatch(t *testing.T) {
 	}
 
 	want := []message.OperatorBatchEntry{
-		{EnqueueID: id1, Text: "first operator message", Source: message.PromptSourceAPI},
+		{EnqueueID: id1, Text: "first operator message", Source: message.PromptSourceAPI, MessageID: msgID1},
 		{
 			EnqueueID: id2, Text: "second operator message", Source: message.PromptSourceSchedule,
-			SourceID: "sched_456", SourceLabel: "nightly goal check",
+			SourceID: "sched_456", SourceLabel: "nightly goal check", MessageID: msgID2,
 		},
 	}
 	if len(batch.OperatorBatch) != len(want) {

@@ -37,6 +37,7 @@ func TestOperatorBatchMessageWireShape(t *testing.T) {
 				SourceID:        "sched_123",
 				SourceLabel:     "nightly CI check",
 				AttachmentCount: 1,
+				MessageID:       "msg_01m210y3yvfmhtykzhd9j6gs2x",
 			},
 		},
 	}
@@ -52,7 +53,7 @@ func TestOperatorBatchMessageWireShape(t *testing.T) {
 		`"origin":"operator_batch",` +
 		`"operator_batch":[` +
 		`{"enqueue_id":1,"text":"first","source":"api"},` +
-		`{"enqueue_id":2,"text":"second","source":"schedule","source_id":"sched_123","source_label":"nightly CI check","attachment_count":1}` +
+		`{"enqueue_id":2,"text":"second","source":"schedule","source_id":"sched_123","source_label":"nightly CI check","attachment_count":1,"message_id":"msg_01m210y3yvfmhtykzhd9j6gs2x"}` +
 		`]}`
 
 	if string(data) != want {

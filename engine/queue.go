@@ -294,6 +294,7 @@ func (s *Session) EnqueuePrompt(text string, messageID string, prov PromptProven
 	s.emit(Event{
 		Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
 		QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+		QueueMessageID: p.MessageID,
 	})
 	s.mu.Unlock()
 	return p.ID, p.MessageID, nil
@@ -487,8 +488,14 @@ func (s *Session) flushQueueRecordsLocked() {
 // a seq reused with DIFFERENT content, same as it already has none for text).
 // EnqueuePromptDurable is EnqueuePrompt's durable, idempotent-by-seq
 // sibling, with the same explicit PromptProvenance parameter — see
-// EnqueuePrompt's own doc comment for the same pattern.
-func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProvenance, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
+// EnqueuePrompt's own doc comment for the same pattern. messageID is
+// resolved via ResolveMessageID exactly as EnqueuePrompt resolves its own —
+// unlike EnqueuePrompt, the resolved value is not returned: a duplicate
+// (seq <= watermark) call resolves a value that is never stored (the
+// original acceptance's own id stands), so returning it here would let a
+// caller mistake this call's resolution for the durably recorded one. A
+// caller needing the id it just supplied already has it before calling.
+func (s *Session) EnqueuePromptDurable(text string, messageID string, seq int64, prov PromptProvenance, blobs ...*message.Blob) (id int64, duplicate bool, err error) {
 	trimmed := strings.TrimSpace(text)
 	usable := usablePromptBlobs(blobs)
 	if trimmed == "" && len(usable) == 0 {
@@ -498,6 +505,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProven
 	if seq < 1 {
 		return 0, false, errors.New("engine: EnqueuePromptDurable requires seq >= 1")
 	}
+	resolved := ResolveMessageID(messageID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if seq <= s.enqueueSeq {
@@ -531,7 +539,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProven
 	s.flushQueueRecordsLocked()
 	const op = "enqueue_durable"
 	rec := record{Type: recPromptQueued, Prompt: &promptRecord{
-		ID: id, Text: trimmed, Seq: seq, Blobs: usable,
+		ID: id, Text: trimmed, Seq: seq, Blobs: usable, MessageID: resolved,
 		Source: string(prov.Source), SourceID: prov.SourceID, SourceLabel: prov.SourceLabel,
 	}}
 	if err := s.timedStorePhase(op, "write_record", func() error {
@@ -559,7 +567,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProven
 		}
 	}
 	s.promptQueue = append(s.promptQueue, QueuedPrompt{
-		ID: id, Text: trimmed, Seq: seq, Blobs: usable,
+		ID: id, Text: trimmed, Seq: seq, Blobs: usable, MessageID: resolved,
 		Source: prov.Source, SourceID: prov.SourceID, SourceLabel: prov.SourceLabel,
 	})
 	s.enqueueSeq = seq
@@ -569,6 +577,7 @@ func (s *Session) EnqueuePromptDurable(text string, seq int64, prov PromptProven
 	s.emit(Event{
 		Type: EventPromptQueued, QueueID: id, QueueText: trimmed, QueueSeq: seq, QueueLen: len(s.promptQueue),
 		QueueSource: string(prov.Source.Normalized()), QueueSourceID: prov.SourceID, QueueSourceLabel: prov.SourceLabel,
+		QueueMessageID: resolved,
 	})
 	return id, false, nil
 }
@@ -813,6 +822,7 @@ func operatorBatchEntries(prompts []QueuedPrompt) []message.OperatorBatchEntry {
 			SourceID:        p.SourceID,
 			SourceLabel:     p.SourceLabel,
 			AttachmentCount: len(p.Blobs),
+			MessageID:       p.MessageID,
 		}
 	}
 	return entries

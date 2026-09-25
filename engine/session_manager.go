@@ -3415,6 +3415,7 @@ func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string
 			Event{
 				Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
 				QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+				QueueMessageID: p.MessageID,
 			})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)
@@ -4204,6 +4205,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 			Event{
 				Type: EventPromptQueued, QueueID: p.ID, QueueText: p.Text, QueueLen: len(s.promptQueue),
 				QueueSource: string(p.Source.Normalized()), QueueSourceID: p.SourceID, QueueSourceLabel: p.SourceLabel,
+				QueueMessageID: p.MessageID,
 			})
 		s.mu.Unlock()
 		m.deferQueueRecordFlush(s)

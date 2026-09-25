@@ -999,6 +999,14 @@ components:
         attachment_count:
           type: integer
           description: This one prompt's own attachment count. Omitted (0) for a text-only prompt.
+        message_id:
+          type: string
+          description: >
+            The id the user message this ONE prompt becomes carries,
+            already resolved before the batch drain ran. Lets a client
+            reconcile an optimistic bubble it minted the id for directly
+            against its own entry here. Omitted on a prompt folded from a
+            journal record written before this field existed.
 
     MessagePlaceholder:
       type: object
@@ -1518,6 +1526,16 @@ components:
       type: object
       required: [parts, seq]
       properties:
+        id:
+          type: string
+          description: >
+            Optional client-supplied id for the user message this prompt
+            creates, same contract as PromptRequest's `id`: used verbatim
+            when usable, otherwise the server mints a fresh `msg_...` id
+            (reported back as `message_id`) — today's behavior when `id`
+            is omitted. Independent of `seq`: a duplicate `seq` still gets
+            no `message_id` back (see EnqueueResponse's `duplicate`
+            status) even when `id` is given.
         parts:
           type: array
           minItems: 1
@@ -1632,6 +1650,15 @@ components:
             can leave it 0/absent even on a `queued` response. That is not
             an error — the prompt was still durably accepted and journaled,
             it simply never ran — so this case is still a 202, never a 500.
+        message_id:
+          type: string
+          description: >
+            The id of the user message this call's own prompt was (or
+            will be) recorded under — the caller's own `id` echoed back,
+            or the server-minted id when `id` was omitted or unusable.
+            Omitted on a `duplicate` response: this call's own prompt was
+            never stored, and only the original accepting call's id is
+            durable.
 
     QueueGetResponse:
       type: object
@@ -1687,6 +1714,14 @@ components:
           description: >
             Free-form, human-readable label for the same instance (a
             schedule's own display name). Display only, never parsed.
+        message_id:
+          type: string
+          description: >
+            The id this entry's eventual durable message will carry,
+            already resolved at enqueue time. Lets a caller with no live
+            state of its own (a fresh viewer, a reconnect) key a
+            placeholder it renders for this still-pending entry on the
+            same id the entry resolves to once delivered.
 
     PromptSource:
       type: string
@@ -1904,10 +1939,10 @@ components:
             prompt queue (docs/plans/2026-07-19-prompt-queue.md):
             prompt.queued fires whenever prompt_async or POST
             /session/{id}/enqueue (docs/plans/2026-07-21-durable-enqueue.md)
-            durably enqueues a prompt, carrying queue_id, queue_text, the
-            resulting queue_len, and — for a POST /session/{id}/enqueue
-            accept only — queue_seq (see that field). prompt.dequeued fires
-            whenever the
+            durably enqueues a prompt, carrying queue_id, queue_text,
+            queue_message_id, the resulting queue_len, and — for a POST
+            /session/{id}/enqueue accept only — queue_seq (see that
+            field). prompt.dequeued fires whenever the
             head is popped for delivery, carrying the same queue_id/
             queue_text plus queue_reason — "delivered" (idle-drain
             dispatch), "injected" (delivered mid-turn as a labeled operator
@@ -2197,6 +2232,14 @@ components:
         queue_source_label:
           type: string
           description: Free-form, human-readable label for the same instance. Present on prompt.queued only, display only.
+        queue_message_id:
+          type: string
+          description: >
+            The queued prompt's own resolved message id — present on
+            prompt.queued only, letting a consumer that reconciles from
+            the event/journal stream alone learn the id before the
+            prompt is ever dispatched. Absent on prompt.dequeued and on
+            every other event type.
         worktree_path:
           type: string
           description: >

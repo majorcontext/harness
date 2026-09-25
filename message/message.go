@@ -178,6 +178,14 @@ type OperatorBatchEntry struct {
 	// mirrors the "[N attachment(s) attached below]" marker in the
 	// message's rendered text. Zero for a text-only prompt.
 	AttachmentCount int `json:"attachment_count,omitempty"`
+	// MessageID is the id the user message this ONE prompt becomes will
+	// carry — engine.QueuedPrompt.MessageID, already resolved (see
+	// engine.ResolveMessageID) before the batch drain ever runs. Lets a
+	// client reconcile an optimistic bubble it minted the id for directly
+	// against its own entry here, even though the batch delivers it inside
+	// a shared Message rather than as its own. Empty on a prompt folded
+	// from a journal record written before QueuedPrompt.MessageID existed.
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // Message is one entry in a session's history.

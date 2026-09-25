@@ -2511,7 +2511,7 @@ func TestClaudeCodeQueueInjectionStampsOperatorBatch(t *testing.T) {
 	// schedule_task/cron worker asserts — proves provenance threads all
 	// the way from EnqueuePrompt through the delegated drain, not
 	// just the native one.
-	queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{
+	queueID, msgID, err := s.EnqueuePrompt("QUEUE-MARKER: please continue", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_456",
 		SourceLabel: "nightly CI check",
@@ -2538,7 +2538,7 @@ func TestClaudeCodeQueueInjectionStampsOperatorBatch(t *testing.T) {
 	}
 	want := []message.OperatorBatchEntry{{
 		EnqueueID: queueID, Text: "QUEUE-MARKER: please continue", Source: message.PromptSourceSchedule,
-		SourceID: "sched_456", SourceLabel: "nightly CI check",
+		SourceID: "sched_456", SourceLabel: "nightly CI check", MessageID: msgID,
 	}}
 	if len(batch.OperatorBatch) != len(want) || batch.OperatorBatch[0] != want[0] {
 		t.Fatalf("OperatorBatch = %+v, want %+v", batch.OperatorBatch, want)

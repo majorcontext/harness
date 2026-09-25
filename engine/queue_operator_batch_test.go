@@ -53,13 +53,13 @@ func TestDrainQueuedPromptsIntoHistoryStampsOperatorBatch(t *testing.T) {
 
 	// First prompt: no source named — must fold to PromptSourceAPI, never
 	// PromptSourceTyped (an untagged caller is never presented as human).
-	id1, _, err := s.EnqueuePrompt("first operator prompt", "", PromptProvenance{})
+	id1, msgID1, err := s.EnqueuePrompt("first operator prompt", "", PromptProvenance{})
 	if err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 	// Second prompt: an explicit schedule delivery, the shape the boxes
 	// control plane's schedule_task/cron worker asserts.
-	id2, _, err := s.EnqueuePrompt("second operator prompt", "", PromptProvenance{
+	id2, msgID2, err := s.EnqueuePrompt("second operator prompt", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_123",
 		SourceLabel: "nightly CI check",
@@ -91,10 +91,10 @@ func TestDrainQueuedPromptsIntoHistoryStampsOperatorBatch(t *testing.T) {
 	}
 
 	want := []message.OperatorBatchEntry{
-		{EnqueueID: id1, Text: "first operator prompt", Source: message.PromptSourceAPI},
+		{EnqueueID: id1, Text: "first operator prompt", Source: message.PromptSourceAPI, MessageID: msgID1},
 		{
 			EnqueueID: id2, Text: "second operator prompt", Source: message.PromptSourceSchedule,
-			SourceID: "sched_123", SourceLabel: "nightly CI check",
+			SourceID: "sched_123", SourceLabel: "nightly CI check", MessageID: msgID2,
 		},
 	}
 	if len(batch.OperatorBatch) != len(want) {
@@ -104,5 +104,63 @@ func TestDrainQueuedPromptsIntoHistoryStampsOperatorBatch(t *testing.T) {
 		if batch.OperatorBatch[i] != e {
 			t.Errorf("OperatorBatch[%d] = %+v, want %+v", i, batch.OperatorBatch[i], e)
 		}
+	}
+}
+
+// TestOperatorBatchEntryCarriesClientSuppliedMessageID is the RED test for
+// the console's own batch-reconciliation mechanism: a caller-supplied id
+// (not a harness mint) must survive VERBATIM into its constituent
+// OperatorBatchEntry, exactly like it survives into a solo message's own
+// ID — proving a client can key its own still-optimistic bubble on this
+// field even when its prompt is delivered as part of a batch rather than
+// standalone.
+func TestOperatorBatchEntryCarriesClientSuppliedMessageID(t *testing.T) {
+	dir := t.TempDir()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("tc1", "gate", `{}`)),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "final"}),
+	}}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		System:     []string{"base"},
+		SessionDir: dir,
+		Tools:      []Tool{gateTool(entered, release)},
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(context.Background(), "please run gate")
+		done <- err
+	}()
+	<-entered
+
+	const clientID = "console-optimistic-queued-1"
+	if _, gotID, err := s.EnqueuePrompt("queued while busy", clientID, PromptProvenance{}); err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	} else if gotID != clientID {
+		t.Fatalf("EnqueuePrompt resolved id = %q, want the supplied id %q verbatim", gotID, clientID)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	var batch *message.Message
+	for _, m := range s.History() {
+		if m.Origin == message.OriginOperatorBatch {
+			m := m
+			batch = &m
+		}
+	}
+	if batch == nil {
+		t.Fatalf("no history message carries Origin=%q; history = %+v", message.OriginOperatorBatch, s.History())
+	}
+	if len(batch.OperatorBatch) != 1 || batch.OperatorBatch[0].MessageID != clientID {
+		t.Fatalf("OperatorBatch = %+v, want exactly one entry with message id %q", batch.OperatorBatch, clientID)
 	}
 }

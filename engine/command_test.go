@@ -82,7 +82,7 @@ func TestRecordCommandDurableDedupesSeqAcrossRestart(t *testing.T) {
 	if got := loaded.EnqueueSeq(); got != 5 {
 		t.Fatalf("EnqueueSeq() = %d, want 5", got)
 	}
-	if _, dup, err := loaded.EnqueuePromptDurable("retry", 5, PromptProvenance{}); err != nil || !dup {
+	if _, dup, err := loaded.EnqueuePromptDurable("retry", "", 5, PromptProvenance{}); err != nil || !dup {
 		t.Fatalf("EnqueuePromptDurable(seq 5): dup=%v err=%v, want dup=true (shared watermark)", dup, err)
 	}
 }

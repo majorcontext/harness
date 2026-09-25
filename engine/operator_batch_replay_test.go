@@ -52,11 +52,12 @@ func TestOperatorBatchMessageSurvivesReplay(t *testing.T) {
 	if _, _, err := s.EnqueuePrompt("first operator prompt", "", PromptProvenance{}); err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
-	if _, _, err := s.EnqueuePrompt("second operator prompt", "", PromptProvenance{
+	_, msgID2, err := s.EnqueuePrompt("second operator prompt", "", PromptProvenance{
 		Source:      message.PromptSourceSchedule,
 		SourceID:    "sched_replay",
 		SourceLabel: "nightly replay check",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("EnqueuePrompt: %v", err)
 	}
 
@@ -115,7 +116,7 @@ func TestOperatorBatchMessageSurvivesReplay(t *testing.T) {
 	// above but still be wrong.
 	want := message.OperatorBatchEntry{
 		EnqueueID: 2, Text: "second operator prompt", Source: message.PromptSourceSchedule,
-		SourceID: "sched_replay", SourceLabel: "nightly replay check",
+		SourceID: "sched_replay", SourceLabel: "nightly replay check", MessageID: msgID2,
 	}
 	if replayed.OperatorBatch[1] != want {
 		t.Errorf("replayed OperatorBatch[1] = %+v, want %+v", replayed.OperatorBatch[1], want)
