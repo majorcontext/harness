@@ -207,8 +207,14 @@ attempt's own text).
 it before it ever reaches the engine as a prompt (`docs/design/slash-
 commands.md`) and dispatches it as `POST /session/{id}/compact`. The engine
 itself learns no control verb from prompt text; an untyped exact `/compact`
-sent as a prompt is ordinary model input. `POST /session/{id}/compact` and
-the `run`-mode dispatcher both funnel through one entry point,
+sent as a prompt to a NATIVE session is ordinary model input. On a
+claude-code-delegated session, that same untyped text still reaches the CLI
+unchanged and the CLI runs it as its own command — the CLI-vocabulary
+exception `docs/design/slash-commands.md` §5 describes for `//x` applies
+here too, since the delegated lane never distinguishes typed from untyped
+text — and the appended message keeps the caller's own origin, not
+`OriginEngine`. `POST /session/{id}/compact` and the `run`-mode dispatcher
+both funnel through one entry point,
 `Session.RunCompactCommand`: on a native session it calls `Session.Compact`;
 on a CURRENTLY-delegated session, `Session.Compact` itself still refuses
 (harness has no journal to fold there), so `RunCompactCommand` instead

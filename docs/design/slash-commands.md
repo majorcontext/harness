@@ -245,14 +245,18 @@ dispatches its own. `GET /commands` returns them with no `method` and no
 The engine does not interpret a control command. `Session.Prompt`
 (`engine/engine.go`) keeps its signature and learns no control verb; the
 command string stops at the frontend. A caller that skips `Resolve` and
-sends `/compact` as a prompt gets an ordinary prompt: the model sees the
-text `/compact`, and nothing compacts. `Session.RunCompactCommand`
-(`engine/compact.go`) is the one engine entry point for a resolved compact
-command, reached only through `POST /session/{id}/compact` (serve mode) or
-the `run`-mode dispatcher, never through `Session.Prompt`. It calls
-`Session.Compact` on a native session. A claude-code-delegated session has
-no journal to fold, so `RunCompactCommand` issues the CLI's own compact
-command instead.
+sends `/compact` as a prompt to a NATIVE session gets an ordinary prompt:
+the model sees the text `/compact`, and nothing compacts. On a
+claude-code-delegated session, the same text still reaches the CLI
+unchanged and the CLI runs it as its own command (see the CLI-vocabulary
+callout below); the appended message keeps the caller's own origin, not
+`OriginEngine`. `Session.RunCompactCommand` (`engine/compact.go`) is the
+one engine entry point for a RESOLVED compact command, reached only
+through `POST /session/{id}/compact` (serve mode) or the `run`-mode
+dispatcher, never through `Session.Prompt`. It calls `Session.Compact` on
+a native session. A claude-code-delegated session has no journal to fold,
+so `RunCompactCommand` issues the CLI's own compact command instead, with
+`OriginEngine`.
 
 `harness serve` resolves a typed command earlier still, before
 `Session.Prompt` is ever called: `resolvePromptCommand`

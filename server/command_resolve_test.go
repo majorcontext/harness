@@ -132,14 +132,14 @@ func TestUntypedSlashStaysPrompt(t *testing.T) {
 	}
 }
 
-// TestUntypedCompactStaysPrompt is the red-first regression test for
-// removing the engine's text intercept (#319): resolvePromptCommand only
-// resolves a typed "/compact" (rule "typed only"). A non-typed source
-// (including the empty/default one) and a typed "//compact" escape must
-// both reach Session.Prompt as ordinary model input, appending a literal
-// "/compact" user message and writing no CommandRecord — never compacting
-// through the engine itself. Before #319, the engine's own exact-text
-// match fired regardless of source, so this failed at HEAD.
+// TestUntypedCompactStaysPrompt pins the typed-only rule for "/compact":
+// resolvePromptCommand only resolves a typed "/compact" (rule "typed
+// only"). A non-typed source (including the empty/default one) and a
+// typed "//compact" escape must both reach Session.Prompt as ordinary
+// model input, appending a literal "/compact" user message and writing no
+// CommandRecord — never compacting through the engine itself. #319 added
+// an engine-side exact-text match that fired regardless of source; this
+// test would have failed against that match.
 func TestUntypedCompactStaysPrompt(t *testing.T) {
 	cases := []struct {
 		name string

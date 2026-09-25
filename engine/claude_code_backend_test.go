@@ -358,8 +358,7 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 // local_command fallback stays scoped to "compact" (or an omitted field),
 // and that a failing compact_result status still emits EventCompactionFailed.
 // Drives RunCompactCommand, the entry point POST /session/{id}/compact and
-// the serve/run dispatchers actually use — not Session.Prompt, which learns
-// no control verb from prompt text.
+// the serve/run dispatchers actually use.
 func TestClaudeCodeCompactTurn(t *testing.T) {
 	tests := []struct {
 		name            string

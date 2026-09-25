@@ -2491,13 +2491,14 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
-// TestPromptCompactTextReachesModel is the red-first regression test for
-// removing the engine's text intercept (#319): the server, not the engine,
-// resolves a typed "/compact" (server/commands.go resolvePromptCommand). A
-// native session's Session.Prompt must learn no control verb from prompt
-// text, so an exact "/compact" prompt is ordinary model input: it appends a
-// literal "/compact" user message and reaches the provider once, instead of
-// running RunCompactCommand.
+// TestPromptCompactTextReachesModel pins the rule that the server, not the
+// engine, resolves a typed "/compact" (server/commands.go
+// resolvePromptCommand). A native session's Session.Prompt must learn no
+// control verb from prompt text, so an exact "/compact" prompt is ordinary
+// model input: it appends a literal "/compact" user message and reaches
+// the provider once, instead of running RunCompactCommand. #319 added an
+// engine-side exact-text match that ran RunCompactCommand instead; this
+// test would have failed against that match.
 func TestPromptCompactTextReachesModel(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),

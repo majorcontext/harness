@@ -2949,9 +2949,9 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 }
 
 // dispatchClaudeCodeTurn appends text and runs it through the Claude Code
-// CLI. RunCompactCommand calls this directly rather than promptWithOrigin,
-// which would redundantly recheck claudeCodeDelegated after RunCompactCommand
-// already confirmed it.
+// CLI. RunCompactCommand calls this directly rather than promptWithOrigin
+// so a model switch after its own lane check cannot send "/compact" to a
+// native model as plain text.
 func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
