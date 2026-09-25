@@ -119,6 +119,78 @@ type harness struct {
 	ts    *httptest.Server
 }
 
+// drainSessions stops every turn h's server still has in flight and blocks
+// until each one's goroutine is finished, so nothing is still writing into
+// h.dir when t.TempDir removes it.
+//
+// multiProviderHarnessInDir registers this, which fixes its order: t.TempDir
+// registers the directory removal BEFORE the constructor runs, and cleanups
+// run LIFO, so this always runs before that removal. A test's own
+// t.Cleanup(blocker.releaseAll) is registered before the harness and
+// therefore runs AFTER this — which is why this cancels the parked turns
+// instead of waiting for a release that has not happened yet.
+//
+// One join per kind of turn driver:
+//
+//   - Drain, given an already-canceled context, cancels every resident
+//     session's prompt and waits for the server's own prompt goroutines
+//     (s.wg). A SessionManager-initiated resume on a root takes that same
+//     path, since New installs SetExternalRunner.
+//   - Reap collects a child node only once its turn goroutine has finalized
+//     (see sessionNode.finalized), and removes it from its parent's
+//     Children list, so a tree that reaps childless has no engine-driven
+//     child turn left in it. Spawn's goroutine — the one that persists a
+//     child's first message, which is what CREATES the session log and its
+//     index sidecar — is exactly the writer this waits out.
+//
+// The single-provider harness (newHarnessOpts) deliberately does not
+// register this. Its tests spawn no children, and a root's log is already
+// open before any turn runs (POST /session persists it), so a late write
+// there lands on an open handle and can never re-create a directory entry.
+// Wiring it there would also hang: a test may fabricate a permanently
+// running child node with ReportTurnStart and no goroutine to finalize it
+// (TestListSessionsIncludesChildStatus), which this wait cannot tell apart
+// from a live turn.
+func (h *harness) drainSessions() {
+	mgr := h.srv.SessionManager()
+	h.srv.mu.Lock()
+	roots := make([]string, 0, len(h.srv.sessions))
+	for id := range h.srv.sessions {
+		roots = append(roots, id)
+	}
+	h.srv.mu.Unlock()
+	// Cancel cascades through the subtree, so a child parked in a provider
+	// call returns with its context error.
+	for _, id := range roots {
+		_ = mgr.Cancel(id)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.srv.Drain(ctx)
+	for {
+		// Armed before the check, so a finalize landing between the two is
+		// still delivered.
+		changed := mgr.Changed()
+		mgr.Reap()
+		if !hasLiveChild(mgr, roots) {
+			return
+		}
+		<-changed
+	}
+}
+
+// hasLiveChild reports whether any root still holds a child node. Reap drops
+// a reaped child from its parent's Children list, so an empty list means
+// every descendant finalized.
+func hasLiveChild(mgr *engine.SessionManager, roots []string) bool {
+	for _, id := range roots {
+		if info, ok := mgr.Info(id); ok && len(info.Children) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func newHarness(t *testing.T, prov provider.Provider) *harness {
 	t.Helper()
 	return newHarnessDir(t, t.TempDir(), prov)
