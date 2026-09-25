@@ -354,6 +354,7 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 		var evicted []*engine.Session
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
+			evicted = append(evicted, loaded)
 		} else {
 			st = &sessionState{sess: loaded, lastUsed: time.Now()}
 			s.sessions[id] = st
