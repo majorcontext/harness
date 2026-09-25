@@ -520,7 +520,12 @@ JSON body, capped at 16 KiB; over the cap, `result` is omitted and
 command to the last durable message at the moment of its first record —
 empty means "before every message" — and a later compaction re-anchors
 it to the fold's own summary id, so the anchor survives however many
-compactions later.
+compactions later. A record anchors to a message by its ID. The
+transcript already treats message IDs as unique: clients de-duplicate
+pages by ID. If a caller reuses a message ID, a command record can
+render after either copy of that message, and it can appear on the
+page of each copy. Clients upsert records by `id`, so a record that
+appears twice is harmless.
 
 A dispatched command produces exactly two records sharing one `id`:
 `accepted`, then one terminal status. Bad arguments, an attachment,
