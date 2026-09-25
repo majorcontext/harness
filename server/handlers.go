@@ -4261,6 +4261,11 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "session is busy; abort it before ending it")
 		return
 	}
+	if st.pins > 0 {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "session is running a command; retry after it finishes")
+		return
+	}
 	wt := st.worktree
 	delete(s.sessions, id)
 	delete(s.lastRequest, id)

@@ -2977,7 +2977,10 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409":
-          description: The session has an in-flight prompt or goal; abort it first.
+          description: >
+            The session has an in-flight prompt or goal (abort it first), or a
+            dispatched slash command still holds it pinned (retry after it
+            finishes).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
