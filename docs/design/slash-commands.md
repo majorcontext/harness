@@ -507,6 +507,13 @@ shutdown; that failure maps to `interrupted` too, rather than `failed`,
 so a client can tell "the process gave up on this" from "the command
 itself was wrong".
 
+Boot reconcile backfills each session's command records into the event
+journal after this repair. The backfill emits the latest record of each
+command, not every intermediate record. If a crash loses both the accepted
+and the terminal event of one command, a client that replays the journal
+sees only the terminal event. Clients fold records by `id`, and the latest
+record wins, so the final state is still correct.
+
 ### The record
 
 Every resolution that reaches a `CommandRecord` at all journals

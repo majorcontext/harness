@@ -1712,7 +1712,7 @@ func (s *Server) reconcile() error {
 		// (see Session.RepairInterruptedCommands's own doc comment). Never
 		// fail boot on this: report and continue, exactly like an unreadable
 		// session log above.
-		n, err := sess.RepairInterruptedCommands(func(name string) string {
+		_, err = sess.RepairInterruptedCommands(func(name string) string {
 			return fmt.Sprintf("harness restarted before /%s finished; it will not run again", name)
 		})
 		if err != nil {
@@ -1726,13 +1726,11 @@ func (s *Server) reconcile() error {
 			cp := c
 			s.emitDurableLocked(&Event{Type: evtCommand, SessionID: id, Command: &cp})
 		}
-		if n > 0 {
-			// The repair wrote through this LoadSession's own handles, opened
-			// only for this pass. Release them now rather than leaving a
-			// second append handle on the log open for the rest of the
-			// process's life — this session is not otherwise resident yet.
-			sess.ReleaseFiles()
-		}
+		// The repair (successful or not) may have opened this LoadSession's
+		// own handles, only for this pass. Release them now rather than
+		// leaving a second append handle on the log open for the rest of
+		// the process's life — this session is not otherwise resident yet.
+		sess.ReleaseFiles()
 	}
 	return nil
 }

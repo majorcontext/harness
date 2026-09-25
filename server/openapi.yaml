@@ -2003,8 +2003,11 @@ components:
             record (`command`, below) — one per journaled `CommandRecord`,
             so a dispatched command's `accepted` record and its later
             terminal record each arrive as their own "command" event
-            sharing `command.id`. See docs/design/slash-commands.md's
-            "Serve-mode resolution" section.
+            sharing `command.id`. Exception: boot reconcile backfills only
+            the latest record of a command lost mid-crash, so a replaying
+            client can see just the terminal event for that `command.id`.
+            See docs/design/slash-commands.md's "Serve-mode resolution"
+            section.
         session_id: { type: string }
         seq:
           type: integer
