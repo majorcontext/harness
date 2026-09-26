@@ -406,13 +406,25 @@ func statusWord(letter string) string {
 // existsInBaseTree reports, for each of paths, whether baseTreeish:path
 // resolves to a real object, via one `git cat-file --batch-check` call
 // (one stdin line per path, one stdout line per path, in the same order).
+// `--batch-check` is newline-delimited (its `-z` mode needs git 2.42; the
+// fleet runs 2.39), so a path containing its own literal newline would
+// shift every later answer by a line; such a path is left out of the
+// batch entirely and conservatively reported as not in the base tree.
 func existsInBaseTree(ctx context.Context, dir, baseTreeish string, paths []string) (map[string]bool, error) {
 	exists := make(map[string]bool, len(paths))
-	if len(paths) == 0 {
+	var queryPaths []string
+	for _, p := range paths {
+		if strings.Contains(p, "\n") {
+			exists[p] = false
+			continue
+		}
+		queryPaths = append(queryPaths, p)
+	}
+	if len(queryPaths) == 0 {
 		return exists, nil
 	}
 	var stdin bytes.Buffer
-	for _, p := range paths {
+	for _, p := range queryPaths {
 		stdin.WriteString(baseTreeish)
 		stdin.WriteByte(':')
 		stdin.WriteString(p)
@@ -427,7 +439,7 @@ func existsInBaseTree(ctx context.Context, dir, baseTreeish string, paths []stri
 		return nil, fmt.Errorf("git cat-file --batch-check: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
-	for i, p := range paths {
+	for i, p := range queryPaths {
 		exists[p] = i < len(lines) && !strings.HasSuffix(lines[i], " missing")
 	}
 	return exists, nil

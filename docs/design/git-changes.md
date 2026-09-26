@@ -68,7 +68,11 @@ name-status diff already reports its true status (typically "deleted")
 on its own. Reporting it here too would duplicate that entry.
 `existsInBaseTree` answers this with one `git cat-file --batch-check`
 call for every candidate large file in the request, not one call per
-file.
+file. `--batch-check` is newline-delimited (its `-z` mode needs git
+2.42; the fleet runs 2.39), so a candidate whose own name contains a
+literal newline is left out of that batch and conservatively treated as
+not in the base — including it would shift every later answer by a
+line.
 
 ## Bounded memory: reading the patch
 

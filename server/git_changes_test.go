@@ -457,17 +457,55 @@ func TestHandleGitChangesUntrackedEntries(t *testing.T) {
 
 // TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated: `git rm
 // --cached` of a tracked file over the large-file cutoff reports it once,
-// as deleted — not also as a synthetic large:true "added" entry.
+// as deleted — not also as a synthetic large:true "added" entry. A
+// newline in one large file's own name must not shift cat-file
+// --batch-check's answers for any of the others.
 func TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated(t *testing.T) {
-	dir := newGitRepo(t)
-	writeTestFile(t, filepath.Join(dir, "big.bin"), strings.Repeat("x\n", 3*1024*1024/2))
-	runTestGit(t, dir, "add", "big.bin")
-	runTestGit(t, dir, "commit", "-q", "-m", "add big.bin")
-	runTestGit(t, dir, "rm", "-q", "--cached", "big.bin")
-
-	got := gitChangesUncommitted(t, dir)
-	if len(got.Files) != 1 || got.Files[0].Path != "big.bin" || got.Files[0].Status != "deleted" || got.Files[0].Large {
-		t.Errorf("Files = %+v, want exactly one deleted big.bin (not also large:true added)", got.Files)
+	big := strings.Repeat("x\n", 3*1024*1024/2)
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		check func(t *testing.T, got gitChangesJSON)
+	}{
+		{"rm --cached", func(t *testing.T, dir string) {
+			writeTestFile(t, filepath.Join(dir, "big.bin"), big)
+			runTestGit(t, dir, "add", "big.bin")
+			runTestGit(t, dir, "commit", "-q", "-m", "add big.bin")
+			runTestGit(t, dir, "rm", "-q", "--cached", "big.bin")
+		}, func(t *testing.T, got gitChangesJSON) {
+			if len(got.Files) != 1 || got.Files[0].Path != "big.bin" || got.Files[0].Status != "deleted" || got.Files[0].Large {
+				t.Errorf("Files = %+v, want exactly one deleted big.bin (not also large:true added)", got.Files)
+			}
+		}},
+		{"newline in one path doesn't shift the rest", func(t *testing.T, dir string) {
+			writeTestFile(t, filepath.Join(dir, "a\nb.bin"), big)
+			writeTestFile(t, filepath.Join(dir, "c.bin"), big)
+			runTestGit(t, dir, "add", "c.bin")
+			runTestGit(t, dir, "commit", "-q", "-m", "add c.bin")
+			runTestGit(t, dir, "rm", "-q", "--cached", "c.bin")
+			writeTestFile(t, filepath.Join(dir, "d.bin"), big)
+		}, func(t *testing.T, got gitChangesJSON) {
+			if len(got.Files) != 3 {
+				t.Fatalf("Files = %+v, want exactly 3 entries", got.Files)
+			}
+			byPath := filesByPath(got.Files)
+			if f := byPath["a\nb.bin"]; !f.Large {
+				t.Errorf("a\\nb.bin entry = %+v, want large=true", f)
+			}
+			if f := byPath["c.bin"]; f.Status != "deleted" || f.Large {
+				t.Errorf("c.bin entry = %+v, want deleted, not large", f)
+			}
+			if f := byPath["d.bin"]; !f.Large {
+				t.Errorf("d.bin entry = %+v, want large=true", f)
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := newGitRepo(t)
+			c.setup(t, dir)
+			c.check(t, gitChangesUncommitted(t, dir))
+		})
 	}
 }
 
