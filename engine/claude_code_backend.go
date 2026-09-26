@@ -175,8 +175,9 @@ func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
 
 // applyClaudeCodeUsage folds a delegated turn's AGGREGATE usage (the
 // "result" event's own usage field, covering every internal API call
-// Claude Code made across the whole turn — not just the closing one) into
-// Session.Usage()/LastUsage(), and costUSD (the same event's own
+// Claude Code made across the whole turn) into Session.Usage(), the turn's
+// final API call usage into LastUsage(), the CLI-reported windowTokens (0
+// when unreported) into ContextWindowTokens(), and costUSD (the same event's own
 // total_cost_usd) into the session's cumulative
 // message.SubscriptionUsage.SessionCostUSD (see that field's own doc
 // comment), durably (recClaudeCodeUsage, store.go carries both).
@@ -201,18 +202,30 @@ func (s *Session) recordClaudeCodeHistoryWatermark(n int) {
 // see claudeCodeEnvelope.TotalCostUSD's own doc comment for why a plain
 // subscription turn reports a real (if not actually billed) dollar
 // figure too, live-verified against a real `claude` 2.1.252 binary.
-func (s *Session) applyClaudeCodeUsage(usage provider.Usage, costUSD float64) {
+func (s *Session) applyClaudeCodeUsage(usage, last provider.Usage, windowTokens int, costUSD float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usage.InputTokens += usage.InputTokens
 	s.usage.OutputTokens += usage.OutputTokens
 	s.usage.CacheReadTokens += usage.CacheReadTokens
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
-	s.lastUsage = usage
+	s.lastUsage = last
 	s.haveLastUsage = true
+	if windowTokens > 0 {
+		s.claudeCodeWindowTokens = windowTokens
+	}
 	s.claudeCodeSessionCostUSD += costUSD
 	s.haveClaudeCodeCost = true
-	s.persistClaudeCodeUsage(usage, costUSD)
+	s.persistClaudeCodeUsage(usage, last, windowTokens, costUSD)
+}
+
+// claudeCodeLastUsage returns a recClaudeCodeUsage record's final API call
+// usage, or its aggregate for a record written before that field existed.
+func claudeCodeLastUsage(usage, last *provider.Usage) *provider.Usage {
+	if last != nil {
+		return last
+	}
+	return usage
 }
 
 // runClaudeCodeTurn drives ONE turn through the `claude` CLI against s's
@@ -1016,6 +1029,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	var pendingReasoningUpstream string
 	var pendingReasoningID string
 
+	// lastCallUsage is the main thread's most recent API call usage: the
+	// size of the prompt that call sent. mainModel keys the "result"
+	// event's modelUsage map.
+	var lastCallUsage *claudeCodeUsage
+	var mainModel string
+
 	// pendingAssistant assembles the ONE message.Message for one upstream
 	// API response. The CLI streams each content block of a response as
 	// its own "assistant" envelope, all sharing that response's
@@ -1155,6 +1174,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			switch env.Subtype {
 			case "init":
 				s.recordClaudeCodeSessionID(env.SessionID)
+				mainModel = env.Model
 			case "status":
 				switch {
 				case env.Status == "compacting":
@@ -1204,6 +1224,9 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.
 		case "assistant":
+			if u := claudeCodeCallUsage(env.Message); u != nil && env.ParentToolUseID == "" {
+				lastCallUsage = u
+			}
 			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
 				continue
@@ -1374,7 +1397,11 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// Terminal: nothing more can join the open response.
 			flushPendingAssistant()
 			usage := mapClaudeCodeUsage(env.Usage)
-			s.applyClaudeCodeUsage(usage, env.TotalCostUSD)
+			last := usage
+			if lastCallUsage != nil {
+				last = mapClaudeCodeUsage(lastCallUsage)
+			}
+			s.applyClaudeCodeUsage(usage, last, env.ModelUsage[mainModel].ContextWindow, env.TotalCostUSD)
 			streamMillis := env.DurationMillis - env.TTFTMillis
 			if streamMillis < 0 {
 				// A CLI build that sends duration_ms but not ttft_ms (or
@@ -1518,6 +1545,15 @@ type claudeCodeEnvelope struct {
 	Status              string                     `json:"status,omitempty"`
 	CompactResultStatus string                     `json:"compact_result,omitempty"`
 	LocalCommand        string                     `json:"local_command,omitempty"`
+	// Model is a "system"/"init" envelope's model id, the key of the
+	// main model's entry in a "result" envelope's ModelUsage.
+	Model      string                          `json:"model,omitempty"`
+	ModelUsage map[string]claudeCodeModelUsage `json:"modelUsage,omitempty"`
+}
+
+// claudeCodeModelUsage is one entry of a "result" envelope's modelUsage map.
+type claudeCodeModelUsage struct {
+	ContextWindow int `json:"contextWindow,omitempty"`
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own
@@ -1622,7 +1658,8 @@ func mapClaudeCodeRateLimit(info *claudeCodeRateLimitInfo) (message.Subscription
 	return out, true
 }
 
-// claudeCodeUsage is a "result" event's usage object.
+// claudeCodeUsage is a "result" event's usage object (the turn's sum) or
+// an "assistant" event's message usage (one API call).
 //
 // # Usage mapping
 //
@@ -1676,6 +1713,8 @@ type claudeCodeMessage struct {
 	// it verbatim (via ResolveMessageID) as the assembled message's own ID.
 	ID      string          `json:"id,omitempty"`
 	Content json.RawMessage `json:"content"`
+	// Usage is the usage of the one API call this envelope belongs to.
+	Usage *claudeCodeUsage `json:"usage,omitempty"`
 }
 
 // claudeCodeContentBlock is one content block of a claudeCodeMessage. Only
@@ -1910,6 +1949,16 @@ func claudeCodeUpstreamID(raw json.RawMessage) string {
 		return ""
 	}
 	return cm.ID
+}
+
+// claudeCodeCallUsage returns an "assistant" envelope's per-call usage, or
+// nil when it carries none.
+func claudeCodeCallUsage(raw json.RawMessage) *claudeCodeUsage {
+	var cm claudeCodeMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &cm) != nil {
+		return nil
+	}
+	return cm.Usage
 }
 
 func claudeCodeAppendPromptArg(arg string) bool {

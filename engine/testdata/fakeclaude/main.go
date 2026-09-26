@@ -61,7 +61,9 @@
 // "compact_boundary" (a "system"/"compact_boundary" envelope with a
 // compact_metadata payload, mid-turn, ahead of the turn's own text and
 // result — proves the driver forwards the CLI's own internal-compaction
-// marker as harness's EventClaudeCodeCompacted instead of dropping it).
+// marker as harness's EventClaudeCodeCompacted instead of dropping it),
+// and "per_call_usage" (several API calls in one turn, each with its own
+// usage, and a result carrying their sum plus a modelUsage window).
 package main
 
 import (
@@ -271,13 +273,46 @@ func main() {
 		return
 	}
 
-	emit(map[string]any{
+	initEvent := map[string]any{
 		"type":       "system",
 		"subtype":    "init",
 		"session_id": sessionID,
-	})
+	}
+	if mode == "per_call_usage" {
+		initEvent["model"] = "claude-opus-5-5[1m]"
+	}
+	emit(initEvent)
 
 	switch mode {
+	case "per_call_usage":
+		// Numbers captured from a real `claude` 2.1.280 turn with two Bash
+		// calls: three API calls, each "assistant" envelope carrying its
+		// own call's usage, and a "result" whose usage is their sum.
+		call := func(id string, content map[string]any, cacheWrite, cacheRead, output int) {
+			emit(map[string]any{"type": "assistant", "message": map[string]any{
+				"id": id, "role": "assistant", "content": []map[string]any{content},
+				"usage": map[string]any{"input_tokens": 2, "cache_creation_input_tokens": cacheWrite, "cache_read_input_tokens": cacheRead, "output_tokens": output},
+			}})
+		}
+		result := func(id string) {
+			emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
+				{"type": "tool_result", "tool_use_id": id, "content": "ok\n"},
+			}}})
+		}
+		call("msg_1", map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": map[string]any{"command": "echo one"}}, 5545, 10234, 16)
+		result("toolu_1")
+		call("msg_2", map[string]any{"type": "tool_use", "id": "toolu_2", "name": "Bash", "input": map[string]any{"command": "echo two"}}, 104, 15779, 16)
+		result("toolu_2")
+		call("msg_3", map[string]any{"type": "text", "text": "done"}, 104, 15883, 39)
+		emit(map[string]any{
+			"type": "result", "subtype": "success", "is_error": false, "num_turns": 3, "result": "done",
+			"usage": map[string]any{"input_tokens": 6, "cache_creation_input_tokens": 5753, "cache_read_input_tokens": 41896, "output_tokens": 187},
+			"modelUsage": map[string]any{
+				"claude-haiku-4-5-20251001": map[string]any{"inputTokens": 1, "contextWindow": 200000},
+				"claude-opus-5-5[1m]":       map[string]any{"inputTokens": 6, "contextWindow": 1000000},
+			},
+		})
+		return
 	case "compact_boundary":
 		// A "system"/"compact_boundary" envelope — the CLI's own documented
 		// marker that it just compacted ITS OWN internal context (verified

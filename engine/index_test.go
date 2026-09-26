@@ -475,7 +475,8 @@ func TestSessionIndexLastPromptTokensFoldsDelegatedUsage(t *testing.T) {
 	if err := s.Persist(); err != nil {
 		t.Fatal(err)
 	}
-	s.applyClaudeCodeUsage(provider.Usage{InputTokens: 5, CacheReadTokens: 200, CacheWriteTokens: 10}, 0.05)
+	delegated := provider.Usage{InputTokens: 5, CacheReadTokens: 200, CacheWriteTokens: 10}
+	s.applyClaudeCodeUsage(delegated, delegated, 0, 0.05)
 
 	last, ok := s.LastUsage()
 	if !ok {

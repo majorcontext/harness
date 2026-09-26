@@ -93,9 +93,11 @@ CURRENT model routes to the Claude Code CLI backend
 (`engine.ClaudeCodeProviderFamily`, `engine/claude_code_backend.go`): that
 turn manages its own context end to end, and harness's own journal is only
 ever a passive record of what streamed back. `applyClaudeCodeUsage` still
-sets `Session.LastUsage()` on every delegated turn, from the CLI's own
-"result" event — but that figure describes the CLI's OWN internal, self-
-compacted context, not harness's journal. The two can differ by orders of
+sets `Session.LastUsage()` on every delegated turn, from the usage of the
+turn's last main-thread API call (the `message.usage` of its last
+"assistant" envelope; the "result" event's usage is the sum over all calls
+and goes into `Session.Usage()` only) — but that figure describes the CLI's
+OWN internal, self-compacted context, not harness's journal. The two can differ by orders of
 magnitude on a long-running delegated session, because harness's journal
 is never itself compacted while delegated.
 
@@ -561,6 +563,13 @@ whenever the provider reported usage for that turn. They part company in one
 case: when every input component is zero, `maybeAutoCompact` falls back to
 `estimatePromptTokensFromHistory`, so compaction can act while `used_tokens`
 still reads 0.
+
+On the claude-code lane, `window_tokens` is the `contextWindow` the CLI
+reports in the "result" event's `modelUsage` entry for the model named by
+its "system"/"init" event. `recClaudeCodeUsage` records it, and a model
+switch clears it. Until the CLI reports one, `window_tokens` is modelmeta's
+200,000 stand-in. `maybeAutoCompact` never runs for a delegated turn and
+reads neither value.
 
 ## 5. Non-goals
 

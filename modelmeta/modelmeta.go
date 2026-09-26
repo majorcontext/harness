@@ -225,7 +225,8 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// ref outright; harness's OWN automatic-compaction threshold is
 		// unconditionally skipped for a delegated turn regardless of what
 		// this reports (see PromptWithOrigin's early dispatch), so the
-		// exact figure here drives no real behavior. claudeCodeContextWindow
+		// exact figure here drives no real behavior, and the engine
+		// reports the CLI's own window once a turn names one. claudeCodeContextWindow
 		// (200,000, Sonnet's advertised first-party window) is a stand-in
 		// chosen only to be an honest, plausible-sounding number rather
 		// than an arbitrary placeholder like 0 or MaxInt.

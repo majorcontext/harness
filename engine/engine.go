@@ -1092,6 +1092,9 @@ type Session struct {
 	// mirrors haveLastUsage's own role for lastUsage.
 	claudeCodeSessionCostUSD float64
 	haveClaudeCodeCost       bool
+	// claudeCodeWindowTokens is the context window the Claude Code CLI
+	// reported for the current model, or 0 when none was reported.
+	claudeCodeWindowTokens int
 
 	// turnUnsettled is SessionManager.recoverInterruptedTurnLocked's
 	// restart-recovery signal, replacing an earlier, unreliable
@@ -1825,6 +1828,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
+	s.claudeCodeWindowTokens = 0
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
@@ -2315,10 +2319,14 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 }
 
 // ContextWindowTokens returns this session's resolved context window — 0
-// when automatic compaction is disarmed.
+// when automatic compaction is disarmed. On the claude-code lane, a window
+// the CLI reported replaces modelmeta's stand-in.
 func (s *Session) ContextWindowTokens() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.model.Provider == ClaudeCodeProviderFamily && s.claudeCodeWindowTokens > 0 {
+		return s.claudeCodeWindowTokens
+	}
 	return s.cfg.ContextWindowTokens
 }
 

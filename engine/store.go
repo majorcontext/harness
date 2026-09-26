@@ -347,6 +347,12 @@ type record struct {
 	// being indistinguishable from an explicit zero-cost turn written by
 	// the current code, which always sets this non-nil (even to &0.0).
 	ClaudeCodeCostUSD *float64 `json:"claude_code_cost_usd,omitempty"`
+	// ClaudeCodeLastUsage and ClaudeCodeWindowTokens carry a
+	// recClaudeCodeUsage record's final API call usage and CLI-reported
+	// context window. A record written before them replays Usage as the
+	// last usage.
+	ClaudeCodeLastUsage    *provider.Usage `json:"claude_code_last_usage,omitempty"`
+	ClaudeCodeWindowTokens int             `json:"claude_code_window_tokens,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -777,7 +783,7 @@ func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
 // record.ClaudeCodeCostUSD's own doc comment). It mirrors persistModel/
 // persistEffort exactly: a no-op until the log exists (lazy creation),
 // caller holds s.mu.
-func (s *Session) persistClaudeCodeUsage(usage provider.Usage, costUSD float64) {
+func (s *Session) persistClaudeCodeUsage(usage, last provider.Usage, windowTokens int, costUSD float64) {
 	if s.cfg.SessionDir == "" || !s.logStarted {
 		return
 	}
@@ -785,7 +791,13 @@ func (s *Session) persistClaudeCodeUsage(usage provider.Usage, costUSD float64) 
 		s.lastPersistErr = err
 		return
 	}
-	if err := s.writeRecord(record{Type: recClaudeCodeUsage, Usage: &usage, ClaudeCodeCostUSD: &costUSD}); err != nil {
+	if err := s.writeRecord(record{
+		Type:                   recClaudeCodeUsage,
+		Usage:                  &usage,
+		ClaudeCodeCostUSD:      &costUSD,
+		ClaudeCodeLastUsage:    &last,
+		ClaudeCodeWindowTokens: windowTokens,
+	}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1615,6 +1627,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// flag, is the arming signal a reload must trust.
 			priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 			s.model = rec.Model
+			s.claudeCodeWindowTokens = 0
 			switch {
 			case priorDelegated && rec.Model.Provider != ClaudeCodeProviderFamily:
 				s.forceCompactionCheck = true
@@ -1638,8 +1651,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.OutputTokens += rec.Usage.OutputTokens
 				s.usage.CacheReadTokens += rec.Usage.CacheReadTokens
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
-				s.lastUsage = *rec.Usage
+				s.lastUsage = *claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage)
 				s.haveLastUsage = true
+			}
+			if rec.ClaudeCodeWindowTokens > 0 {
+				s.claudeCodeWindowTokens = rec.ClaudeCodeWindowTokens
 			}
 			// See record.ClaudeCodeCostUSD's own doc comment: nil means a
 			// record written before cost tracking existed, not a
@@ -2305,6 +2321,9 @@ func readSessionInfo(path string) (SessionInfo, error) {
 		Usage               *provider.Usage  `json:"usage,omitempty"`
 		Model               message.ModelRef `json:"model,omitzero"`
 		ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
+		// Same JSON names as record's fields.
+		ClaudeCodeLastUsage    *provider.Usage `json:"claude_code_last_usage,omitempty"`
+		ClaudeCodeWindowTokens int             `json:"claude_code_window_tokens,omitempty"`
 	}
 	var info SessionInfo
 	first := true
@@ -2332,8 +2351,11 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 			}
 		case recClaudeCodeUsage:
-			if rec.Usage != nil {
-				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			if last := claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage); last != nil {
+				info.LastPromptTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+			}
+			if rec.ClaudeCodeWindowTokens > 0 {
+				info.WindowTokens = rec.ClaudeCodeWindowTokens
 			}
 		case recModel:
 			if rec.ContextWindowTokens != nil {

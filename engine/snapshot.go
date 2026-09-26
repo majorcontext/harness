@@ -190,6 +190,7 @@ type sessionSnapshot struct {
 
 	ClaudeCodeSessionCostUSD float64 `json:"claude_code_session_cost_usd,omitempty"`
 	HaveClaudeCodeCost       bool    `json:"have_claude_code_cost,omitempty"`
+	ClaudeCodeWindowTokens   int     `json:"claude_code_window_tokens,omitempty"`
 }
 
 // sessionSnapshotFile is the on-disk wrapper: the snapshot bytes plus a
@@ -516,6 +517,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 
 		ClaudeCodeSessionCostUSD: s.claudeCodeSessionCostUSD,
 		HaveClaudeCodeCost:       s.haveClaudeCodeCost,
+		ClaudeCodeWindowTokens:   s.claudeCodeWindowTokens,
 	}
 	if len(s.toolResults) > 0 {
 		snap.ToolResults = make(map[string]toolResultMeta, len(s.toolResults))
@@ -609,6 +611,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.claudeCodeHistoryWatermark = snap.ClaudeCodeHistoryWatermark
 	s.claudeCodeSessionCostUSD = snap.ClaudeCodeSessionCostUSD
 	s.haveClaudeCodeCost = snap.HaveClaudeCodeCost
+	s.claudeCodeWindowTokens = snap.ClaudeCodeWindowTokens
 	if snap.CommittedOutcome != nil {
 		oc := *snap.CommittedOutcome
 		s.committedOutcome = &oc

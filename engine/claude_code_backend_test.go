@@ -3010,3 +3010,55 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", found.ClaudeCodeCompactPreTokens)
 	}
 }
+
+// TestClaudeCodeContextGaugeReportsLastCallAndCLIWindow: a delegated turn
+// with three API calls must report the LAST call's prompt as LastUsage (not
+// the result event's sum across all three) and the window the CLI reports in
+// modelUsage (not the stand-in): live, after a full or snapshot reload, and
+// in the index.
+func TestClaudeCodeContextGaugeReportsLastCallAndCLIWindow(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "per_call_usage")
+	if _, err := s.Prompt(context.Background(), "run two commands"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	reloaded, err := LoadSession(Config{SessionDir: s.cfg.SessionDir, ClaudeCode: s.cfg.ClaudeCode}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	s.cfg.SnapshotEveryRecords = idleOnly
+	s.snapshotOnIdle()
+	s.waitSnapshots()
+	fromSnapshot, err := LoadSession(Config{SessionDir: s.cfg.SessionDir, ClaudeCode: s.cfg.ClaudeCode}, s.ID)
+	if err != nil || fromSnapshot.replayedRecords >= fromSnapshot.recordsWritten {
+		t.Fatalf("snapshot LoadSession: err %v, replayed %d of %d records", err, fromSnapshot.replayedRecords, fromSnapshot.recordsWritten)
+	}
+	wantLast := provider.Usage{InputTokens: 2, OutputTokens: 39, CacheReadTokens: 15883, CacheWriteTokens: 104}
+	wantTotal := provider.Usage{InputTokens: 6, OutputTokens: 187, CacheReadTokens: 41896, CacheWriteTokens: 5753}
+	for name, sess := range map[string]*Session{"live": s, "reloaded": reloaded, "snapshot": fromSnapshot} {
+		if last, ok := sess.LastUsage(); !ok || last != wantLast {
+			t.Errorf("%s LastUsage() = %+v, %v; want %+v", name, last, ok, wantLast)
+		}
+		if got := sess.Usage(); got != wantTotal {
+			t.Errorf("%s Usage() = %+v, want %+v", name, got, wantTotal)
+		}
+		if got := sess.ContextWindowTokens(); got != 1_000_000 {
+			t.Errorf("%s ContextWindowTokens() = %d, want 1000000", name, got)
+		}
+	}
+	ix, err := ReadSessionIndex(s.cfg.SessionDir, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ix.LastPromptTokens != 15989 || ix.WindowTokens != 1_000_000 {
+		t.Errorf("index LastPromptTokens/WindowTokens = %d/%d, want 15989/1000000", ix.LastPromptTokens, ix.WindowTokens)
+	}
+
+	s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "haiku"})
+	switched, err := LoadSession(Config{SessionDir: s.cfg.SessionDir, ClaudeCode: s.cfg.ClaudeCode}, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live, cold := s.ContextWindowTokens(), switched.ContextWindowTokens(); live != 200_000 || cold != 200_000 {
+		t.Errorf("after a model switch, live/reloaded ContextWindowTokens() = %d/%d, want the stand-in 200000 (the old model's window must not carry over)", live, cold)
+	}
+}

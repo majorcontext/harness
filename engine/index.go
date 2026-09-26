@@ -206,6 +206,9 @@ type indexRecord struct {
 	Prompt              *promptRecord    `json:"prompt,omitempty"`
 	TaskSpawn           *taskSpawnRecord `json:"task_spawn,omitempty"`
 	Compact             *indexCompact    `json:"compact,omitempty"`
+	// Same JSON names as record's fields.
+	ClaudeCodeLastUsage    *provider.Usage `json:"claude_code_last_usage,omitempty"`
+	ClaudeCodeWindowTokens int             `json:"claude_code_window_tokens,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -230,6 +233,9 @@ func indexRecordOf(rec record) indexRecord {
 		Goal:                rec.Goal,
 		Prompt:              rec.Prompt,
 		TaskSpawn:           rec.TaskSpawn,
+
+		ClaudeCodeLastUsage:    rec.ClaudeCodeLastUsage,
+		ClaudeCodeWindowTokens: rec.ClaudeCodeWindowTokens,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)
@@ -328,8 +334,11 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
 		}
 	case recClaudeCodeUsage:
-		if rec.Usage != nil {
-			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+		if last := claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage); last != nil {
+			f.ix.LastPromptTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+		}
+		if rec.ClaudeCodeWindowTokens > 0 {
+			f.ix.WindowTokens = rec.ClaudeCodeWindowTokens
 		}
 	case recModel:
 		f.ix.Model = rec.Model
