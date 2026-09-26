@@ -572,7 +572,7 @@ func TestTypedCommandOnAllThreeRoutes(t *testing.T) {
 // with ResultTruncated true and no Result, never a partially-copied body.
 func TestStatusResultTruncatedOverCap(t *testing.T) {
 	body := bytes.Repeat([]byte("a"), 17<<10)
-	status, _, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusOK, body, false)
+	status, _, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusOK, body, false, true)
 	if status != message.CommandSucceeded {
 		t.Errorf("status = %q, want succeeded", status)
 	}
@@ -610,7 +610,7 @@ func TestCommandResponseWriterCapsBufferedBody(t *testing.T) {
 		t.Fatalf("buffered body = %d bytes, want at most %d (commandResultCap+1)", cw.body.Len(), commandResultCap+1)
 	}
 
-	status, _, result, truncated := commandOutcome(command.OpQueueList, "queue", cw.code, cw.body.Bytes(), false)
+	status, _, result, truncated := commandOutcome(command.OpQueueList, "queue", cw.code, cw.body.Bytes(), false, true)
 	if status != message.CommandSucceeded {
 		t.Errorf("status = %q, want succeeded", status)
 	}
@@ -629,7 +629,7 @@ func TestCommandResponseWriterCapsBufferedBody(t *testing.T) {
 // strand the command "accepted" until the next boot. Failure: Result holds
 // bytes that are not valid JSON.
 func TestCommandOutcomeInvalidBodyOmitsResult(t *testing.T) {
-	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusOK, []byte("not json"), false)
+	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusOK, []byte("not json"), false, true)
 	if status != message.CommandSucceeded {
 		t.Errorf("status = %q, want succeeded", status)
 	}
@@ -649,7 +649,7 @@ func TestCommandOutcomeInvalidBodyOmitsResult(t *testing.T) {
 // never failed — the one status/text row nothing else in this package
 // exercised.
 func TestCommandOutcomeDrainingNon2xxIsInterrupted(t *testing.T) {
-	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusInternalServerError, []byte(`{"error":"boom"}`), true)
+	status, text, result, truncated := commandOutcome(command.OpStatus, "status", http.StatusInternalServerError, []byte(`{"error":"boom"}`), true, true)
 	if status != message.CommandInterrupted {
 		t.Errorf("status = %q, want interrupted", status)
 	}
@@ -659,6 +659,49 @@ func TestCommandOutcomeDrainingNon2xxIsInterrupted(t *testing.T) {
 	}
 	if result != nil || truncated {
 		t.Errorf("result = %q truncated = %v, want nil/false", result, truncated)
+	}
+}
+
+// TestCommandOutcome409RefusedByAvailableDuringTask: a 409 maps to refused
+// only for an Op whose spec is not availableDuringTask; the same 409 for an
+// availableDuringTask Op keeps today's failed mapping with the route's own
+// error text. commandOutcome keys this off the caller-supplied flag alone,
+// never the error string, since both 409 causes (this session's own turn,
+// or another session's turn holding the workdir) must map the same way.
+func TestCommandOutcome409RefusedByAvailableDuringTask(t *testing.T) {
+	tests := []struct {
+		name                string
+		availableDuringTask bool
+		wantStatus          message.CommandStatus
+		wantText            string
+	}{
+		{
+			name:                "not available during task is refused",
+			availableDuringTask: false,
+			wantStatus:          message.CommandRefused,
+			wantText:            "/compact cannot run while a turn is running; send it again after the turn ends",
+		},
+		{
+			name:                "available during task keeps failed",
+			availableDuringTask: true,
+			wantStatus:          message.CommandFailed,
+			wantText:            "session is busy with another prompt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, text, result, truncated := commandOutcome(command.OpCompact, "compact", http.StatusConflict,
+				[]byte(`{"error":"session is busy with another prompt"}`), false, tt.availableDuringTask)
+			if status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", status, tt.wantStatus)
+			}
+			if text != tt.wantText {
+				t.Errorf("text = %q, want %q", text, tt.wantText)
+			}
+			if result != nil || truncated {
+				t.Errorf("result = %q truncated = %v, want nil/false", result, truncated)
+			}
+		})
 	}
 }
 

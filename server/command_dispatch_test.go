@@ -170,6 +170,70 @@ func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
 	}
 }
 
+// TestRacedMidTurnCompactRecordsRefused: a turn that starts AFTER
+// resolvePromptCommand's busy check but BEFORE runCommand dispatches
+// handleCompact must still land the command as refused, not failed.
+// commandDispatchRace opens exactly that gap: it starts a real occupant
+// turn on the same session while /compact's own dispatch is in flight, so
+// handleCompact's own claimForPrompt call races into a session that just
+// became busy and answers 409 "session is busy with another prompt".
+// Failure mode this guards: commandOutcome maps that 409 to failed with
+// the route's own error text instead of refused with the exact refused
+// sentence, and a typed "/compact" line still never becomes a user
+// message.
+func TestRacedMidTurnCompactRecordsRefused(t *testing.T) {
+	prov := &queueProv{name: "test", started: make(chan struct{}), release: make(chan struct{})}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	defer close(prov.release)
+	sse := h.openSSE("?from=0", "")
+
+	raced := false
+	h.srv.commandDispatchRace = func() {
+		if raced {
+			return
+		}
+		raced = true
+		resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+			"parts": []map[string]string{{"type": "text", "text": "occupant"}},
+		})
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("occupant prompt status %d: %s", resp.StatusCode, data)
+		}
+		<-prov.started
+	}
+
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("/compact status %d: %s", resp.StatusCode, data)
+	}
+
+	accepted := sse.waitFor(t, "command")
+	if accepted.Command == nil || accepted.Command.Status != message.CommandAccepted {
+		t.Fatalf("first command event = %+v, want accepted", accepted.Command)
+	}
+	terminal := sse.waitFor(t, "command")
+	if terminal.Command == nil || terminal.Command.Status != message.CommandRefused {
+		t.Fatalf("terminal command event = %+v, want refused", terminal.Command)
+	}
+	want := "/compact cannot run while a turn is running; send it again after the turn ends"
+	if terminal.Command.Text != want {
+		t.Errorf("terminal text = %q, want %q", terminal.Command.Text, want)
+	}
+	if !raced {
+		t.Fatal("commandDispatchRace never ran; this test proves nothing")
+	}
+
+	for _, m := range h.userMessages(id) {
+		if m.Parts.Text() == "/compact" {
+			t.Fatalf("a user message holds /compact: %+v", m)
+		}
+	}
+}
+
 // TestRunCommandHandlerPanicRecordsFailed: a serveOpHandlers panic must not
 // crash the process — runCommand runs off the request goroutine, so
 // net/http's own per-request recover never reaches it. Failure: the

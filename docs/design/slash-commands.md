@@ -479,6 +479,15 @@ A typed line goes to `command.Registry.Resolve`. Four outcomes follow.
      process — the exact handler its own HTTP method would call — and
      a second, terminal record follows.
 
+A turn can also start AFTER check 3 passes and BEFORE the dispatched route
+call in step 4 runs. For a command that does not declare
+`available_during_task`, that route call then meets a busy session or a
+busy workdir and answers 409. `commandOutcome` maps that 409 to `refused`
+too, with the same sentence check 3 uses — keyed on the 409 status and the
+command's own `available_during_task` flag, never on the route's error
+text, since a busy-session 409 and a busy-workdir 409 both mean the same
+thing here: a running turn blocks this command.
+
 `<name>` in every rendered sentence below is the name (or alias) the
 caller actually typed, never the registry's canonical `name`.
 
@@ -490,9 +499,10 @@ caller actually typed, never the registry's canonical `name`.
 | `succeeded` | `/<name> succeeded` |
 | `failed` (bad arguments) | `Resolve`'s own error text, e.g. `command: /compact keep_turns must be a number, got "abc"` |
 | `failed` (attachment) | `/<name> takes no attachments; nothing ran` |
-| `failed` (route error) | the route's own `error` string |
+| `failed` (route error) | the route's own `error` string (not the 409-while-not-`available_during_task` case below) |
 | `failed` (compact skip) | `/compact did nothing: <reason>` (`engine.CompactSkipMessage`) |
 | `refused` | `/<name> cannot run while a turn is running; send it again after the turn ends` |
+| `refused` (raced dispatch) | same sentence — a 409 from the route call itself, for a command not `available_during_task` |
 | `unsupported` | `/<name> is not available in this client` |
 | `interrupted` (boot) | `harness restarted before /<name> finished; it will not run again` |
 | `interrupted` (drain) | `harness stopped before /<name> finished; it will not run again` |

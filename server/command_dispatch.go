@@ -165,7 +165,7 @@ func (s *Server) runCommand(id string, sess *engine.Session, releaseSess func(),
 	cw := newCommandResponseWriter(res.Spec.Op)
 	serveOpHandlers[res.Spec.Op](s, cw, req)
 
-	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining())
+	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining(), res.Spec.AvailableDuringTask)
 	s.recordCommandTerminal(sess, rec)
 }
 
@@ -191,9 +191,15 @@ const commandResultCap = 16 << 10
 // CommandRecord status/text/result, per docs/design/slash-commands.md's
 // "Status and text" table: a 2xx with a non-empty compact skip_reason is
 // "failed" with the skip sentence; any other 2xx is "succeeded"; a non-2xx
-// while draining is "interrupted" with the drain wording; any other non-2xx
-// is "failed" with the route's own error text.
-func commandOutcome(op command.Op, typed string, code int, body []byte, draining bool) (status message.CommandStatus, text string, result json.RawMessage, truncated bool) {
+// while draining is "interrupted" with the drain wording; a 409 for an Op
+// whose spec is not availableDuringTask is "refused" with the same
+// sentence resolvePromptCommand's own pre-dispatch busy check uses — a
+// turn that started in the gap between that check and this dispatch
+// blocks the op exactly like one already running at check time, from
+// either 409 cause (this session's own turn, or another session's turn
+// holding the workdir); any other non-2xx is "failed" with the route's own
+// error text.
+func commandOutcome(op command.Op, typed string, code int, body []byte, draining bool, availableDuringTask bool) (status message.CommandStatus, text string, result json.RawMessage, truncated bool) {
 	if code >= 200 && code < 300 {
 		if op == command.OpCompact {
 			return compactCommandOutcome(typed, body)
@@ -213,6 +219,9 @@ func commandOutcome(op command.Op, typed string, code int, body []byte, draining
 	}
 	if draining {
 		return message.CommandInterrupted, fmt.Sprintf("harness stopped before /%s finished; it will not run again", typed), nil, false
+	}
+	if code == http.StatusConflict && !availableDuringTask {
+		return message.CommandRefused, fmt.Sprintf("/%s cannot run while a turn is running; send it again after the turn ends", typed), nil, false
 	}
 	var eb struct {
 		Error string `json:"error"`
