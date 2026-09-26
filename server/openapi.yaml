@@ -2618,6 +2618,65 @@ components:
         status:
           $ref: "#/components/schemas/ProcessStatus"
 
+    GitChangeFile:
+      type: object
+      required: [path, status, additions, deletions, binary]
+      properties:
+        path: { type: string }
+        old_path:
+          type: string
+          description: Set only when status is "renamed".
+        status:
+          type: string
+          enum: [added, modified, deleted, renamed]
+        additions: { type: integer }
+        deletions: { type: integer }
+        binary:
+          type: boolean
+          description: additions/deletions are 0 and patch carries no content for this file.
+
+    GitBaseRef:
+      type: object
+      required: [ref, sha]
+      properties:
+        ref:
+          type: string
+          description: >
+            The default branch's remote-tracking ref, e.g. "origin/main".
+            Resolved from refs/remotes/origin/HEAD, else origin/main, else
+            origin/master.
+        sha:
+          type: string
+          description: merge-base(HEAD, ref) — the commit scope=branch diffs against.
+
+    GitChanges:
+      type: object
+      required: [dir, scope, branch, head, files, patch, truncated]
+      properties:
+        dir: { type: string }
+        scope:
+          type: string
+          enum: [branch, uncommitted]
+        branch:
+          type: string
+          description: Empty when HEAD is detached.
+        head: { type: string }
+        base:
+          $ref: "#/components/schemas/GitBaseRef"
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/GitChangeFile" }
+          description: Always complete, even when patch is truncated.
+        patch:
+          type: string
+          description: >
+            Unified diff text (git format) for every non-binary file, in
+            files order, capped at roughly 1 MiB. Stops at a whole-file
+            boundary rather than mid-hunk; see truncated.
+        truncated:
+          type: boolean
+          description: True when patch stopped short of every file's diff.
+
   parameters:
     sessionID:
       name: id
@@ -3843,6 +3902,48 @@ paths:
               schema: { $ref: "#/components/schemas/ProcessStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/ProcessNotFound" }
+
+  /git/changes:
+    get:
+      operationId: getGitChanges
+      summary: A box's git diff, for the boxes web console's Changes panel.
+      description: >
+        scope=uncommitted diffs HEAD against the working tree. scope=branch
+        (default) diffs merge-base(HEAD, the default branch) against the
+        working tree, so it shows what a PR would contain once the agent
+        commits. Both scopes fold in untracked files (respecting
+        .gitignore) as status "added". Never mutates the repository or
+        takes git locks: every git subprocess runs with
+        GIT_OPTIONAL_LOCKS=0 and never touches the index.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          schema: { type: string, enum: [branch, uncommitted], default: branch }
+        - name: dir
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Resolved like POST /session's workdir (resolveWorkDir): empty
+            means the harness process's own cwd; a value outside every
+            configured workspace root is a 400.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitChanges" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: >
+            dir is not a git work tree (error "not_a_git_repo"), or
+            scope=branch and no default branch could be resolved from
+            origin/HEAD, origin/main, or origin/master (error "no_base").
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /debug/goroutines:
     get:
