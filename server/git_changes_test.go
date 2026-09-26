@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -316,25 +317,18 @@ func gitCmdCount(t *testing.T) *int {
 	return &n
 }
 
-// TestHandleGitChangesSubprocessCountIsConstant proves subprocess count doesn't grow with file count.
-// TestHandleGitChangesSubprocessCountIsConstant also doubles as the scale
-// guard: 50k untracked files in one directory would take ~24s in add -N
-// alone if pathspec matching regressed to quadratic (per the review's own
-// repro), so a generous but discriminating time bound catches that too.
+// TestHandleGitChangesSubprocessCountIsConstant: 50k untracked root files cost the same subprocess count as 3.
 func TestHandleGitChangesSubprocessCountIsConstant(t *testing.T) {
 	populate := func(dir string, n int) {
-		sub := filepath.Join(dir, "bigdir")
-		mkdirAllTest(t, sub)
 		for i := 0; i < n; i++ {
-			writeTestFile(t, filepath.Join(sub, fmt.Sprintf("f%05d.txt", i)), "x\n")
+			writeTestFile(t, filepath.Join(dir, fmt.Sprintf("f%05d.txt", i)), "x\n")
 		}
 	}
 
 	small := newGitRepo(t)
 	populate(small, 3)
 	count := gitCmdCount(t)
-	h := newGitChangesHarness(t, small)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+small)
+	got := gitChangesUncommitted(t, small)
 	if len(got.Files) != 3 {
 		t.Fatalf("Files = %+v", got.Files)
 	}
@@ -344,24 +338,21 @@ func TestHandleGitChangesSubprocessCountIsConstant(t *testing.T) {
 	big := newGitRepo(t)
 	populate(big, n)
 	count = gitCmdCount(t)
-	h = newGitChangesHarness(t, big)
-	start := time.Now()
-	_, got = gitChangesGet(t, h, "?scope=uncommitted&dir="+big)
-	elapsed := time.Since(start)
+	got = gitChangesUncommitted(t, big)
 	if len(got.Files) != n {
 		t.Fatalf("Files count = %d, want %d", len(got.Files), n)
-	}
-	if elapsed > 20*time.Second {
-		t.Errorf("request took %s for %d untracked files, want well under quadratic (~24s)", elapsed, n)
 	}
 	if *count != smallCount {
 		t.Errorf("git subprocess count = %d for 3 files, %d for %d files; want equal", smallCount, *count, n)
 	}
 }
 
-// TestHandleGitChangesSingleHugeFileCapped: one file alone exceeding the cap is still capped correctly.
+// TestHandleGitChangesSingleHugeFileCapped: one tracked file's huge modification is still capped correctly.
 func TestHandleGitChangesSingleHugeFileCapped(t *testing.T) {
 	dir := newGitRepo(t)
+	writeTestFile(t, filepath.Join(dir, "huge.txt"), "x\n")
+	runTestGit(t, dir, "add", "huge.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "add huge.txt")
 	huge := strings.Repeat("b\n", 2*gitChangesPatchCap)
 	writeTestFile(t, filepath.Join(dir, "huge.txt"), huge)
 	got := gitChangesUncommitted(t, dir)
@@ -430,30 +421,28 @@ func TestHandleGitChangesGlobLikeFilenameTreatedLiterally(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesUntrackedIndexInputSkipsMissingAndDirectories: a
-// missing path is dropped; a clean directory is one pathspec; a directory
-// containing a nested repo keeps its sibling files but drops the repo.
-func TestHandleGitChangesUntrackedIndexInputSkipsMissingAndDirectories(t *testing.T) {
+// TestHandleGitChangesUntrackedEntries: missing dropped, nested repo and large file excluded, large file also reported.
+func TestHandleGitChangesUntrackedEntries(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "keep.txt"), "keep\n")
-	mkdirAllTest(t, filepath.Join(dir, "clean_dir"))
-	mkdirAllTest(t, filepath.Join(dir, "mixed", "vendor", "dep"))
-	writeTestFile(t, filepath.Join(dir, "mixed", "normal.txt"), "n\n")
-	runTestGit(t, filepath.Join(dir, "mixed", "vendor", "dep"), "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, untrackedLargeCutoff+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	lsFilesOut := "keep.txt\x00clean_dir/\x00mixed/\x00gone.txt\x00"
-	got := splitNulZ(string(untrackedIndexInput(dir, lsFilesOut)))
-	sort.Strings(got)
-	want := "clean_dir/,keep.txt,mixed/normal.txt"
-	if strings.Join(got, ",") != want {
-		t.Errorf("untrackedIndexInput = %v, want %s", got, want)
+	lsFilesOut := "keep.txt\x00big.bin\x00vendor/dep/\x00gone.txt\x00"
+	excludeArgs, large := untrackedEntries(dir, lsFilesOut)
+
+	wantExclude := ":(exclude,literal)big.bin,:(exclude,literal)vendor/dep/"
+	if strings.Join(excludeArgs, ",") != wantExclude {
+		t.Errorf("excludeArgs = %v, want %s", excludeArgs, wantExclude)
+	}
+	if len(large) != 1 || large[0].Path != "big.bin" || !large[0].Large {
+		t.Errorf("large = %+v, want one big.bin entry with Large=true", large)
 	}
 }
 
-// TestHandleGitChangesRetriesOnVanishedUntrackedFile: gitCmdHook deletes an
-// untracked file as `add -N` is about to run, so the request must retry
-// against a fresh listing rather than 500ing on the vanished pathspec.
-func TestHandleGitChangesRetriesOnVanishedUntrackedFile(t *testing.T) {
+// TestHandleGitChangesVanishedUntrackedFileNotFatal: a file deleted right as add -N runs is silently absent, not fatal.
+func TestHandleGitChangesVanishedUntrackedFileNotFatal(t *testing.T) {
 	dir := newGitRepo(t)
 	vanish := filepath.Join(dir, "vanish.txt")
 	writeTestFile(t, vanish, "v\n")
@@ -476,7 +465,71 @@ func TestHandleGitChangesRetriesOnVanishedUntrackedFile(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesIndexNeverWritten: .git/index's inode and mtime are unchanged, even with a stat-dirty file.
+// TestHandleGitChangesTooManyChanges409: a deadline mid-git-call (shrunk timeout + a sleeping hook) is 409, not 500.
+func TestHandleGitChangesTooManyChanges409(t *testing.T) {
+	dir := newGitRepo(t)
+
+	oldTimeout := gitChangesTimeout
+	gitChangesTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { gitChangesTimeout = oldTimeout })
+
+	slept := false
+	old := gitCmdHook
+	gitCmdHook = func(args []string) {
+		if !slept {
+			slept = true
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	t.Cleanup(func() { gitCmdHook = old })
+
+	h := newGitChangesHarness(t, dir)
+	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "too_many_changes") {
+		t.Errorf("body = %s, want error code too_many_changes", body)
+	}
+}
+
+// TestHandleGitChangesLargeUntrackedFile: over the cutoff is large:true with no hunk; under it keeps its hunk.
+func TestHandleGitChangesLargeUntrackedFile(t *testing.T) {
+	dir := newGitRepo(t)
+	writeTestFile(t, filepath.Join(dir, "big.txt"), strings.Repeat("x\n", 3*1024*1024/2))
+	writeTestFile(t, filepath.Join(dir, "small.txt"), strings.Repeat("y\n", 100))
+
+	got := gitChangesUncommitted(t, dir)
+	byPath := filesByPath(got.Files)
+	if big := byPath["big.txt"]; !big.Large || big.Additions != 0 || big.Deletions != 0 {
+		t.Errorf("big.txt entry = %+v, want large=true, 0/0", big)
+	}
+	if strings.Contains(got.Patch, "big.txt") {
+		t.Errorf("patch contains a hunk for the large file: %q", got.Patch)
+	}
+	if small := byPath["small.txt"]; small.Large {
+		t.Errorf("small.txt entry = %+v, want large=false", small)
+	}
+	if !strings.Contains(got.Patch, "diff --git a/small.txt b/small.txt") {
+		t.Errorf("patch missing the 1 MiB file's hunk: %q", got.Patch)
+	}
+}
+
+// listObjectFiles lists loose object files under dir/.git/objects.
+func listObjectFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	filepath.WalkDir(filepath.Join(dir, ".git", "objects"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files
+}
+
+// TestHandleGitChangesIndexNeverWritten: .git/index and .git/objects are both unchanged.
 func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 	dir := newGitRepo(t)
 	seed := filepath.Join(dir, "seed.txt")
@@ -484,12 +537,14 @@ func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 	if err := os.Chtimes(seed, future, future); err != nil {
 		t.Fatal(err)
 	}
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
 
 	indexPath := filepath.Join(dir, ".git", "index")
 	before, err := os.Stat(indexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+	objectsBefore := listObjectFiles(t, dir)
 
 	gitChangesUncommitted(t, dir)
 
@@ -499,6 +554,9 @@ func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 	}
 	if !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
 		t.Errorf(".git/index changed: before mtime=%s, after mtime=%s", before.ModTime(), after.ModTime())
+	}
+	if objectsAfter := listObjectFiles(t, dir); strings.Join(objectsAfter, ",") != strings.Join(objectsBefore, ",") {
+		t.Errorf(".git/objects changed: before %v, after %v", objectsBefore, objectsAfter)
 	}
 }
 
@@ -632,10 +690,7 @@ func TestHandleGitChangesNeutralizesFilterDrivers(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesFileCounts covers scenarios distinguished only by
-// how many files (and which) end up in the response: a gitignored
-// untracked file, an untracked nested repo, and a dirty submodule are all
-// excluded.
+// TestHandleGitChangesFileCounts: gitignored, nested-repo, and dirty-submodule content are all excluded.
 func TestHandleGitChangesFileCounts(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -666,6 +721,19 @@ func TestHandleGitChangesFileCounts(t *testing.T) {
 			writeTestFile(t, filepath.Join(dir, "sub", "seed.txt"), "seed\ndirty\n")
 			return dir
 		}, 0, ""},
+		{"ignored files beside a nested repo", func(t *testing.T) string {
+			dir := newGitRepo(t)
+			writeTestFile(t, filepath.Join(dir, ".gitignore"), "*.log\n__pycache__/\n")
+			runTestGit(t, dir, "add", ".gitignore")
+			runTestGit(t, dir, "commit", "-q", "-m", "add gitignore")
+			mkdirAllTest(t, filepath.Join(dir, "experiments", "upstream"))
+			runTestGit(t, filepath.Join(dir, "experiments", "upstream"), "init", "-q")
+			writeTestFile(t, filepath.Join(dir, "experiments", "run.py"), "x\n")
+			writeTestFile(t, filepath.Join(dir, "experiments", "out.log"), "noisy\n")
+			mkdirAllTest(t, filepath.Join(dir, "experiments", "__pycache__"))
+			writeTestFile(t, filepath.Join(dir, "experiments", "__pycache__", "run.pyc"), "bin\n")
+			return dir
+		}, 1, "experiments/run.py"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

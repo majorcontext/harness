@@ -18,26 +18,43 @@ total subprocess count stays constant:
    temporary file. A missing real index (an unborn repository) leaves the
    copy unwritten; git treats a `GIT_INDEX_FILE` path that doesn't exist
    as a fresh empty index.
-2. List untracked paths with `git ls-files --others --exclude-standard
-   --directory`: a wholly untracked directory is one entry there, not one
-   per file, which keeps git's own pathspec matching (quadratic in
-   pathspec count) off a large untracked tree. Each entry is Lstat-checked
-   for a nested git repository somewhere inside it; a contaminated
-   directory is expanded to its own files instead, skipping that
-   repository's subtree.
-3. Stage that list as intent-to-add in the private index copy only, via
-   `git add -N --pathspec-from-file=- --pathspec-file-nul -c
-   core.splitIndex=false` (the config keeps `add -N` from writing a
-   shared-index file into the real repository). A path that vanishes
-   between steps 2 and 3 fails that whole batch, so this retries once
-   against a fresh listing.
+2. List untracked paths with `git ls-files --others --exclude-standard`
+   (no `--directory`): an entry ending in `/` is exactly a nested git
+   repository, which git itself refuses to descend into. `untrackedEntries`
+   partitions this list into an `add -N` exclude pathspec per nested
+   repo, plus one per untracked file over the 2 MiB large-file cutoff
+   (below) — everything else is left for `add -N` to add.
+3. Stage the private index copy with ONE `git add -N -- . <excludes...>`
+   (`-c core.splitIndex=false`, so it never writes a shared-index file
+   into the real repository). Passing pathspec `.` plus an exclude per
+   nested repo or large file — rather than one include pathspec per
+   ordinary file — is what keeps this a single subprocess regardless of
+   file count: git's own pathspec matching is quadratic in pathspec
+   count, so one include pathspec per file made this step alone take
+   24 s at 50,000 untracked files. Git itself then decides .gitignore and
+   repository boundaries for the files `.` does cover, rather than this
+   package re-deriving them file by file. A path that no longer exists by
+   the time `add -N` runs is simply outside what `.` matches; an exclude
+   naming a path that no longer exists is a no-op — neither is an error,
+   so this needs no retry.
 4. Run `--numstat`, `--name-status`, and the patch diff against that same
    copy. Each now reports tracked AND untracked files together — an
    intent-to-add entry has no blob content, so diffing it against the
    base tree shows every line as added, exactly like an "added" status.
 
 The real `.git/index` is only ever read (a plain file copy), never
-written by any git command — see "Never writing the index" below.
+written by any git command — see "Never writing the index or objects"
+below.
+
+## Large untracked files
+
+An untracked file over 2 MiB (`untrackedLargeCutoff`, matching opencode's
+own snapshot cutoff) is excluded from `add -N` the same way a nested repo
+is, and given its own `gitChangeFile` directly: status `"added"`,
+`additions`/`deletions` 0, `large: true`, and no content in `patch` — the
+same shape `binary` already uses for a file whose content isn't
+diffable, here applied to a plain-text file whose size alone makes
+diffing it not worth the request's own cost.
 
 ## Bounded memory: reading the patch
 
@@ -60,7 +77,7 @@ truncation.
 The cap is ~1 MiB (`gitChangesPatchCap = 1<<20`): large enough for a
 typical PR-sized diff, small enough to keep a single response bounded.
 
-## Never writing the index
+## Never writing the index or objects
 
 Porcelain `git diff` refreshes the index (`refresh_index_quietly`) when a
 file's stat info changed but its content did not — rewriting
@@ -73,6 +90,15 @@ endpoint's own git commands never write the real index at all (they read
 it once, as a plain file copy), so this race cannot happen structurally —
 not merely suppressed with `diff.autoRefreshIndex=false` (which is also
 set, defensively, on both `add -N` and the diffs).
+
+Staging a new file's intent-to-add entry also makes git write the empty
+blob's loose object (`e69de29…`), which would otherwise land in the real
+`.git/objects`. `GIT_OBJECT_DIRECTORY` points every object write at a
+private, request-scoped directory instead;
+`GIT_ALTERNATE_OBJECT_DIRECTORIES` points reads at the real objects
+directory (resolved via `git rev-parse --git-path objects`, the same
+worktree-aware pattern as the index), so a diff against real history
+still resolves every blob it needs.
 
 ## Command execution surfaces neutralized
 
@@ -131,6 +157,17 @@ response's own `dir` field still echoes the originally resolved `dir`.
 - No common ancestor (an orphan branch, or a shallow clone too shallow to
   reach it): `git merge-base` exits 1 with no output; mapped to `409
   no_base` rather than surfaced as a raw subprocess failure.
+
+## A change set too large for the request's own deadline
+
+An unusually large change set (order 100,000+ untracked files) can still
+exhaust the request's own bounded, linear-time deadline: the cost per
+file stays constant, but the total is not unbounded. `writeGitErr` checks
+`ctx.Err()` on any git-call failure and answers `409 too_many_changes`
+instead of `500` when the deadline itself is what killed the subprocess —
+a scale ceiling, not a server fault. `gitChangesTimeout` is a package var,
+not a const, so a test can shrink it and deterministically reach this
+path without needing hundreds of thousands of real files.
 
 ## Accepted limitations
 

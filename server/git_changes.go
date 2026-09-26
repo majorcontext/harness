@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,9 +17,17 @@ import (
 	"time"
 )
 
-const gitChangesTimeout = 30 * time.Second
+// gitChangesTimeout is a var, not a const, so a test can shrink it to
+// deterministically exercise the 409 too_many_changes path.
+var gitChangesTimeout = 30 * time.Second
 
 const gitChangesPatchCap = 1 << 20
+
+// untrackedLargeCutoff mirrors opencode's snapshot (sst/opencode
+// packages/opencode/src/snapshot/index.ts): an untracked file this large
+// contributes no hunk, so a request never buffers or diffs a multi-
+// megabyte blob for a file the agent hasn't even tracked.
+const untrackedLargeCutoff = 2 * 1024 * 1024
 
 // gitChangesWaitDelay bounds exec.Cmd.Wait, so a lingering grandchild
 // process holding stdout/stderr open can't block it indefinitely.
@@ -33,6 +40,7 @@ type gitChangeFile struct {
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
 	Binary    bool   `json:"binary"`
+	Large     bool   `json:"large"`
 }
 
 type gitBaseRef struct {
@@ -76,7 +84,7 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 
 	repoRoot, ok, err := gitRepoRootAt(ctx, realDir, ceiling)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeGitErr(w, ctx, err)
 		return
 	}
 	if !ok {
@@ -99,7 +107,7 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 	if head == "" {
 		emptyTree, err := gitEmptyTree(ctx, repoRoot)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeGitErr(w, ctx, err)
 			return
 		}
 		baseTreeish = emptyTree
@@ -117,11 +125,11 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 		mb, err := gitOut(ctx, repoRoot, nil, "merge-base", head, revision)
 		if err != nil {
 			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			if ctx.Err() == nil && errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 				writeErr(w, http.StatusConflict, fmt.Sprintf("no_base: HEAD and %s share no common ancestor", display))
 				return
 			}
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeGitErr(w, ctx, err)
 			return
 		}
 		sha := strings.TrimSpace(mb)
@@ -131,13 +139,24 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 
 	files, patch, truncated, err := gitChangeSet(ctx, repoRoot, baseTreeish, gitChangesPatchCap)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		writeGitErr(w, ctx, err)
 		return
 	}
 	resp.Files = files
 	resp.Patch = patch
 	resp.Truncated = truncated
 	writeJSONNoEscapeHTML(w, http.StatusOK, resp)
+}
+
+// writeGitErr answers 409 too_many_changes when ctx's own deadline caused
+// err (a killed git subprocess) — a bounded, expected scale ceiling, not a
+// server fault — rather than a generic 500.
+func writeGitErr(w http.ResponseWriter, ctx context.Context, err error) {
+	if ctx.Err() != nil {
+		writeErr(w, http.StatusConflict, "too_many_changes: request exceeded its time budget diffing a large change set")
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, err.Error())
 }
 
 // verifyDirWithinRoots re-checks dir after symlink resolution, so a symlink
@@ -207,6 +226,21 @@ func gitCmd(ctx context.Context, dir string, extraEnv []string, args ...string) 
 	return cmd
 }
 
+// gitCmdMagicPathspecs is gitCmd without GIT_LITERAL_PATHSPECS, for the one
+// `add -N` call that relies on `:(exclude,literal)` pathspec magic (its own
+// "literal" keeps a glob-like path exact instead).
+func gitCmdMagicPathspecs(ctx context.Context, dir string, extraEnv []string, args ...string) *exec.Cmd {
+	args = append(append([]string{}, gitStaticSafetyArgs...), args...)
+	if gitCmdHook != nil {
+		gitCmdHook(args)
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1"), extraEnv...)
+	cmd.WaitDelay = gitChangesWaitDelay
+	return cmd
+}
+
 func gitOut(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	cmd := gitCmd(ctx, dir, extraEnv, args...)
 	var stdout, stderr bytes.Buffer
@@ -231,7 +265,7 @@ func isGitWorkTreeErr(err error) bool {
 func gitRepoRootAt(ctx context.Context, dir, ceiling string) (root string, ok bool, err error) {
 	out, err := gitOut(ctx, dir, []string{"GIT_CEILING_DIRECTORIES=" + ceiling}, "rev-parse", "--show-toplevel")
 	if err != nil {
-		if isGitWorkTreeErr(err) {
+		if ctx.Err() == nil && isGitWorkTreeErr(err) {
 			return "", false, nil
 		}
 		return "", false, err
@@ -362,102 +396,43 @@ func statusWord(letter string) string {
 	}
 }
 
-// untrackedIndexInput builds `add -N --pathspec-from-file=-`'s NUL-
-// terminated stdin from `ls-files -o --directory`'s raw -z output: a wholly
-// untracked directory is one pathspec, not one per file, keeping git's own
-// (quadratic) pathspec matching off a large untracked tree. Each entry is
-// re-Lstat'd (it may have vanished since ls-files ran); a directory
-// containing a nested repo is expanded to its own files instead, skipping
-// that repo's subtree.
-func untrackedIndexInput(repoRoot, lsFilesOut string) []byte {
-	var buf bytes.Buffer
-	add := func(p string) {
-		buf.WriteString(p)
-		buf.WriteByte(0)
-	}
+// untrackedEntries partitions `ls-files -o --exclude-standard -z`'s raw
+// output (no --directory: a "/"-suffixed entry is exactly a nested repo).
+// A nested repo, and a file over untrackedLargeCutoff, both become an
+// `add -N` exclude pathspec; the large file also gets its own
+// gitChangeFile here, since excluding it also excludes it from the diff.
+func untrackedEntries(repoRoot, lsFilesOut string) (excludeArgs []string, large []gitChangeFile) {
 	for _, p := range splitNulZ(lsFilesOut) {
-		full := filepath.Join(repoRoot, p)
-		info, err := os.Lstat(full)
+		if strings.HasSuffix(p, "/") {
+			excludeArgs = append(excludeArgs, ":(exclude,literal)"+p)
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(repoRoot, p))
 		if err != nil {
-			continue
+			continue // vanished since ls-files ran
 		}
-		if !info.IsDir() {
-			add(p)
-			continue
-		}
-		if hasNestedRepo(full) {
-			addPlainFiles(repoRoot, full, add)
-		} else {
-			add(p)
+		if info.Size() > untrackedLargeCutoff {
+			excludeArgs = append(excludeArgs, ":(exclude,literal)"+p)
+			large = append(large, gitChangeFile{Path: p, Status: "added", Large: true})
 		}
 	}
-	return buf.Bytes()
+	return excludeArgs, large
 }
 
-// hasNestedRepo reports whether any directory at or under root contains its
-// own .git, which a parent pathspec can't recurse `add -N` into.
-func hasNestedRepo(root string) bool {
-	found := false
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || found {
-			return filepath.SkipAll
-		}
-		if d.Name() == ".git" {
-			found = true
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found
-}
-
-// addPlainFiles walks root calling add with each file's repoRoot-relative
-// path, skipping any nested-repo subtree.
-func addPlainFiles(repoRoot, root string, add func(string)) {
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if _, gerr := os.Lstat(filepath.Join(path, ".git")); gerr == nil {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel, rerr := filepath.Rel(repoRoot, path); rerr == nil {
-			add(rel)
-		}
-		return nil
-	})
-}
-
-// addUntrackedIntentToAdd stages every untracked path intent-to-add in the
-// private index at env's GIT_INDEX_FILE. A path vanishing between ls-files
-// and add -N fails that whole batch, so this retries once against a fresh
-// listing. core.splitIndex=false keeps add -N from writing a shared-index
+// addUntrackedIntentToAdd stages every untracked path (other than one named
+// in excludeArgs) intent-to-add in one subprocess, regardless of file
+// count: pathspec "." lets git itself decide .gitignore and repository
+// boundaries. core.splitIndex=false keeps it from writing a shared-index
 // file into the real repository.
-func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string) error {
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		lsFilesOut, err := gitOut(ctx, repoRoot, nil, "ls-files", "--others", "--exclude-standard", "--directory", "-z")
-		if err != nil {
-			return err
-		}
-		input := untrackedIndexInput(repoRoot, lsFilesOut)
-		if len(input) == 0 {
-			return nil
-		}
-		cmd := gitCmd(ctx, repoRoot, env, "-c", "core.splitIndex=false", "add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul", "--")
-		cmd.Stdin = bytes.NewReader(input)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			lastErr = fmt.Errorf("git add -N: %w: %s", err, strings.TrimSpace(stderr.String()))
-			continue
-		}
-		return nil
+func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string, excludeArgs []string) error {
+	args := append([]string{"-c", "core.splitIndex=false", "add", "-N", "--", "."}, excludeArgs...)
+	cmd := gitCmdMagicPathspecs(ctx, repoRoot, env, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git add -N: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return lastErr
+	return nil
 }
 
 // diffFilterDriverArgs neutralizes every repo-configured clean/process
@@ -496,6 +471,22 @@ func diffFilterDriverArgs(ctx context.Context, dir string) ([]string, error) {
 	return args, nil
 }
 
+// gitRealPath resolves gitPath (e.g. "index", "objects") via `git rev-parse
+// --git-path`, absolutized against repoRoot — this also works inside a git
+// worktree, whose index and objects live under the main repository's
+// .git/worktrees/<name>/, not a plain .git/.
+func gitRealPath(ctx context.Context, repoRoot, gitPath string) (string, error) {
+	out, err := gitOut(ctx, repoRoot, nil, "rev-parse", "--git-path", gitPath)
+	if err != nil {
+		return "", err
+	}
+	p := strings.TrimSpace(out)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(repoRoot, p)
+	}
+	return p, nil
+}
+
 // gitChangeSet computes files and patch against baseTreeish, folding
 // untracked files in as "added" via a private index copy, in a constant
 // number of subprocesses regardless of file count. files is always
@@ -507,14 +498,14 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	}
 	defer os.RemoveAll(tmpDir)
 	tmpIndex := filepath.Join(tmpDir, "index")
-
-	realIndexOut, err := gitOut(ctx, repoRoot, nil, "rev-parse", "--git-path", "index")
-	if err != nil {
+	tmpObjects := filepath.Join(tmpDir, "objects")
+	if err := os.MkdirAll(tmpObjects, 0o700); err != nil {
 		return nil, "", false, err
 	}
-	realIndex := strings.TrimSpace(realIndexOut)
-	if !filepath.IsAbs(realIndex) {
-		realIndex = filepath.Join(repoRoot, realIndex)
+
+	realIndex, err := gitRealPath(ctx, repoRoot, "index")
+	if err != nil {
+		return nil, "", false, err
 	}
 	if data, err := os.ReadFile(realIndex); err == nil {
 		if err := os.WriteFile(tmpIndex, data, 0o600); err != nil {
@@ -526,9 +517,26 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	// A missing realIndex (unborn repository) leaves tmpIndex unwritten:
 	// git treats a nonexistent GIT_INDEX_FILE as a fresh empty index.
 
-	env := []string{"GIT_INDEX_FILE=" + tmpIndex}
+	realObjects, err := gitRealPath(ctx, repoRoot, "objects")
+	if err != nil {
+		return nil, "", false, err
+	}
+	// GIT_OBJECT_DIRECTORY isolates every object add -N or diff would write
+	// (e.g. the empty blob an intent-to-add entry needs) into tmpObjects;
+	// GIT_ALTERNATE_OBJECT_DIRECTORIES still resolves a read against every
+	// real object.
+	env := []string{
+		"GIT_INDEX_FILE=" + tmpIndex,
+		"GIT_OBJECT_DIRECTORY=" + tmpObjects,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + realObjects,
+	}
 
-	if err := addUntrackedIntentToAdd(ctx, repoRoot, env); err != nil {
+	lsFilesOut, err := gitOut(ctx, repoRoot, nil, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, "", false, err
+	}
+	excludeArgs, largeFiles := untrackedEntries(repoRoot, lsFilesOut)
+	if err := addUntrackedIntentToAdd(ctx, repoRoot, env, excludeArgs); err != nil {
 		return nil, "", false, err
 	}
 
@@ -567,6 +575,7 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 			Binary:    ns.binary,
 		})
 	}
+	files = append(files, largeFiles...)
 
 	patch, truncated, err = runPatchCapped(ctx, repoRoot, env,
 		diffArgs("--no-color", "-M", baseTreeish), patchCap)
