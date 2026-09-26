@@ -143,23 +143,24 @@ func TestOpRoutesMatchTheMux(t *testing.T) {
 	}
 }
 
-func TestServeModeOpsTotal(t *testing.T) {
-	registry := command.NewRegistry()
-	control := map[command.Op]bool{}
-	for _, s := range registry.All() {
-		if s.Kind == command.KindControl {
-			control[s.Op] = true
-		}
+func TestServeSupportFollowsExecutableHandler(t *testing.T) {
+	orig := serveOpHandlers[command.OpSetModel]
+	delete(serveOpHandlers, command.OpSetModel)
+	t.Cleanup(func() { serveOpHandlers[command.OpSetModel] = orig })
+
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, data := h.do("GET", "/commands", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /commands status %d: %s", resp.StatusCode, data)
 	}
-	for op := range serveModeOps {
-		if !control[op] {
-			t.Errorf("serveModeOps names %q, which is not a control Op", op)
-		}
+	var body struct {
+		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
 	}
-	for op := range control {
-		if _, ok := serveModeOps[op]; !ok {
-			t.Errorf("control Op %q is neither supported nor refused by serveModeOps", op)
-		}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body.ServeSupport["model"].Supported {
+		t.Fatal("/model advertised as supported without an executable handler")
 	}
 }
 

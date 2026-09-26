@@ -36,30 +36,13 @@ var opRoutes = map[command.Op]route{
 	command.OpProcessList:    {"GET", "/process"},
 }
 
-// serveModeOps declares which control Ops serve mode resolves through its
-// own routes, total over every command.Op. queue-clear stays false: nothing
-// dispatches it through serve mode yet.
-var serveModeOps = map[command.Op]bool{
-	command.OpCompact:        true,
-	command.OpSetModel:       true,
-	command.OpSetThinking:    true,
-	command.OpSetServiceTier: true,
-	command.OpAbort:          true,
-	command.OpSetGoal:        true,
-	command.OpClearGoal:      true,
-	command.OpQueueList:      true,
-	command.OpQueueClear:     false,
-	command.OpStatus:         true,
-	command.OpProcessList:    true,
-}
-
 const serveUnsupportedReason = "Not available in this client."
 
 func serveSupport(spec *command.Spec) (supported bool, reason string) {
-	if spec.Kind == command.KindFrontend {
+	if spec.Kind != command.KindControl {
 		return false, serveUnsupportedReason
 	}
-	if !serveModeOps[spec.Op] {
+	if _, ok := serveOpHandlers[spec.Op]; !ok {
 		return false, serveUnsupportedReason
 	}
 	return true, ""
