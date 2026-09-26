@@ -324,9 +324,10 @@ func TestRecordCommandTerminalKeepsCreatedAtAndAnchor(t *testing.T) {
 	}
 }
 
-// TestRecordCommandTerminalInheritsClientRef: a terminal CommandRecord built
-// without ClientRef set (exactly how server.runCommand builds its own,
-// never reading it back from Commands()) must still carry the accepted
+// TestRecordCommandTerminalInheritsClientRef: a terminal CommandRecord for
+// an already-accepted ID, built with ClientRef left at its zero value (the
+// engine's own guarantee, independent of whether a caller happens to
+// carry the value forward itself), must still inherit the accepted
 // record's ClientRef, on the emitted event and after LoadSession. Failure:
 // the Boxes console loses its own correlation id the moment a dispatched
 // command finishes, and can no longer match the terminal record to the
@@ -350,7 +351,7 @@ func TestRecordCommandTerminalInheritsClientRef(t *testing.T) {
 	}
 
 	// A fresh CommandRecord for the SAME id with ClientRef left at its zero
-	// value, exactly as server.runCommand builds its terminal record.
+	// value — the engine must not depend on a caller carrying it forward.
 	succeeded := message.CommandRecord{
 		ID: id, Line: "/compact", Name: "compact",
 		Source: message.PromptSourceTyped, Status: message.CommandSucceeded, Text: "/compact succeeded",

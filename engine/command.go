@@ -168,10 +168,9 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit b
 		// A status update for an already-folded ID: copy the original
 		// CreatedAt/AfterMessageID/ClientRef onto c before the write and the
 		// emit below, so the persisted record, the emitted event, and the
-		// fold all agree. ClientRef in particular lets a caller that builds
-		// a terminal CommandRecord without it (RepairInterruptedCommands
-		// does not carry it forward itself) still inherit the value the
-		// accepted record set.
+		// fold all agree. This is the engine's own guarantee, independent of
+		// what a caller happens to set on c: a later record for the same ID
+		// inherits ClientRef whatever the caller does with it.
 		c.CreatedAt = existing.CreatedAt
 		c.AfterMessageID = existing.AfterMessageID
 		c.ClientRef = existing.ClientRef

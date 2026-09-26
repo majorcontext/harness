@@ -549,9 +549,12 @@ printable ASCII bytes, the same rule `source_id` uses. It exists so a
 caller that dispatches through `/enqueue` and never sees the reply —
 the Boxes console's own case — can still find the command record its
 prompt produced. Set it on the request and every record of the same
-command, accepted through terminal, carries it back. An ordinary
-prompt drops the value instead: `client_ref` is never journaled onto
-a message, a queued prompt, or `GET /session/{id}/journal`.
+command, accepted through terminal, carries it back, including on the
+receipt (`CommandReceipt.client_ref`). An ordinary prompt drops the
+value instead: `client_ref` is never journaled onto a message or a
+queued prompt. `GET /session/{id}/journal` carries neither `client_ref`
+nor any other command field — it stays metadata-only for every record,
+command or not (see "The carriers" below).
 
 ### The carriers
 
