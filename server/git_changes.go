@@ -17,9 +17,16 @@ import (
 	"time"
 )
 
-// gitChangesTimeout is a var, not a const, so a test can shrink it to
-// deterministically exercise the 409 too_many_changes path.
+// gitChangesTimeout is the endpoint's overall request budget: a var, not a
+// const, so a test can shrink it to deterministically exercise the 409
+// too_many_changes path. gitChangesResponseMargin is reserved out of it for
+// marshaling and writing the response, so a too_many_changes answer
+// reliably finishes before a caller's own timeout — boxes proxies this
+// route with its own client timeout kept a few seconds above
+// gitChangesTimeout for exactly this reason.
 var gitChangesTimeout = 30 * time.Second
+
+const gitChangesResponseMargin = 2 * time.Second
 
 const gitChangesPatchCap = 1 << 20
 
@@ -79,7 +86,7 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), gitChangesTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), gitChangesTimeout-gitChangesResponseMargin)
 	defer cancel()
 
 	repoRoot, ok, err := gitRepoRootAt(ctx, realDir, ceiling)

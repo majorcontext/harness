@@ -169,6 +169,13 @@ a scale ceiling, not a server fault. `gitChangesTimeout` is a package var,
 not a const, so a test can shrink it and deterministically reach this
 path without needing hundreds of thousands of real files.
 
+The git work itself is bounded to `gitChangesTimeout -
+gitChangesResponseMargin` (28s of the nominal 30s), not the full budget:
+marshaling and writing the response still needs a couple of seconds after
+the deadline fires, and boxes' own proxy timeout for this route is close
+to `gitChangesTimeout` too. Spending the whole budget on git work would
+risk the client giving up before this endpoint's own 409 reaches it.
+
 ## Accepted limitations
 
 - The patch's JSON encoding disables HTML escaping (`writeJSONNoEscapeHTML`,

@@ -470,7 +470,7 @@ func TestHandleGitChangesTooManyChanges409(t *testing.T) {
 	dir := newGitRepo(t)
 
 	oldTimeout := gitChangesTimeout
-	gitChangesTimeout = 20 * time.Millisecond
+	gitChangesTimeout = gitChangesResponseMargin + 20*time.Millisecond // internal deadline: 20ms
 	t.Cleanup(func() { gitChangesTimeout = oldTimeout })
 
 	slept := false
