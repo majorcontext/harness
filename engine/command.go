@@ -145,7 +145,11 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit b
 func (s *Session) RecordCommand(c message.CommandRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.recordCommandLocked(c, 0, true)
+	if err := s.recordCommandLocked(c, 0, true); err != nil {
+		return err
+	}
+	s.maybeSnapshotLocked()
+	return nil
 }
 
 // RecordCommandDurable is RecordCommand's durable, idempotent-by-seq
@@ -167,6 +171,7 @@ func (s *Session) RecordCommandDurable(c message.CommandRecord, seq int64) (dupl
 		return false, err
 	}
 	s.enqueueSeq = seq
+	s.maybeSnapshotLocked()
 	return false, nil
 }
 
@@ -197,6 +202,7 @@ func (s *Session) RepairInterruptedCommands(text func(name string) string) (int,
 		if err := s.recordCommandLocked(c, 0, false); err != nil {
 			return n, err
 		}
+		s.maybeSnapshotLocked()
 		n++
 	}
 	return n, nil

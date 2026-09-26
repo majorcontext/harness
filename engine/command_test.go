@@ -9,6 +9,66 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
+func TestCommandRecordEveryKSnapshotAfterFold(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(*Session, message.CommandRecord) error
+		seq   int64
+	}{
+		{
+			name: "RecordCommand",
+			write: func(s *Session, c message.CommandRecord) error {
+				return s.RecordCommand(c)
+			},
+		},
+		{
+			name: "RecordCommandDurable",
+			write: func(s *Session, c message.CommandRecord) error {
+				_, err := s.RecordCommandDurable(c, 7)
+				return err
+			},
+			seq: 7,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewSession(Config{SessionDir: dir, SnapshotEveryRecords: 1})
+			c := message.CommandRecord{
+				ID: NewCommandID(), Line: "/compact", Name: "compact",
+				Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+			}
+			if err := tt.write(s, c); err != nil {
+				t.Fatalf("record command: %v", err)
+			}
+			s.waitSnapshots()
+
+			snap := readSessionSnapshot(dir, s.ID)
+			if snap == nil {
+				t.Fatal("command append did not produce an every-K snapshot")
+			}
+			if snap.Seq != s.recordsWritten {
+				t.Fatalf("snapshot seq = %d, want journal head %d", snap.Seq, s.recordsWritten)
+			}
+
+			loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if loaded.replayedRecords >= loaded.recordsWritten {
+				t.Fatalf("replayed %d of %d records; snapshot-anchored replay was not used", loaded.replayedRecords, loaded.recordsWritten)
+			}
+			commands := loaded.Commands()
+			if len(commands) != 1 || commands[0].Status != message.CommandSucceeded {
+				t.Fatalf("snapshot-anchored Commands() = %+v, want one succeeded command", commands)
+			}
+			if got := loaded.EnqueueSeq(); got != tt.seq {
+				t.Fatalf("snapshot-anchored EnqueueSeq() = %d, want %d", got, tt.seq)
+			}
+		})
+	}
+}
+
 func TestCommandRecordNeverEntersHistory(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
