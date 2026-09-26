@@ -146,8 +146,10 @@ var bifrostVertexContextWindows = map[string]int{
 // claude-code ref, which is recognized but whose window this table cannot
 // know: harness passes a bare alias and only the CLI knows what it resolved
 // to. A caller must treat that 0 as "unknown", never as a usable size. The
-// CLI does report the resolved window at runtime, in a "result" envelope's
-// modelUsage entry, which is where a real figure comes from.
+// The CLI does report the resolved window at runtime, in a "result"
+// envelope's modelUsage entry, so a real figure is obtainable there even
+// though this table cannot hold one. The stream decoder does not read it
+// yet.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
@@ -223,7 +225,8 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		// Only the CLI knows what a bare alias resolved to, so no static
 		// figure here can be right. Report none rather than a plausible one:
 		// a wrong denominator renders a session five times fuller than it is.
-		// The runtime window arrives in a "result" envelope's modelUsage.
+		// A runtime window is obtainable from a "result" envelope's
+		// modelUsage, which the stream decoder does not read yet.
 		tokens, ok = 0, true
 	}
 	return tokens, ok

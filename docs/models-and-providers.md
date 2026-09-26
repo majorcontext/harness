@@ -101,8 +101,9 @@ session on a 1,000,000-token model as five times fuller than it was.
 
 The 0 means "not from this table", not "no window exists". The CLI reports
 the resolved window at runtime, in a `result` envelope's `modelUsage` entry
-keyed by the model its `init` event names, which is where a real figure for
-the gauge comes from.
+keyed by the model its `init` event names. `claudeCodeEnvelope` does not
+decode that field today, so no runtime window reaches the gauge yet; it is
+where one is obtainable, not where one currently comes from.
 
 The registry covers `anthropic`, `openai`, `codex`, `amazon-bedrock`,
 `claude-code`, and `bifrost` refs. The `bifrost` case
