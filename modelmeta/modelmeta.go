@@ -143,9 +143,11 @@ var bifrostVertexContextWindows = map[string]int{
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
 // false for an unrecognized provider or model, and 0 with true for a
-// claude-code ref, which is recognized but has no knowable window: the CLI
-// resolves a bare alias itself and never reports its choice. A caller must
-// treat that 0 as "unknown", never as a usable size.
+// claude-code ref, which is recognized but whose window this table cannot
+// know: harness passes a bare alias and only the CLI knows what it resolved
+// to. A caller must treat that 0 as "unknown", never as a usable size. The
+// CLI does report the resolved window at runtime, in a "result" envelope's
+// modelUsage entry, which is where a real figure comes from.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
@@ -218,10 +220,10 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// The CLI resolves a bare alias itself and never reports what it
-		// chose, so no window here can be right. Report none rather than a
-		// plausible figure: a wrong denominator renders a session five times
-		// fuller than it is.
+		// Only the CLI knows what a bare alias resolved to, so no static
+		// figure here can be right. Report none rather than a plausible one:
+		// a wrong denominator renders a session five times fuller than it is.
+		// The runtime window arrives in a "result" envelope's modelUsage.
 		tokens, ok = 0, true
 	}
 	return tokens, ok
