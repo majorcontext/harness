@@ -3,9 +3,12 @@ package server
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TestMutableSessionColdInsertPinsBeforeSweep: a cold-loaded session must
@@ -231,6 +234,85 @@ func TestRacedMidTurnCompactRecordsRefused(t *testing.T) {
 		if m.Parts.Text() == "/compact" {
 			t.Fatalf("a user message holds /compact: %+v", m)
 		}
+	}
+}
+
+// TestTypedCompactOnManagedChildRecordsFailed: handleCompact answers a
+// managed child's /compact through rejectManagedChildTurn, not a busy-turn
+// conflict — that 409 must record failed with the route's own
+// managed-child text, never refused with the busy-turn sentence.
+// commandOutcome used to map every 409 for an Op not availableDuringTask
+// (OpCompact) to refused regardless of cause; this pins the managed-child
+// cause to its own outcome. Failure mode this guards: the terminal record
+// reads refused, "/compact cannot run while a turn is running", which is
+// false — the child is done, not busy — instead of failed with
+// rejectManagedChildTurn's own sentence.
+func TestTypedCompactOnManagedChildRecordsFailed(t *testing.T) {
+	dir := t.TempDir()
+	rootProv := &scriptedProvider{name: "root"}
+	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
+	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
+	model := message.ModelRef{Provider: "root", Model: "m1"}
+	var srv *Server
+	h := multiProviderHarnessInDir(t, dir, model, func(o *Options) {
+		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = model
+			}
+			return engine.NewSession(engine.Config{
+				Providers: reg, Model: m, WorkDir: workDir, ParentSession: parentSession,
+				SessionDir: dir, OnEvent: func(ev engine.Event) { srv.Publish(ev) },
+			}), nil
+		}
+		o.LoadSession = func(id string) (*engine.Session, error) {
+			return engine.LoadSession(engine.Config{
+				Providers: reg, Model: model, SessionDir: dir, OnEvent: func(ev engine.Event) { srv.Publish(ev) },
+			}, id)
+		}
+	}, rootProv, childProv)
+	srv = h.srv
+
+	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
+	}
+	var root struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &root)
+
+	resp, data = h.do("POST", "/session", map[string]string{
+		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+
+	sse := h.openSSE("?from=0", "")
+	resp, data = h.do("POST", "/session/"+child.ID+"/prompt_async", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("/compact status %d: %s", resp.StatusCode, data)
+	}
+
+	accepted := sse.waitFor(t, "command")
+	if accepted.Command == nil || accepted.Command.Status != message.CommandAccepted {
+		t.Fatalf("first command event = %+v, want accepted", accepted.Command)
+	}
+	terminal := sse.waitFor(t, "command")
+	if terminal.Command == nil || terminal.Command.Status != message.CommandFailed {
+		t.Fatalf("terminal command event = %+v, want failed", terminal.Command)
+	}
+	want := "session is a SessionManager-managed child session; use POST /session/{id}/send instead"
+	if terminal.Command.Text != want {
+		t.Errorf("terminal command text = %q, want %q", terminal.Command.Text, want)
 	}
 }
 

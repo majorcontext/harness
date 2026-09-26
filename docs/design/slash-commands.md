@@ -501,8 +501,9 @@ caller actually typed, never the registry's canonical `name`.
 | `failed` (attachment) | `/<name> takes no attachments; nothing ran` |
 | `failed` (route error) | the route's own `error` string (not the 409-while-not-`available_during_task` case below) |
 | `failed` (compact skip) | `/compact did nothing: <reason>` (`engine.CompactSkipMessage`) |
+| `failed` (managed-child 409) | the route's own `error` string — `rejectManagedChildTurn`'s rejection, e.g. from a raced `/compact` against a managed child; never `refused`, even when the command is not `available_during_task` |
 | `refused` | `/<name> cannot run while a turn is running; send it again after the turn ends` |
-| `refused` (raced dispatch) | same sentence — a 409 from the route call itself, for a command not `available_during_task` |
+| `refused` (raced dispatch) | same sentence — a 409 from the route call itself, for a command not `available_during_task`, on a session that is not a managed child |
 | `unsupported` | `/<name> is not available in this client` |
 | `interrupted` (boot) | `harness restarted before /<name> finished; it will not run again` |
 | `interrupted` (drain) | `harness stopped before /<name> finished; it will not run again` |
