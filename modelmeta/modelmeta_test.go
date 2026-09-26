@@ -265,3 +265,15 @@ func TestStripBedrockAnthropicPrefix(t *testing.T) {
 		}
 	}
 }
+
+// The CLI resolves a bare alias to a model harness never learns, so a
+// claude-code ref must be recognized (RequireContextWindow accepts it) while
+// reporting no window.
+func TestContextWindowClaudeCodeReportsNoWindow(t *testing.T) {
+	for _, model := range []string{"opus", "sonnet", "haiku"} {
+		tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: model})
+		if !ok || tokens != 0 {
+			t.Errorf("ContextWindow(claude-code/%s) = %d, %v; want 0, true", model, tokens, ok)
+		}
+	}
+}
