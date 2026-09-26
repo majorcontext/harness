@@ -715,9 +715,18 @@ func connectMCPServer(ctx context.Context, name string, spec MCPServerConfig) (*
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if _, err := client.Initialize(cctx); err != nil {
+	init, err := client.Initialize(cctx)
+	if err != nil {
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("initialize: %w", err)
+	}
+	// A resources-only server (no tools capability in its initialize
+	// response) has no tools/list method at all; calling it anyway gets a
+	// -32601 method-not-found and the whole connect fails. Treat "no tools
+	// capability" as zero tools instead of dialing a method the server
+	// never advertised.
+	if init.Capabilities.Tools == nil {
+		return client, nil, nil
 	}
 	tools, err := client.ListAllTools(cctx)
 	if err != nil {
@@ -917,6 +926,100 @@ func sanitizeMCPCallError(server string, err error) error {
 		return fmt.Errorf("engine: mcp: server %q: call failed: connection refused", server)
 	}
 	return fmt.Errorf("engine: mcp: server %q: call failed: connection failed", server)
+}
+
+// mcpResourcesCap bounds how many resources ListResources returns for one
+// server, as a sane cap on the response size a model reads. Figma's hosted
+// server serves on the order of 90 resources; this leaves ample headroom.
+const mcpResourcesCap = 500
+
+// mcpResourcesListPageCap bounds the number of resources/list pages
+// ListResources will fetch, a backstop against a server that never
+// terminates pagination.
+const mcpResourcesListPageCap = 1000
+
+// ResourceCapableServers returns the sorted names of every connected server
+// whose initialize response advertised the resources capability. It
+// triggers the first connect batch, like Tools.
+func (m *MCPManager) ResourceCapableServers(ctx context.Context) []string {
+	m.ensureConnected(ctx)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var names []string
+	for name, e := range m.state {
+		if e.Connected && e.client != nil && e.client.ServerCapabilities().Resources != nil {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// resourceClient resolves server to its live, resources-capable client, or
+// a fixed, classified error -- never a raw connect error.
+func (m *MCPManager) resourceClient(server string) (*mcp.Client, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.state[server]
+	if !ok {
+		return nil, fmt.Errorf("engine: mcp: server %q is not configured", server)
+	}
+	if !entry.Connected || entry.client == nil {
+		return nil, fmt.Errorf("engine: mcp: server %q failed to initialize and is retrying in the background: %s", server, classifyMCPConnectError(entry.LastErr))
+	}
+	if entry.client.ServerCapabilities().Resources == nil {
+		return nil, fmt.Errorf("engine: mcp: server %q does not support MCP resources", server)
+	}
+	return entry.client, nil
+}
+
+// ListResources returns server's resources, stopping pagination once
+// mcpResourcesCap is reached; truncated reports whether more remained.
+func (m *MCPManager) ListResources(ctx context.Context, server string) (resources []mcp.Resource, truncated bool, err error) {
+	m.ensureConnected(ctx)
+	client, err := m.resourceClient(server)
+	if err != nil {
+		return nil, false, err
+	}
+
+	var all []mcp.Resource
+	cursor := ""
+	seen := make(map[string]struct{})
+	for pages := 0; ; pages++ {
+		if pages >= mcpResourcesListPageCap {
+			return nil, false, sanitizeMCPCallError(server, fmt.Errorf("mcp: resources/list: exceeded %d pages without terminating", mcpResourcesListPageCap))
+		}
+		page, err := client.ListResources(ctx, cursor)
+		if err != nil {
+			return nil, false, sanitizeMCPCallError(server, err)
+		}
+		all = append(all, page.Resources...)
+		if len(all) > mcpResourcesCap {
+			return all[:mcpResourcesCap], true, nil
+		}
+		if page.NextCursor == "" {
+			return all, false, nil
+		}
+		if _, dup := seen[page.NextCursor]; dup {
+			return nil, false, sanitizeMCPCallError(server, fmt.Errorf("mcp: resources/list: server returned non-advancing cursor %q", page.NextCursor))
+		}
+		seen[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
+	}
+}
+
+// ReadResource fetches one resource's contents from server by uri.
+func (m *MCPManager) ReadResource(ctx context.Context, server, uri string) (*mcp.ReadResourceResult, error) {
+	m.ensureConnected(ctx)
+	client, err := m.resourceClient(server)
+	if err != nil {
+		return nil, err
+	}
+	res, err := client.ReadResource(ctx, uri)
+	if err != nil {
+		return nil, sanitizeMCPCallError(server, err)
+	}
+	return res, nil
 }
 
 // MCPServerInstructions is one connected server's own usage guidance from
@@ -1181,7 +1284,8 @@ func mcpContentToParts(server, tool string, content []mcp.Content) message.Parts
 		case mcp.ContentTypeText:
 			parts = append(parts, &message.Text{Text: c.Text})
 		case mcp.ContentTypeImage, mcp.ContentTypeAudio:
-			parts = append(parts, &message.Blob{MediaType: c.MimeType, Data: decodeMCPBase64(server, tool, c.Data)})
+			data, _ := decodeMCPBase64(server, tool, c.Data)
+			parts = append(parts, &message.Blob{MediaType: c.MimeType, Data: data})
 		case mcp.ContentTypeResource:
 			if c.Resource == nil {
 				continue
@@ -1189,7 +1293,8 @@ func mcpContentToParts(server, tool string, content []mcp.Content) message.Parts
 			if c.Resource.Text != "" {
 				parts = append(parts, &message.Text{Text: c.Resource.Text})
 			} else if c.Resource.Blob != "" {
-				parts = append(parts, &message.Blob{MediaType: c.Resource.MimeType, Data: decodeMCPBase64(server, tool, c.Resource.Blob)})
+				data, _ := decodeMCPBase64(server, tool, c.Resource.Blob)
+				parts = append(parts, &message.Blob{MediaType: c.Resource.MimeType, Data: data})
 			}
 		case mcp.ContentTypeResourceLink:
 			parts = append(parts, &message.Text{Text: fmt.Sprintf("resource: %s (%s)", c.URI, c.Name)})
@@ -1208,14 +1313,14 @@ func mcpContentToParts(server, tool string, content []mcp.Content) message.Parts
 // decodeMCPBase64 decodes s, an MCP content block's base64 payload. On
 // malformed base64 it logs a slog warning naming the server and tool the
 // payload came from — never the payload bytes themselves, which may be
-// arbitrarily large and are not diagnostic here — and returns nil, the
-// same fail-open-with-empty-data behavior as before, just no longer
-// silent.
-func decodeMCPBase64(server, tool, s string) []byte {
+// arbitrarily large and are not diagnostic here — and returns ok=false with
+// a nil data, so a caller reporting a size can distinguish "malformed" from
+// a genuinely empty payload rather than misreporting it as 0 bytes.
+func decodeMCPBase64(server, tool, s string) (data []byte, ok bool) {
 	data, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		slog.Warn("engine: mcp: malformed base64 content, dropping payload", "server", server, "tool", tool, "error", err)
-		return nil
+		return nil, false
 	}
-	return data
+	return data, true
 }

@@ -177,6 +177,27 @@ func (c *Client) ListAllTools(ctx context.Context) ([]Tool, error) {
 	}
 }
 
+// ListResources requests one page of the server's resource list. Pass the
+// previous result's NextCursor to fetch the next page; an empty cursor
+// requests the first page. A response with an empty NextCursor means there
+// are no more pages.
+func (c *Client) ListResources(ctx context.Context, cursor string) (*ListResourcesResult, error) {
+	var result ListResourcesResult
+	if err := c.request(ctx, methodResourcesList, listResourcesParams{Cursor: cursor}, &result); err != nil {
+		return nil, fmt.Errorf("mcp: resources/list: %w", err)
+	}
+	return &result, nil
+}
+
+// ReadResource fetches one resource's contents by URI.
+func (c *Client) ReadResource(ctx context.Context, uri string) (*ReadResourceResult, error) {
+	var result ReadResourceResult
+	if err := c.request(ctx, methodResourcesRead, readResourceParams{URI: uri}, &result); err != nil {
+		return nil, fmt.Errorf("mcp: resources/read %s: %w", uri, err)
+	}
+	return &result, nil
+}
+
 // CallTool invokes a tool by name with the given arguments (typically a
 // map[string]any or a struct that marshals to a JSON object). A non-nil
 // error means the call failed at the protocol level (e.g. unknown tool

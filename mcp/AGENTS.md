@@ -18,11 +18,13 @@ notification handling.
 - Stdio uses one JSON-RPC message per line over the child process streams.
 - Streamable HTTP accepts a JSON response or SSE response.
 - Preserve `MCP-Session-Id` continuity.
-- Preserve paginated `tools/list` cursors.
+- Preserve paginated `tools/list` and `resources/list` cursors.
 - Keep static request headers on every HTTP call.
 
-Do not add OAuth, client-served capabilities, legacy HTTP+SSE fallback, or
-other MCP feature families without an explicit scope change.
+In scope: `tools/list`, `tools/call`, `resources/list`, `resources/read`.
+Do not add OAuth, client-served capabilities, legacy HTTP+SSE fallback,
+`resources/subscribe`, prompts, or other MCP feature families without an
+explicit scope change.
 
 ## Content
 

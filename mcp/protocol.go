@@ -25,9 +25,11 @@ func isSupportedProtocolVersion(v string) bool {
 // Method names used by this client. Notification methods live under
 // "notifications/" per the spec.
 const (
-	methodInitialize = "initialize"
-	methodToolsList  = "tools/list"
-	methodToolsCall  = "tools/call"
+	methodInitialize    = "initialize"
+	methodToolsList     = "tools/list"
+	methodToolsCall     = "tools/call"
+	methodResourcesList = "resources/list"
+	methodResourcesRead = "resources/read"
 
 	notificationInitialized = "notifications/initialized"
 	notificationCancelled   = "notifications/cancelled"

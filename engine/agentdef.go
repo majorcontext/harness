@@ -102,6 +102,7 @@ var knownToolNames = map[string]bool{
 	"session_info": true, "glob": true, "grep": true, "ls": true,
 	"process": true, "goal": true, "model": true, "mcp": true,
 	"read_tool_result": true, "task": true,
+	mcpListResourcesToolName: true, mcpReadResourceToolName: true,
 }
 
 // ResolveAgentDefs returns every agent type available to a session: the
