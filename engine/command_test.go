@@ -324,6 +324,57 @@ func TestRecordCommandTerminalKeepsCreatedAtAndAnchor(t *testing.T) {
 	}
 }
 
+// TestRecordCommandTerminalInheritsClientRef: a terminal CommandRecord built
+// without ClientRef set (exactly how server.runCommand builds its own,
+// never reading it back from Commands()) must still carry the accepted
+// record's ClientRef, on the emitted event and after LoadSession. Failure:
+// the Boxes console loses its own correlation id the moment a dispatched
+// command finishes, and can no longer match the terminal record to the
+// prompt that caused it.
+func TestRecordCommandTerminalInheritsClientRef(t *testing.T) {
+	dir := t.TempDir()
+	var events []Event
+	s := NewSession(Config{
+		SessionDir: dir,
+		OnEvent:    func(ev Event) { events = append(events, ev) },
+	})
+
+	id := NewCommandID()
+	accepted := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+		ClientRef: "pd_01abc",
+	}
+	if err := s.RecordCommand(accepted); err != nil {
+		t.Fatalf("RecordCommand accepted: %v", err)
+	}
+
+	// A fresh CommandRecord for the SAME id with ClientRef left at its zero
+	// value, exactly as server.runCommand builds its terminal record.
+	succeeded := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded, Text: "/compact succeeded",
+	}
+	if err := s.RecordCommand(succeeded); err != nil {
+		t.Fatalf("RecordCommand succeeded: %v", err)
+	}
+	if len(events) != 2 || events[1].Command == nil {
+		t.Fatalf("events after succeeded = %+v, want two command events", events)
+	}
+	if got := events[1].Command.ClientRef; got != "pd_01abc" {
+		t.Errorf("terminal event ClientRef = %q, want pd_01abc", got)
+	}
+
+	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	cmds := loaded.Commands()
+	if len(cmds) != 1 || cmds[0].ClientRef != "pd_01abc" {
+		t.Fatalf("after LoadSession: Commands() = %+v, want one record with ClientRef pd_01abc", cmds)
+	}
+}
+
 // TestCommandAnchorSkipsSyntheticOrphan: AfterMessageID names the last
 // history message that is not a synthetic orphan tool result.
 func TestCommandAnchorSkipsSyntheticOrphan(t *testing.T) {

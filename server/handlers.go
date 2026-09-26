@@ -1822,6 +1822,11 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// dispatches at once or sits in the queue first — see runPrompt's
 		// own doc comment on prov.
 		promptSourceInput
+		// ClientRef is an OPTIONAL caller-minted correlation id — see
+		// sanitizeClientRef and resolvePromptCommand's own doc comment. Kept
+		// only on a resolved command's CommandRecord; dropped for an
+		// ordinary prompt.
+		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it: blob data arrives as base64 and
 	// encoding/json allocates the decoded []byte during Unmarshal, so the
@@ -1861,7 +1866,12 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
-	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, prov, 0)
+	clientRef, err := sanitizeClientRef(body.ClientRef)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, prov, 0, clientRef)
 	if handled {
 		return
 	}
@@ -2220,6 +2230,9 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		// promptSourceInput: OPTIONAL provenance (source/source_id/
 		// source_label) — see parsePromptProvenance.
 		promptSourceInput
+		// ClientRef mirrors handlePrompt's own body.ClientRef — see
+		// sanitizeClientRef and resolvePromptCommand's own doc comment.
+		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it, for the same reason handlePrompt
 	// does (see promptRequestMaxBytes's doc comment): blob data arrives as
@@ -2266,7 +2279,12 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, code, err.Error())
 		return
 	}
-	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq)
+	clientRef, err := sanitizeClientRef(body.ClientRef)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq, clientRef)
 	if handled {
 		return
 	}

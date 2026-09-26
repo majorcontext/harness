@@ -519,8 +519,9 @@ record wins, so the final state is still correct.
 Every resolution that reaches a `CommandRecord` at all journals
 `message.CommandRecord`, in the same shape whichever route resolved it:
 `id`, `line`, `name`, `source`, `status`, `created_at`, and `updated_at`
-are always present; `args`, `source_id`, `source_label`, `text`, `result`,
-`result_truncated`, and `after_message_id` are present only when non-empty.
+are always present; `args`, `source_id`, `source_label`, `client_ref`,
+`text`, `result`, `result_truncated`, and `after_message_id` are present
+only when non-empty.
 `result` is the dispatched route's own 2xx
 JSON body, capped at 16 KiB; over the cap, `result` is omitted and
 `result_truncated` is `true` instead. `after_message_id` anchors the
@@ -542,6 +543,15 @@ and unknown name produce none — see "Resolving the line" above.
 `seq` covers a command exactly like an ordinary prompt: a duplicate
 `seq` answers a clean `{"status": "duplicate", "watermark": N}`, and
 nothing runs a second time.
+
+`client_ref` is an optional caller-minted correlation id, up to 128
+printable ASCII bytes, the same rule `source_id` uses. It exists so a
+caller that dispatches through `/enqueue` and never sees the reply —
+the Boxes console's own case — can still find the command record its
+prompt produced. Set it on the request and every record of the same
+command, accepted through terminal, carries it back. An ordinary
+prompt drops the value instead: `client_ref` is never journaled onto
+a message, a queued prompt, or `GET /session/{id}/journal`.
 
 ### The carriers
 

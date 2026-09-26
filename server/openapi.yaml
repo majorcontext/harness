@@ -231,6 +231,13 @@ components:
           description: >
             Free-form, human-readable label for the same instance.
             Omitted, display only.
+        client_ref:
+          type: string
+          description: >
+            The caller's own optional correlation id (see PromptRequest's
+            `client_ref`), carried from the resolving request onto every
+            record of this command. Omitted when the caller sent none. Set
+            only on a command; an ordinary prompt drops the value it sent.
         status:
           $ref: "#/components/schemas/CommandStatus"
         text:
@@ -274,6 +281,11 @@ components:
           description: The same id the full CommandRecord for this command carries.
         status:
           $ref: "#/components/schemas/CommandStatus"
+        client_ref:
+          type: string
+          description: >
+            Echoes the request's own `client_ref`, when it sent one — see
+            CommandRecord's `client_ref`.
 
     CommandServeSupportEntry:
       type: object
@@ -1386,6 +1398,13 @@ components:
             Optional, display only — see PromptRequest's `source_label`
             description for the silent truncation and control-character
             stripping an oversize or dirty value gets.
+        client_ref:
+          type: string
+          maxLength: 128
+          description: >
+            Optional caller-minted correlation id — see PromptRequest's
+            `client_ref` description. Kept only on a resolved command's
+            own CommandRecord; dropped for an ordinary message.
 
     SendResponse:
       type: object
@@ -1521,6 +1540,20 @@ components:
             stripped — the durably journaled value can therefore differ
             from what the caller sent. Invalid UTF-8 is rejected with 400,
             not repaired.
+        client_ref:
+          type: string
+          maxLength: 128
+          description: >
+            Optional caller-minted correlation id (e.g. the Boxes console's
+            own prompt id). Must be printable ASCII (0x20-0x7E), same rule
+            as `source_id`; an oversize or non-printable value is rejected
+            with 400, not repaired. Kept only when this text resolves to a
+            TYPED slash command, carried onto every record of that command
+            (CommandRecord's own `client_ref`) so a caller that never sees
+            the reply — because delivery went through `/enqueue` — can
+            still find its own command by this id. Dropped for an ordinary
+            prompt: never journaled onto the message, the queue entry, or
+            any other durable or event record.
 
     EnqueueRequest:
       type: object
@@ -1600,6 +1633,13 @@ components:
             Optional, display only — see PromptRequest's `source_label`
             description for the silent truncation and control-character
             stripping an oversize or dirty value gets.
+        client_ref:
+          type: string
+          maxLength: 128
+          description: >
+            Optional caller-minted correlation id — see PromptRequest's
+            `client_ref` description. Kept only on a resolved command's
+            own CommandRecord; dropped for an ordinary prompt.
 
     EnqueueResponse:
       type: object

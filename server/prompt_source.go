@@ -24,24 +24,46 @@ import (
 const (
 	sourceIDMaxBytes    = 128
 	sourceLabelMaxBytes = 256
+	// clientRefMaxBytes bounds client_ref, the Boxes console's own prompt
+	// correlation id — see promptSourceInput's doc comment for why
+	// source_id shares the same shape and rule.
+	clientRefMaxBytes = 128
 )
 
-// sanitizeSourceID rejects in when it exceeds sourceIDMaxBytes or contains
-// a byte outside printable ASCII (0x20-0x7E) — unlike sourceLabel below,
-// an identifier is silently truncated or stripped at the caller's own
-// peril (a truncated or byte-mangled id looks up nothing, or the wrong
-// thing, later), so this REJECTS a malformed one rather than repairing it.
-// Empty is always valid (SourceID is optional).
-func sanitizeSourceID(in string) (string, error) {
-	if len(in) > sourceIDMaxBytes {
-		return "", fmt.Errorf("source_id exceeds %d bytes", sourceIDMaxBytes)
+// sanitizeASCIIID rejects in when it exceeds maxBytes or contains a byte
+// outside printable ASCII (0x20-0x7E), naming field in the error — the
+// shared rule sanitizeSourceID and sanitizeClientRef both apply to their
+// own caller-supplied identifier. An identifier is rejected outright
+// rather than truncated or stripped (unlike sourceLabel below): a
+// truncated or byte-mangled id looks up nothing, or the wrong thing,
+// later. Empty always passes (every caller of this treats its field as
+// optional).
+func sanitizeASCIIID(field, in string, maxBytes int) (string, error) {
+	if len(in) > maxBytes {
+		return "", fmt.Errorf("%s exceeds %d bytes", field, maxBytes)
 	}
 	for i := 0; i < len(in); i++ {
 		if c := in[i]; c < 0x20 || c > 0x7e {
-			return "", fmt.Errorf("source_id must be printable ASCII")
+			return "", fmt.Errorf("%s must be printable ASCII", field)
 		}
 	}
 	return in, nil
+}
+
+// sanitizeSourceID applies sanitizeASCIIID's rule to source_id.
+func sanitizeSourceID(in string) (string, error) {
+	return sanitizeASCIIID("source_id", in, sourceIDMaxBytes)
+}
+
+// sanitizeClientRef applies sanitizeASCIIID's rule to client_ref, the
+// optional caller-minted correlation id every prompt-landing route
+// (prompt_async, enqueue, send) accepts alongside promptSourceInput. Unlike
+// source_id/source_label, client_ref is never itself part of
+// promptSourceInput or engine.PromptProvenance: it rides through
+// resolvePromptCommand as its own value and is kept only on a resolved
+// command's own CommandRecord — see resolvePromptCommand's doc comment.
+func sanitizeClientRef(in string) (string, error) {
+	return sanitizeASCIIID("client_ref", in, clientRefMaxBytes)
 }
 
 // sanitizeSourceLabel bounds and cleans in for durable storage and

@@ -154,8 +154,9 @@ const (
 // route's response carries when the request resolved to a command instead
 // of an ordinary prompt.
 type commandReceiptJSON struct {
-	ID     string                `json:"id"`
-	Status message.CommandStatus `json:"status"`
+	ID        string                `json:"id"`
+	Status    message.CommandStatus `json:"status"`
+	ClientRef string                `json:"client_ref,omitempty"`
 }
 
 // resolvePromptCommand is the single entry point every prompt-landing
@@ -170,11 +171,16 @@ type commandReceiptJSON struct {
 // the run token can declare `typed`. The check only keeps an untagged
 // caller's `/foo` text a prompt.
 //
+// clientRef is the caller's OPTIONAL client_ref (already validated by
+// sanitizeClientRef), kept off promptSourceInput/engine.PromptProvenance
+// deliberately: it is set on a resolved command's CommandRecord only, and
+// dropped for an ordinary prompt.
+//
 // reports whether text was a command and was handled (response already
 // written). When handled is false, the caller sends promptText, which is
 // res.Text for an escaped "//x" and text otherwise.
 func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, id, text string,
-	blobs []*message.Blob, prov engine.PromptProvenance, seq int64) (promptText string, handled bool) {
+	blobs []*message.Blob, prov engine.PromptProvenance, seq int64, clientRef string) (promptText string, handled bool) {
 	if prov.Source.Normalized() != message.PromptSourceTyped {
 		return text, false
 	}
@@ -197,6 +203,7 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 				Source:      prov.Source,
 				SourceID:    prov.SourceID,
 				SourceLabel: prov.SourceLabel,
+				ClientRef:   clientRef,
 				Status:      message.CommandFailed,
 				Text:        err.Error(),
 			}
@@ -215,6 +222,7 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 		Source:      prov.Source,
 		SourceID:    prov.SourceID,
 		SourceLabel: prov.SourceLabel,
+		ClientRef:   clientRef,
 	}
 	if len(blobs) > 0 {
 		rec.Status = message.CommandFailed
@@ -306,7 +314,7 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		return true
 	}
 
-	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status}
+	receipt := &commandReceiptJSON{ID: rec.ID, Status: rec.Status, ClientRef: rec.ClientRef}
 	switch route {
 	case promptRouteAsync:
 		writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "command", Command: receipt})

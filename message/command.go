@@ -23,13 +23,19 @@ func (s CommandStatus) Terminal() bool { return s != "" && s != CommandAccepted 
 // CommandRecord is a slash command a person typed and its outcome. It is
 // deliberately not a Message and not a Part: no transcoder can receive it.
 type CommandRecord struct {
-	ID              string          `json:"id"`
-	Line            string          `json:"line"`
-	Name            string          `json:"name"`
-	Args            map[string]any  `json:"args,omitempty"`
-	Source          PromptSource    `json:"source"`
-	SourceID        string          `json:"source_id,omitempty"`
-	SourceLabel     string          `json:"source_label,omitempty"`
+	ID          string         `json:"id"`
+	Line        string         `json:"line"`
+	Name        string         `json:"name"`
+	Args        map[string]any `json:"args,omitempty"`
+	Source      PromptSource   `json:"source"`
+	SourceID    string         `json:"source_id,omitempty"`
+	SourceLabel string         `json:"source_label,omitempty"`
+	// ClientRef is an OPTIONAL caller-minted correlation id (the Boxes
+	// console's own prompt id) carried verbatim from the resolving
+	// request onto every record of this command — see
+	// server.resolvePromptCommand's doc comment. Never set for an
+	// ordinary prompt: it exists only on a CommandRecord.
+	ClientRef       string          `json:"client_ref,omitempty"`
 	Status          CommandStatus   `json:"status"`
 	Text            string          `json:"text,omitempty"`
 	Result          json.RawMessage `json:"result,omitempty"`
