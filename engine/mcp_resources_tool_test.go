@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -113,33 +114,42 @@ func TestMCPListResourcesUnfilteredToleratesOneServerFailing(t *testing.T) {
 // TestMCPReadResourceContents: text contents come back verbatim; a blob
 // becomes a short mimeType/size placeholder, never the raw base64 payload.
 func TestMCPReadResourceContents(t *testing.T) {
-	const blobB64 = "aGVsbG8td29ybGQ=" // "hello-world", 11 bytes
-	srv := &fakeMCPHTTPServer{
-		resourcesCapability: true,
-		resourceContents: map[string][]map[string]any{
-			"skill://index.json": {textResourceContents("skill://index.json", "application/json", `{"skills":["a"]}`)},
-			"skill://logo.png":   {blobResourceContents("skill://logo.png", "image/png", blobB64)},
-		},
-	}
-	s := newResourceSession(t, "figma", srv)
+	largeB64 := strings.Repeat("A", 4000) // valid, no padding: 3000 decoded bytes
+	const blobB64 = "aGVsbG8td29ybGQ="    // "hello-world", 11 bytes
 
-	text, err := s.RunTool(context.Background(), mcpReadResourceToolName, json.RawMessage(`{"server":"figma","uri":"skill://index.json"}`))
-	if err != nil {
-		t.Fatalf("read_mcp_resource(text): %v", err)
+	cases := []struct {
+		name            string
+		contents        map[string]any
+		want            []string
+		wantNotContains string
+	}{
+		{"text", textResourceContents("skill://r", "application/json", `{"skills":["a"]}`), []string{`{"skills":["a"]}`}, ""},
+		{"blob", blobResourceContents("skill://r", "image/png", blobB64), []string{"image/png", "11 bytes"}, blobB64},
+		{"blob present but empty", blobResourceContents("skill://r", "image/png", ""), []string{"image/png", "0 bytes"}, ""},
+		{"large blob sized without decoding", blobResourceContents("skill://r", "application/pdf", largeB64), []string{"3000 bytes"}, largeB64},
+		{"malformed blob", blobResourceContents("skill://r", "image/png", "not-valid-base64!!"), []string{"malformed payload"}, ""},
 	}
-	if text.Text() != `{"skills":["a"]}` {
-		t.Errorf("output = %q", text.Text())
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := &fakeMCPHTTPServer{
+				resourcesCapability: true,
+				resourceContents:    map[string][]map[string]any{"skill://r": {tc.contents}},
+			}
+			s := newResourceSession(t, "figma", srv)
 
-	blob, err := s.RunTool(context.Background(), mcpReadResourceToolName, json.RawMessage(`{"server":"figma","uri":"skill://logo.png"}`))
-	if err != nil {
-		t.Fatalf("read_mcp_resource(blob): %v", err)
-	}
-	if strings.Contains(blob.Text(), blobB64) {
-		t.Fatalf("output = %q, leaked the raw base64 blob", blob.Text())
-	}
-	if !strings.Contains(blob.Text(), "image/png") || !strings.Contains(blob.Text(), "11 bytes") {
-		t.Errorf("output = %q, want a mimeType/size placeholder", blob.Text())
+			out, err := s.RunTool(context.Background(), mcpReadResourceToolName, json.RawMessage(`{"server":"figma","uri":"skill://r"}`))
+			if err != nil {
+				t.Fatalf("read_mcp_resource: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.Text(), want) {
+					t.Errorf("output = %q, want it to contain %q", out.Text(), want)
+				}
+			}
+			if tc.wantNotContains != "" && strings.Contains(out.Text(), tc.wantNotContains) {
+				t.Errorf("output = %q, leaked the raw base64 blob", out.Text())
+			}
+		})
 	}
 }
 
@@ -174,5 +184,39 @@ func TestMCPResourceToolsRestrictTools(t *testing.T) {
 	}
 	if _, err := s.RunTool(context.Background(), mcpListResourcesToolName, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("list_mcp_resources ran after restrictTools removed it, want an error")
+	}
+}
+
+// TestMCPBase64DecodedLenMatchesStdEncoding: mcpBase64DecodedLen's ok=false
+// cases must match base64.StdEncoding.DecodeString's own rejections exactly,
+// and its length must match len(decoded) whenever both accept the input.
+func TestMCPBase64DecodedLenMatchesStdEncoding(t *testing.T) {
+	cases := []struct {
+		name string
+		s    string
+	}{
+		{"empty", ""},
+		{"no padding", "aGVsbG8td29ybGQ="},
+		{"one pad", "aGVsbG8="},
+		{"two pad", "aA=="},
+		{"large", strings.Repeat("A", 4000)},
+		{"invalid chars", "not-valid-base64!!"},
+		{"length not multiple of 4", "A"},
+		{"length not multiple of 4 (3)", "AAA"},
+		{"padding mid-string", "AAAA="},
+		{"embedded pad char", "A=AA"},
+		{"all padding", "===="},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, decodeErr := base64.StdEncoding.DecodeString(tc.s)
+			n, ok := mcpBase64DecodedLen(tc.s)
+			if ok != (decodeErr == nil) {
+				t.Fatalf("mcpBase64DecodedLen(%q) ok = %v, want %v (DecodeString err = %v)", tc.s, ok, decodeErr == nil, decodeErr)
+			}
+			if ok && n != len(decoded) {
+				t.Errorf("mcpBase64DecodedLen(%q) = %d, want %d", tc.s, n, len(decoded))
+			}
+		})
 	}
 }

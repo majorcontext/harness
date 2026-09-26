@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/message"
@@ -181,21 +183,51 @@ func runMCPReadResourceTool(ctx context.Context, s *Session, raw json.RawMessage
 		switch {
 		case c.Text != "":
 			parts = append(parts, &message.Text{Text: c.Text})
-		case c.Blob != "":
+		case c.Blob != nil:
 			mime := c.MimeType
 			if mime == "" {
 				mime = "application/octet-stream"
 			}
-			data, ok := decodeMCPBase64(in.Server, in.URI, c.Blob)
+			n, ok := mcpBase64DecodedLen(*c.Blob)
 			if !ok {
+				slog.Warn("engine: mcp: malformed base64 content, dropping payload", "server", in.Server, "tool", mcpReadResourceToolName)
 				parts = append(parts, &message.Text{Text: fmt.Sprintf("[binary resource: %s, malformed payload, %s]", in.URI, mime)})
 				continue
 			}
-			parts = append(parts, &message.Text{Text: fmt.Sprintf("[binary resource: %s, %d bytes, %s]", in.URI, len(data), mime)})
+			parts = append(parts, &message.Text{Text: fmt.Sprintf("[binary resource: %s, %d bytes, %s]", in.URI, n, mime)})
 		}
 	}
 	if len(parts) == 0 {
 		parts = message.Parts{&message.Text{Text: ""}}
 	}
 	return parts, nil
+}
+
+// mcpBase64StdAlphabet is the standard base64 character set encoding/base64's
+// StdEncoding accepts, excluding the "=" padding character handled
+// separately below.
+const mcpBase64StdAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+// mcpBase64DecodedLen reports s's decoded byte length without allocating a
+// decode buffer for it — read_mcp_resource only needs a size to report, not
+// the bytes themselves, and an MCP resource's blob can be large enough that
+// decoding it just to call len() would be wasted work. ok is false for
+// anything base64.StdEncoding.DecodeString would also reject: a length not
+// a multiple of 4, more than two trailing "=" characters, or any character
+// outside the standard alphabet.
+func mcpBase64DecodedLen(s string) (n int, ok bool) {
+	l := len(s)
+	if l%4 != 0 {
+		return 0, false
+	}
+	pad := 0
+	for pad < l && pad < 2 && s[l-1-pad] == '=' {
+		pad++
+	}
+	for i := 0; i < l-pad; i++ {
+		if strings.IndexByte(mcpBase64StdAlphabet, s[i]) < 0 {
+			return 0, false
+		}
+	}
+	return l/4*3 - pad, true
 }

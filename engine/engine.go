@@ -3236,8 +3236,8 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 	if err != nil {
 		return nil, err
 	}
-	tools, mcpCatalog, mcpServers, hasResources := s.toolDefsWithCatalog(ctx)
-	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers, hasResources)
+	tools, mcpCatalog, mcpServers, resourceServers := s.toolDefsWithCatalog(ctx)
+	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers, resourceServers)
 
 	system := append([]string(nil), s.cfg.System...)
 	system = append(system, s.cfg.AppendSystemPrompt...)
@@ -3990,12 +3990,15 @@ func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
 }
 
 // toolDefsWithCatalog is toolDefs plus the stage-1 MCP catalog segment that
-// belongs in the same request's system prompt, and the resources-capability
-// gate the instructions segment must also use.
+// belongs in the same request's system prompt, and the resource-capable
+// server names the instructions segment must also fold into its own
+// server snapshot (see mcpInstructionsSegmentFrom) — a resources-only
+// server contributes no tool def, so plan.servers alone would never see
+// it.
 //
 // The catalog is "" whenever nothing is deferred, which includes every
 // session that did not opt into deferral at all.
-func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool, bool) {
+func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool, []string) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
 	for name, t := range s.tools {
 		// Presence here is decided below by live capability, not by
@@ -4012,8 +4015,11 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 	// AND, not independent per-tool checks: restrictTools may have removed
 	// one but not the other, and the instructions line below promises BOTH
 	// tools, so a session missing either must advertise neither.
-	hasResources := hasListTool && hasReadTool && len(mcpResourceCapableServers(ctx, s.cfg.MCP)) > 0
-	if hasResources {
+	resourceServers := mcpResourceCapableServers(ctx, s.cfg.MCP)
+	if !hasListTool || !hasReadTool {
+		resourceServers = nil
+	}
+	if len(resourceServers) > 0 {
 		defs = append(defs, listTool.Def, readTool.Def)
 	}
 
@@ -4028,7 +4034,7 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 			})
 		}
 	}
-	return defs, plan.catalog, plan.servers, hasResources
+	return defs, plan.catalog, plan.servers, resourceServers
 }
 
 // runToolCalls executes every tool call in an assistant message and returns

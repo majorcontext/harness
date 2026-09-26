@@ -408,6 +408,43 @@ func TestMCPToolsAndInstructionsLineAgreeOnFirstTurn(t *testing.T) {
 	}
 }
 
+// TestMCPInstructionsIncludesResourcesOnlyServerText: a resources-only
+// server (no tool defs) that set its own initialize instructions must still
+// have that text rendered in the <mcp_instructions> block, not silently
+// dropped just because it never appears in the tool-def server snapshot.
+func TestMCPInstructionsIncludesResourcesOnlyServerText(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
+	}}
+	reg := &fakeInstructionsRegistry{
+		resourceServers: []string{"figma"},
+		entries: []MCPServerInstructions{
+			{Name: "figma", Text: "Load a skill before calling use_figma."},
+		},
+	}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: t.TempDir(),
+		MCP:        reg,
+	})
+
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	req := prov.requests[0]
+
+	var found bool
+	for _, seg := range req.System {
+		if strings.Contains(seg, "Load a skill before calling use_figma.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("system array missing the resources-only server's own instructions: %v", req.System)
+	}
+}
+
 // TestMCPResourcesLineAbsentWhenToolsRestricted: a session restricted away
 // from the resource tools (e.g. an agent definition's tools: list omitting
 // them) must not carry the resources line either, even though its

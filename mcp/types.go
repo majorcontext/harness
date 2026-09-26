@@ -157,12 +157,14 @@ type readResourceParams struct {
 
 // ResourceContents is one item of a resources/read response: either Text
 // or Blob (base64) is populated, matching EmbeddedResource's convention for
-// the same fields.
+// the same fields. Blob is a pointer so a present-but-empty "blob":""
+// (a valid, if unusual, zero-length resource) is distinguishable from a
+// wholly absent field — a plain string would collapse both to "".
 type ResourceContents struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"` // base64
+	URI      string  `json:"uri"`
+	MimeType string  `json:"mimeType,omitempty"`
+	Text     string  `json:"text,omitempty"`
+	Blob     *string `json:"blob,omitempty"` // base64
 }
 
 // ReadResourceResult is the resources/read response payload.

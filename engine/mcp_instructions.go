@@ -286,20 +286,48 @@ func neutralizeMCPAttr(s string) string {
 // mcpStatusSegment still tells the model that server exists and is now
 // healthy. Revisit only with a cache-cost measurement in hand.
 func (s *Session) mcpInstructionsSegment() string {
-	return s.mcpInstructionsSegmentFrom(s.liveMCPToolServers(), len(mcpResourceCapableServers(context.Background(), s.cfg.MCP)) > 0)
+	_, hasListTool := s.tools[mcpListResourcesToolName]
+	_, hasReadTool := s.tools[mcpReadResourceToolName]
+	var resourceServers []string
+	if hasListTool && hasReadTool {
+		resourceServers = mcpResourceCapableServers(context.Background(), s.cfg.MCP)
+	}
+	return s.mcpInstructionsSegmentFrom(s.liveMCPToolServers(), resourceServers)
 }
 
 // mcpInstructionsSegmentFrom renders the frozen segment from the SAME tool
-// snapshot and resources-capability gate the request's plan already read,
-// so a retry committing between two registry reads cannot desynchronize
-// them.
-func (s *Session) mcpInstructionsSegmentFrom(servers map[string]bool, hasResources bool) string {
+// snapshot the request's plan already read, unioned with resourceServers —
+// every resource-capable server the resources gate is actually on for (see
+// toolDefsWithCatalog). A resources-only server contributes no tool def, so
+// it would never appear in servers on its own; without the union, its own
+// initialize instructions would be dropped even though it connected and the
+// resources line names it implicitly. Passing "" instead of a real snapshot
+// desynchronizes nothing here: both inputs are read from the same request's
+// single toolDefsWithCatalog call.
+func (s *Session) mcpInstructionsSegmentFrom(servers map[string]bool, resourceServers []string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mcpInstrLoaded {
 		return s.mcpInstrSeg
 	}
-	s.mcpInstrSeg = renderMCPInstructions(mcpRegistryFromServers(s.cfg.MCP, servers), hasResources)
+	merged := unionMCPServerNames(servers, resourceServers)
+	s.mcpInstrSeg = renderMCPInstructions(mcpRegistryFromServers(s.cfg.MCP, merged), len(resourceServers) > 0)
 	s.mcpInstrLoaded = true
 	return s.mcpInstrSeg
+}
+
+// unionMCPServerNames returns servers plus extra, as a fresh map — servers
+// itself (plan.servers) is never mutated, since other callers read it too.
+func unionMCPServerNames(servers map[string]bool, extra []string) map[string]bool {
+	if len(extra) == 0 {
+		return servers
+	}
+	merged := make(map[string]bool, len(servers)+len(extra))
+	for name := range servers {
+		merged[name] = true
+	}
+	for _, name := range extra {
+		merged[name] = true
+	}
+	return merged
 }
