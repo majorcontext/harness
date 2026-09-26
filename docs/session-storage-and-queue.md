@@ -468,45 +468,26 @@ Volume v2 deployments.
 A resolved slash command (`docs/design/slash-commands.md`'s "Serve-mode
 resolution") is journaled beside history, never inside it:
 `Session.RecordCommand`/`RecordCommandDurable` persist a `recCommand`
-record and fold it into `Session.Commands()` by `id` — the same
-append-only, fold-by-`id` shape a status update reapplies over an
-earlier record for the same command, never a second row. A command's
-`after_message_id` anchors it to the last durable message at the moment
-of its FIRST record; a later status update (`accepted` ->
-`succeeded`/`failed`/...) keeps that same anchor and the same
-`created_at` — only `updated_at` and the terminal fields change.
-`GET /session/{id}/message`'s `MessagePage`/`Transcript` responses carry
-the folded records whose anchor falls inside the returned window
-(`commands`, `engine.CommandsInWindow`), and `GET /session/{id}/journal`
-exposes each record's `id`/`name`/`status` as metadata beside its own
-entry.
-
-A page read decodes a command record's own line, args, text, and result
-only for a command the requested window returns. It folds every other
-command record on the page's own scan path by a smaller head — id, anchor,
-`created_at`, and the durable enqueue seq — and never reads that larger
-payload at all. A command record OUTSIDE the window can therefore carry a
-malformed line, args, text, or result field and the page read still
-succeeds; only a malformed field on an IN-WINDOW record still fails the
-read. `LoadSession` still decodes every command record in full, so it still
-rejects such a journal on load, whether or not a page read ever asked for
-that record.
-
-`POST /session/{id}/enqueue`'s dispatched-command sibling,
-`Session.RecordCommandDurable`, shares `Session.enqueueSeq` — the SAME
-watermark `EnqueuePromptDurable` advances above — so a command and a
-prompt draw idempotency sequence numbers from one session-monotonic
-space: a duplicate `seq` for either kind is a clean no-op against the
-same high-water mark, and `GET /session/{id}/queue`'s watermark reports
-both.
-
-A resolved command never enters the prompt queue. `resolvePromptCommand`
-(`server/commands.go`) intercepts a TYPED line before `prompt_async`,
-`enqueue`, or `send` ever calls `EnqueuePrompt`/`EnqueuePromptDurable`: it
-records the `CommandRecord` and, for a dispatchable op, runs the
-command's own route in process — no `QueuedPrompt` is ever created, and a
-busy session that cannot run the command right now REFUSES it
-(`CommandRefused`) rather than queuing it for later.
+record and fold it into `Session.Commands()` by `id`, so a status update
+reapplies over the earlier record rather than adding a row.
+`after_message_id` anchors to the last durable message at the FIRST
+record and stays fixed through later updates. `GET /session/{id}/message`
+carries the folded records whose anchor falls inside the returned window
+(`commands`, `engine.CommandsInWindow`); `GET /session/{id}/journal`
+exposes only `id`/`name`/`status` as metadata. A page read decodes a
+record's line, args, text, and result only inside that window — every
+other record folds by a smaller head (id, anchor, `created_at`, seq) — so
+a malformed field OUTSIDE the window does not fail the read, though
+`LoadSession` still decodes every record in full and rejects it on load.
+`Session.RecordCommandDurable` shares `Session.enqueueSeq` with
+`EnqueuePromptDurable`, so a command and a prompt draw idempotency `seq`
+from one session-monotonic space, and `GET /session/{id}/queue`'s
+watermark reports both. A resolved command never enters that queue:
+`resolvePromptCommand` (`server/commands.go`) intercepts a TYPED line
+before `EnqueuePrompt`/`EnqueuePromptDurable` runs, records the
+`CommandRecord`, and, for a dispatchable op, runs the command's own
+route in process; a busy session REFUSES it (`CommandRefused`) rather
+than queuing it.
 
 ## Managed processes
 
