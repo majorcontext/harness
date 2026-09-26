@@ -47,18 +47,19 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
 
-// sessionSnapshotVersion is the snapshot format version. Recovery
-// DISCARDS — never migrates — a snapshot carrying any other value, so a
-// field added to the schema needs no migration path: bump this and every
-// stored snapshot falls back to a full replay on its next load and is
-// rewritten from the next trigger.
-const sessionSnapshotVersion = 3
+// sessionSnapshotVersion is the snapshot format version, derived from
+// sessionSnapshot's own shape. Recovery DISCARDS — never migrates — a snapshot
+// carrying any other value, so a field added to the schema changes this by
+// itself and every stored snapshot falls back to a full replay on its next
+// load.
+var sessionSnapshotVersion = schemaVersion(reflect.TypeFor[sessionSnapshot]())
 
 // sessionSnapshotSuffix names a session's snapshot file. Like the metadata
 // index's own suffix it deliberately does not end in ".jsonl", so no

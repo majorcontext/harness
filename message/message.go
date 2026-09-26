@@ -834,6 +834,32 @@ func marshalPart(p Part) ([]byte, error) {
 	}
 }
 
+// partVariants pairs each wire discriminator with a zero-value constructor.
+// unmarshalPart and PartVariants both walk it, so wire dispatch and the
+// enumeration of Part's implementors cannot drift apart.
+var partVariants = []struct {
+	partType PartType
+	new      func() Part
+}{
+	{PartText, func() Part { return new(Text) }},
+	{PartBlob, func() Part { return new(Blob) }},
+	{PartToolCall, func() Part { return new(ToolCall) }},
+	{PartToolResult, func() Part { return new(ToolResult) }},
+	{PartReasoning, func() Part { return new(Reasoning) }},
+	{PartEngineContext, func() Part { return new(EngineContext) }},
+}
+
+// PartVariants returns a zero value of each concrete Part implementation.
+// Reflection cannot discover these on its own, so a schema digest calls
+// this to fold each variant's shape into a Part-typed field.
+func PartVariants() []Part {
+	out := make([]Part, len(partVariants))
+	for i, v := range partVariants {
+		out[i] = v.new()
+	}
+	return out
+}
+
 func unmarshalPart(raw json.RawMessage) (Part, error) {
 	var head struct {
 		Type PartType `json:"type"`
@@ -841,27 +867,17 @@ func unmarshalPart(raw json.RawMessage) (Part, error) {
 	if err := json.Unmarshal(raw, &head); err != nil {
 		return nil, err
 	}
-	var p Part
-	switch head.Type {
-	case PartText:
-		p = new(Text)
-	case PartBlob:
-		p = new(Blob)
-	case PartToolCall:
-		p = new(ToolCall)
-	case PartToolResult:
-		p = new(ToolResult)
-	case PartReasoning:
-		p = new(Reasoning)
-	case PartEngineContext:
-		p = new(EngineContext)
-	default:
-		return nil, fmt.Errorf("message: unknown part type %q", head.Type)
+	for _, v := range partVariants {
+		if v.partType != head.Type {
+			continue
+		}
+		p := v.new()
+		if err := json.Unmarshal(raw, p); err != nil {
+			return nil, err
+		}
+		return p, nil
 	}
-	if err := json.Unmarshal(raw, p); err != nil {
-		return nil, err
-	}
-	return p, nil
+	return nil, fmt.Errorf("message: unknown part type %q", head.Type)
 }
 
 // SyntheticOrphanResultText is the Content text of a tool_result

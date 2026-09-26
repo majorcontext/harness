@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -22,11 +23,11 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// sessionIndexVersion is the sidecar format version. ReadSessionIndex
-// refolds — never guesses — when a stored index carries any other value, so
-// a field added here needs no migration: bump this and every stale sidecar
-// is rebuilt on its next read.
-const sessionIndexVersion = 3
+// sessionIndexVersion is the sidecar format version, derived from
+// SessionIndex's own shape. ReadSessionIndex refolds — never guesses — when a
+// stored index carries any other value, so a field added here changes this by
+// itself and every stale sidecar is rebuilt on its next read.
+var sessionIndexVersion = schemaVersion(reflect.TypeFor[SessionIndex]())
 
 // sessionIndexSuffix is appended to a session id to name its sidecar. It
 // deliberately does NOT end in ".jsonl", so ListSessionIndexes' own scan for
