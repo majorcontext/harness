@@ -580,6 +580,9 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 
 	case "message_stop":
+		if s.msgCreatedAt.IsZero() {
+			s.msgCreatedAt = time.Now().UTC()
+		}
 		msg := s.assemble()
 		s.queue = append(s.queue, provider.Event{
 			Type:       provider.EventDone,

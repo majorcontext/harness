@@ -4057,7 +4057,10 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 }
 
 // runToolCall runs one call end to end: the before-hook chain, the tool
-// itself, the after-hook chain, and the four events that bracket them.
+// itself, the after-hook chain, and the four events that bracket them. id
+// and createdAt are the owning assistant message's own fields (empty and
+// zero from RunTool, which has none), and ride on EventToolStart only, per
+// Event.ID's doc comment.
 //
 // It recovers a PANIC from the tool or from either hook chain. The recover
 // lives here, rather than only in toolexec.go's runOneGuarded, because
@@ -4087,8 +4090,8 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 // This path is new with concurrent execution. Before runOneGuarded a tool
 // panic killed the process, so "the session survives a panic" never
 // existed and neither did the unbalanced pair.
-func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
-	s.emit(Event{Type: EventToolStart, ToolCall: tc})
+func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall, id string, createdAt time.Time) (out message.Parts, isErr bool) {
+	s.emit(Event{Type: EventToolStart, ToolCall: tc, ID: id, CreatedAt: createdAt})
 
 	execEndOwed, toolEndEmitted := false, false
 	defer func() {
@@ -4258,7 +4261,7 @@ func (s *Session) RunTool(ctx context.Context, name string, args json.RawMessage
 		Name:      name,
 		Arguments: args,
 	}
-	out, isErr := s.runToolCall(ctx, tc)
+	out, isErr := s.runToolCall(ctx, tc, "", time.Time{})
 	if isErr {
 		return nil, fmt.Errorf("engine: tool %q: %s", name, out.Text())
 	}

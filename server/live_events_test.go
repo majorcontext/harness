@@ -145,6 +145,57 @@ func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
 	}
 }
 
+// TestLiveEventsToolStartCarriesOwningMessageID proves a native turn's
+// tool.start carries the id and created_at of the assistant message that
+// turn produces, exactly like a text/reasoning delta already does (see
+// TestLiveEventsCarryAssistantMessageID). Before this test, runToolCall
+// (engine.go) emitted EventToolStart with only a ToolCall, so a native
+// tool.start reached the wire with a zero id and created_at even though the
+// EventMessage moments earlier, for the same turn, carried both.
+func TestLiveEventsToolStartCarriesOwningMessageID(t *testing.T) {
+	createdAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		{
+			{
+				Type: provider.EventDone,
+				Message: &message.Message{
+					ID:        "resp_tool_msgid",
+					Role:      message.RoleAssistant,
+					CreatedAt: createdAt,
+					Parts:     message.Parts{&message.ToolCall{CallID: "call_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}},
+				},
+				StopReason: provider.StopToolUse,
+			},
+		},
+		{
+			{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_tool_final", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}},
+		},
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "go"}}})
+
+	var turnMsg, toolStart *Event
+	for _, ev := range sse.collectUntilIdle(t) {
+		switch {
+		case ev.Type == engine.EventMessage && ev.Message != nil && ev.Message.Role == message.RoleAssistant && turnMsg == nil:
+			turnMsg = &ev
+		case ev.Type == engine.EventToolStart && toolStart == nil:
+			toolStart = &ev
+		}
+	}
+	if turnMsg == nil || toolStart == nil {
+		t.Fatalf("turnMsg=%+v toolStart=%+v, want both", turnMsg, toolStart)
+	}
+	if toolStart.ID == "" || toolStart.ID != turnMsg.Message.ID {
+		t.Errorf("tool.start ID = %q, want %q (the owning assistant message's id)", toolStart.ID, turnMsg.Message.ID)
+	}
+	if toolStart.CreatedAt.IsZero() || !toolStart.CreatedAt.Equal(turnMsg.Message.CreatedAt) {
+		t.Errorf("tool.start CreatedAt = %v, want %v (the owning assistant message's created_at)", toolStart.CreatedAt, turnMsg.Message.CreatedAt)
+	}
+}
+
 // TestLiveEventTurnRestartForwarded proves Server.Publish forwards the engine
 // EventTurnRestart marker onto the live SSE stream. A base-loop retry
 // (engine/prompt_retry.go) emits it so a client drops the failed attempt's
