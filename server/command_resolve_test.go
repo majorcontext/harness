@@ -591,7 +591,7 @@ func TestStatusResultTruncatedOverCap(t *testing.T) {
 // written, proving the cap was applied only after the fact in commandOutcome
 // rather than in the writer itself.
 func TestCommandResponseWriterCapsBufferedBody(t *testing.T) {
-	cw := newCommandResponseWriter()
+	cw := newCommandResponseWriter(command.OpQueueList)
 	chunk := bytes.Repeat([]byte("a"), 4096)
 	total := 1 << 20 // 1 MiB, written in several calls
 	written := 0

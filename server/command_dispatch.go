@@ -74,15 +74,21 @@ func commandRouteBody(op command.Op, args map[string]any) []byte {
 // caller's full byte count with a nil error, matching io.Writer's contract,
 // so a handler that checks its own Write result behaves exactly as it does
 // against a real http.ResponseWriter.
+//
+// OpCompact is exempt from the cap: commandOutcome never journals its route
+// body verbatim, only a small object it derives from the parsed
+// compactResponseJSON (see compactCommandOutcome), so buffering the whole
+// body here — including an oversized *message.Message summary — costs
+// nothing durable and lets that derivation see every field it needs.
 type commandResponseWriter struct {
-	header     http.Header
-	code       int
-	body       bytes.Buffer
-	overflowed bool
+	header http.Header
+	op     command.Op
+	code   int
+	body   bytes.Buffer
 }
 
-func newCommandResponseWriter() *commandResponseWriter {
-	return &commandResponseWriter{header: make(http.Header)}
+func newCommandResponseWriter(op command.Op) *commandResponseWriter {
+	return &commandResponseWriter{header: make(http.Header), op: op}
 }
 
 func (w *commandResponseWriter) Header() http.Header { return w.header }
@@ -91,15 +97,16 @@ func (w *commandResponseWriter) Write(b []byte) (int, error) {
 	if w.code == 0 {
 		w.code = http.StatusOK
 	}
+	if w.op == command.OpCompact {
+		w.body.Write(b)
+		return len(b), nil
+	}
 	if room := commandResultCap + 1 - w.body.Len(); room > 0 {
 		keep := b
 		if len(keep) > room {
 			keep = keep[:room]
 		}
 		w.body.Write(keep)
-	}
-	if w.body.Len() > commandResultCap {
-		w.overflowed = true
 	}
 	return len(b), nil
 }
@@ -155,7 +162,7 @@ func (s *Server) runCommand(id string, sess *engine.Session, releaseSess func(),
 		s.commandDispatchRace() // test-only seam, see its own doc comment
 	}
 
-	cw := newCommandResponseWriter()
+	cw := newCommandResponseWriter(res.Spec.Op)
 	serveOpHandlers[res.Spec.Op](s, cw, req)
 
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining())
@@ -176,7 +183,8 @@ func (s *Server) recordCommandTerminal(sess *engine.Session, rec message.Command
 // commandResultCap bounds a dispatched command's Result field — the
 // route's own 2xx JSON body — at 16 KiB (see message.CommandRecord's own
 // doc comment). Over the cap, Result is omitted and ResultTruncated is true
-// instead of journaling an unbounded response body.
+// instead of journaling an unbounded response body. OpCompact does not use
+// this cap; see compactCommandOutcome.
 const commandResultCap = 16 << 10
 
 // commandOutcome maps one route call's HTTP result to a terminal
@@ -188,13 +196,7 @@ const commandResultCap = 16 << 10
 func commandOutcome(op command.Op, typed string, code int, body []byte, draining bool) (status message.CommandStatus, text string, result json.RawMessage, truncated bool) {
 	if code >= 200 && code < 300 {
 		if op == command.OpCompact {
-			var cr struct {
-				SkipReason string `json:"skip_reason"`
-			}
-			_ = json.Unmarshal(body, &cr)
-			if cr.SkipReason != "" {
-				return message.CommandFailed, "/compact did nothing: " + engine.CompactSkipMessage(cr.SkipReason), nil, false
-			}
+			return compactCommandOutcome(typed, body)
 		}
 		text = fmt.Sprintf("/%s succeeded", typed)
 		if len(body) > commandResultCap {
@@ -221,4 +223,57 @@ func commandOutcome(op command.Op, typed string, code int, body []byte, draining
 		text = http.StatusText(code)
 	}
 	return message.CommandFailed, text, nil, false
+}
+
+// compactResultJSON is OpCompact's own CommandRecord.Result shape — never
+// the route's full compactResponseJSON body, which duplicates the fold's
+// summary message already durable in history under SummaryID. Built from
+// the fully buffered (uncapped, see commandResponseWriter) route response,
+// so it never depends on commandResultCap and never truncates.
+type compactResultJSON struct {
+	TurnsFolded int    `json:"turns_folded"`
+	FirstID     string `json:"first_id"`
+	LastID      string `json:"last_id"`
+	SummaryID   string `json:"summary_id"`
+}
+
+// compactDelegatedResultJSON is OpCompact's Result shape on the Claude Code
+// delegated lane, where no native fold happened at all.
+type compactDelegatedResultJSON struct {
+	ClaudeCodeDelegated bool `json:"claude_code_delegated"`
+}
+
+// compactCommandOutcome maps a 2xx POST /session/{id}/compact body to a
+// terminal CommandRecord for OpCompact. See compactResultJSON's own doc
+// comment for why Result is this slim, derived object rather than the
+// route's own compactResponseJSON body.
+func compactCommandOutcome(typed string, body []byte) (message.CommandStatus, string, json.RawMessage, bool) {
+	var cr compactResponseJSON
+	_ = json.Unmarshal(body, &cr)
+	if cr.SkipReason != "" {
+		return message.CommandFailed, "/compact did nothing: " + engine.CompactSkipMessage(cr.SkipReason), nil, false
+	}
+	text := fmt.Sprintf("/%s succeeded", typed)
+	var slim any
+	if cr.ClaudeCodeDelegated {
+		slim = compactDelegatedResultJSON{ClaudeCodeDelegated: true}
+	} else {
+		summaryID := ""
+		if cr.Summary != nil {
+			summaryID = cr.Summary.ID
+		}
+		slim = compactResultJSON{
+			TurnsFolded: cr.TurnsFolded,
+			FirstID:     cr.FirstID,
+			LastID:      cr.LastID,
+			SummaryID:   summaryID,
+		}
+	}
+	result, err := json.Marshal(slim)
+	if err != nil {
+		// Unreachable: both slim shapes above are plain structs of strings
+		// and a bool.
+		return message.CommandSucceeded, text, nil, false
+	}
+	return message.CommandSucceeded, text, result, false
 }

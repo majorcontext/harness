@@ -250,10 +250,18 @@ components:
             The dispatched route's own 2xx JSON body, capped at 16 KiB —
             an object for most commands, an array for `/processes`.
             Omitted when the command never dispatched a route, or when
-            the body exceeded the cap — see `result_truncated`.
+            the body exceeded the cap — see `result_truncated`. `compact`
+            is the one exception: `result` is never the route's own body
+            (which repeats the fold's summary message, already durable in
+            history) and never depends on the cap. On a native fold it is
+            `{"turns_folded", "first_id", "last_id", "summary_id"}`; on the
+            Claude Code delegated lane it is
+            `{"claude_code_delegated": true}`.
         result_truncated:
           type: boolean
-          description: True when `result` was omitted for exceeding the 16 KiB cap.
+          description: >
+            True when `result` was omitted for exceeding the 16 KiB cap.
+            Always false for `compact`.
         after_message_id:
           type: string
           description: >

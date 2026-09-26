@@ -524,7 +524,13 @@ are always present; `args`, `source_id`, `source_label`, `client_ref`,
 only when non-empty.
 `result` is the dispatched route's own 2xx
 JSON body, capped at 16 KiB; over the cap, `result` is omitted and
-`result_truncated` is `true` instead. `after_message_id` anchors the
+`result_truncated` is `true` instead. `OpCompact` is the one exception:
+`result` is never the route's own body (which repeats the fold's summary
+message, already durable in history), and never depends on the cap. On a
+native fold, `result` is `{"turns_folded", "first_id", "last_id",
+"summary_id"}`, where `summary_id` is the summary message's own ID. On the
+Claude Code delegated lane, `result` is `{"claude_code_delegated": true}`.
+`after_message_id` anchors the
 command to the last durable message at the moment of its first record —
 empty means "before every message" — and a later compaction re-anchors
 it to the fold's own summary id, so the anchor survives however many
