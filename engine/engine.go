@@ -2853,8 +2853,8 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 		}
 		return res.Summary, nil
 	}
-	if s.claudeCodeDelegated() {
-		return s.dispatchClaudeCodeTurn(ctx, text, origin, id, prov, operatorBatch, blobs...)
+	if backend, ok := s.delegatedBackend(); ok {
+		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -2923,10 +2923,24 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	return s.runAgenticLoop(ctx)
 }
 
-// dispatchClaudeCodeTurn appends text and runs it through the Claude Code
-// CLI. RunCompactCommand calls this directly rather than promptWithOrigin,
-// which would recheck isExplicitCompactCommand and recurse.
-func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
+// delegatedBackend resolves the DelegatedBackend for s's CURRENT model, if
+// any is registered. Every internal dispatch site calls this exactly once
+// and carries the result forward, rather than each re-resolving s.Model()
+// on its own: SetModel is allowed mid-turn, so a second, later lookup could
+// disagree with the first and abort a turn a concurrent switch already
+// committed to running.
+func (s *Session) delegatedBackend() (DelegatedBackend, bool) {
+	b, err := delegatedBackends.For(s.Model())
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// dispatchClaudeCodeTurn appends text and runs it through backend.
+// RunCompactCommand calls this directly rather than promptWithOrigin, which
+// would recheck isExplicitCompactCommand and recurse.
+func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
 		Role:          message.RoleUser,
@@ -2939,17 +2953,17 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origi
 		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
 	}
 	s.append(msg)
-	return s.runDelegatedTurn(ctx)
+	return s.runDelegatedTurn(ctx, backend)
 }
 
-// runDelegatedTurn runs one Claude Code CLI turn. Callers that already
-// checked claudeCodeDelegated call this directly, not runAgenticLoop, so a
-// model switch in between cannot send their text to the wrong lane.
-func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error) {
+// runDelegatedTurn runs one turn through backend, resolved by the caller's
+// own delegatedBackend() call — see that method's own doc comment for why
+// this never re-resolves the model itself.
+func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()
-	msg, err := s.runClaudeCodeTurn(ctx)
+	msg, err := backend.RunTurn(ctx, s)
 	if err != nil {
 		s.requeueTaskNotifications()
 		s.emitSessionError(err)
@@ -2979,8 +2993,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error
 // docs/design/goal-retry-directive-reuse.md.
 //
 // A session whose model names ClaudeCodeProviderFamily dispatches to
-// runClaudeCodeTurn (engine/claude_code_backend.go) instead, at the very
-// top, before any of the native-loop machinery below runs: maxTokensUsed
+// runDelegatedTurn (delegated_backend.go) instead, at the very top, before
+// any of the native-loop machinery below runs: maxTokensUsed
 // accounting, streamTurnWithRetry, runToolCalls, and
 // drainQueuedPromptsIntoHistory's tool-call-boundary drain are ALL native-
 // provider-call concepts that make no sense for a turn Claude Code itself
@@ -2993,8 +3007,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error
 // entirely, so THIS is the one choke point every route into the agentic
 // loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
-	if s.claudeCodeDelegated() {
-		return s.runDelegatedTurn(ctx)
+	if backend, ok := s.delegatedBackend(); ok {
+		return s.runDelegatedTurn(ctx, backend)
 	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
