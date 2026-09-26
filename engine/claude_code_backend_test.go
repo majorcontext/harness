@@ -1444,10 +1444,16 @@ func TestClaudeCodeReservedUpstreamIDStillMergesReasoning(t *testing.T) {
 	if strings.HasPrefix(asst.ID, "cmpsum") {
 		t.Errorf("hist[1].ID = %q, want a minted id, not the reserved upstream id verbatim", asst.ID)
 	}
+	if asst.CreatedAt.IsZero() {
+		t.Fatal("hist[1].CreatedAt is zero, want the merge's own latched time")
+	}
 	for _, ev := range events {
 		if ev.Type == EventReasoningDelta || ev.Type == EventTextDelta {
 			if ev.ID != asst.ID {
 				t.Errorf("delta event %+v carries ID %q, want %q (the merged message's own id)", ev, ev.ID, asst.ID)
+			}
+			if !ev.CreatedAt.Equal(asst.CreatedAt) {
+				t.Errorf("delta event %+v carries CreatedAt %v, want %v (the merged message's own time)", ev, ev.CreatedAt, asst.CreatedAt)
 			}
 		}
 	}

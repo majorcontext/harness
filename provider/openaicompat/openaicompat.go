@@ -262,8 +262,9 @@ type stream struct {
 	model  message.ModelRef
 	family string
 
-	id   string
-	text bytes.Buffer
+	id        string
+	createdAt time.Time
+	text      bytes.Buffer
 	// reasoningText accumulates reasoning deltas into a Reasoning part,
 	// from whichever encoding a chunk carries: reasoning_details
 	// (structured), reasoning_content, or reasoning. Compat endpoints carry
@@ -450,6 +451,9 @@ func (s *stream) handle(data []byte) error {
 	}
 	if chunk.ID != "" {
 		s.id = chunk.ID
+		if s.createdAt.IsZero() {
+			s.createdAt = time.Now().UTC()
+		}
 	}
 	if chunk.Usage != nil {
 		s.usage.InputTokens = chunk.Usage.PromptTokens
@@ -465,7 +469,7 @@ func (s *stream) handle(data []byte) error {
 	if choice.Delta.Content != "" {
 		s.haveText = true
 		s.text.WriteString(choice.Delta.Content)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content, ID: s.id})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content, ID: s.id, CreatedAt: s.createdAt})
 	}
 	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
 	// reasoning (OpenRouter), and Gemini via Bifrost delivers structured
@@ -479,7 +483,7 @@ func (s *stream) handle(data []byte) error {
 			hasDetailText = true
 			s.haveReasoning = true
 			s.reasoningText.WriteString(rd.Text)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text, ID: s.id})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text, ID: s.id, CreatedAt: s.createdAt})
 			detailJoined += rd.Text
 		}
 	}
@@ -494,11 +498,11 @@ func (s *stream) handle(data []byte) error {
 	} else if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id, CreatedAt: s.createdAt})
 	} else if rc := choice.Delta.Reasoning; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id, CreatedAt: s.createdAt})
 	}
 	for _, tc := range choice.Delta.ToolCalls {
 		if s.toolCalls == nil {
@@ -542,6 +546,9 @@ func (s *stream) emitToolCalls() {
 // finish_reason never surfaced, then queues the terminal EventDone.
 func (s *stream) finish() {
 	s.emitToolCalls()
+	if s.createdAt.IsZero() {
+		s.createdAt = time.Now().UTC()
+	}
 	stop := s.stopReason
 	if !s.haveFinish {
 		if len(s.toolOrder) > 0 {
@@ -567,7 +574,7 @@ func (s *stream) assemble() *message.Message {
 		ID:        s.id,
 		Role:      message.RoleAssistant,
 		Model:     s.model,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: s.createdAt,
 	}
 	if s.haveReasoning {
 		msg.Parts = append(msg.Parts, &message.Reasoning{Text: s.reasoningText.String()})

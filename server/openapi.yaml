@@ -1893,6 +1893,16 @@ components:
             provider's first frame reports it, so a client keying a
             streaming row on this value must fall back to a synthetic key
             until it turns non-empty. Absent on every other event type.
+        created_at:
+          type: string
+          format: date-time
+          description: >
+            The creation time this event's turn will eventually journal
+            (see Message.created_at) — latched at the same moment as `id`,
+            the same rule provider.Event.CreatedAt and engine.Event.CreatedAt
+            document. Present only on text.delta, reasoning.delta, and
+            tool.start, alongside `id`; empty until the provider's first
+            frame reports it. Absent on every other event type.
         text:
           type: string
           description: Delta text for text.delta / reasoning.delta.

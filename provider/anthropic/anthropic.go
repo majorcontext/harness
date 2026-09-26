@@ -339,10 +339,11 @@ type stream struct {
 	r     *bufio.Reader
 	model message.ModelRef
 
-	msgID      string
-	blocks     []*assembledBlock
-	usage      provider.Usage
-	stopReason provider.StopReason
+	msgID        string
+	msgCreatedAt time.Time
+	blocks       []*assembledBlock
+	usage        provider.Usage
+	stopReason   provider.StopReason
 
 	queue []provider.Event
 	done  bool
@@ -457,6 +458,7 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("anthropic: bad message_start: %w", err)
 		}
 		s.msgID = ev.Message.ID
+		s.msgCreatedAt = time.Now().UTC()
 		s.usage.InputTokens = ev.Message.Usage.InputTokens
 		s.usage.CacheWriteTokens = ev.Message.Usage.CacheCreationInputTokens
 		s.usage.CacheReadTokens = ev.Message.Usage.CacheReadInputTokens
@@ -513,12 +515,12 @@ func (s *stream) handle(name string, data []byte) error {
 		switch ev.Delta.Type {
 		case "text_delta":
 			b.text.WriteString(ev.Delta.Text)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta.Text, ID: s.msgID})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta.Text, ID: s.msgID, CreatedAt: s.msgCreatedAt})
 		case "input_json_delta":
 			b.inputJSON.WriteString(ev.Delta.PartialJSON)
 		case "thinking_delta":
 			b.text.WriteString(ev.Delta.Thinking)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta.Thinking, ID: s.msgID})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: ev.Delta.Thinking, ID: s.msgID, CreatedAt: s.msgCreatedAt})
 		case "signature_delta":
 			b.signature += ev.Delta.Signature
 		}
@@ -655,7 +657,7 @@ func (s *stream) assemble() *message.Message {
 		ID:        s.msgID,
 		Role:      message.RoleAssistant,
 		Model:     s.model,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: s.msgCreatedAt,
 	}
 	for _, b := range s.blocks {
 		switch b.kind {

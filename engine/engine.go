@@ -110,7 +110,11 @@ type Event struct {
 	// ID, on EventTextDelta/EventReasoningDelta/EventToolStart only, is the
 	// id the turn's own EventMessage will carry — see provider.Event.ID and
 	// claudeCodeUpstreamID. Empty until known.
-	ID         string              `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
+	// CreatedAt rides alongside ID, on the same three event types, and is
+	// the SAME time the turn's own EventMessage.Message.CreatedAt carries.
+	// Zero until known.
+	CreatedAt  time.Time           `json:"created_at,omitzero"`
 	Text       string              `json:"text,omitempty"`
 	Message    *message.Message    `json:"message,omitempty"`
 	ToolCall   *message.ToolCall   `json:"tool_call,omitempty"`
@@ -3396,8 +3400,10 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// provider.Event.ID's doc comment: stable for the whole stream once
 	// known), so an interrupted turn's assemblePartial below can reuse the
 	// same id its deltas already streamed under instead of minting a second
-	// one the deltas never carried.
+	// one the deltas never carried. streamCreatedAt is its CreatedAt
+	// counterpart, latched at the same instant.
 	var streamID string
+	var streamCreatedAt time.Time
 	// firstDeltaAt is set once, on the first non-EventActivity event this
 	// stream yields (see provider.EventActivity's doc comment: it carries no
 	// content, so it must not count as "first byte"). If EventDone is
@@ -3422,7 +3428,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			}
 			return nil, "", provider.Usage{}, &interruptedTurnError{
 				err:     err,
-				partial: s.assemblePartial(streamID, text.String(), toolCalls),
+				partial: s.assemblePartial(streamID, streamCreatedAt, text.String(), toolCalls),
 			}
 		}
 		watch.kick()
@@ -3435,13 +3441,15 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			text.WriteString(ev.Text)
 			if streamID == "" {
 				streamID = ev.ID
+				streamCreatedAt = ev.CreatedAt
 			}
-			s.emit(Event{Type: EventTextDelta, Text: ev.Text, ID: ev.ID})
+			s.emit(Event{Type: EventTextDelta, Text: ev.Text, ID: ev.ID, CreatedAt: ev.CreatedAt})
 		case provider.EventReasoningDelta:
 			if streamID == "" {
 				streamID = ev.ID
+				streamCreatedAt = ev.CreatedAt
 			}
-			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text, ID: ev.ID})
+			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text, ID: ev.ID, CreatedAt: ev.CreatedAt})
 		case provider.EventToolCall:
 			// A complete tool_use/tool_call block: the provider has
 			// finished emitting its arguments (see
@@ -3521,8 +3529,11 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 // every native adapter's own assemble (e.g. provider/anthropic/
 // anthropic.go's stream.assemble) applies to Message.ID, never
 // ResolveMessageID's reserved-prefix rewrite. Empty only mints, matching
-// streamTurn never latching an id when the provider sent none.
-func (s *Session) assemblePartial(id, text string, toolCalls []*message.ToolCall) *message.Message {
+// streamTurn never latching an id when the provider sent none. createdAt
+// is streamCreatedAt, id's own latched counterpart, and is used verbatim
+// for the same reason; a zero value leaves CreatedAt zero here too, and
+// appendWithUsage's own IsZero fallback stamps it on append.
+func (s *Session) assemblePartial(id string, createdAt time.Time, text string, toolCalls []*message.ToolCall) *message.Message {
 	if id == "" {
 		id = newID("msg")
 	}
@@ -3530,7 +3541,7 @@ func (s *Session) assemblePartial(id, text string, toolCalls []*message.ToolCall
 		ID:        id,
 		Role:      message.RoleAssistant,
 		Model:     s.Model(),
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: createdAt,
 	}
 	if text != "" {
 		msg.Parts = append(msg.Parts, &message.Text{Text: text})

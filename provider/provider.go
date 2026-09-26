@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -212,7 +213,13 @@ type Event struct {
 	// (e.g. Anthropic's message_start) and stamped on every delta from then
 	// on. It is the SAME id EventDone's own Message.ID carries. Empty
 	// before the id arrives.
-	ID         string
+	ID string
+	// CreatedAt is latched at the same moment as ID, on the stream's first
+	// frame, and stamped on every delta from then on. It is the SAME time
+	// EventDone's own Message.CreatedAt carries — never a fresh Now() at
+	// assemble time, which would disagree with what a delta already sent.
+	// Zero before it arrives, exactly when ID is empty.
+	CreatedAt  time.Time
 	Text       string
 	ToolCall   *message.ToolCall
 	Message    *message.Message

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -115,11 +116,13 @@ func TestLiveEventsTextReasoningToolStartToolEnd(t *testing.T) {
 	}
 }
 
-// TestLiveEventsCarryAssistantMessageID: a delta's id must equal the message's id.
+// TestLiveEventsCarryAssistantMessageID: a delta's id and created_at must
+// equal the message's own id and created_at.
 func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{{
-		{Type: provider.EventTextDelta, Text: "Hi", ID: "resp_msgid_1"},
-		{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_msgid_1", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hi"}}}},
+		{Type: provider.EventTextDelta, Text: "Hi", ID: "resp_msgid_1", CreatedAt: createdAt},
+		{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_msgid_1", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hi"}}, CreatedAt: createdAt}},
 	}}}
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
@@ -136,6 +139,9 @@ func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
 	}
 	if delta == nil || got == nil || got.Message == nil || delta.ID == "" || delta.ID != got.Message.ID {
 		t.Fatalf("delta=%+v msg=%+v, want matching non-empty ids", delta, got)
+	}
+	if delta.CreatedAt.IsZero() || !delta.CreatedAt.Equal(got.Message.CreatedAt) {
+		t.Fatalf("delta.CreatedAt=%v msg.CreatedAt=%v, want matching non-zero times", delta.CreatedAt, got.Message.CreatedAt)
 	}
 }
 
