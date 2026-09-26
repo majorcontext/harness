@@ -3531,11 +3531,16 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 // ResolveMessageID's reserved-prefix rewrite. Empty only mints, matching
 // streamTurn never latching an id when the provider sent none. createdAt
 // is streamCreatedAt, id's own latched counterpart, and is used verbatim
-// for the same reason; a zero value leaves CreatedAt zero here too, and
-// appendWithUsage's own IsZero fallback stamps it on append.
+// for the same reason; a zero value is stamped here so the appended
+// message and the emitted EventMessage carry the same time.
 func (s *Session) assemblePartial(id string, createdAt time.Time, text string, toolCalls []*message.ToolCall) *message.Message {
 	if id == "" {
 		id = newID("msg")
+	}
+	// Stamp here, not on append: append stamps its own copy, leaving the
+	// EventMessage pointer zero and the two representations disagreeing.
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
 	}
 	msg := &message.Message{
 		ID:        id,

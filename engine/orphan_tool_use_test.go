@@ -302,3 +302,38 @@ func TestStreamErrorWithoutToolCallIsUnaffected(t *testing.T) {
 		t.Fatalf("history = %+v, want only the user message (turn never entered history)", h)
 	}
 }
+
+// A native stream that truncates before EventDone leaves assemblePartial no
+// provider timestamp. Stamping on append alone would leave the emitted
+// EventMessage pointer zero while the journal held a real time.
+func TestInterruptedNativeTurnStampsPartialCreatedAt(t *testing.T) {
+	prov := &diesAfterToolCallProvider{
+		name: "test",
+		dying: []provider.Event{
+			{Type: provider.EventToolCall, ToolCall: toolCall("orphan3", "bash", `{"command":"echo hi"}`)},
+		},
+		dieErr: errTransportDropped,
+	}
+	var emitted []message.Message
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+		OnEvent: func(ev Event) {
+			if ev.Type == EventMessage && ev.Message != nil {
+				emitted = append(emitted, *ev.Message)
+			}
+		},
+	})
+	if _, err := s.Prompt(context.Background(), "go"); err == nil {
+		t.Fatal("Prompt = nil error, want the transport error surfaced")
+	}
+	h := s.History()
+	if len(h) < 2 || h[1].CreatedAt.IsZero() {
+		t.Fatalf("journaled partial CreatedAt = %v, want non-zero", h[1].CreatedAt)
+	}
+	for _, m := range emitted {
+		if m.Role == message.RoleAssistant && m.CreatedAt != h[1].CreatedAt {
+			t.Errorf("emitted CreatedAt = %v, want the journaled %v", m.CreatedAt, h[1].CreatedAt)
+		}
+	}
+}
