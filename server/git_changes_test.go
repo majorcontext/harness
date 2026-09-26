@@ -421,23 +421,53 @@ func TestHandleGitChangesGlobLikeFilenameTreatedLiterally(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesUntrackedEntries: missing dropped, nested repo and large file excluded, large file also reported.
+// TestHandleGitChangesUntrackedEntries: missing dropped; nested repo and
+// every over-cutoff file excluded from intent-to-add either way; an
+// over-cutoff file with no match in the base tree is reported large here,
+// while one that already exists in the base tree (by path) is excluded
+// but left unreported, for the normal diff to report on its own.
 func TestHandleGitChangesUntrackedEntries(t *testing.T) {
-	dir := t.TempDir()
+	dir := newGitRepo(t)
+	bigContent := make([]byte, untrackedLargeCutoff+1)
 	writeTestFile(t, filepath.Join(dir, "keep.txt"), "keep\n")
-	if err := os.WriteFile(filepath.Join(dir, "big.bin"), make([]byte, untrackedLargeCutoff+1), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), bigContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tracked_big.bin"), bigContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, dir, "add", "tracked_big.bin")
+	runTestGit(t, dir, "commit", "-q", "-m", "add tracked_big.bin")
+	runTestGit(t, dir, "rm", "-q", "--cached", "tracked_big.bin")
+
+	lsFilesOut := "keep.txt\x00big.bin\x00tracked_big.bin\x00vendor/dep/\x00gone.txt\x00"
+	excludeArgs, large, err := untrackedEntries(t.Context(), dir, "HEAD", lsFilesOut)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	lsFilesOut := "keep.txt\x00big.bin\x00vendor/dep/\x00gone.txt\x00"
-	excludeArgs, large := untrackedEntries(dir, lsFilesOut)
-
-	wantExclude := ":(exclude,literal)big.bin,:(exclude,literal)vendor/dep/"
+	wantExclude := ":(exclude,literal)vendor/dep/,:(exclude,literal)big.bin,:(exclude,literal)tracked_big.bin"
 	if strings.Join(excludeArgs, ",") != wantExclude {
 		t.Errorf("excludeArgs = %v, want %s", excludeArgs, wantExclude)
 	}
 	if len(large) != 1 || large[0].Path != "big.bin" || !large[0].Large {
 		t.Errorf("large = %+v, want one big.bin entry with Large=true", large)
+	}
+}
+
+// TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated: `git rm
+// --cached` of a tracked file over the large-file cutoff reports it once,
+// as deleted — not also as a synthetic large:true "added" entry.
+func TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated(t *testing.T) {
+	dir := newGitRepo(t)
+	writeTestFile(t, filepath.Join(dir, "big.bin"), strings.Repeat("x\n", 3*1024*1024/2))
+	runTestGit(t, dir, "add", "big.bin")
+	runTestGit(t, dir, "commit", "-q", "-m", "add big.bin")
+	runTestGit(t, dir, "rm", "-q", "--cached", "big.bin")
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "big.bin" || got.Files[0].Status != "deleted" || got.Files[0].Large {
+		t.Errorf("Files = %+v, want exactly one deleted big.bin (not also large:true added)", got.Files)
 	}
 }
 

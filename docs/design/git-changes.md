@@ -24,19 +24,22 @@ total subprocess count stays constant:
    partitions this list into an `add -N` exclude pathspec per nested
    repo, plus one per untracked file over the 2 MiB large-file cutoff
    (below) — everything else is left for `add -N` to add.
-3. Stage the private index copy with ONE `git add -N -- . <excludes...>`
-   (`-c core.splitIndex=false`, so it never writes a shared-index file
-   into the real repository). Passing pathspec `.` plus an exclude per
-   nested repo or large file — rather than one include pathspec per
-   ordinary file — is what keeps this a single subprocess regardless of
-   file count: git's own pathspec matching is quadratic in pathspec
-   count, so one include pathspec per file made this step alone take
-   24 s at 50,000 untracked files. Git itself then decides .gitignore and
-   repository boundaries for the files `.` does cover, rather than this
-   package re-deriving them file by file. A path that no longer exists by
-   the time `add -N` runs is simply outside what `.` matches; an exclude
-   naming a path that no longer exists is a no-op — neither is an error,
-   so this needs no retry.
+3. Stage the private index copy with ONE `git add -N` (`-c
+   core.splitIndex=false`, so it never writes a shared-index file into
+   the real repository), fed pathspec `.` plus an exclude per nested repo
+   or large file over `--pathspec-from-file`'s stdin, not argv — tens of
+   thousands of excludes would otherwise risk the OS argument-size limit.
+   Passing pathspec `.` plus an exclude per nested repo or large file —
+   rather than one include pathspec per ordinary file — is what keeps
+   this a single subprocess regardless of file count: git's own pathspec
+   matching is quadratic in pathspec count, so one include pathspec per
+   file made this step alone take 24 s at 50,000 untracked files. Git
+   itself then decides .gitignore and repository boundaries for the
+   files `.` does cover, rather than this package re-deriving them file
+   by file. A path that no longer exists by the time `add -N` runs is
+   simply outside what `.` matches; an exclude naming a path that no
+   longer exists is a no-op — neither is an error, so this needs no
+   retry.
 4. Run `--numstat`, `--name-status`, and the patch diff against that same
    copy. Each now reports tracked AND untracked files together — an
    intent-to-add entry has no blob content, so diffing it against the
@@ -55,6 +58,17 @@ is, and given its own `gitChangeFile` directly: status `"added"`,
 same shape `binary` already uses for a file whose content isn't
 diffable, here applied to a plain-text file whose size alone makes
 diffing it not worth the request's own cost.
+
+This large-file rule only applies to a path with no match in
+`baseTreeish`. One that already exists there under the same path (most
+commonly a large tracked file `git rm --cached`'d) is excluded from
+`add -N` exactly the same, but reported here NOT AT ALL: leaving it out
+of the temp index is exactly its real state, so the normal numstat/
+name-status diff already reports its true status (typically "deleted")
+on its own. Reporting it here too would duplicate that entry.
+`existsInBaseTree` answers this with one `git cat-file --batch-check`
+call for every candidate large file in the request, not one call per
+file.
 
 ## Bounded memory: reading the patch
 

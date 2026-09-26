@@ -403,12 +403,52 @@ func statusWord(letter string) string {
 	}
 }
 
+// existsInBaseTree reports, for each of paths, whether baseTreeish:path
+// resolves to a real object, via one `git cat-file --batch-check` call
+// (one stdin line per path, one stdout line per path, in the same order).
+func existsInBaseTree(ctx context.Context, dir, baseTreeish string, paths []string) (map[string]bool, error) {
+	exists := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return exists, nil
+	}
+	var stdin bytes.Buffer
+	for _, p := range paths {
+		stdin.WriteString(baseTreeish)
+		stdin.WriteByte(':')
+		stdin.WriteString(p)
+		stdin.WriteByte('\n')
+	}
+	cmd := gitCmd(ctx, dir, nil, "cat-file", "--batch-check")
+	cmd.Stdin = &stdin
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git cat-file --batch-check: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	lines := strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n")
+	for i, p := range paths {
+		exists[p] = i < len(lines) && !strings.HasSuffix(lines[i], " missing")
+	}
+	return exists, nil
+}
+
 // untrackedEntries partitions `ls-files -o --exclude-standard -z`'s raw
-// output (no --directory: a "/"-suffixed entry is exactly a nested repo).
-// A nested repo, and a file over untrackedLargeCutoff, both become an
-// `add -N` exclude pathspec; the large file also gets its own
-// gitChangeFile here, since excluding it also excludes it from the diff.
-func untrackedEntries(repoRoot, lsFilesOut string) (excludeArgs []string, large []gitChangeFile) {
+// output (no --directory: a "/"-suffixed entry is exactly a nested repo)
+// into `add -N` exclude pathspecs and the large files reported directly.
+// A nested repo, and any file over untrackedLargeCutoff, are always
+// excluded from intent-to-add — this package never reads a large file's
+// content. A large file with no match in baseTreeish gets its own
+// large:true gitChangeFile here, since excluding it also excludes it from
+// the diff that would otherwise report it. One already present in
+// baseTreeish under the same path (e.g. a large tracked file `git rm
+// --cached`'d) is left unreported here instead: leaving it out of the
+// temp index entirely is exactly its real state, so the normal numstat/
+// name-status diff already reports its true status (typically
+// "deleted") on its own — adding a synthetic entry for it here would
+// duplicate that.
+func untrackedEntries(ctx context.Context, repoRoot, baseTreeish, lsFilesOut string) (excludeArgs []string, large []gitChangeFile, err error) {
+	var bigPaths []string
 	for _, p := range splitNulZ(lsFilesOut) {
 		if strings.HasSuffix(p, "/") {
 			excludeArgs = append(excludeArgs, ":(exclude,literal)"+p)
@@ -419,21 +459,39 @@ func untrackedEntries(repoRoot, lsFilesOut string) (excludeArgs []string, large 
 			continue // vanished since ls-files ran
 		}
 		if info.Size() > untrackedLargeCutoff {
-			excludeArgs = append(excludeArgs, ":(exclude,literal)"+p)
+			bigPaths = append(bigPaths, p)
+		}
+	}
+	inBase, err := existsInBaseTree(ctx, repoRoot, baseTreeish, bigPaths)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, p := range bigPaths {
+		excludeArgs = append(excludeArgs, ":(exclude,literal)"+p)
+		if !inBase[p] {
 			large = append(large, gitChangeFile{Path: p, Status: "added", Large: true})
 		}
 	}
-	return excludeArgs, large
+	return excludeArgs, large, nil
 }
 
 // addUntrackedIntentToAdd stages every untracked path (other than one named
 // in excludeArgs) intent-to-add in one subprocess, regardless of file
 // count: pathspec "." lets git itself decide .gitignore and repository
 // boundaries. core.splitIndex=false keeps it from writing a shared-index
-// file into the real repository.
+// file into the real repository. Pathspecs go over stdin
+// (--pathspec-from-file), not argv, since tens of thousands of excludes
+// would otherwise risk the OS argument-size limit.
 func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string, excludeArgs []string) error {
-	args := append([]string{"-c", "core.splitIndex=false", "add", "-N", "--", "."}, excludeArgs...)
-	cmd := gitCmdMagicPathspecs(ctx, repoRoot, env, args...)
+	var stdin bytes.Buffer
+	stdin.WriteString(".\x00")
+	for _, a := range excludeArgs {
+		stdin.WriteString(a)
+		stdin.WriteByte(0)
+	}
+	cmd := gitCmdMagicPathspecs(ctx, repoRoot, env,
+		"-c", "core.splitIndex=false", "add", "-N", "--pathspec-from-file=-", "--pathspec-file-nul", "--")
+	cmd.Stdin = &stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -542,7 +600,10 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	if err != nil {
 		return nil, "", false, err
 	}
-	excludeArgs, largeFiles := untrackedEntries(repoRoot, lsFilesOut)
+	excludeArgs, largeFiles, err := untrackedEntries(ctx, repoRoot, baseTreeish, lsFilesOut)
+	if err != nil {
+		return nil, "", false, err
+	}
 	if err := addUntrackedIntentToAdd(ctx, repoRoot, env, excludeArgs); err != nil {
 		return nil, "", false, err
 	}
