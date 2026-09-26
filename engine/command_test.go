@@ -80,6 +80,57 @@ func TestRecordCommandDurableDedupesSeqAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestCommandFoldTornSeqLastWriterWins(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000001"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000001","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"command","command":{"id":"cmd_first","line":"/compact","name":"compact","source":"typed","status":"accepted","seq":3}}`,
+		`{"type":"command","command":{"id":"cmd_second","line":"/compact","name":"compact","source":"typed","status":"accepted","seq":3}}`,
+	)
+	s, err := LoadSession(Config{SessionDir: dir}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmds := s.Commands()
+	if len(cmds) != 1 || cmds[0].ID != "cmd_second" {
+		t.Fatalf("Commands() = %+v, want exactly one entry, ID cmd_second", cmds)
+	}
+}
+
+func TestRecordCommandTerminalInheritsClientRef(t *testing.T) {
+	dir := t.TempDir()
+	var events []Event
+	s := NewSession(Config{SessionDir: dir, OnEvent: func(ev Event) { events = append(events, ev) }})
+	id := NewCommandID()
+	accepted := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+		ClientRef: "pd_01abc",
+	}
+	if err := s.RecordCommand(accepted); err != nil {
+		t.Fatal(err)
+	}
+	terminal := message.CommandRecord{
+		ID: id, Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+	}
+	if err := s.RecordCommand(terminal); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Command == nil || events[1].Command.ClientRef != "pd_01abc" {
+		t.Fatalf("terminal event = %+v, want ClientRef pd_01abc", events)
+	}
+	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmds := loaded.Commands()
+	if len(cmds) != 1 || cmds[0].ClientRef != "pd_01abc" {
+		t.Fatalf("after LoadSession: Commands() = %+v, want one record with ClientRef pd_01abc", cmds)
+	}
+}
+
 func TestRepairInterruptedCommands(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})

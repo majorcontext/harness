@@ -94,6 +94,7 @@ func (w *commandResponseWriter) WriteHeader(code int) { w.code = code }
 // deferred recover records a failed outcome instead of crashing the process.
 func (s *Server) runCommand(id string, sess *engine.Session, releaseSess func(), rec message.CommandRecord, res command.Resolution) {
 	defer s.wg.Done()
+	// Release the session pin before wg.Done so Drain cannot return with the pin held.
 	defer releaseSess()
 
 	typed := typedCommandName(rec.Line)
