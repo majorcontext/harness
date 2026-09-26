@@ -429,8 +429,12 @@ type Server struct {
 	// never evicted when resident sessions are unloaded for MaxResident. It is
 	// bounded by the number of message IDs, which are small, so retaining it for
 	// unloaded sessions is cheap and keeps replay/reconcile correct.
-	seen     map[string]map[string]bool
-	sessions map[string]*sessionState // in-memory (resident) sessions
+	seen map[string]map[string]bool
+	// commandSeen dedupes reconcile's backfill against records loadJournal
+	// already replayed at boot. Never evicted, same rationale as seen above.
+	commandSeen      map[string]map[string]bool
+	sessions         map[string]*sessionState // in-memory (resident) sessions
+	commandColdLoads map[string]int
 
 	// lastRequest holds the latest fully-assembled model request per session,
 	// in memory only (never persisted): GET /session/{id}/request reads it, and
@@ -663,6 +667,11 @@ type Server struct {
 	// production.
 	coldWindowBootstrapRace func()
 
+	// commandDispatchRace is a test-only seam: when non-nil, runCommand
+	// invokes it right before calling serveOpHandlers[op], letting a test
+	// force a concurrent eviction to land deterministically. Nil in production.
+	commandDispatchRace func()
+
 	// worktreeBase is the directory 'worktree'-isolation sessions create
 	// their per-session git worktrees under (see worktree.go): <SessionDir>/
 	// worktrees when SessionDir is durable, otherwise a process-lifetime
@@ -815,6 +824,10 @@ type sessionState struct {
 	running  bool
 	cancel   context.CancelFunc
 	lastUsed time.Time
+	// pins counts outstanding residency holds a command dispatch takes
+	// through mutableSession; while positive, evictResidentLocked skips this
+	// entry exactly as it skips running.
+	pins int
 	// shareWorkdir opts this session out of the workdir-busy exclusivity rule
 	// in claimForPrompt (see workdir.go): set from POST /session's
 	// share_workdir, in memory only (a reloaded/cold session defaults back to
@@ -883,7 +896,9 @@ func New(opts Options) (*Server, error) {
 		sinkTypes:         eventSinkTypeSet(opts.EventSinkIncludeTypes),
 		subs:              make(map[*subscriber]struct{}),
 		seen:              make(map[string]map[string]bool),
+		commandSeen:       make(map[string]map[string]bool),
 		sessions:          make(map[string]*sessionState),
+		commandColdLoads:  make(map[string]int),
 		lastRequest:       make(map[string]*requestSnapshot),
 		lastReqHash:       make(map[string]string),
 		lastPersistErr:    make(map[string]string),

@@ -142,3 +142,74 @@ func TestOpRoutesMatchTheMux(t *testing.T) {
 		}
 	}
 }
+
+func TestServeModeOpsTotal(t *testing.T) {
+	registry := command.NewRegistry()
+	control := map[command.Op]bool{}
+	for _, s := range registry.All() {
+		if s.Kind == command.KindControl {
+			control[s.Op] = true
+		}
+	}
+	for op := range serveModeOps {
+		if !control[op] {
+			t.Errorf("serveModeOps names %q, which is not a control Op", op)
+		}
+	}
+	for op := range control {
+		if _, ok := serveModeOps[op]; !ok {
+			t.Errorf("control Op %q is neither supported nor refused by serveModeOps", op)
+		}
+	}
+}
+
+func TestCommandsServeSupportTotal(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, data := h.do("GET", "/commands", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /commands status %d: %s", resp.StatusCode, data)
+	}
+	var body struct {
+		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	registry := command.NewRegistry()
+	wantUnsupported := map[string]bool{
+		"new": true, "resume": true, "quit": true, "queue-clear": true,
+	}
+
+	got := map[string]serveSupportJSON{}
+	for k, v := range body.ServeSupport {
+		got[k] = v
+	}
+	for _, s := range registry.All() {
+		entry, ok := got[s.Name]
+		if !ok {
+			t.Errorf("serve_support missing %q", s.Name)
+			continue
+		}
+		delete(got, s.Name)
+		if wantUnsupported[s.Name] {
+			if entry.Supported {
+				t.Errorf("serve_support[%q].supported = true, want false", s.Name)
+			}
+			const wantReason = "Not available in this client."
+			if entry.Reason != wantReason {
+				t.Errorf("serve_support[%q].reason = %q, want %q", s.Name, entry.Reason, wantReason)
+			}
+			continue
+		}
+		if !entry.Supported {
+			t.Errorf("serve_support[%q].supported = false, want true", s.Name)
+		}
+		if entry.Reason != "" {
+			t.Errorf("serve_support[%q].reason = %q, want empty", s.Name, entry.Reason)
+		}
+	}
+	for name := range got {
+		t.Errorf("serve_support has surplus entry %q", name)
+	}
+}

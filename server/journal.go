@@ -38,7 +38,9 @@ type Event struct {
 	RecordedAt time.Time        `json:"recorded_at,omitzero"`
 	Status     string           `json:"status,omitempty"`
 	Message    *message.Message `json:"message,omitempty"`
-	Model      message.ModelRef `json:"model,omitzero"`
+	// Command is carried by the durable "command" record only.
+	Command *message.CommandRecord `json:"command,omitempty"`
+	Model   message.ModelRef       `json:"model,omitzero"`
 	// Effort is a *message.Effort, not a bare message.Effort with omitempty,
 	// for the same reason QueueLen below is a *int: an "effort" record must
 	// tell "cleared to the provider default" (EffortUnset, an explicit
@@ -324,6 +326,8 @@ const (
 	// the session that a tab connecting later must be able to learn — see
 	// engine.EventClaudeCodeCompacted's own doc comment.
 	evtClaudeCodeCompacted = "compaction.claude_code"
+	// evtCommand mirrors engine.EventCommand.
+	evtCommand = "command"
 )
 
 const journalName = "events.jsonl"
@@ -493,6 +497,10 @@ func (s *Server) Publish(ev engine.Event) {
 			PreTokens:  ev.ClaudeCodeCompactPreTokens,
 			PostTokens: ev.ClaudeCodeCompactPostTokens,
 		})
+	case engine.EventCommand:
+		// commandSeen is not marked here: loadJournal rebuilds it from the
+		// durable journal this call just wrote to, on the next boot.
+		s.emitDurable(Event{Type: evtCommand, SessionID: ev.SessionID, Command: ev.Command})
 	}
 }
 
@@ -1086,16 +1094,20 @@ func (s *Server) syncMessages(sessionID string) {
 // which durable ordinal its own kept window starts at, and page backward
 // from a real anchor on its FIRST "load older" request instead of
 // re-fetching this same newest page to merely discover one.
-func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, ok bool) {
+//
+// commands comes from the same sess.HistoryAndCommands() call as history,
+// never a second sess.Commands() call, which could observe a compaction
+// that reanchors a command to a summary this history snapshot lacks.
+func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, seq int64, liveFrom int64, seqs []int64, commands []message.CommandRecord, ok bool) {
 	sess, ok := s.lookupSession(id)
 	if !ok {
-		return nil, 0, 0, nil, false
+		return nil, 0, 0, nil, nil, false
 	}
 	// Sampled first, before anything else this function does — see the
-	// doc comment above for why tipAtStart must precede sess.History().
+	// doc comment above for why tipAtStart must precede sess.HistoryAndCommands().
 	tipAtStart := s.currentSeq()
 
-	history = sess.History()
+	history, commands = sess.HistoryAndCommands()
 	persistErr := sess.PersistErr()
 	// A pure function of this exact history snapshot -- no s.journal, no
 	// s.mu, so it needs neither the lock below nor a place inside it.
@@ -1114,7 +1126,7 @@ func (s *Server) transcriptSyncedThrough(id string) (history []message.Message, 
 	if reportErr != nil {
 		s.reportError(reportErr)
 	}
-	return history, seq, liveFrom, seqs, true
+	return history, seq, liveFrom, seqs, commands, true
 }
 
 // transcriptCursorLocked is transcriptSyncedThrough's own lock section,
@@ -1601,6 +1613,27 @@ func (s *Server) isSeenLocked(sessionID, msgID string) bool {
 	return s.seen[sessionID][msgID]
 }
 
+// commandSeenKey joins status to id since a later terminal record for the
+// same ID must still journal.
+func commandSeenKey(id string, status message.CommandStatus) string {
+	return id + "\x00" + string(status)
+}
+
+// Caller holds s.mu.
+func (s *Server) markCommandSeenLocked(sessionID, id string, status message.CommandStatus) {
+	m := s.commandSeen[sessionID]
+	if m == nil {
+		m = make(map[string]bool)
+		s.commandSeen[sessionID] = m
+	}
+	m[commandSeenKey(id, status)] = true
+}
+
+// Caller holds s.mu.
+func (s *Server) isCommandSeenLocked(sessionID, id string, status message.CommandStatus) bool {
+	return s.commandSeen[sessionID][commandSeenKey(id, status)]
+}
+
 // sessionSeqLocked returns the highest durable seq recorded for a session, or 0.
 // Caller holds s.mu.
 func (s *Server) sessionSeqLocked(sessionID string) int64 {
@@ -1659,6 +1692,27 @@ func (s *Server) reconcile() error {
 			s.markSeenLocked(id, m.ID)
 			s.emitDurableLocked(&Event{Type: evtMessage, SessionID: id, Message: &m})
 		}
+
+		// A command still "accepted" never reached a terminal status before
+		// this session's process died, so mark it interrupted rather than
+		// leave it stuck forever. Never fail boot on this.
+		_, err = sess.RepairInterruptedCommands(func(name string) string {
+			return fmt.Sprintf("harness restarted before /%s finished; it will not run again", name)
+		})
+		if err != nil {
+			s.reportError(fmt.Errorf("session %s repair interrupted commands: %w", id, err))
+		}
+		for _, c := range sess.Commands() {
+			if s.isCommandSeenLocked(id, c.ID, c.Status) {
+				continue
+			}
+			s.markCommandSeenLocked(id, c.ID, c.Status)
+			cp := c
+			s.emitDurableLocked(&Event{Type: evtCommand, SessionID: id, Command: &cp})
+		}
+		// Release the handles the repair opened; this session is not
+		// otherwise resident yet.
+		sess.ReleaseFiles()
 	}
 	return nil
 }
@@ -1707,6 +1761,9 @@ func (s *Server) loadJournal(data []byte) {
 		}
 		if ev.Type == evtMessage && ev.Message != nil {
 			s.markSeenLocked(ev.SessionID, ev.Message.ID)
+		}
+		if ev.Type == evtCommand && ev.Command != nil {
+			s.markCommandSeenLocked(ev.SessionID, ev.Command.ID, ev.Command.Status)
 		}
 		if ev.Type == evtTurnEnd {
 			s.lastTurn[ev.SessionID] = &turnOutcome{outcome: ev.Outcome, error: ev.Error}

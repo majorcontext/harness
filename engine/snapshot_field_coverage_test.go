@@ -53,6 +53,8 @@ var snapshottedSessionFields = map[string]bool{
 	"promptQueue":                true,
 	"promptQueueNextID":          true,
 	"enqueueSeq":                 true,
+	"commands":                   true,
+	"commandSeqs":                true,
 	"toolResults":                true,
 	"toolResultNextID":           true,
 	"toolResultBytes":            true,

@@ -149,6 +149,12 @@ type sessionSnapshot struct {
 	PromptQueueNextID int64          `json:"prompt_queue_next_id,omitempty"`
 	EnqueueSeq        int64          `json:"enqueue_seq,omitempty"`
 
+	// Commands and CommandSeqs mirror Session.commands/commandSeqs. Empty on
+	// an old snapshot written before slash commands existed, matching what a
+	// full replay of that same tail also produces.
+	Commands    []message.CommandRecord `json:"commands,omitempty"`
+	CommandSeqs map[string]int64        `json:"command_seqs,omitempty"`
+
 	ToolResults      map[string]toolResultMeta `json:"tool_results,omitempty"`
 	ToolResultNextID int64                     `json:"tool_result_next_id,omitempty"`
 	ToolResultBytes  int                       `json:"tool_result_bytes,omitempty"`
@@ -506,6 +512,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		PromptQueue:          append([]QueuedPrompt(nil), s.promptQueue...),
 		PromptQueueNextID:    s.promptQueueNextID,
 		EnqueueSeq:           s.enqueueSeq,
+		Commands:             append([]message.CommandRecord(nil), s.commands...),
 		ToolResultNextID:     s.toolResultNextID,
 		ToolResultBytes:      s.toolResultBytes,
 		SpawnedChildIDs:      append([]string(nil), s.spawnedChildIDs...),
@@ -521,6 +528,12 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		snap.ToolResults = make(map[string]toolResultMeta, len(s.toolResults))
 		for k, v := range s.toolResults {
 			snap.ToolResults[k] = v
+		}
+	}
+	if len(s.commandSeqs) > 0 {
+		snap.CommandSeqs = make(map[string]int64, len(s.commandSeqs))
+		for k, v := range s.commandSeqs {
+			snap.CommandSeqs[k] = v
 		}
 	}
 	if len(s.mcpSelected) > 0 {
@@ -575,6 +588,11 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 		s.promptQueueNextID = snap.PromptQueueNextID
 	}
 	s.enqueueSeq = snap.EnqueueSeq
+	s.commands = append([]message.CommandRecord(nil), snap.Commands...)
+	s.commandSeqs = make(map[string]int64, len(snap.CommandSeqs))
+	for k, v := range snap.CommandSeqs {
+		s.commandSeqs[k] = v
+	}
 	if len(snap.ToolResults) > 0 {
 		s.toolResults = make(map[string]toolResultMeta, len(snap.ToolResults))
 		for k, v := range snap.ToolResults {

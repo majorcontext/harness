@@ -463,6 +463,32 @@ death exactly like a torn fsync can, and the same last-writer-wins fold
 repairs both. See docs/deploy-modal.md for the recommended setting on Modal
 Volume v2 deployments.
 
+## Command records
+
+A resolved slash command (`docs/design/slash-commands.md`'s "Serve-mode
+resolution") is journaled beside history, never inside it:
+`Session.RecordCommand`/`RecordCommandDurable` persist a `recCommand`
+record and fold it into `Session.Commands()` by `id`, so a status update
+reapplies over the earlier record rather than adding a row.
+`after_message_id` anchors to the last durable message at the FIRST
+record and stays fixed through later updates. `GET /session/{id}/message`
+carries the folded records whose anchor falls inside the returned window
+(`commands`, `engine.CommandsInWindow`); `GET /session/{id}/journal`
+exposes only `id`/`name`/`status` as metadata. A page read decodes a
+record's line, args, text, and result only inside that window — every
+other record folds by a smaller head (id, anchor, `created_at`, seq) — so
+a malformed field OUTSIDE the window does not fail the read, though
+`LoadSession` still decodes every record in full and rejects it on load.
+`Session.RecordCommandDurable` shares `Session.enqueueSeq` with
+`EnqueuePromptDurable`, so a command and a prompt draw idempotency `seq`
+from one session-monotonic space, and `GET /session/{id}/queue`'s
+watermark reports both. A resolved command never enters that queue:
+`resolvePromptCommand` (`server/commands.go`) intercepts a TYPED line
+before `EnqueuePrompt`/`EnqueuePromptDurable` runs, records the
+`CommandRecord`, and, for a dispatchable op, runs the command's own
+route in process; a busy session REFUSES it (`CommandRefused`) rather
+than queuing it.
+
 ## Managed processes
 
 `config.Config.Processes` (`processes` in JSON) declares named long-lived

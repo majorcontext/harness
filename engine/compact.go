@@ -233,6 +233,21 @@ const (
 	SkipReasonSummarizerEmpty = "summarizer_empty"
 )
 
+// CompactSkipMessage renders a CompactResult.SkipReason as a sentence a
+// person can act on, shared by every caller so a skip reads identically.
+func CompactSkipMessage(reason string) string {
+	switch reason {
+	case SkipReasonNotEnoughTurns:
+		return "the session does not have enough turns yet to fold"
+	case SkipReasonLoneExistingSummary:
+		return "the session's history is already a single summary with nothing left to fold"
+	case SkipReasonSummarizerEmpty:
+		return "the summarizer returned no usable summary"
+	default:
+		return reason
+	}
+}
+
 // effectiveKeepTurns resolves CompactOptions.KeepTurns/Config.
 // CompactionKeepTurns down to one concrete, floored value.
 func (s *Session) effectiveKeepTurns(optKeepTurns int) int {
@@ -290,14 +305,8 @@ func isLoneExistingSummary(folded []message.Message) bool {
 
 const compactCommandText = "/compact"
 
-// isExplicitCompactCommand: an attachment means real intent to prompt the
-// model, not to run the command.
-func isExplicitCompactCommand(text string, blobs []*message.Blob) bool {
-	return len(blobs) == 0 && strings.TrimSpace(text) == compactCommandText
-}
-
-// RunCompactCommand is the one entry point both POST /session/{id}/compact
-// and an explicit "/compact" prompt call.
+// RunCompactCommand is the engine entry point for a resolved compact
+// command: POST /session/{id}/compact and the serve/run dispatchers.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
 	if backend, ok := s.delegatedBackend(); ok {
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
@@ -506,13 +515,18 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	summary.Normalize()
 
 	s.mu.Lock()
-	spliced, err := spliceCompact(s.history, spliceFirstID, spliceLastID, summary)
+	start, end, err := compactBounds(s.history, spliceFirstID, spliceLastID)
 	if err != nil {
 		s.mu.Unlock()
 		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
 		return CompactResult{}, err
 	}
-	s.history = spliced
+	// Re-anchor before the splice removes the folded range: a command whose
+	// AfterMessageID names one of these messages must follow the summary
+	// instead, or its anchor becomes unresolvable the moment this range
+	// leaves history (see reanchorCommands).
+	reanchorCommands(s.commands, s.history, start, end, summary.ID)
+	s.history = spliceCompactBounds(s.history, start, end, summary)
 	// Cumulative usage only (see docs/design/context-compaction.md's "Usage
 	// accounting"): NEVER touch lastUsage/haveLastUsage here — the
 	// automatic trigger reads LastUsage as "how large is the next worker
@@ -840,28 +854,14 @@ func healCompactFoldEnd(history []message.Message, firstID string, turnsFolded i
 	return history[foldEnd].ID, nil
 }
 
-// applyCompactRecord folds one journaled compact record into history: the
-// LastID heal above, then spliceCompact. It is the ONE implementation of
-// "what a compact record does to a history", shared by LoadSession's replay
-// (store.go) and the metadata index's own fold (index.go), so the two can
-// never disagree about how many messages a fold removed.
+// compactRecordBounds runs the LastID heal above, then returns the
+// occurrence-aware range spliceCompactBounds needs. It is the ONE
+// implementation of "what messages a compact record removes", shared by
+// LoadSession's replay and the metadata index's own fold.
 //
-// A FOUND lastID keeps the pre-heal behavior exactly: the heal never runs
-// for it. A failed heal falls through unchanged, so spliceCompact returns
-// its usual loud error rather than a silent best-effort guess.
-func applyCompactRecord(history []message.Message, firstID, lastID string, turnsFolded int, summary message.Message) ([]message.Message, error) {
-	start, end, err := compactRecordBounds(history, firstID, lastID, turnsFolded)
-	if err != nil {
-		return nil, err
-	}
-	return spliceCompactBounds(history, start, end, summary), nil
-}
-
-// compactRecordBounds is applyCompactRecord's occurrence-aware half: it
-// performs the same missing-last-id heal, then returns the exact range that
-// will be replaced. indexFold uses these bounds for both its message skeleton
-// and the parallel journal-record provenance, so repeated IDs cannot make the
-// two slices select different occurrences.
+// A FOUND lastID keeps the pre-heal behavior exactly. A failed heal falls
+// through unchanged, so the caller's own splice returns its usual loud,
+// explicit error rather than a silent best-effort guess.
 func compactRecordBounds(history []message.Message, firstID, lastID string, turnsFolded int) (int, int, error) {
 	if _, found := indexOfMessageID(history, lastID); !found {
 		if healed, err := healCompactFoldEnd(history, firstID, turnsFolded); err == nil {

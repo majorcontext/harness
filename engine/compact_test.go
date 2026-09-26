@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +104,12 @@ func compactSummaryTurn(text string, usage provider.Usage) []provider.Event {
 	return compactTurn(text, usage)
 }
 
+func compactTurnWithID(id, text string, usage provider.Usage) []provider.Event {
+	msg := &message.Message{ID: id, Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}}
+	ev := provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: usage}
+	return []provider.Event{ev}
+}
+
 // runTurns drives n ordinary Prompt calls against s, failing the test on any
 // error.
 func runTurns(t *testing.T, s *Session, n int) {
@@ -174,6 +179,144 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 	if after[2].Parts.Text() != "three" {
 		t.Errorf("after[2] text = %q, want %q (turn 3's assistant reply)", after[2].Parts.Text(), "three")
+	}
+}
+
+func TestCommandReanchoredOnCompact(t *testing.T) {
+	cases := []struct {
+		name             string
+		turns            [][]provider.Event
+		preRecordTurns   int
+		postRecordTurns  int
+		wantAnchorBefore func(s *Session) string
+		wantAnchorAfter  func(summaryID string) string
+	}{
+		{
+			name: "compacted anchor follows summary",
+			turns: [][]provider.Event{
+				compactTurn("one", provider.Usage{InputTokens: 10}),
+				compactTurn("two", provider.Usage{InputTokens: 10}),
+				compactTurn("three", provider.Usage{InputTokens: 10}),
+				compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+			},
+			preRecordTurns:   1,
+			postRecordTurns:  2,
+			wantAnchorBefore: func(s *Session) string { return s.History()[1].ID },
+			wantAnchorAfter:  func(summaryID string) string { return summaryID },
+		},
+		{
+			name: "surviving duplicate keeps its own anchor",
+			turns: [][]provider.Event{
+				compactTurnWithID("msg_dup_anchor", "one", provider.Usage{InputTokens: 10}),
+				compactTurn("two", provider.Usage{InputTokens: 10}),
+				compactTurnWithID("msg_dup_anchor", "three", provider.Usage{InputTokens: 10}),
+				compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+			},
+			preRecordTurns:   3,
+			postRecordTurns:  0,
+			wantAnchorBefore: func(s *Session) string { return "msg_dup_anchor" },
+			wantAnchorAfter:  func(summaryID string) string { return "msg_dup_anchor" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			prov := &scriptedProvider{name: "test", turns: tc.turns}
+			s := NewSession(Config{
+				Providers:  provider.Registry{"test": prov},
+				Model:      message.ModelRef{Provider: "test", Model: "m1"},
+				SessionDir: dir,
+			})
+			runTurns(t, s, tc.preRecordTurns)
+			anchor := tc.wantAnchorBefore(s)
+
+			cmd := message.CommandRecord{
+				ID: NewCommandID(), Line: "/compact", Name: "compact",
+				Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+			}
+			if err := s.RecordCommand(cmd); err != nil {
+				t.Fatalf("RecordCommand: %v", err)
+			}
+			if got := s.Commands()[0].AfterMessageID; got != anchor {
+				t.Fatalf("test setup: command anchor = %q, want %q", got, anchor)
+			}
+
+			runTurns(t, s, tc.postRecordTurns)
+
+			res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+			if err != nil {
+				t.Fatalf("Compact: %v", err)
+			}
+			if res.TurnsFolded != 2 {
+				t.Fatalf("TurnsFolded = %d, want 2", res.TurnsFolded)
+			}
+			want := tc.wantAnchorAfter(res.Summary.ID)
+
+			if got := s.Commands()[0].AfterMessageID; got != want {
+				t.Fatalf("live Commands() anchor after compact = %q, want %q", got, want)
+			}
+			loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if got := loaded.Commands()[0].AfterMessageID; got != want {
+				t.Fatalf("LoadSession Commands() anchor = %q, want %q", got, want)
+			}
+			page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != want {
+				t.Fatalf("page Commands = %+v, want one record anchored to %q", page.Commands, want)
+			}
+		})
+	}
+}
+
+func TestHistoryAndCommandsOneSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactTurn("three", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	runTurns(t, s, 1)
+
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/compact", Name: "compact",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+
+	runTurns(t, s, 2)
+
+	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	summaryID := res.Summary.ID
+
+	history, cmds := s.HistoryAndCommands()
+	if len(cmds) != 1 || cmds[0].AfterMessageID != summaryID {
+		t.Fatalf("HistoryAndCommands() commands = %+v, want one record anchored to %q", cmds, summaryID)
+	}
+	found := false
+	for _, m := range history {
+		if m.ID == summaryID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("HistoryAndCommands() history %+v does not contain the command's anchor %q", history, summaryID)
 	}
 }
 
@@ -2374,38 +2517,30 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
-func TestPromptCompactCommandRunsCompactInsteadOfModelTurn(t *testing.T) {
+func TestPromptCompactTextReachesModel(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurn("one", provider.Usage{InputTokens: 10}),
-		compactTurn("two", provider.Usage{InputTokens: 10}),
-		compactTurn("three", provider.Usage{InputTokens: 10}),
-		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),
 	}}
-	var events []Event
 	s := NewSession(Config{
 		Providers: provider.Registry{"test": prov},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
-		OnEvent:   func(ev Event) { events = append(events, ev) },
 	})
-	runTurns(t, s, 3)
 
-	msg, err := s.Prompt(context.Background(), "/compact")
-	if err != nil {
+	if _, err := s.Prompt(context.Background(), "/compact"); err != nil {
 		t.Fatalf("Prompt(/compact): %v", err)
 	}
+
+	found := false
 	for _, m := range s.History() {
-		if m.Parts.Text() == "/compact" {
-			t.Fatalf("history contains a literal /compact user message: %+v", m)
+		if m.Role == message.RoleUser && m.Parts.Text() == "/compact" {
+			found = true
 		}
 	}
-	if msg == nil || !strings.Contains(msg.Parts.Text(), "SUMMARY") {
-		t.Fatalf("Prompt(/compact) returned %+v, want the compaction summary", msg)
+	if !found {
+		t.Fatalf("history = %+v, want a literal /compact user message", s.History())
 	}
-	has := func(typ string) bool {
-		return slices.ContainsFunc(events, func(ev Event) bool { return ev.Type == typ })
-	}
-	if !has(EventCompactionStarted) || !has(EventHistoryCompacted) {
-		t.Fatalf("events = %+v, want EventCompactionStarted and EventHistoryCompacted", events)
+	if len(prov.requests) != 1 {
+		t.Fatalf("provider calls = %d, want 1 (the engine must send /compact to the model, not intercept it)", len(prov.requests))
 	}
 }
 

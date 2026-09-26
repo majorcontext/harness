@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1395,5 +1396,47 @@ func TestListSessionsPinsTheFilenameID(t *testing.T) {
 	}
 	if info.ID != named {
 		t.Errorf("ReadSessionInfo reported %q, want the filename id %q", info.ID, named)
+	}
+}
+
+func TestSessionIndexSidecarCarriesNoCommandData(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	if err := s.RecordCommand(message.CommandRecord{
+		ID: NewCommandID(), Line: "/status", Name: "status",
+		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+		Result: json.RawMessage(`{"ok":true}`),
+	}); err != nil {
+		t.Fatalf("RecordCommand: %v", err)
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	data, err := os.ReadFile(sessionIndexPath(dir, s.ID))
+	if err != nil {
+		t.Fatalf("read sidecar: %v", err)
+	}
+	if strings.Contains(string(data), "cmd_") {
+		t.Fatalf("sidecar carries command data: %s", data)
+	}
+}
+
+func TestSessionIndexRefoldIgnoresCommandPayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000009"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000009","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"model","model":"test/m1"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"command","command":7}`,
+		`{"type":"message","message":{"id":"m2","role":"assistant","parts":[{"type":"text","text":"hi"}]}}`,
+	)
+	ix, err := ReadSessionIndex(dir, id)
+	if err != nil {
+		t.Fatalf("ReadSessionIndex: %v", err)
+	}
+	if ix.DurableMessages != 2 {
+		t.Fatalf("DurableMessages = %d, want 2", ix.DurableMessages)
 	}
 }

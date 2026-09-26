@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,9 +40,6 @@ func pagedSession(t *testing.T, dir string, n int) *Session {
 // endpoint publishes, restated here in full: read the records in order;
 // each message record appends its id; each compact record removes the ids
 // from first_id through last_id and puts its summary id in their place.
-// Deriving it from LoadSession instead would share applyCompactRecord with
-// the implementation under test, and a fold defect would then agree with
-// itself (AGENTS.md's oracle rule).
 func wholeSequence(t *testing.T, dir, id string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
@@ -389,6 +387,198 @@ func TestReadMessagePageEmptySession(t *testing.T) {
 	}
 	if len(page.Messages) != 0 || page.Total != 0 || page.HasMore {
 		t.Errorf("page = %+v, want an empty page", page)
+	}
+}
+
+func TestMessagePageCarriesCommandsInWindow(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+
+	newCmd := func() message.CommandRecord {
+		return message.CommandRecord{
+			ID: NewCommandID(), Line: "/status", Name: "status",
+			Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+		}
+	}
+
+	c0 := newCmd()
+	if err := s.RecordCommand(c0); err != nil {
+		t.Fatalf("RecordCommand c0: %v", err)
+	}
+
+	var c1, c2 message.CommandRecord
+	for i := 1; i <= 10; i++ {
+		role := message.RoleUser
+		if i%2 == 0 {
+			role = message.RoleAssistant
+		}
+		s.append(message.Message{
+			ID:    fmt.Sprintf("m%d", i),
+			Role:  role,
+			Parts: message.Parts{&message.Text{Text: fmt.Sprintf("text %d", i)}},
+		})
+		switch i {
+		case 2:
+			c1 = newCmd()
+			if err := s.RecordCommand(c1); err != nil {
+				t.Fatalf("RecordCommand c1: %v", err)
+			}
+		case 9:
+			c2 = newCmd()
+			if err := s.RecordCommand(c2); err != nil {
+				t.Fatalf("RecordCommand c2: %v", err)
+			}
+		}
+	}
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	older, err := ReadMessagePage(dir, s.ID, 6, 5)
+	if err != nil {
+		t.Fatalf("ReadMessagePage(before=6, limit=5): %v", err)
+	}
+	if got := idsOf(older.Messages); !sameIDs(got, []string{"m1", "m2", "m3", "m4", "m5"}) {
+		t.Fatalf("older page messages = %v, want m1..m5", got)
+	}
+	if got := commandIDsOf(older.Commands); !sameIDs(got, []string{c0.ID, c1.ID}) {
+		t.Fatalf("older page commands = %v, want [c0, c1] (anchored \"\" and m2)", got)
+	}
+
+	newest, err := ReadMessagePage(dir, s.ID, 0, 5)
+	if err != nil {
+		t.Fatalf("ReadMessagePage(newest, limit=5): %v", err)
+	}
+	if got := idsOf(newest.Messages); !sameIDs(got, []string{"m6", "m7", "m8", "m9", "m10"}) {
+		t.Fatalf("newest page messages = %v, want m6..m10", got)
+	}
+	if got := commandIDsOf(newest.Commands); !sameIDs(got, []string{c2.ID}) {
+		t.Fatalf("newest page commands = %v, want [c2] (anchored m9) — never c0 or c1", got)
+	}
+}
+
+func commandIDsOf(cmds []message.CommandRecord) []string {
+	out := make([]string, 0, len(cmds))
+	for _, c := range cmds {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+func TestMessagePageShowsLatestFoldedCommandStatus(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+
+	appendMsg := func(id string) {
+		s.append(message.Message{ID: id, Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "x"}}})
+	}
+	appendMsg("m1")
+	appendMsg("m2")
+
+	cmd := message.CommandRecord{
+		ID: NewCommandID(), Line: "/model", Name: "model",
+		Source: message.PromptSourceTyped, Status: message.CommandAccepted,
+	}
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand accepted: %v", err)
+	}
+
+	appendMsg("m3")
+	appendMsg("m4")
+	appendMsg("m5")
+
+	cmd.Status = message.CommandSucceeded
+	cmd.Text = "/model succeeded"
+	if err := s.RecordCommand(cmd); err != nil {
+		t.Fatalf("RecordCommand succeeded: %v", err)
+	}
+
+	appendMsg("m6")
+	appendMsg("m7")
+	appendMsg("m8")
+	if err := s.PersistErr(); err != nil {
+		t.Fatalf("PersistErr: %v", err)
+	}
+
+	page, err := ReadMessagePage(dir, s.ID, 4, 2) // m2,m3: well before the terminal record
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m2", "m3"}) {
+		t.Fatalf("page messages = %v, want m2,m3", got)
+	}
+	if len(page.Commands) != 1 || page.Commands[0].Status != message.CommandSucceeded {
+		t.Fatalf("page.Commands = %+v, want one succeeded record", page.Commands)
+	}
+}
+
+func TestMessagePageTornSeqFoldsToLatestCommand(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000002"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000002","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"command","command":{"id":"cmd_first","line":"/compact","name":"compact","source":"typed","status":"accepted","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z","seq":3}}`,
+		`{"type":"command","command":{"id":"cmd_second","line":"/compact","name":"compact","source":"typed","status":"accepted","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z","seq":3}}`,
+	)
+	page, err := ReadMessagePage(dir, id, 0, DefaultMessagePageLimit)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if len(page.Commands) != 1 || page.Commands[0].ID != "cmd_second" {
+		t.Fatalf("page.Commands = %+v, want exactly one entry, ID cmd_second", page.Commands)
+	}
+}
+
+func TestTailPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000005"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000005","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m2","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m3","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m4","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
+		`{"type":"command","command":{"id":"cmd_good","line":"/status","name":"status","source":"typed","status":"succeeded","after_message_id":"m4","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z"}}`,
+		`{"type":"message","message":{"id":"m5","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+	)
+
+	page, err := ReadMessagePage(dir, id, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m4", "m5"}) {
+		t.Fatalf("page messages = %v, want m4,m5", got)
+	}
+	if got := commandIDsOf(page.Commands); !sameIDs(got, []string{"cmd_good"}) {
+		t.Fatalf("page commands = %v, want [cmd_good] — cmd_bad is anchored outside the window and must never be decoded", got)
+	}
+}
+
+func TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
+	dir := t.TempDir()
+	const id = "ses_0000000000000006"
+	writeSessionLog(t, dir, id,
+		`{"type":"session","id":"ses_0000000000000006","created_at":"2026-07-21T00:00:00Z"}`,
+		`{"type":"message","message":{"id":"m1","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"command","command":{"id":"cmd_bad","line":7,"name":"status","source":"typed","status":"succeeded","after_message_id":"m1","created_at":"2026-07-21T00:00:01Z","updated_at":"2026-07-21T00:00:01Z"}}`,
+		`{"type":"message","message":{"id":"m2","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m3","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"message","message":{"id":"m4","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+		`{"type":"compact","compact":{"first_id":"m3","last_id":"m3","turns_folded":1,"summary":{"id":"s3","role":"user","parts":[{"type":"text","text":"summary"}]}}}`,
+		`{"type":"command","command":{"id":"cmd_good","line":"/status","name":"status","source":"typed","status":"succeeded","after_message_id":"m4","created_at":"2026-07-21T00:00:02Z","updated_at":"2026-07-21T00:00:02Z"}}`,
+		`{"type":"message","message":{"id":"m5","role":"user","parts":[{"type":"text","text":"a"}]}}`,
+	)
+
+	page, err := ReadMessagePage(dir, id, 0, 2)
+	if err != nil {
+		t.Fatalf("ReadMessagePage: %v", err)
+	}
+	if got := idsOf(page.Messages); !sameIDs(got, []string{"m4", "m5"}) {
+		t.Fatalf("page messages = %v, want m4,m5", got)
+	}
+	if got := commandIDsOf(page.Commands); !sameIDs(got, []string{"cmd_good"}) {
+		t.Fatalf("page commands = %v, want [cmd_good] — cmd_bad is anchored outside the window and must never be decoded", got)
 	}
 }
 
@@ -1075,7 +1265,7 @@ func TestTailPageReadsItsSpanOnce(t *testing.T) {
 	}
 	counter := &pageByteCounter{f: jf}
 	// The two OLDEST messages: the walk crosses the whole journal.
-	msgs, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, 1, 2)
+	msgs, _, ok, err := tailPage(counter, ix.LogSize, fi.Size(), ix.DurableMessages, 1, 2)
 	if err != nil || !ok {
 		t.Fatalf("tailPage = ok %v, err %v", ok, err)
 	}

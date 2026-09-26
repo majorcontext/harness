@@ -169,6 +169,15 @@ func (f *promptQueueFold) queued(p promptRecord) {
 	}
 }
 
+// observeSeq advances f.seq to at least seq: a command record's Seq draws
+// from the same durable-enqueue seq space a prompt.queued record's Seq
+// does, so a resumed session's watermark must reflect whichever saw higher.
+func (f *promptQueueFold) observeSeq(seq int64) {
+	if seq > f.seq {
+		f.seq = seq
+	}
+}
+
 // dequeued folds one prompt.dequeued record: it removes the matching queued
 // entry by ID, not by position (see promptRecord's doc comment), so the
 // folded queue ends up exactly the undelivered set however many other

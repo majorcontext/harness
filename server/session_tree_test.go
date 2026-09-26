@@ -1599,6 +1599,33 @@ func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
 	}
 }
 
+func TestEnqueueTypedCommandResolvesBeforeManagedChildGuard(t *testing.T) {
+	h, childID := doneChildHarness(t)
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+childID+"/enqueue", map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/model root/m1"}},
+		"seq":    int64(1),
+		"source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue status %d, want 202: %s", resp.StatusCode, data)
+	}
+	body := decodeCommandResponse(t, data)
+	if body.Status != "command" || body.Command.Status != "accepted" {
+		t.Fatalf("response = %+v, want status=command command.status=accepted", body)
+	}
+
+	accepted := sse.waitFor(t, "command")
+	if accepted.Command == nil || accepted.Command.Status != message.CommandAccepted {
+		t.Fatalf("first command event = %+v, want accepted", accepted.Command)
+	}
+	terminal := sse.waitFor(t, "command")
+	if terminal.Command == nil || terminal.Command.Status != message.CommandSucceeded {
+		t.Fatalf("terminal command event = %+v, want succeeded", terminal.Command)
+	}
+}
+
 // TestGenericTurnRoutesUnifiedSendAllowsManagedChild is the positive
 // counterpart to TestGenericTurnRoutesRejectManagedChild: prompt_async
 // and the three knob swaps (model/thinking/service-tier) now resolve a

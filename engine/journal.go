@@ -129,6 +129,12 @@ type JournalRecord struct {
 	PromptReason string `json:"prompt_reason,omitempty"`
 	PromptSeq    int64  `json:"prompt_seq,omitempty"`
 
+	// Command (Type == recCommand) -- metadata only: no line, args, text, or
+	// result. PromptSeq (above) is reused for a command's durable seq.
+	CommandID     string `json:"command_id,omitempty"`
+	CommandName   string `json:"command_name,omitempty"`
+	CommandStatus string `json:"command_status,omitempty"`
+
 	// Task delivery -- the subagent-sessions checkout/commit/requeue trail
 	// (Type is one of recTaskSpawned/recTaskNotifyQueued/
 	// recTaskNotifyDelivered/recTaskOutcomeCommitted). TaskFailReason is
@@ -243,6 +249,13 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.PromptID = rec.Prompt.ID
 			out.PromptReason = rec.Prompt.Reason
 			out.PromptSeq = rec.Prompt.Seq
+		}
+	case recCommand:
+		if rec.Command != nil {
+			out.CommandID = rec.Command.ID
+			out.CommandName = rec.Command.Name
+			out.CommandStatus = string(rec.Command.Status)
+			out.PromptSeq = rec.Command.Seq
 		}
 	case recTaskSpawned:
 		if rec.TaskSpawn != nil {

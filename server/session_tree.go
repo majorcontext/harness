@@ -476,6 +476,8 @@ type sessionSendBody struct {
 	// once or sits in the queue first — see runPrompt's own doc comment
 	// on prov.
 	promptSourceInput
+	// ClientRef mirrors handlePrompt's own body.ClientRef.
+	ClientRef string `json:"client_ref"`
 }
 
 // decodeSessionSendBody resolves body into the text-plus-attachments pair
@@ -555,6 +557,15 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 	prov, code, err := parsePromptProvenance(body.promptSourceInput)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	clientRef, err := sanitizeClientRef(body.ClientRef)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteSend, id, text, blobs, prov, 0, clientRef)
+	if handled {
 		return
 	}
 	// Resolved ONCE, exactly like handlePrompt's msgID — see its own doc

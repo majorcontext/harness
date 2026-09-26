@@ -261,6 +261,9 @@ type Event struct {
 	QueueSource      string `json:"queue_source,omitempty"`
 	QueueSourceID    string `json:"queue_source_id,omitempty"`
 	QueueSourceLabel string `json:"queue_source_label,omitempty"`
+
+	// Command is carried by EventCommand only.
+	Command *message.CommandRecord `json:"command,omitempty"`
 	// QueueMessageID is the queued prompt's own resolved message id (see
 	// QueuedPrompt.MessageID/ResolveMessageID) — set on EventPromptQueued
 	// ONLY, mirroring QueueSource's Queued-only scope. Lets a client key a
@@ -340,6 +343,9 @@ const (
 	// whatever the reason (delivered/injected/cleared).
 	EventPromptQueued   = "prompt.queued"
 	EventPromptDequeued = "prompt.dequeued"
+
+	// EventCommand fires on a resolved slash command's accepted record and its terminal status.
+	EventCommand = "command"
 )
 
 // SessionSyncFsync and SessionSyncVolume are the two accepted values of
@@ -1586,7 +1592,16 @@ type Session struct {
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or
 	// below it is a duplicate no-op. Rebuilt on replay by LoadSession.
+	// RecordCommandDurable shares this exact watermark: a dispatched command
+	// and a durably-enqueued prompt draw from the same per-session seq space.
 	enqueueSeq int64
+
+	// commands is the session's folded slash-command trail, never s.history.
+	// Guarded by mu.
+	commands []message.CommandRecord
+	// commandSeqs maps a folded command's ID to the durable seq its first
+	// record carried. Guarded by mu.
+	commandSeqs map[string]int64
 
 	// toolResults maps a retained tool result's handle (trh_N) to its
 	// metadata (see toolresult.go). Content is NOT held here — the bytes
@@ -1731,6 +1746,7 @@ func newSession(cfg Config) *Session {
 		contextWindowErr:      contextWindowErr,
 		toolResultNextID:      1,
 		toolResults:           make(map[string]toolResultMeta),
+		commandSeqs:           make(map[string]int64),
 		toolConcurrency:       resolveToolConcurrency(cfg.ToolConcurrency),
 		readBudget:            newToolReadBudget(cfg.ToolReadBudgetBytes),
 		readHashes:            make(map[string][sha256.Size]byte),
@@ -2450,6 +2466,17 @@ func (s *Session) History() []message.Message {
 	return append([]message.Message(nil), s.history...)
 }
 
+// HistoryAndCommands returns copies of the session's message history and
+// folded command records from one s.mu hold — the pairing History() and
+// Commands() cannot promise when called separately, since a compaction
+// between the two calls can reanchor a command to a summary the earlier
+// history read never saw.
+func (s *Session) HistoryAndCommands() ([]message.Message, []message.CommandRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]message.Message(nil), s.history...), append([]message.CommandRecord(nil), s.commands...)
+}
+
 func (s *Session) append(m message.Message) {
 	s.appendWithUsage(m, nil)
 }
@@ -2844,15 +2871,6 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	// A "/compact" prompt is a command, not model input.
-	if isExplicitCompactCommand(text, blobs) {
-		res, err := s.RunCompactCommand(ctx, CompactOptions{})
-		if err != nil {
-			s.emitSessionError(err)
-			return nil, err
-		}
-		return res.Summary, nil
-	}
 	if backend, ok := s.delegatedBackend(); ok {
 		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
 	}
@@ -2938,8 +2956,6 @@ func (s *Session) delegatedBackend() (DelegatedBackend, bool) {
 }
 
 // dispatchClaudeCodeTurn appends text and runs it through backend.
-// RunCompactCommand calls this directly rather than promptWithOrigin, which
-// would recheck isExplicitCompactCommand and recurse.
 func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),

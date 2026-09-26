@@ -27,9 +27,11 @@ Scope is harness alone. A session in `harness run`, `harness serve`, and
 the SDK gets the complete command set with no other service present.
 Section 10 records why.
 
-Harness renders no menu. It owns the vocabulary and one terminal surface,
-`harness run`. Every graphical menu is a client's, and `GET /commands` is
-what a client builds it from.
+Harness renders no menu. It owns the vocabulary and resolves a typed
+command on `harness run`'s terminal and, for a caller that declares its
+input typed, inside `harness serve`'s prompt routes (see "Serve-mode
+resolution" below). Every graphical menu is a client's, and
+`GET /commands` is what it builds from.
 
 ## 1. Three kinds, one registry
 
@@ -115,8 +117,10 @@ spaces are the same condition, and keeping the difference would make them
 look different in a log.
 
 A line that does not start with `/` is not a command. `Resolve` reports
-that, and the caller sends the line unchanged. An unknown `/name` is an
-error. A frontend must not send it to the model as literal text.
+that, and the caller sends the line unchanged. For `harness run`, an
+unknown `/name` is an error, with one exception below. `harness serve`
+differs: a typed unknown `/name` stays a plain prompt, sent on unchanged —
+see "Serve-mode resolution" below.
 
 One case sends an unknown `/name` on as literal text, on purpose: a
 session delegated to the Claude Code CLI (`engine.Session.ClaudeCodeDelegated`).
@@ -158,12 +162,11 @@ the same answer.
 
 Rule 1 alone prevents the failure above.
 
-A menu adds a fifth protection that no parser gives. When `/` opens a
-menu and the command fires on SELECTION, no parse stands between the
-keystroke and the operation. Text that stops matching an entry is text,
-and Enter sends it. A frontend with a menu must fire on selection, never
-on submit. `harness run -p "/compact"` has no menu, so rules 1 through 4
-carry the full weight there.
+A menu is autocomplete, not a fifth protection: it fills the input on
+selection but does not run the command. Submitting the line resolves it,
+under the same four rules every time — a menu selection carries no
+special trust of its own. `harness run -p "/compact"` has no menu, so
+rules 1 through 4 carry the full weight there too.
 
 ## 4. Control commands
 
@@ -236,15 +239,30 @@ dispatches its own. `GET /commands` returns them with no `method` and no
 
 ## 5. Dispatch
 
-The engine does not interpret a control command, with one exception.
-`Session.Prompt` (`engine/engine.go`) keeps its signature and never learns
-most control verbs; the command string stops at the frontend for those.
-`/compact` is the exception: `promptWithOrigin` matches the exact text and
-calls `Session.RunCompactCommand` (`engine/compact.go`) instead of sending
-it to the model, so a caller that skips `Resolve` still compacts the
-session instead of prompting it. `RunCompactCommand` calls `Session.Compact`
-on a native session. A claude-code-delegated session has no journal to
-fold, so `RunCompactCommand` issues the CLI's own compact command instead.
+The engine does not interpret a control command; `Session.Prompt`
+(`engine/engine.go`) learns no control verb, so a caller that skips
+`Resolve` and sends `/compact` as a prompt to a NATIVE session gets an
+ordinary prompt — nothing compacts. On a claude-code-delegated session
+the same text reaches the CLI unchanged and the CLI runs it as its own
+command, keeping the caller's own origin, not `OriginEngine`.
+`Session.RunCompactCommand` (`engine/compact.go`) is the only entry
+point for a RESOLVED compact command, reached through `POST
+/session/{id}/compact` or the `run`-mode dispatcher, never through
+`Session.Prompt`: it calls `Session.Compact` on a native session, or —
+since a delegated session has no journal to fold — issues the CLI's own
+compact command, with `OriginEngine`. `harness serve` resolves a typed
+command before `Session.Prompt` ever runs, through `resolvePromptCommand`
+(`server/commands.go`), for every op it supports — see "Serve-mode
+resolution" below.
+
+> **Exception to the `//x` escape.** The Claude Code CLI treats a
+> leading `/name` in any text it receives as one of its own commands
+> (`/cost`, `/context`, `/usage` — section 2), typed or not. A delegated
+> session's typed `//x` still unescapes to `/x` and reaches the CLI as
+> input — harness cannot keep it literal, since the CLI owns the name.
+> On a NATIVE session, `//compact` unescapes to plain text and reaches
+> the model as ordinary input: the engine learns no control verb, so
+> nothing compacts.
 
 Three reasons, in order of weight.
 
@@ -349,11 +367,22 @@ The server returns the resolved registry for the current configuration:
 ]}
 ```
 
-A frontend renders the menu and the argument hints from this response
-alone. It does not carry its own table. `method` and `path` are the
-serve-mode mapping, present so an HTTP client needs no route knowledge of
-its own; `cmd/harness` ignores both and dispatches on `op`. Add the entry
-to `server/openapi.yaml`, which stays authoritative.
+A frontend builds its slash-menu autocomplete from this response, rather
+than carrying its own table; harness resolves the typed line server-side,
+so a frontend never re-implements `Resolve`. `method` and `path` are the
+serve-mode mapping; `cmd/harness` ignores both and dispatches on `op`.
+
+`serve_support` is a second, additive map, keyed by `name`, for a client
+(the Boxes console) that resolves commands itself rather than proxying
+through a frontend. Each entry reads `{"supported": true}` or
+`{"supported": false, "reason": "Not available in this client."}`: `new`
+(aliased `/clear`), `resume`, and `quit` are unsupported since the
+frontend owns the session pointer; `queue-clear` is unsupported since
+nothing dispatches `DELETE /session/{id}/queue` through serve mode yet.
+No `serve_support` key at all means an older server that resolves
+nothing.
+
+Add the entry to `server/openapi.yaml`, which stays authoritative.
 
 ### The menu lives in the input area
 
@@ -371,7 +400,102 @@ Separate surfaces do not mean separate vocabularies. The menu builds from
 calls the same action the owning component exposes, exactly as the
 palette bridge does today. Neither surface reimplements a guard.
 
-The menu fires on selection. Section 3 gives the reason.
+The menu fills the input on selection; submitting the line fires the
+command. Section 3 gives the reason.
+
+## Serve-mode resolution
+
+`harness serve` resolves a slash command on submit, before any other
+branch runs, through one shared entry point, `resolvePromptCommand`
+(`server/commands.go`), called from `POST /session/{id}/prompt_async`,
+`/enqueue`, and `/send`. A resolved command never appends a user message
+or enters the prompt queue (see `docs/session-storage-and-queue.md`).
+
+Resolution runs only when the request's declared provenance
+(`message.PromptSource`, normalized) equals `typed`; empty or omitted
+normalizes to `api`. The gate is not a security boundary: one bearer
+token authenticates every caller, so anything holding it — a delegated
+Claude Code CLI process included — can declare `typed`. It only stops
+an untagged caller's literal `/foo` from becoming a command.
+
+A typed line goes to `command.Registry.Resolve`. Not a command or an
+unknown name: no record, sent on as an ordinary prompt (`//x` becomes
+literal `/x` here, and only here — a non-typed `//x` passes through
+unchanged; see section 5's `//x` exception). Bad arguments
+(`ArgsError`): a `failed` record journals at once with `Resolve`'s own
+error text; nothing runs. A known command: an attachment fails it
+outright, and an unsupported `serve_support` entry marks it
+`unsupported`; a running turn refuses it unless it declares
+`available_during_task` (never queued); otherwise `accepted`, its own
+route runs in process, and a terminal record follows — a turn starting
+between that check and the route call meets the same busy 409, which
+`commandOutcome` also maps to `refused`.
+
+`<name>` below is the name (or alias) the caller typed, never the
+registry's canonical `name`.
+
+### Status and text
+
+| Status | Text |
+|---|---|
+| `accepted` | omitted |
+| `succeeded` | `/<name> succeeded` |
+| `failed` (bad arguments) | `Resolve`'s own error text, e.g. `command: /compact keep_turns must be a number, got "abc"` |
+| `failed` (attachment) | `/<name> takes no attachments; nothing ran` |
+| `failed` (route error) | the route's own `error` string |
+| `failed` (compact skip) | `/compact did nothing: <reason>` (`engine.CompactSkipMessage`) |
+| `failed` (managed-child 409) | the route's own `error` string — `rejectManagedChildTurn`'s rejection against a raced `/compact`; never `refused` |
+| `refused` | `/<name> cannot run while a turn is running; send it again after the turn ends` |
+| `refused` (raced dispatch) | same sentence, from a 409 on the route call itself |
+| `unsupported` | `/<name> is not available in this client` |
+| `interrupted` (boot) | `harness restarted before /<name> finished; it will not run again` |
+| `interrupted` (drain) | `harness stopped before /<name> finished; it will not run again` |
+
+Boot `interrupted` rewrites a still-`accepted` command whose dispatch
+will not resume after a restart (`Session.RepairInterruptedCommands`);
+drain `interrupted` is a route call failing because the process is
+shutting down. Boot reconcile then backfills each session's records,
+LATEST record per command only, so a client that lost the accepted event
+to a crash still sees the terminal one and folds by `id` to the correct
+final state.
+
+### The record and its carriers
+
+Every resolution that reaches a `CommandRecord` journals
+`message.CommandRecord` in one shape regardless of route: `id`, `line`,
+`name`, `source`, `status`, `created_at`, `updated_at` are always
+present; `args`, `source_id`, `source_label`, `client_ref`, `text`,
+`result`, `result_truncated`, and `after_message_id` appear only when
+non-empty. `result` is the route's own 2xx JSON body, capped at 16 KiB
+(`result_truncated` is `true` over the cap) — except `OpCompact`, never
+capped: `{"turns_folded", "first_id", "last_id", "summary_id"}` on a
+native fold, `{"claude_code_delegated": true}` on the delegated lane.
+
+`after_message_id` anchors the command to the last durable message at
+its first record (empty means "before every message"), re-anchored to
+the fold's own summary id on a later compaction — relying on message IDs
+staying unique, the same assumption clients use to de-duplicate pages;
+clients upsert by `id`, so a reused ID rendering a record twice is
+harmless. A dispatched command journals exactly two records sharing one
+`id` (`accepted`, then one terminal status); every other outcome above
+journals at most one, and `POST /session/{id}/enqueue`'s idempotency
+`seq` covers a command like an ordinary prompt — a duplicate answers
+`{"status": "duplicate", "watermark": N}` and nothing runs twice.
+
+`client_ref` is an optional caller-minted correlation id (up to 128
+printable ASCII bytes, the `source_id` rule) so a caller dispatching
+through `/enqueue` — the Boxes console's case — can find the record its
+prompt produced without seeing the reply; every record, and the receipt
+(`CommandReceipt.client_ref`), carries it back, though an ordinary
+prompt never journals it. A resolved command reaches a client three
+ways: the durable `"command"` SSE event
+(`{"type":"command","session_id":"…","seq":…,"command":{…}}`, replayable
+from `from=<seq>`); `commands` on `GET /session/{id}/message`'s
+bootstrap and page responses, holding records whose `after_message_id`
+falls inside the window (a window from the first message also holds
+every empty-anchor record; always `[]` when empty); and
+`GET /session/{id}/journal`, as `command_id`/`command_name`/
+`command_status` metadata, never the full record.
 
 ## 7. Prompt commands
 
@@ -466,8 +590,10 @@ box. Wrapping is not owning, and it is out of scope here.
 
 1. `command` package: `Spec`, `Registry`, `Resolve`, `Op`, the builtin
    control table. No I/O, no routes.
-2. `server` dispatcher: the `Op`-to-route map, `GET /commands`, and the
-   `server/openapi.yaml` entry.
+2. `server` dispatcher: the `Op`-to-route map, `GET /commands` (including
+   `serve_support`), and the `server/openapi.yaml` entry.
+   `resolvePromptCommand` resolves a typed line on every prompt-landing
+   route and journals its `CommandRecord` (see "Serve-mode resolution").
 3. `cmd/harness` dispatcher: `Op` to a method call on the held session,
    for `-resume` and `-continue` runs.
 4. Console menu: `/` in the input area opens a menu built from
@@ -507,6 +633,16 @@ Name the failure first.
 - Stage 4: a project command shadows a user command of the same name.
 - Stage 4: an appended message carries `PromptSourceCommand` and the
   expanded text.
+- Only `source: "typed"` resolves `/compact`; an empty or `api` source
+  stays a plain prompt through `resolvePromptCommand`.
+- A typed `//x` resolves to the literal text `/x`, never a
+  `CommandRecord`; a non-typed `//x` reaches the model or queue unchanged.
+- A typed `/queue-clear` records `unsupported`; a typed dispatchable
+  command against a busy session records `refused`, not `accepted`, and
+  nothing is queued.
+- A dispatched command journals exactly two records sharing one `id`:
+  `accepted`, then one terminal status. A command still `accepted` at
+  boot is repaired to `interrupted` before any client can observe it.
 
 Table tests suit `Resolve`. Use `httptest` for `GET /commands`.
 

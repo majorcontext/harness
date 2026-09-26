@@ -205,6 +205,9 @@ const (
 	// applyClaudeCodeUsage's doc comment for why that divergence is safe
 	// here.
 	recClaudeCodeUsage = "claude_code.usage"
+	// recCommand is one resolved slash command's record, never a recMessage,
+	// so a command never enters s.history or a provider request.
+	recCommand = "command"
 )
 
 // record is one line of a session log file.
@@ -293,6 +296,8 @@ type record struct {
 	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
 	// promptRecord and queue.go). nil on every other record type.
 	Prompt *promptRecord `json:"prompt,omitempty"`
+	// Command carries a recCommand record's payload. nil otherwise.
+	Command *commandRecord `json:"command,omitempty"`
 	// TaskSpawn carries a recTaskSpawned record's payload (see
 	// taskSpawnRecord). nil on every other record type.
 	TaskSpawn *taskSpawnRecord `json:"task_spawn,omitempty"`
@@ -1498,6 +1503,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// two can never drift on the torn-write and ID-burn rules it holds.
 	qf := promptQueueFold{queue: s.promptQueue, nextID: s.promptQueueNextID, seq: s.enqueueSeq}
 
+	cmds, cSeqs := s.commands, s.commandSeqs
+
 	// apply is the switch every fold below writes into a Session field
 	// through. A snapshot-anchored load (snapshotStartAfter above) SKIPS
 	// this switch for every record at or before the anchor, so any Session
@@ -1700,6 +1707,14 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if rec.Prompt != nil {
 				qf.dequeued(*rec.Prompt)
 			}
+		case recCommand:
+			// qf.observeSeq advances the same durable-enqueue watermark a
+			// prompt.queued record's own Seq does: commands and
+			// durably-enqueued prompts share one seq space per session.
+			if rec.Command != nil {
+				cmds = foldCommand(cmds, cSeqs, rec.Command.CommandRecord, rec.Command.Seq)
+				qf.observeSeq(rec.Command.Seq)
+			}
 		case recTaskSpawned:
 			// Folded into s.spawnedChildIDs — see recTaskSpawned's own doc
 			// comment (the "proactive-enough" crash-recovery finding) and
@@ -1812,9 +1827,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// far (guaranteed present, in order, since a compact record can
 			// only be written chronologically after those messages were
 			// themselves durably appended) and splice — the identical
-			// function the live path uses (spliceCompact, compact.go), so
-			// the two can never drift apart. Not found is corruption, an
-			// explicit error, never a silent best-effort guess.
+			// bounds and splice functions the live path uses (compactBounds/
+			// spliceCompactBounds, compact.go), so the two can never drift
+			// apart. Not found is corruption, an explicit error, never a
+			// silent best-effort guess.
 			if rec.Compact == nil {
 				return fmt.Errorf("compact record without payload at line %d", line)
 			}
@@ -1849,19 +1865,18 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// error. Not a regression: main hard-fails this load every time,
 			// and a session that loads with a slightly-wrong fold beats a
 			// session that never loads again.
-			// applyCompactRecord (compact.go) runs the heal and then
-			// spliceCompact. It is shared with the metadata index's own
-			// fold (index.go), so both agree on how many messages a
-			// compact record removes. A failed heal falls through
-			// unchanged: spliceCompact looks for the original (unhealed)
-			// LastID, fails to find it exactly as before, and returns its
-			// usual loud, explicit error — never a silent best-effort
-			// guess.
-			spliced, err := applyCompactRecord(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded, rec.Compact.Summary)
+			// compactRecordBounds runs the heal and returns the range to
+			// splice, shared with the metadata index's own fold. A failed
+			// heal falls through unchanged: the splice below returns its
+			// usual loud, explicit error rather than a silent guess.
+			start, end, err := compactRecordBounds(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)
 			}
-			s.history = spliced
+			// Re-anchor cmds (the command trail folded so far) exactly as the
+			// live path does — see reanchorCommands.
+			reanchorCommands(cmds, s.history, start, end, rec.Compact.Summary.ID)
+			s.history = spliceCompactBounds(s.history, start, end, rec.Compact.Summary)
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt
 			// Cumulative usage ONLY (see record.Usage's doc comment above
@@ -1922,6 +1937,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.replayedRecords++
 	}
 	s.promptQueue, s.promptQueueNextID, s.enqueueSeq = qf.queue, qf.nextID, qf.seq
+	s.commands, s.commandSeqs = cmds, cSeqs
 	// A log from an older binary or an external writer can carry an
 	// assistant tool_call whose turn died before a result was recorded.
 	// Repair at ingest so every downstream consumer sees a protocol-valid

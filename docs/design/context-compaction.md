@@ -203,15 +203,22 @@ to the real-error case above (`Prompt` fails outright) and the conclusive
 case (`Prompt` proceeds without ever having recorded the pre-compaction
 attempt's own text).
 
-**A `/compact` prompt** (exact text, trimmed, no attachments) is a command,
-not model input: `promptWithOrigin` intercepts it before either lane's
-ordinary dispatch, on every lane, so a client never has to know which lane a
-session is on. `POST /session/{id}/compact` and an explicit `/compact`
-prompt both funnel through one entry point, `Session.RunCompactCommand`: on
-a native session it calls `Session.Compact`; on a CURRENTLY-delegated
-session, `Session.Compact` itself still refuses (harness has no journal to
-fold there), so `RunCompactCommand` instead issues the Claude Code CLI's
-own `compact` command — the CLI's published control-request surface
+**A typed `/compact` command** is not model input: `harness serve`
+resolves it before it reaches the engine as a prompt
+(`docs/design/slash-commands.md`) and dispatches it as
+`POST /session/{id}/compact`. The engine learns no control verb from
+prompt text: an untyped `/compact` prompt to a NATIVE session is
+ordinary model input, and on a claude-code-delegated session the same
+untyped text reaches the CLI unchanged and the CLI runs it as its own
+command — the same `//x` exception `docs/design/slash-commands.md` §5
+describes, since the delegated lane never distinguishes typed from
+untyped text — keeping the caller's own origin, not `OriginEngine`.
+`POST /session/{id}/compact` and the `run`-mode dispatcher both funnel
+through `Session.RunCompactCommand`: on a native session it calls
+`Session.Compact`; on a CURRENTLY-delegated session, which
+`Session.Compact` itself still refuses (no journal to fold), it instead
+issues the Claude Code CLI's own `compact` command — the CLI's published
+control-request surface
 (`@anthropic-ai/claude-agent-sdk`'s `sdk.d.ts`) has no separate compaction
 trigger, so sending its command is the only mechanism. The command is
 dispatched with `message.OriginEngine`, never the caller's own text or

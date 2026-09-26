@@ -24,24 +24,35 @@ import (
 const (
 	sourceIDMaxBytes    = 128
 	sourceLabelMaxBytes = 256
+	// clientRefMaxBytes bounds client_ref, a caller-minted correlation id.
+	clientRefMaxBytes = 128
 )
 
-// sanitizeSourceID rejects in when it exceeds sourceIDMaxBytes or contains
-// a byte outside printable ASCII (0x20-0x7E) — unlike sourceLabel below,
-// an identifier is silently truncated or stripped at the caller's own
-// peril (a truncated or byte-mangled id looks up nothing, or the wrong
-// thing, later), so this REJECTS a malformed one rather than repairing it.
-// Empty is always valid (SourceID is optional).
-func sanitizeSourceID(in string) (string, error) {
-	if len(in) > sourceIDMaxBytes {
-		return "", fmt.Errorf("source_id exceeds %d bytes", sourceIDMaxBytes)
+// sanitizeASCIIID rejects in when it exceeds maxBytes or contains a byte
+// outside printable ASCII (0x20-0x7E), naming field in the error. It
+// rejects outright rather than truncating or stripping (unlike sourceLabel
+// below): a truncated or byte-mangled id looks up nothing, or the wrong
+// thing, later. Empty always passes.
+func sanitizeASCIIID(field, in string, maxBytes int) (string, error) {
+	if len(in) > maxBytes {
+		return "", fmt.Errorf("%s exceeds %d bytes", field, maxBytes)
 	}
 	for i := 0; i < len(in); i++ {
 		if c := in[i]; c < 0x20 || c > 0x7e {
-			return "", fmt.Errorf("source_id must be printable ASCII")
+			return "", fmt.Errorf("%s must be printable ASCII", field)
 		}
 	}
 	return in, nil
+}
+
+// sanitizeSourceID applies sanitizeASCIIID's rule to source_id.
+func sanitizeSourceID(in string) (string, error) {
+	return sanitizeASCIIID("source_id", in, sourceIDMaxBytes)
+}
+
+// sanitizeClientRef applies sanitizeASCIIID's rule to client_ref.
+func sanitizeClientRef(in string) (string, error) {
+	return sanitizeASCIIID("client_ref", in, clientRefMaxBytes)
 }
 
 // sanitizeSourceLabel bounds and cleans in for durable storage and

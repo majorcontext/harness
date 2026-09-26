@@ -1265,19 +1265,24 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		// residency race in coldWindowedBootstrap: fall through to the
 		// always-correct path below, windowed to the same tail limit names.
 	}
-	msgs, seq, liveFrom, seqs, ok := s.transcriptSyncedThrough(id)
+	msgs, seq, liveFrom, seqs, cmds, ok := s.transcriptSyncedThrough(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
+	// fromFirst stays true unless the window below truncates msgs.
+	fromFirst := true
 	if limit > 0 {
+		before := len(msgs)
 		msgs, seqs = windowTranscriptTail(msgs, seqs, limit)
+		fromFirst = len(msgs) == before
 	}
 	writeJSON(w, http.StatusOK, transcriptJSON{
 		Messages:   marshalMessages(msgs),
 		StreamFrom: seq,
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
+		Commands:   engine.CommandsInWindow(cmds, msgs, fromFirst),
 	})
 }
 
@@ -1353,6 +1358,7 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 		StreamFrom: seq,
 		LiveFrom:   liveFrom,
 		Seqs:       seqs,
+		Commands:   page.Commands,
 	}, true
 }
 
@@ -1390,10 +1396,11 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 // and why the two numbering spaces must never be confused). A caller that
 // reads only Messages/StreamFrom/LiveFrom is unaffected.
 type transcriptJSON struct {
-	Messages   []json.RawMessage `json:"messages"`
-	StreamFrom int64             `json:"stream_from"`
-	LiveFrom   int64             `json:"live_from"`
-	Seqs       []int64           `json:"seqs,omitempty"`
+	Messages   []json.RawMessage       `json:"messages"`
+	StreamFrom int64                   `json:"stream_from"`
+	LiveFrom   int64                   `json:"live_from"`
+	Seqs       []int64                 `json:"seqs,omitempty"`
+	Commands   []message.CommandRecord `json:"commands"`
 }
 
 // marshalMessages renders messages for the wire, one at a time, replacing
@@ -1446,6 +1453,8 @@ type messagePageJSON struct {
 	Total int `json:"total"`
 	// HasMore reports whether older messages exist before FirstSeq.
 	HasMore bool `json:"has_more"`
+	// Commands holds the folded command records anchored in this page. Never nil.
+	Commands []message.CommandRecord `json:"commands"`
 }
 
 // handleMessagePage answers GET /session/{id}/message?before_seq=N&limit=K:
@@ -1491,6 +1500,7 @@ func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id s
 		LastSeq:  page.LastSeq,
 		Total:    page.Total,
 		HasMore:  page.HasMore,
+		Commands: page.Commands,
 	})
 }
 
@@ -1532,22 +1542,26 @@ func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq
 	// today — the repair runs at load, and this session was never loaded —
 	// but filtering makes the two paths agree by CONSTRUCTION rather than
 	// by an argument about which shapes can reach here.
-	msgs := durableOnly(sess.History())
+	history, cmds := sess.HistoryAndCommands()
+	msgs := durableOnly(history)
 	total := len(msgs)
 	// The same window arithmetic the journal path uses, from the same
 	// helper: two copies would give one session two different paginations
 	// depending on which path answered it.
 	lo, hi, _ := engine.MessagePageWindow(total, beforeSeq, limit)
 	if hi < lo {
-		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total})
+		commands := engine.CommandsInWindow(cmds, nil, total == 0)
+		writeJSON(w, http.StatusOK, messagePageJSON{Messages: []json.RawMessage{}, Total: total, Commands: commands})
 		return
 	}
+	window := msgs[lo-1 : hi]
 	writeJSON(w, http.StatusOK, messagePageJSON{
-		Messages: marshalMessages(msgs[lo-1 : hi]),
+		Messages: marshalMessages(window),
 		FirstSeq: lo,
 		LastSeq:  hi,
 		Total:    total,
 		HasMore:  lo > 1,
+		Commands: engine.CommandsInWindow(cmds, window, lo == 1),
 	})
 }
 
@@ -1755,8 +1769,11 @@ type promptAsyncResponse struct {
 	// minted one when `id` was empty or a reserved-prefix collision (see
 	// engine.ResolveMessageID) — so a caller that pre-minted an id for its
 	// own optimistic render can confirm which id to reconcile against,
-	// whether this prompt started immediately or is still queued.
-	MessageID string `json:"message_id"`
+	// whether this prompt started immediately or is still queued. Omitted
+	// when Status is "command": a resolved command never becomes a message.
+	MessageID string `json:"message_id,omitempty"`
+	// Command carries the resolved command's receipt when Status is "command".
+	Command *commandReceiptJSON `json:"command,omitempty"`
 }
 
 // handlePrompt is POST /session/{id}/prompt_async (see docs/plans/2026-07-19-
@@ -1793,6 +1810,8 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// dispatches at once or sits in the queue first — see runPrompt's
 		// own doc comment on prov.
 		promptSourceInput
+		// ClientRef is an optional caller-minted correlation id.
+		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it: blob data arrives as base64 and
 	// encoding/json allocates the decoded []byte during Unmarshal, so the
@@ -1830,6 +1849,15 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	prov, code, err := parsePromptProvenance(body.promptSourceInput)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	clientRef, err := sanitizeClientRef(body.ClientRef)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, prov, 0, clientRef)
+	if handled {
 		return
 	}
 	// Resolved ONCE, here, regardless of which branch below actually ends
@@ -2134,9 +2162,11 @@ func (s *Server) enqueueOrDispatch(w http.ResponseWriter, id string, text string
 // duplicate). Queued mirrors promptAsyncResponse's rule: depth including
 // this prompt, only when status is "queued".
 type enqueueResponse struct {
-	Status    string `json:"status"` // "started" | "queued" | "duplicate"
+	Status    string `json:"status"` // "started" | "queued" | "duplicate" | "command"
 	Watermark int64  `json:"watermark"`
 	Queued    int    `json:"queued,omitempty"`
+	// Command carries the resolved command's receipt when Status is "command".
+	Command *commandReceiptJSON `json:"command,omitempty"`
 	// MessageID mirrors promptAsyncResponse.MessageID: the id this
 	// request's own prompt was (or will be) recorded under. Omitted on a
 	// "duplicate" response — this call's own resolution was never stored;
@@ -2173,9 +2203,6 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.rejectManagedChildTurn(w, id) {
-		return
-	}
 	var body struct {
 		Parts []promptPartInput `json:"parts"`
 		Seq   int64             `json:"seq"`
@@ -2187,6 +2214,8 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		// promptSourceInput: OPTIONAL provenance (source/source_id/
 		// source_label) — see parsePromptProvenance.
 		promptSourceInput
+		// ClientRef mirrors handlePrompt's own body.ClientRef.
+		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it, for the same reason handlePrompt
 	// does (see promptRequestMaxBytes's doc comment): blob data arrives as
@@ -2231,6 +2260,18 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	prov, code, err := parsePromptProvenance(body.promptSourceInput)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	clientRef, err := sanitizeClientRef(body.ClientRef)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq, clientRef)
+	if handled {
+		return
+	}
+	if s.rejectManagedChildTurn(w, id) {
 		return
 	}
 	// Resolved once, like handlePrompt's own msgID: this call's chosen
@@ -3496,10 +3537,11 @@ func (s *Server) handleSetServiceTier(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, setServiceTierResponseJSON{ServiceTier: sess.ServiceTier()})
 }
 
-// evictResidentLocked unloads the longest-idle non-busy sessions from
+// evictResidentLocked unloads the longest-idle eligible sessions from
 // s.sessions (this server's OWN residency bookkeeping) when the resident
-// count exceeds Options.MaxResident. Busy sessions are never evicted;
-// s.seen is retained so journal idempotency survives the unload.
+// count exceeds Options.MaxResident. A running session or one with a
+// positive sessionState.pins is never evicted; s.seen is retained so
+// journal idempotency survives the unload.
 //
 // This frees s.sessions' own entry, but not necessarily the *Session object
 // itself: a root is adopted into sessMgr (AdoptRoot) and never reaped
@@ -3530,8 +3572,8 @@ func (s *Server) evictResidentLocked() (evicted []*engine.Session) {
 	}
 	cands := make([]cand, 0, len(s.sessions))
 	for id, st := range s.sessions {
-		if st.running {
-			continue // busy sessions hold an in-flight prompt; keep them resident
+		if st.running || st.pins > 0 {
+			continue // busy or pinned sessions must stay resident
 		}
 		cands = append(cands, cand{id, st.lastUsed})
 	}
@@ -4227,6 +4269,11 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.commandColdLoads[id] > 0 {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "session is running a command; retry after it finishes")
+		return
+	}
 	st := s.sessions[id]
 	if st == nil {
 		s.mu.Unlock()
@@ -4241,6 +4288,11 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 	if st.running {
 		s.mu.Unlock()
 		writeErr(w, http.StatusConflict, "session is busy; abort it before ending it")
+		return
+	}
+	if st.pins > 0 {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "session is running a command; retry after it finishes")
 		return
 	}
 	wt := st.worktree
