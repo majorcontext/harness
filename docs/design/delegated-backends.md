@@ -31,10 +31,18 @@ in codex's app-server:
 
 | harness mechanism | codex app-server |
 |---|---|
-| a `get_context_usage` control request written into the CLI's stdin | `thread/tokenUsage/updated` notification |
+| usage read from the terminal `result` envelope: a whole-turn aggregate, not prompt occupancy | `thread/tokenUsage/updated` notification |
 | `/compact` re-implemented per lane | `thread/compact/start` |
 | queued prompts packed into an `OPERATOR MESSAGES` template and unpacked by the console | `turn/steer`, which appends input to an active turn |
 | `modelmeta`'s static per-ref window tables | `model/list`, reporting models and reasoning efforts |
+
+The first row is the sharpest of the four. Harness does not have a usable
+occupancy signal on this lane at all: the `result` envelope reports what a
+whole turn spent across every internal API call, which is why a session once
+displayed 1,725,110 used tokens against a 1,000,000-token window, and why the
+same figure collapses to near zero straight after a compaction. Recovering a
+real reading is unmerged work that has taken fourteen review rounds so far.
+Codex reports it as one notification.
 
 An intersection interface would reduce all four to the claude-code
 implementation and keep the console-side reconciliation those mechanisms
