@@ -2942,14 +2942,21 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origi
 	return s.runDelegatedTurn(ctx)
 }
 
-// runDelegatedTurn runs one Claude Code CLI turn. Callers that already
-// checked claudeCodeDelegated call this directly, not runAgenticLoop, so a
-// model switch in between cannot send their text to the wrong lane.
+// runDelegatedTurn runs one turn through the DelegatedBackend registered
+// for the session's current model. Callers that already checked
+// claudeCodeDelegated call this directly, not runAgenticLoop, so a model
+// switch in between cannot send their text to the wrong lane.
 func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()
-	msg, err := s.runClaudeCodeTurn(ctx)
+	backend, err := delegatedBackends.For(s.Model())
+	if err != nil {
+		s.requeueTaskNotifications()
+		s.emitSessionError(err)
+		return nil, err
+	}
+	msg, err := backend.RunTurn(ctx, s)
 	if err != nil {
 		s.requeueTaskNotifications()
 		s.emitSessionError(err)
@@ -2979,8 +2986,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error
 // docs/design/goal-retry-directive-reuse.md.
 //
 // A session whose model names ClaudeCodeProviderFamily dispatches to
-// runClaudeCodeTurn (engine/claude_code_backend.go) instead, at the very
-// top, before any of the native-loop machinery below runs: maxTokensUsed
+// runDelegatedTurn (delegated_backend.go) instead, at the very top, before
+// any of the native-loop machinery below runs: maxTokensUsed
 // accounting, streamTurnWithRetry, runToolCalls, and
 // drainQueuedPromptsIntoHistory's tool-call-boundary drain are ALL native-
 // provider-call concepts that make no sense for a turn Claude Code itself
