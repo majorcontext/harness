@@ -12,9 +12,6 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// commandClientRefResponse decodes the "command" shape every prompt-landing
-// route's response carries, plus client_ref — see resolvePromptCommand and
-// commandReceiptJSON.
 type commandClientRefResponse struct {
 	Status  string `json:"status"`
 	Command struct {
@@ -24,13 +21,6 @@ type commandClientRefResponse struct {
 	} `json:"command"`
 }
 
-// TestClientRefCarriesOnTypedCommand is the named-failure test for the
-// core promise: client_ref, sent alongside a TYPED "/status" on any of the
-// three prompt-landing routes, must appear on the receipt, on both the
-// accepted and terminal journaled "command" events, and on the bootstrap
-// transcript's folded commands. Failure: the Boxes console cannot
-// correlate its own prompt with the command record it later reads back,
-// once delivery went through /enqueue and it never saw a reply.
 func TestClientRefCarriesOnTypedCommand(t *testing.T) {
 	const clientRef = "pd_01abc"
 	parts := []map[string]string{{"type": "text", "text": "/status"}}
@@ -86,11 +76,6 @@ func TestClientRefCarriesOnTypedCommand(t *testing.T) {
 				t.Fatalf("bootstrap commands = %+v, want one record with client_ref %q", bootstrap.Commands, clientRef)
 			}
 
-			// GET .../message?before_seq=&limit= is a SEPARATE read path
-			// (engine.ReadMessagePage's tailPage/foldedPage, via
-			// decodeCommandHeads' own pass-2 full decode of the latest
-			// record) from the bootstrap stream_from=1 read just above —
-			// both must carry client_ref.
 			windowed := getPageCommands(t, h, id, "?limit=10")
 			if len(windowed.Commands) != 1 || windowed.Commands[0].ClientRef != clientRef {
 				t.Fatalf("windowed page commands = %+v, want one record with client_ref %q", windowed.Commands, clientRef)
@@ -99,14 +84,6 @@ func TestClientRefCarriesOnTypedCommand(t *testing.T) {
 	}
 }
 
-// TestBootMarksAcceptedCommandInterruptedCarriesClientRef mirrors
-// TestBootMarksAcceptedCommandInterrupted (command_journal_test.go), adding
-// ClientRef to the accepted record durably enqueued before the crash: it
-// pins that ClientRef round-trips through the on-disk record and the boot
-// backfill, on both the interrupted repair and the reloaded session — not
-// the copy-forward mechanism itself (see engine's own
-// TestRecordCommandTerminalInheritsClientRef for that), since the folded
-// record RepairInterruptedCommands repairs already carries the value.
 func TestBootMarksAcceptedCommandInterruptedCarriesClientRef(t *testing.T) {
 	const clientRef = "pd_enqueued"
 	dir := t.TempDir()
@@ -135,9 +112,12 @@ func TestBootMarksAcceptedCommandInterruptedCarriesClientRef(t *testing.T) {
 	}
 
 	srv2 := newServer(t, dir, prov, 0)
+	srv2Closed := false
 	t.Cleanup(func() {
-		if err := srv2.Close(); err != nil {
-			t.Errorf("closing second server: %v", err)
+		if !srv2Closed {
+			if err := srv2.Close(); err != nil {
+				t.Errorf("closing second server: %v", err)
+			}
 		}
 	})
 	events := commandEventsForSession(srv2, id)
@@ -154,6 +134,9 @@ func TestBootMarksAcceptedCommandInterruptedCarriesClientRef(t *testing.T) {
 	if interrupted.Command.ClientRef != clientRef {
 		t.Errorf("interrupted event client_ref = %q, want %q", interrupted.Command.ClientRef, clientRef)
 	}
+	if want := "harness restarted before /compact finished; it will not run again"; interrupted.Command.Text != want {
+		t.Errorf("interrupted text = %q, want %q", interrupted.Command.Text, want)
+	}
 
 	reloaded, err := srv2.opts.LoadSession(id)
 	if err != nil {
@@ -163,12 +146,17 @@ func TestBootMarksAcceptedCommandInterruptedCarriesClientRef(t *testing.T) {
 	if len(cmds) != 1 || cmds[0].ClientRef != clientRef {
 		t.Fatalf("reloaded Commands() = %+v, want one record with client_ref %q", cmds, clientRef)
 	}
+	if err := srv2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srv2Closed = true
+	srv3 := newServer(t, dir, prov, 0)
+	t.Cleanup(func() { srv3.Close() })
+	if events := commandEventsForSession(srv3, id); len(events) != 2 {
+		t.Fatalf("second boot added events: %+v", events)
+	}
 }
 
-// assertClientRefNowhere greps both id's own session log and the server's
-// events log for clientRef, raw bytes — not a decoded-field check, so it
-// catches a leak into ANY field (provenance included), not only the one
-// this test set out to check.
 func assertClientRefNowhere(t *testing.T, h *harness, id, clientRef string) {
 	t.Helper()
 	sessionLog, err := os.ReadFile(filepath.Join(h.dir, id+".jsonl"))
@@ -188,13 +176,6 @@ func assertClientRefNowhere(t *testing.T, h *harness, id, clientRef string) {
 	}
 }
 
-// TestClientRefDroppedForOrdinaryPrompt is the named-failure table for the
-// "ordinary prompt drops it" rule: client_ref sent on a non-command prompt
-// must be validated and then discarded — never journaled onto the message,
-// the queue, or any server event, on ANY of the three prompt-landing
-// routes, and whether the prompt dispatches at once or sits in the durable
-// queue behind a busy turn first. Failure: an operator id leaks into
-// durable session or server state a prompt was never meant to carry.
 func TestClientRefDroppedForOrdinaryPrompt(t *testing.T) {
 	const clientRef = "pd_ordinary"
 	parts := []map[string]string{{"type": "text", "text": "hello"}}
@@ -228,10 +209,6 @@ func TestClientRefDroppedForOrdinaryPrompt(t *testing.T) {
 		})
 	}
 
-	// A prompt that arrives while the session is busy sits in the durable
-	// FIFO (its own prompt.queued record) before it ever dispatches — a
-	// separate write path from the three above, and the one the Boxes
-	// console's own /enqueue traffic most often exercises.
 	t.Run("queued_behind_busy_turn", func(t *testing.T) {
 		prov := newBlockingProvider("test")
 		h := newHarness(t, prov)
@@ -269,15 +246,6 @@ func TestClientRefDroppedForOrdinaryPrompt(t *testing.T) {
 	})
 }
 
-// TestClientRefValidation is the named-failure table for client_ref's
-// rejection rule (shared with source_id via sanitizeASCIIID): an oversized
-// or non-ASCII value must 400 on every prompt-landing route, BEFORE any
-// claim, enqueue, or record — even when the text is a TYPED command,
-// which is the one case that could otherwise reach a claim/enqueue/record
-// before the validation error surfaces. Each case sends a typed "/status"
-// (not an ordinary prompt) so a validation-order regression that lets
-// resolvePromptCommand run first would dispatch or durably enqueue a
-// command and 202, not 400 — the exact failure this test must catch.
 func TestClientRefValidation(t *testing.T) {
 	invalid := map[string]string{
 		"too_long":  strings.Repeat("a", 129),
@@ -317,9 +285,6 @@ func TestClientRefValidation(t *testing.T) {
 				if path != "enqueue" {
 					return
 				}
-				// The rejected attempt above must not have consumed seq 1: a
-				// retry with the SAME seq and a VALID client_ref is a fresh
-				// command dispatch, not a "duplicate" no-op.
 				resp, data = h.do("POST", "/session/"+id+"/enqueue", map[string]any{
 					"parts":      []map[string]string{{"type": "text", "text": "/status"}},
 					"source":     "typed",

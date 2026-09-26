@@ -357,8 +357,6 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 // result settles as a successful turn with no assistant message, that the
 // local_command fallback stays scoped to "compact" (or an omitted field),
 // and that a failing compact_result status still emits EventCompactionFailed.
-// Drives RunCompactCommand, the entry point POST /session/{id}/compact and
-// the serve/run dispatchers actually use.
 func TestClaudeCodeCompactTurn(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -427,11 +425,6 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 	}
 }
 
-// TestRunCompactCommandIssuesEngineOriginOnDelegatedSession proves
-// RunCompactCommand's delegated dispatch stamps message.OriginEngine on the
-// "/compact" turn it sends to the CLI, never a caller's own origin: harness
-// decides to compact, so the appended message must never read as user
-// passthrough.
 func TestRunCompactCommandIssuesEngineOriginOnDelegatedSession(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "compact_turn")
 

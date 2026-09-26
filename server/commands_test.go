@@ -143,12 +143,6 @@ func TestOpRoutesMatchTheMux(t *testing.T) {
 	}
 }
 
-// TestServeModeOpsTotal pins the support matrix in both directions,
-// mirroring cmd/harness/command_test.go's TestRunModeOpsAreDeclared:
-// every Op named by a registry KindControl spec is a key in
-// serveModeOps, and no key names an Op outside the registry. A new Op
-// that nobody declares fails here instead of reaching GET /commands as
-// silently unsupported.
 func TestServeModeOpsTotal(t *testing.T) {
 	registry := command.NewRegistry()
 	control := map[command.Op]bool{}
@@ -169,11 +163,6 @@ func TestServeModeOpsTotal(t *testing.T) {
 	}
 }
 
-// TestCommandsServeSupportTotal pins GET /commands' serve_support: a
-// key for every registry entry name and no other key, with new,
-// resume, quit, and queue-clear reported unsupported with the exact
-// published reason. Failure here means the console dims a command that
-// works, or offers one that does not.
 func TestCommandsServeSupportTotal(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	resp, data := h.do("GET", "/commands", nil)

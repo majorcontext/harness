@@ -104,11 +104,6 @@ func compactSummaryTurn(text string, usage provider.Usage) []provider.Event {
 	return compactTurn(text, usage)
 }
 
-// compactTurnWithID is compactTurn with a caller-chosen message ID instead
-// of a fresh compactTurnSeq mint, for a test that needs two turns to
-// produce messages sharing one ID — a duplicate a client retry with the
-// same pre-minted id can genuinely produce (engine.ResolveMessageID accepts
-// a caller's id verbatim).
 func compactTurnWithID(id, text string, usage provider.Usage) []provider.Event {
 	msg := &message.Message{ID: id, Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: text}}}
 	ev := provider.Event{Type: provider.EventDone, Message: msg, StopReason: provider.StopEndTurn, Usage: usage}
@@ -187,153 +182,97 @@ func TestCompactFoldsOldestPrefixKeepsRecentTurns(t *testing.T) {
 	}
 }
 
-// TestCommandReanchoredOnCompact: a command recorded against a message
-// compaction later folds away must follow the summary instead — live, after
-// LoadSession, and on a message page — never an anchor a compacted history
-// can no longer resolve. Failure: a command vanishes from every page once
-// its anchor is folded away.
 func TestCommandReanchoredOnCompact(t *testing.T) {
-	dir := t.TempDir()
-	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurn("one", provider.Usage{InputTokens: 10}),
-		compactTurn("two", provider.Usage{InputTokens: 10}),
-		compactTurn("three", provider.Usage{InputTokens: 10}),
-		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
-	}}
-	s := NewSession(Config{
-		Providers:  provider.Registry{"test": prov},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
-	})
-	runTurns(t, s, 1) // m1 (user), m2 (assistant)
+	cases := []struct {
+		name             string
+		turns            [][]provider.Event
+		preRecordTurns   int
+		postRecordTurns  int
+		wantAnchorBefore func(s *Session) string
+		wantAnchorAfter  func(summaryID string) string
+	}{
+		{
+			name: "compacted anchor follows summary",
+			turns: [][]provider.Event{
+				compactTurn("one", provider.Usage{InputTokens: 10}),
+				compactTurn("two", provider.Usage{InputTokens: 10}),
+				compactTurn("three", provider.Usage{InputTokens: 10}),
+				compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+			},
+			preRecordTurns:   1,
+			postRecordTurns:  2,
+			wantAnchorBefore: func(s *Session) string { return s.History()[1].ID },
+			wantAnchorAfter:  func(summaryID string) string { return summaryID },
+		},
+		{
+			name: "surviving duplicate keeps its own anchor",
+			turns: [][]provider.Event{
+				compactTurnWithID("msg_dup_anchor", "one", provider.Usage{InputTokens: 10}),
+				compactTurn("two", provider.Usage{InputTokens: 10}),
+				compactTurnWithID("msg_dup_anchor", "three", provider.Usage{InputTokens: 10}),
+				compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+			},
+			preRecordTurns:   3,
+			postRecordTurns:  0,
+			wantAnchorBefore: func(s *Session) string { return "msg_dup_anchor" },
+			wantAnchorAfter:  func(summaryID string) string { return "msg_dup_anchor" },
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			prov := &scriptedProvider{name: "test", turns: tc.turns}
+			s := NewSession(Config{
+				Providers:  provider.Registry{"test": prov},
+				Model:      message.ModelRef{Provider: "test", Model: "m1"},
+				SessionDir: dir,
+			})
+			runTurns(t, s, tc.preRecordTurns)
+			anchor := tc.wantAnchorBefore(s)
 
-	anchor := s.History()[1].ID // m2
-	cmd := message.CommandRecord{
-		ID: NewCommandID(), Line: "/compact", Name: "compact",
-		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
-	}
-	if err := s.RecordCommand(cmd); err != nil {
-		t.Fatalf("RecordCommand: %v", err)
-	}
-	if got := s.Commands()[0].AfterMessageID; got != anchor {
-		t.Fatalf("test setup: command anchor = %q, want %q (m2)", got, anchor)
-	}
+			cmd := message.CommandRecord{
+				ID: NewCommandID(), Line: "/compact", Name: "compact",
+				Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
+			}
+			if err := s.RecordCommand(cmd); err != nil {
+				t.Fatalf("RecordCommand: %v", err)
+			}
+			if got := s.Commands()[0].AfterMessageID; got != anchor {
+				t.Fatalf("test setup: command anchor = %q, want %q", got, anchor)
+			}
 
-	runTurns(t, s, 2) // m3..m6
+			runTurns(t, s, tc.postRecordTurns)
 
-	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	if res.TurnsFolded != 2 {
-		t.Fatalf("TurnsFolded = %d, want 2 (folds m1..m4 into the summary)", res.TurnsFolded)
-	}
-	summaryID := res.Summary.ID
+			res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+			if err != nil {
+				t.Fatalf("Compact: %v", err)
+			}
+			if res.TurnsFolded != 2 {
+				t.Fatalf("TurnsFolded = %d, want 2", res.TurnsFolded)
+			}
+			want := tc.wantAnchorAfter(res.Summary.ID)
 
-	if got := s.Commands()[0].AfterMessageID; got != summaryID {
-		t.Fatalf("live Commands() anchor after compact = %q, want summary id %q", got, summaryID)
-	}
-
-	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	if got := loaded.Commands()[0].AfterMessageID; got != summaryID {
-		t.Fatalf("LoadSession Commands() anchor = %q, want %q", got, summaryID)
-	}
-
-	page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
-	if err != nil {
-		t.Fatalf("ReadMessagePage: %v", err)
-	}
-	if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != summaryID {
-		t.Fatalf("page Commands = %+v, want one record anchored to %q", page.Commands, summaryID)
+			if got := s.Commands()[0].AfterMessageID; got != want {
+				t.Fatalf("live Commands() anchor after compact = %q, want %q", got, want)
+			}
+			loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
+			if err != nil {
+				t.Fatalf("LoadSession: %v", err)
+			}
+			if got := loaded.Commands()[0].AfterMessageID; got != want {
+				t.Fatalf("LoadSession Commands() anchor = %q, want %q", got, want)
+			}
+			page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
+			if err != nil {
+				t.Fatalf("ReadMessagePage: %v", err)
+			}
+			if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != want {
+				t.Fatalf("page Commands = %+v, want one record anchored to %q", page.Commands, want)
+			}
+		})
 	}
 }
 
-// TestCommandKeepsAnchorWhenOnlyEarlierDuplicateIsFolded is the red-first
-// regression test for reanchorCommands over a duplicate message ID. Message
-// IDs are not guaranteed unique: engine.ResolveMessageID accepts a caller's
-// id verbatim, so a client retry with the same pre-minted id can append a
-// SECOND message carrying it. Here turn 1's and turn 3's assistant replies
-// share one ID (dupID) — an earlier occurrence and a later one. The command
-// is recorded once the LATER dupID is the last durable message, so its
-// anchor is that later, surviving occurrence. Compact then folds only turns
-// 1 and 2 (KeepTurns: 1 keeps turn 3, which holds the later dupID).
-//
-// Failure mode this pins: reanchorCommands used to test only "does dupID
-// appear anywhere in the folded range", which the EARLIER occurrence
-// satisfies — wrongly moving the command's anchor to the summary even
-// though the message it actually names (the later occurrence) survives the
-// fold untouched.
-func TestCommandKeepsAnchorWhenOnlyEarlierDuplicateIsFolded(t *testing.T) {
-	dir := t.TempDir()
-	const dupID = "msg_dup_anchor"
-	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
-		compactTurnWithID(dupID, "one", provider.Usage{InputTokens: 10}),   // turn 1 asst: earlier dupID
-		compactTurn("two", provider.Usage{InputTokens: 10}),                // turn 2 asst
-		compactTurnWithID(dupID, "three", provider.Usage{InputTokens: 10}), // turn 3 asst: later dupID
-		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
-	}}
-	s := NewSession(Config{
-		Providers:  provider.Registry{"test": prov},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
-	})
-	runTurns(t, s, 3)
-
-	history := s.History()
-	if len(history) != 6 || history[1].ID != dupID || history[5].ID != dupID {
-		t.Fatalf("test setup: history = %+v, want history[1] and history[5] both %q", history, dupID)
-	}
-
-	cmd := message.CommandRecord{
-		ID: NewCommandID(), Line: "/compact", Name: "compact",
-		Source: message.PromptSourceTyped, Status: message.CommandSucceeded,
-	}
-	if err := s.RecordCommand(cmd); err != nil {
-		t.Fatalf("RecordCommand: %v", err)
-	}
-	if got := s.Commands()[0].AfterMessageID; got != dupID {
-		t.Fatalf("test setup: command anchor = %q, want %q (the later dupID)", got, dupID)
-	}
-
-	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	if res.TurnsFolded != 2 {
-		t.Fatalf("TurnsFolded = %d, want 2 (folds turns 1-2, keeps turn 3 with the later dupID)", res.TurnsFolded)
-	}
-
-	if got := s.Commands()[0].AfterMessageID; got != dupID {
-		t.Fatalf("live Commands() anchor after compact = %q, want unchanged %q — the surviving later dupID, not the summary", got, dupID)
-	}
-
-	loaded, err := LoadSession(Config{SessionDir: dir}, s.ID)
-	if err != nil {
-		t.Fatalf("LoadSession: %v", err)
-	}
-	if got := loaded.Commands()[0].AfterMessageID; got != dupID {
-		t.Fatalf("LoadSession Commands() anchor = %q, want unchanged %q", got, dupID)
-	}
-
-	page, err := ReadMessagePage(dir, s.ID, 0, DefaultMessagePageLimit)
-	if err != nil {
-		t.Fatalf("ReadMessagePage: %v", err)
-	}
-	if len(page.Commands) != 1 || page.Commands[0].AfterMessageID != dupID {
-		t.Fatalf("page Commands = %+v, want one record anchored to unchanged %q", page.Commands, dupID)
-	}
-}
-
-// TestHistoryAndCommandsOneSnapshot is a contract test: after a compaction
-// reanchors a command, HistoryAndCommands' two return values still agree —
-// the command's AfterMessageID names a summary present in the same call's
-// history. It does not exercise concurrency and cannot detect two separate
-// lock holds; that guarantee rests on HistoryAndCommands' single s.mu hold
-// by construction. Failure: the command's AfterMessageID names a summary
-// absent from the paired history.
 func TestHistoryAndCommandsOneSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
@@ -2578,14 +2517,6 @@ func TestCompactRefusesCurrentlyDelegatedSession(t *testing.T) {
 	}
 }
 
-// TestPromptCompactTextReachesModel pins the rule that the server, not the
-// engine, resolves a typed "/compact" (server/commands.go
-// resolvePromptCommand). A native session's Session.Prompt must learn no
-// control verb from prompt text, so an exact "/compact" prompt is ordinary
-// model input: it appends a literal "/compact" user message and reaches
-// the provider once, instead of running RunCompactCommand. #319 added an
-// engine-side exact-text match that ran RunCompactCommand instead; this
-// test would have failed against that match.
 func TestPromptCompactTextReachesModel(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopEndTurn, &message.Text{Text: "ok"}),

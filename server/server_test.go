@@ -1550,11 +1550,6 @@ func TestListStatusErrorOnBadSessionDir(t *testing.T) {
 	}
 }
 
-// TestEvictResidentLockedSkipsPinnedEntry: a pinned resident survives an
-// eviction sweep exactly like a running one, even when it is also the
-// longest-idle candidate — eviction instead falls to the next, unpinned
-// candidate. Failure: eviction unloads a session while a command dispatch
-// still holds a reference to its *engine.Session.
 func TestEvictResidentLockedSkipsPinnedEntry(t *testing.T) {
 	prov := &scriptedProvider{name: "test"}
 	h := newHarnessOpts(t, t.TempDir(), prov, 3) // headroom: no auto-eviction while both are created

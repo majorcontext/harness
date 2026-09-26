@@ -40,9 +40,6 @@ func pagedSession(t *testing.T, dir string, n int) *Session {
 // endpoint publishes, restated here in full: read the records in order;
 // each message record appends its id; each compact record removes the ids
 // from first_id through last_id and puts its summary id in their place.
-// Deriving it from LoadSession instead would share compactRecordBounds and
-// spliceCompactBounds with the implementation under test, and a fold defect
-// would then agree with itself (AGENTS.md's oracle rule).
 func wholeSequence(t *testing.T, dir, id string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, id+".jsonl"))
@@ -393,11 +390,6 @@ func TestReadMessagePageEmptySession(t *testing.T) {
 	}
 }
 
-// TestMessagePageCarriesCommandsInWindow: a page must carry exactly the
-// folded commands whose anchor sits inside its window, plus an
-// empty-anchored command only on the page that starts at the session's
-// first message. Failure: a command is missing from a page it belongs on,
-// or leaks onto one it does not.
 func TestMessagePageCarriesCommandsInWindow(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
@@ -409,7 +401,6 @@ func TestMessagePageCarriesCommandsInWindow(t *testing.T) {
 		}
 	}
 
-	// c0 is recorded before any message exists, so its anchor is "".
 	c0 := newCmd()
 	if err := s.RecordCommand(c0); err != nil {
 		t.Fatalf("RecordCommand c0: %v", err)
@@ -474,12 +465,6 @@ func commandIDsOf(cmds []message.CommandRecord) []string {
 	return out
 }
 
-// TestMessagePageShowsLatestFoldedCommandStatus: a command's terminal record
-// can land after messages the requested page never carries. The page must
-// still show the command's LATEST status, folded by ID — never the earlier
-// "accepted" record a backward scan happens to reach first inside the
-// window. Failure: an older page reports a command still "accepted" long
-// after it succeeded.
 func TestMessagePageShowsLatestFoldedCommandStatus(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
@@ -515,9 +500,7 @@ func TestMessagePageShowsLatestFoldedCommandStatus(t *testing.T) {
 		t.Fatalf("PersistErr: %v", err)
 	}
 
-	// before_seq=4, limit=2: messages m2, m3 — well before the terminal
-	// record's own position in the log.
-	page, err := ReadMessagePage(dir, s.ID, 4, 2)
+	page, err := ReadMessagePage(dir, s.ID, 4, 2) // m2,m3: well before the terminal record
 	if err != nil {
 		t.Fatalf("ReadMessagePage: %v", err)
 	}
@@ -529,11 +512,6 @@ func TestMessagePageShowsLatestFoldedCommandStatus(t *testing.T) {
 	}
 }
 
-// TestMessagePageTornSeqFoldsToLatestCommand: two hand-written command
-// records sharing one seq but carrying different IDs fold to the SECOND one
-// on a page read, exactly like TestCommandFoldTornSeqLastWriterWins proves
-// for Session.Commands(). Failure: a page shows both torn-write records, or
-// keeps the abandoned one.
 func TestMessagePageTornSeqFoldsToLatestCommand(t *testing.T) {
 	dir := t.TempDir()
 	const id = "ses_0000000000000002"
@@ -551,14 +529,6 @@ func TestMessagePageTornSeqFoldsToLatestCommand(t *testing.T) {
 	}
 }
 
-// TestTailPageIgnoresAMalformedCommandOutsideTheWindow: the tail walk must
-// decode a command record's head — id, after_message_id, created_at, seq —
-// without ever decoding its line, args, text, or result. cmd_bad sits
-// between m4 and m5 in the log, so the backward walk for the [m4,m5] window
-// passes it (and gathers its head) before it can stop at m4, but cmd_bad's
-// own anchor (m1) is outside that window. Its "line" field is a JSON number,
-// which a full CommandRecord decode rejects. Failure: the page fails on
-// cmd_bad even though the window never asked for it.
 func TestTailPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
 	dir := t.TempDir()
 	const id = "ses_0000000000000005"
@@ -585,19 +555,6 @@ func TestTailPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
 	}
 }
 
-// TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow is
-// TestTailPageIgnoresAMalformedCommandOutsideTheWindow's counterpart for the
-// compacted-log fold path.
-//
-// cmd_bad sits BEFORE the compact record in the log (anchored to m1, before
-// m2 and m3 exist), and the compact record sits AFTER m4 — so the backward
-// walk for the [m4,m5] window meets m5, cmd_good, then the compact record
-// and bails to foldedPage right there, never classifying cmd_bad at all.
-// foldedPage's own forward fold is what then has to pass over cmd_bad's
-// line without decoding it in full: it runs from byte 0 and reaches
-// cmd_bad before it reaches the compact record. Failure: foldedPage fails
-// on cmd_bad's malformed "line" even though cmd_bad's anchor (m1) is
-// outside the requested window.
 func TestFoldedPageIgnoresAMalformedCommandOutsideTheWindow(t *testing.T) {
 	dir := t.TempDir()
 	const id = "ses_0000000000000006"

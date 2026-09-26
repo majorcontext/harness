@@ -233,9 +233,6 @@ func TestResolveUnknownIsNotText(t *testing.T) {
 	}
 }
 
-// TestResolveArgErrorNamesSpec is the named-failure test: a failed record
-// cannot name the command, because Resolve returns an untyped error for
-// bad arguments.
 func TestResolveArgErrorNamesSpec(t *testing.T) {
 	r := NewRegistry()
 	for _, line := range []string{"/compact abc", "/status now", "/model", "/model a b"} {

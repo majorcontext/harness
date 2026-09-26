@@ -11,15 +11,6 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestMutableSessionColdInsertPinsBeforeSweep: a cold-loaded session must
-// not be able to evict itself during its own insert sweep. With
-// MaxResident=1 and another session already resident and pinned, the
-// newly inserted entry is the only eviction candidate at the moment the
-// sweep runs — pinning it first must remove it from that candidate set.
-// Failure: mutableSession loads and inserts id, evictResidentLocked evicts
-// that same fresh entry before it is pinned, and the pin lands on a
-// detached, already-released sessionState instead of the one the map
-// still holds.
 func TestMutableSessionColdInsertPinsBeforeSweep(t *testing.T) {
 	prov := newCapturingProvider()
 	h := newHarnessOpts(t, t.TempDir(), prov, 1)
@@ -60,20 +51,10 @@ func TestMutableSessionColdInsertPinsBeforeSweep(t *testing.T) {
 	}
 }
 
-// TestCommandTerminalWritesLandOnLiveSessionAfterEviction: id's own
-// *engine.Session is pinned for the whole dispatch, from writeCommand's
-// lookup through the terminal write, so a concurrent eviction sweep in the
-// gap between them (commandDispatchRace) must skip it instead of unloading
-// it. Failure mode this guards: the terminal record lands on a second,
-// freshly cold-loaded object for id instead of the one writeCommand's own
-// accepted record landed on — invisible to a live reader, which keeps
-// seeing the command stuck "accepted" forever.
 func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 	dir := t.TempDir()
 	prov := newCapturingProvider()
-	// MaxResident=1: any second resident session would evict the first idle
-	// one, if id's own entry were not pinned.
-	h := newHarnessOpts(t, dir, prov, 1)
+	h := newHarnessOpts(t, dir, prov, 1) // MaxResident=1
 
 	id := h.createSession("test/m1")
 	h.srv.mu.Lock()
@@ -86,11 +67,7 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 			return
 		}
 		raced = true
-		// Attempt a real concurrent eviction of id's own resident object
-		// right here, in the gap this seam exists to open — see
-		// commandDispatchRace's own doc comment (server.go). The pin held
-		// across this whole dispatch must make it a no-op for id.
-		h.createSession("test/m1")
+		h.createSession("test/m1") // attempt a real concurrent eviction of id
 	}
 
 	sse := h.openSSE("?from=0", "")
@@ -131,11 +108,6 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 	}
 }
 
-// TestMutableSessionPinReleasedAfterCommand: the pin mutableSession takes for
-// a dispatched command's session is released once the command reaches its
-// terminal write, so the session becomes an ordinary eviction candidate
-// again. Failure: a leaked pin permanently exempts a session from
-// MaxResident eviction.
 func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
 	dir := t.TempDir()
 	prov := newCapturingProvider()
@@ -155,10 +127,7 @@ func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
 
 	h.srv.mu.Lock()
 	pins := h.srv.sessions[id].pins
-	h.srv.opts.MaxResident = 1
-	// id is now the longest-idle resident; a pin left behind would exempt
-	// it from this sweep. One more session, with MaxResident=1, pushes the
-	// count past the cap.
+	h.srv.opts.MaxResident = 1 // id is now the longest-idle resident
 	h.srv.mu.Unlock()
 	if pins != 0 {
 		t.Fatalf("pins = %d after command finished, want 0", pins)
@@ -173,17 +142,6 @@ func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
 	}
 }
 
-// TestRacedMidTurnCompactRecordsRefused: a turn that starts AFTER
-// resolvePromptCommand's busy check but BEFORE runCommand dispatches
-// handleCompact must still land the command as refused, not failed.
-// commandDispatchRace opens exactly that gap: it starts a real occupant
-// turn on the same session while /compact's own dispatch is in flight, so
-// handleCompact's own claimForPrompt call races into a session that just
-// became busy and answers 409 "session is busy with another prompt".
-// Failure mode this guards: commandOutcome maps that 409 to failed with
-// the route's own error text instead of refused with the exact refused
-// sentence, and a typed "/compact" line still never becomes a user
-// message.
 func TestRacedMidTurnCompactRecordsRefused(t *testing.T) {
 	prov := &queueProv{name: "test", started: make(chan struct{}), release: make(chan struct{})}
 	h := newHarness(t, prov)
@@ -237,24 +195,15 @@ func TestRacedMidTurnCompactRecordsRefused(t *testing.T) {
 	}
 }
 
-// TestTypedCompactOnManagedChildRecordsFailed: handleCompact answers a
-// managed child's /compact through rejectManagedChildTurn, not a busy-turn
-// conflict — that 409 must record failed with the route's own
-// managed-child text, never refused with the busy-turn sentence.
-// commandOutcome used to map every 409 for an Op not availableDuringTask
-// (OpCompact) to refused regardless of cause; this pins the managed-child
-// cause to its own outcome. Failure mode this guards: the terminal record
-// reads refused, "/compact cannot run while a turn is running", which is
-// false — the child is done, not busy — instead of failed with
-// rejectManagedChildTurn's own sentence.
-func TestTypedCompactOnManagedChildRecordsFailed(t *testing.T) {
+func doneChildHarness(t *testing.T) (h *harness, childID string) {
+	t.Helper()
 	dir := t.TempDir()
 	rootProv := &scriptedProvider{name: "root"}
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
 	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
 	model := message.ModelRef{Provider: "root", Model: "m1"}
 	var srv *Server
-	h := multiProviderHarnessInDir(t, dir, model, func(o *Options) {
+	h = multiProviderHarnessInDir(t, dir, model, func(o *Options) {
 		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
 			if m.IsZero() {
 				m = model
@@ -292,9 +241,14 @@ func TestTypedCompactOnManagedChildRecordsFailed(t *testing.T) {
 	}
 	mustUnmarshal(t, data, &child)
 	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+	return h, child.ID
+}
+
+func TestTypedCompactOnManagedChildRecordsFailed(t *testing.T) {
+	h, childID := doneChildHarness(t)
 
 	sse := h.openSSE("?from=0", "")
-	resp, data = h.do("POST", "/session/"+child.ID+"/prompt_async", map[string]any{
+	resp, data := h.do("POST", "/session/"+childID+"/prompt_async", map[string]any{
 		"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
 		"source": "typed",
 	})
@@ -316,11 +270,6 @@ func TestTypedCompactOnManagedChildRecordsFailed(t *testing.T) {
 	}
 }
 
-// TestRunCommandHandlerPanicRecordsFailed: a serveOpHandlers panic must not
-// crash the process — runCommand runs off the request goroutine, so
-// net/http's own per-request recover never reaches it. Failure: the
-// goroutine's panic propagates unrecovered and takes the whole process down
-// instead of leaving one command "failed".
 func TestRunCommandHandlerPanicRecordsFailed(t *testing.T) {
 	prov := newCapturingProvider()
 	h := newHarness(t, prov)

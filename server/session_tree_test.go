@@ -1599,66 +1599,11 @@ func TestGenericTurnRoutesRejectManagedChild(t *testing.T) {
 	}
 }
 
-// TestEnqueueTypedCommandResolvesBeforeManagedChildGuard is the named-
-// failure test for handleEnqueue's own ordering bug: rejectManagedChildTurn
-// used to run BEFORE resolvePromptCommand, so a typed command sent to a
-// managed child through /enqueue hit the blanket 409
-// TestGenericTurnRoutesRejectManagedChild's own "enqueue" case asserts,
-// with resolvePromptCommand never reached and no CommandRecord ever
-// journaled — unlike prompt_async and /send, which already resolve first
-// (see resolvePromptCommand's own doc comment: "before any other branch
-// runs"). Wires OnEvent (multiProviderHarness deliberately does not, per
-// its own doc comment) so the command's accepted/terminal records are
-// observable over the real SSE stream, exactly like every other
-// resolvePromptCommand test.
 func TestEnqueueTypedCommandResolvesBeforeManagedChildGuard(t *testing.T) {
-	dir := t.TempDir()
-	rootProv := &scriptedProvider{name: "root"}
-	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
-	reg := provider.Registry{rootProv.Name(): rootProv, childProv.Name(): childProv}
-	model := message.ModelRef{Provider: "root", Model: "m1"}
-	var srv *Server
-	h := multiProviderHarnessInDir(t, dir, model, func(o *Options) {
-		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
-			if m.IsZero() {
-				m = model
-			}
-			return engine.NewSession(engine.Config{
-				Providers: reg, Model: m, WorkDir: workDir, ParentSession: parentSession,
-				SessionDir: dir, OnEvent: func(ev engine.Event) { srv.Publish(ev) },
-			}), nil
-		}
-		o.LoadSession = func(id string) (*engine.Session, error) {
-			return engine.LoadSession(engine.Config{
-				Providers: reg, Model: model, SessionDir: dir, OnEvent: func(ev engine.Event) { srv.Publish(ev) },
-			}, id)
-		}
-	}, rootProv, childProv)
-	srv = h.srv
-
-	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
-	if resp.StatusCode != 201 {
-		t.Fatalf("create root status %d: %s", resp.StatusCode, data)
-	}
-	var root struct {
-		ID string `json:"id"`
-	}
-	mustUnmarshal(t, data, &root)
-
-	resp, data = h.do("POST", "/session", map[string]string{
-		"parent_id": root.ID, "agent": engine.AgentGeneralPurpose, "prompt": "go", "model": "child/m1",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("spawn child status %d: %s", resp.StatusCode, data)
-	}
-	var child struct {
-		ID string `json:"id"`
-	}
-	mustUnmarshal(t, data, &child)
-	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
+	h, childID := doneChildHarness(t)
 
 	sse := h.openSSE("?from=0", "")
-	resp, data = h.do("POST", "/session/"+child.ID+"/enqueue", map[string]any{
+	resp, data := h.do("POST", "/session/"+childID+"/enqueue", map[string]any{
 		"parts":  []map[string]string{{"type": "text", "text": "/model root/m1"}},
 		"seq":    int64(1),
 		"source": "typed",

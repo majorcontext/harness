@@ -7,14 +7,6 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// TestHandleEndRefusesWhilePinned: a command dispatch pins id's
-// sessionState (sessionState.pins) for the whole dispatch, from
-// writeCommand's lookup through the terminal write, but handleEnd only
-// ever checked st.running. DELETE landing in that gap removed a pinned
-// entry from residency, and the route handler's next lookup cold-loaded a
-// second *engine.Session over the same log — the live one stayed stuck at
-// "accepted" forever. Failure mode this guards: DELETE returns 204/200
-// while st.pins > 0.
 func TestHandleEndRefusesWhilePinned(t *testing.T) {
 	dir := t.TempDir()
 	prov := newCapturingProvider()

@@ -1399,10 +1399,6 @@ func TestListSessionsPinsTheFilenameID(t *testing.T) {
 	}
 }
 
-// TestSessionIndexSidecarCarriesNoCommandData: the sidecar is a cache of the
-// journal fold, sized for GET /session's own fields — never O(command
-// bytes). A command's own id and result must never reach it. Failure: the
-// sidecar grows with every command a session records.
 func TestSessionIndexSidecarCarriesNoCommandData(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{SessionDir: dir})
@@ -1426,11 +1422,6 @@ func TestSessionIndexSidecarCarriesNoCommandData(t *testing.T) {
 	}
 }
 
-// TestSessionIndexRefoldIgnoresCommandPayloadShape: the index refold must
-// not decode a command record's own payload at all. Failure: a command line
-// whose command field carries a JSON type commandRecord cannot decode (here,
-// a number) breaks ReadSessionIndex instead of only the page reads that
-// actually need that payload.
 func TestSessionIndexRefoldIgnoresCommandPayloadShape(t *testing.T) {
 	dir := t.TempDir()
 	const id = "ses_0000000000000009"
