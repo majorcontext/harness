@@ -580,6 +580,35 @@ func TestReadSessionIndexKeepsIntentionalDisarmAtZero(t *testing.T) {
 	}
 }
 
+func TestReadSessionIndexClaudeCodeWindowProvenance(t *testing.T) {
+	cases := []struct {
+		name     string
+		modelRec string
+		want     int
+	}{
+		{"legacy stand-in hidden", `{"type":"model","model":"claude-code/opus","context_window_tokens":200000}`, 0},
+		{"explicit pin kept", `{"type":"model","model":"claude-code/opus","context_window_tokens":250000,"context_window_explicit":true}`, 250_000},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			id := fmt.Sprintf("ses_0123456789abcd%02x", i)
+			journal := `{"type":"session","id":"` + id + `","created_at":"2026-01-02T03:04:05Z","workdir":"/w"}
+` + c.modelRec + "\n"
+			if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(journal), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			ix, err := ReadSessionIndex(dir, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ix.WindowTokens != c.want {
+				t.Errorf("WindowTokens = %d, want %d", ix.WindowTokens, c.want)
+			}
+		})
+	}
+}
+
 // mustMarshalIndex renders a sidecar exactly as the production writers do,
 // checksum included, so a test that alters a field still produces a file
 // that reaches the check it means to exercise.
@@ -690,6 +719,7 @@ func TestListSessionsMatchesIndex(t *testing.T) {
 		LastInputTokens:  ix.LastInputTokens,
 		LastPromptTokens: ix.LastPromptTokens,
 		WindowTokens:     ix.WindowTokens,
+		Model:            ix.Model,
 	}
 	if mustJSON(t, got) != mustJSON(t, want) {
 		t.Errorf("ListSessions entry = %s, want %s", mustJSON(t, got), mustJSON(t, want))

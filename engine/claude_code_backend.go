@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -210,6 +211,7 @@ func (s *Session) applyClaudeCodeUsage(usage provider.Usage, costUSD float64) {
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.lastUsage = usage
 	s.haveLastUsage = true
+	s.lastUsageDelegated = true
 	s.claudeCodeSessionCostUSD += costUSD
 	s.haveClaudeCodeCost = true
 	s.persistClaudeCodeUsage(usage, costUSD)
@@ -273,7 +275,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	if binary == "" {
 		binary = defaultClaudeCodeBinaryPath
 	}
-	model := s.Model()
+	model, contextUsageGen := s.beginClaudeCodeTurn()
 
 	appendPrompt, haveAppendPrompt := claudeCodeAppendSystemPrompt(s.cfg.AppendSystemPrompt)
 	if haveAppendPrompt {
@@ -529,6 +531,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// writer as every later mid-turn injection, never a separate
 		// one-off path.
 		firstWriteErrCh <- writeClaudeCodeInputMessage(stdin, text, blobs)
+		_ = writeClaudeCodeContextUsageRequest(stdin, contextUsageGen)
 		for {
 			select {
 			case <-wake:
@@ -633,7 +636,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = proc.Kill()
 	}()
 
-	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model)
+	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model, contextUsageGen)
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
 	// goroutine's own doc comment above): signal it to stop, THEN close
@@ -959,7 +962,7 @@ func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []
 // child's process group: that would kill the very background session
 // --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
 // its subsequent cmd.Wait() does not reintroduce this wait.
-func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
+func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, contextUsageGen uint64) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
 	var compactBoundarySeen, compactUnsettled bool
 	settleCompaction := func() {
 		if compactUnsettled {
@@ -1200,9 +1203,18 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					ClaudeCodeCompactPreTokens:  preTokens,
 					ClaudeCodeCompactPostTokens: postTokens,
 				})
+				// Feed real occupancy into the gauge, only against a window
+				// a live snapshot already established this turn.
+				if postTokens > 0 {
+					if window, _, live := s.ContextGauge(); live {
+						s.setClaudeCodeContextUsage(contextUsageGen, postTokens, window)
+					}
+				}
 			}
 			// Any other subtype (e.g. "api_retry") is observed but
 			// requires no action.
+		case "control_response":
+			applyClaudeCodeContextUsageResponse(s, env.Response)
 		case "assistant":
 			msg := claudeCodeAssistantMessage(env.Message, model, env.ParentToolUseID)
 			if len(msg.Parts) == 0 {
@@ -1475,14 +1487,16 @@ func reasoningOnlyParts(parts message.Parts) bool {
 // field here is optional so a line missing one just zero-values it) —
 // Unknown fields and missing optional fields are tolerated.
 type claudeCodeEnvelope struct {
-	Type      string           `json:"type"`
-	Subtype   string           `json:"subtype,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	Message   json.RawMessage  `json:"message,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
-	Result    string           `json:"result,omitempty"`
-	NumTurns  *int             `json:"num_turns,omitempty"`
-	Usage     *claudeCodeUsage `json:"usage,omitempty"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Response is a "control_response" envelope's own payload.
+	Response json.RawMessage  `json:"response,omitempty"`
+	Message  json.RawMessage  `json:"message,omitempty"`
+	IsError  bool             `json:"is_error,omitempty"`
+	Result   string           `json:"result,omitempty"`
+	NumTurns *int             `json:"num_turns,omitempty"`
+	Usage    *claudeCodeUsage `json:"usage,omitempty"`
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
 	// whole delegated turn — folded into the session's cumulative
 	// message.SubscriptionUsage.SessionCostUSD by applyClaudeCodeUsage
@@ -1518,6 +1532,53 @@ type claudeCodeEnvelope struct {
 	Status              string                     `json:"status,omitempty"`
 	CompactResultStatus string                     `json:"compact_result,omitempty"`
 	LocalCommand        string                     `json:"local_command,omitempty"`
+}
+
+const claudeCodeContextUsageRequestIDPrefix = "harness-context-usage-"
+
+func writeClaudeCodeContextUsageRequest(w io.Writer, gen uint64) error {
+	line, err := json.Marshal(map[string]any{
+		"type":       "control_request",
+		"request_id": claudeCodeContextUsageRequestIDPrefix + strconv.FormatUint(gen, 10),
+		"request":    map[string]string{"subtype": "get_context_usage", "detail": "summary"},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(append(line, '\n'))
+	return err
+}
+
+type claudeCodeControlResponse struct {
+	Subtype   string                        `json:"subtype"`
+	RequestID string                        `json:"request_id"`
+	Response  *claudeCodeContextUsageResult `json:"response"`
+}
+
+type claudeCodeContextUsageResult struct {
+	TotalTokens  *int `json:"totalTokens"`
+	RawMaxTokens *int `json:"rawMaxTokens"`
+}
+
+// A missing or negative field is rejected, not zero-valued: either would
+// otherwise pass a malformed reply off as a real zero-usage snapshot. Zero
+// RawMaxTokens is rejected too: it is the gauge's denominator, and a zero
+// denominator beside a nonzero TotalTokens is unusable, not a real reading.
+func applyClaudeCodeContextUsageResponse(s *Session, raw json.RawMessage) {
+	var cr claudeCodeControlResponse
+	if json.Unmarshal(raw, &cr) != nil || cr.Subtype != "success" || cr.Response == nil {
+		return
+	}
+	res := cr.Response
+	if res.TotalTokens == nil || res.RawMaxTokens == nil || *res.TotalTokens < 0 || *res.RawMaxTokens <= 0 {
+		return
+	}
+	genStr, ok := strings.CutPrefix(cr.RequestID, claudeCodeContextUsageRequestIDPrefix)
+	gen, err := strconv.ParseUint(genStr, 10, 64)
+	if !ok || err != nil {
+		return
+	}
+	s.setClaudeCodeContextUsage(gen, *res.TotalTokens, *res.RawMaxTokens)
 }
 
 // claudeCodeCompactMetadata is a "system"/"compact_boundary" envelope's own

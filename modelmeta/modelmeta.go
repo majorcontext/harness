@@ -26,6 +26,7 @@ var anthropicContextWindows = map[string]int{
 	"claude-opus-4-7":            1_000_000,
 	"claude-opus-4-8":            1_000_000,
 	"claude-opus-5":              1_000_000,
+	"claude-opus-5-5":            1_000_000,
 	"claude-sonnet-4-5":          1_000_000,
 	"claude-sonnet-4-5-20250929": 1_000_000,
 	"claude-sonnet-4-6":          1_000_000,
@@ -128,8 +129,19 @@ var bifrostFireworksContextWindows = map[string]int{
 	"kimi-k3":                1_048_576,
 	"kimi-k2p7-code":         262_000,
 	"glm-5p2":                1_048_575,
+	"glm-5p3":                1_048_573,
+	"glm-5p3-flash":          1_048_573,
 	"deepseek-v4-pro-0813":   1_000_000,
 	"deepseek-v4-flash-0731": 1_000_000,
+}
+
+var firerouterCandidateModels = []string{
+	"kimi-k3",
+	"glm-5p2",
+	"glm-5p3",
+	"glm-5p3-flash",
+	"deepseek-v4-pro-0813",
+	"deepseek-v4-flash-0731",
 }
 
 // bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
@@ -215,21 +227,8 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// A turn delegated to the Claude Code CLI (see
-		// engine/claude_code_backend.go) is driven entirely by that CLI's
-		// OWN context management: it runs its own tool loop and its own
-		// compaction over its own history, never harness's. This entry
-		// exists ONLY so engine.Config.RequireContextWindow (default true
-		// — an unrecognized model is a hard session-create refusal, see
-		// engine/context_window.go) does not refuse a claude-code model
-		// ref outright; harness's OWN automatic-compaction threshold is
-		// unconditionally skipped for a delegated turn regardless of what
-		// this reports (see PromptWithOrigin's early dispatch), so the
-		// exact figure here drives no real behavior. claudeCodeContextWindow
-		// (200,000, Sonnet's advertised first-party window) is a stand-in
-		// chosen only to be an honest, plausible-sounding number rather
-		// than an arbitrary placeholder like 0 or MaxInt.
-		tokens, ok = claudeCodeContextWindow, true
+		// ref is a CLI alias; the running CLI reports the real window live.
+		tokens, ok = 0, true
 	}
 	return tokens, ok
 }
@@ -250,10 +249,10 @@ const claudeCodeProvider = "claude-code"
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
 
-// claudeCodeContextWindow is the stand-in context-window figure reported
-// for claudeCodeProvider — see the ContextWindow case above for why its
-// exact value carries no real weight.
-const claudeCodeContextWindow = 200_000
+// SuppressUsageGauge reports whether ref's window is only ever a floor.
+func SuppressUsageGauge(ref message.ModelRef) bool {
+	return ref.Provider == "bifrost" && lastPathSegment(ref.Model) == "firerouter"
+}
 
 // lastPathSegment returns the substring of model after its last '/', or
 // model unchanged if it contains no '/'. message.ModelRef.Model may itself

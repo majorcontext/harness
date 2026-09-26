@@ -135,20 +135,35 @@ func main() {
 	// first turn is still open, exactly the mid-turn steering window this
 	// stand-in exists to prove.
 	stdinR := bufio.NewReader(os.Stdin)
-	readStdinLine := func() (line string, ok bool) {
+	// pendingControlRequestID is set by readRawLine as a side effect,
+	// only once this process actually reads a control_request line.
+	var pendingControlRequestID string
+	readRawLine := func() (line string, ok bool) {
 		b, err := stdinR.ReadString('\n')
 		if logPath := os.Getenv("FAKE_CLAUDE_STDIN_LOG"); logPath != "" && b != "" {
-			// Record (append) exactly the bytes read, same shape the old
-			// one-shot read-to-EOF left behind — a test recovers the
-			// EXACT bytes the driver sent on each line, e.g. proving a
-			// checked-out task notification's rendered content actually
-			// reached the CLI's input (engine/claude_code_backend_test.go).
 			if f, ferr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); ferr == nil {
 				_, _ = f.WriteString(b)
 				f.Close()
 			}
 		}
-		return strings.TrimRight(b, "\n"), err == nil
+		line = strings.TrimRight(b, "\n")
+		if strings.Contains(line, `"type":"control_request"`) {
+			var req struct {
+				RequestID string `json:"request_id"`
+			}
+			if json.Unmarshal([]byte(line), &req) == nil {
+				pendingControlRequestID = req.RequestID
+			}
+		}
+		return line, err == nil
+	}
+	readStdinLine := func() (line string, ok bool) {
+		for {
+			line, ok = readRawLine()
+			if !ok || !strings.Contains(line, `"type":"control_request"`) {
+				return line, ok
+			}
+		}
 	}
 
 	if mode != "fast_no_drain" {
@@ -276,6 +291,27 @@ func main() {
 		"subtype":    "init",
 		"session_id": sessionID,
 	})
+	if usage := os.Getenv("FAKE_CLAUDE_CONTEXT_USAGE"); usage != "" {
+		// Requires the actual control_request line rather than assuming one arrived.
+		for pendingControlRequestID == "" {
+			if _, ok := readRawLine(); !ok {
+				break
+			}
+		}
+		if pendingControlRequestID != "" {
+			total, max, _ := strings.Cut(usage, "/")
+			totalTokens, _ := strconv.Atoi(total)
+			maxTokens, _ := strconv.Atoi(max)
+			emit(map[string]any{
+				"type": "control_response",
+				"response": map[string]any{
+					"subtype":    "success",
+					"request_id": pendingControlRequestID,
+					"response":   map[string]any{"totalTokens": totalTokens, "rawMaxTokens": maxTokens},
+				},
+			})
+		}
+	}
 
 	switch mode {
 	case "compact_boundary":
@@ -293,8 +329,9 @@ func main() {
 			"type":    "system",
 			"subtype": "compact_boundary",
 			"compact_metadata": map[string]any{
-				"trigger":    "auto",
-				"pre_tokens": 123456,
+				"trigger":     "auto",
+				"pre_tokens":  123456,
+				"post_tokens": 7000,
 			},
 			"session_id": sessionID,
 		})

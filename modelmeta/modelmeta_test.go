@@ -55,14 +55,52 @@ func TestContextWindowCodex(t *testing.T) {
 	}
 }
 
-// TestContextWindowCodexUnknownModelStillMisses proves the codex case does
-// not fall back to a stand-in figure the way claudeCodeProvider does: a
-// codex ref naming a model absent from openaiContextWindows must still miss,
-// so engine.Config.RequireContextWindow's fail-loud refusal stays armed for
-// a genuinely unknown model instead of silently reporting a guess.
 func TestContextWindowCodexUnknownModelStillMisses(t *testing.T) {
 	if tokens, ok := ContextWindow(message.ModelRef{Provider: "codex", Model: "gpt-nonexistent"}); ok {
 		t.Errorf("ContextWindow(codex/gpt-nonexistent) = %d, true; want ok=false", tokens)
+	}
+}
+
+func TestContextWindowClaudeCodeNoStandIn(t *testing.T) {
+	tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: "opus"})
+	if !ok || tokens != 0 {
+		t.Fatalf("ContextWindow(claude-code/opus) = %d, %v; want 0, true", tokens, ok)
+	}
+}
+
+func TestSuppressUsageGauge(t *testing.T) {
+	cases := []struct {
+		ref  message.ModelRef
+		want bool
+	}{
+		{message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/routers/firerouter"}, true},
+		{message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/models/glm-5p2"}, false},
+		{message.ModelRef{Provider: "claude-code", Model: "opus"}, false},
+	}
+	for _, c := range cases {
+		if got := SuppressUsageGauge(c.ref); got != c.want {
+			t.Errorf("SuppressUsageGauge(%v) = %v, want %v", c.ref, got, c.want)
+		}
+	}
+}
+
+func TestFirerouterFloorPinnedToCandidates(t *testing.T) {
+	if len(firerouterCandidateModels) == 0 {
+		t.Fatal("firerouterCandidateModels is empty")
+	}
+	min := -1
+	for _, m := range firerouterCandidateModels {
+		tokens, ok := bifrostFireworksContextWindows[m]
+		if !ok {
+			t.Fatalf("firerouterCandidateModels names %q, which bifrostFireworksContextWindows does not key", m)
+		}
+		if min == -1 || tokens < min {
+			min = tokens
+		}
+	}
+	floor := bifrostFireworksContextWindows["firerouter"]
+	if floor > min {
+		t.Errorf("firerouter floor = %d, want <= %d (the smallest candidate's window, %s)", floor, min, firerouterCandidateModels)
 	}
 }
 
@@ -107,6 +145,8 @@ func TestContextWindowBifrost(t *testing.T) {
 		{"bifrost/fireworks/accounts/fireworks/models/kimi-k3", 1_048_576},
 		{"bifrost/fireworks/accounts/fireworks/models/kimi-k2p7-code", 262_000},
 		{"bifrost/fireworks/accounts/fireworks/models/glm-5p2", 1_048_575},
+		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3", 1_048_573},
+		{"bifrost/fireworks/accounts/fireworks/models/glm-5p3-flash", 1_048_573},
 		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-pro-0813", 1_000_000},
 		{"bifrost/fireworks/accounts/fireworks/models/deepseek-v4-flash-0731", 1_000_000},
 		{"bifrost/vertex/gemini-3.1-pro-preview", 1_048_576},

@@ -290,33 +290,42 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	}
 }
 
-// contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
-// the exact sum maybeAutoCompact (engine/compact.go) compares against
-// WindowTokens, so this gauge and auto-compaction never disagree.
-// WindowTokens is 0 when automatic compaction is disarmed — a caller must
-// treat 0 as "unknown", never as "full".
+// contextJSON is the Session/StatusEntry context sub-object. A caller must
+// treat WindowTokens 0 as "unknown", never as "full".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession.
 func contextJSONForSession(sess *engine.Session) contextJSON {
-	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
-	if last, ok := sess.LastUsage(); ok {
-		out.UsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+	windowTokens, usedTokens, _ := sess.ContextGauge()
+	return contextJSON{WindowTokens: windowTokens, UsedTokens: usedTokens}
+}
+
+// contextJSONForModel suppresses a claude-code session's persisted
+// LastPromptTokens aggregate, mirroring ContextGauge's resident case.
+// delegated tracks who last WROTE LastPromptTokens, not the session's
+// current model: a journal can end with a claude-code usage record and
+// then switch to a native provider, and the model check alone would miss
+// that stale aggregate.
+func contextJSONForModel(model message.ModelRef, usedTokens, windowTokens int, delegated bool) contextJSON {
+	if model.Provider == engine.ClaudeCodeProviderFamily {
+		return contextJSON{}
 	}
-	return out
+	if delegated {
+		return contextJSON{WindowTokens: windowTokens}
+	}
+	return contextJSON{UsedTokens: usedTokens, WindowTokens: windowTokens}
 }
 
 // contextJSONForInfo mirrors usageJSONForInfo.
 func contextJSONForInfo(info engine.SessionInfo) contextJSON {
-	return contextJSON{UsedTokens: info.LastPromptTokens, WindowTokens: info.WindowTokens}
+	return contextJSONForModel(info.Model, info.LastPromptTokens, info.WindowTokens, info.LastPromptTokensDelegated)
 }
 
 // contextJSONForIndex mirrors buildSessionFromIndex's cold projections.
 func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
-	return contextJSON{UsedTokens: ix.LastPromptTokens, WindowTokens: ix.WindowTokens}
+	return contextJSONForModel(ix.Model, ix.LastPromptTokens, ix.WindowTokens, ix.LastPromptTokensDelegated)
 }
 
 // lastTurnJSON is the openapi LastTurn shape.

@@ -277,6 +277,8 @@ type record struct {
 	// ContextWindowTokens carries s.cfg.ContextWindowTokens on a recModel
 	// record. A *int: nil means a legacy record, distinct from a real disarm.
 	ContextWindowTokens *int `json:"context_window_tokens,omitempty"`
+	// ContextWindowExplicit carries s.contextWindowExplicit; see coldContextWindow.
+	ContextWindowExplicit bool `json:"context_window_explicit,omitempty"`
 	// Effort carries the reasoning-effort level on the session header record
 	// (the level at create time) and on a recEffort record (a SetEffort
 	// change). Omitted when EffortUnset, so a legacy log with no effort
@@ -584,6 +586,10 @@ type SessionInfo struct {
 	// LastPromptTokens mirrors SessionIndex.LastPromptTokens.
 	LastPromptTokens int
 	WindowTokens     int
+	// LastPromptTokensDelegated mirrors SessionIndex.LastPromptTokensDelegated.
+	LastPromptTokensDelegated bool
+	// Model mirrors SessionIndex.Model.
+	Model message.ModelRef
 }
 
 // addUsage accumulates one record's usage into a listing summary.
@@ -677,7 +683,7 @@ func (s *Session) persistModel(ref message.ModelRef) {
 		return
 	}
 	tokens := s.cfg.ContextWindowTokens
-	rec := record{Type: recModel, Model: ref, ContextWindowTokens: &tokens}
+	rec := record{Type: recModel, Model: ref, ContextWindowTokens: &tokens, ContextWindowExplicit: s.contextWindowExplicit}
 	if err := s.writeRecord(rec); err != nil {
 		s.lastPersistErr = err
 	}
@@ -1151,7 +1157,7 @@ func (s *Session) ensureLog() error {
 		windowTokens := s.cfg.ContextWindowTokens
 		headerRecs := []record{
 			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
-			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens},
+			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens, ContextWindowExplicit: s.contextWindowExplicit},
 		}
 		// A selection made before the log existed has no other durable
 		// carrier: persistMCPToolsSelected no-ops until logStarted, and
@@ -1550,6 +1556,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				s.lastUsageDelegated = false
 				// A recMessage record only ever carries Usage for a
 				// native turn (a delegated turn's usage folds through
 				// recClaudeCodeUsage below, never here) — mirrors
@@ -1640,6 +1647,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				s.lastUsageDelegated = true
 			}
 			// See record.ClaudeCodeCostUSD's own doc comment: nil means a
 			// record written before cost tracking existed, not a
@@ -2252,13 +2260,15 @@ func ReadSessionInfo(dir, id string) (SessionInfo, error) {
 func sessionInfoAt(dir, id string) (SessionInfo, error) {
 	if ix, err := readSessionIndexAt(dir, id, false); err == nil {
 		return SessionInfo{
-			ID:               ix.ID,
-			CreatedAt:        ix.CreatedAt,
-			Messages:         ix.Messages,
-			Usage:            ix.Usage,
-			LastInputTokens:  ix.LastInputTokens,
-			LastPromptTokens: ix.LastPromptTokens,
-			WindowTokens:     ix.WindowTokens,
+			ID:                        ix.ID,
+			CreatedAt:                 ix.CreatedAt,
+			Messages:                  ix.Messages,
+			Usage:                     ix.Usage,
+			LastInputTokens:           ix.LastInputTokens,
+			LastPromptTokens:          ix.LastPromptTokens,
+			WindowTokens:              ix.WindowTokens,
+			LastPromptTokensDelegated: ix.LastPromptTokensDelegated,
+			Model:                     ix.Model,
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
@@ -2299,12 +2309,13 @@ func readSessionInfo(path string) (SessionInfo, error) {
 		return SessionInfo{}, err
 	}
 	type headRecord struct {
-		Type                string           `json:"type"`
-		ID                  string           `json:"id"`
-		CreatedAt           time.Time        `json:"created_at"`
-		Usage               *provider.Usage  `json:"usage,omitempty"`
-		Model               message.ModelRef `json:"model,omitzero"`
-		ContextWindowTokens *int             `json:"context_window_tokens,omitempty"`
+		Type                  string           `json:"type"`
+		ID                    string           `json:"id"`
+		CreatedAt             time.Time        `json:"created_at"`
+		Usage                 *provider.Usage  `json:"usage,omitempty"`
+		Model                 message.ModelRef `json:"model,omitzero"`
+		ContextWindowTokens   *int             `json:"context_window_tokens,omitempty"`
+		ContextWindowExplicit bool             `json:"context_window_explicit,omitempty"`
 	}
 	var info SessionInfo
 	first := true
@@ -2330,17 +2341,16 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.addUsage(*rec.Usage)
 				info.LastInputTokens = rec.Usage.InputTokens
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+				info.LastPromptTokensDelegated = false
 			}
 		case recClaudeCodeUsage:
 			if rec.Usage != nil {
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+				info.LastPromptTokensDelegated = true
 			}
 		case recModel:
-			if rec.ContextWindowTokens != nil {
-				info.WindowTokens = *rec.ContextWindowTokens
-			} else {
-				info.WindowTokens = ResolveModelContextWindow(rec.Model)
-			}
+			info.Model = rec.Model
+			info.WindowTokens = coldContextWindow(rec.Model, rec.ContextWindowTokens, rec.ContextWindowExplicit)
 		case recCompact:
 			if rec.Usage != nil {
 				// Cumulative only. LastInputTokens must not move for a

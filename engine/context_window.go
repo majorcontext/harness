@@ -145,6 +145,24 @@ func ResolveModelContextWindow(model message.ModelRef) int {
 	return tokens
 }
 
+// displayContextWindow returns 0 when modelmeta.SuppressUsageGauge(model) is true, tokens otherwise.
+func displayContextWindow(model message.ModelRef, tokens int) int {
+	if modelmeta.SuppressUsageGauge(model) {
+		return 0
+	}
+	return tokens
+}
+
+// coldContextWindow trusts a claude-code ref's persisted value only when
+// explicit is true: the value alone cannot tell an operator's pin apart
+// from a legacy 200_000 stand-in.
+func coldContextWindow(model message.ModelRef, persisted *int, explicit bool) int {
+	if persisted != nil && (explicit || model.Provider != ClaudeCodeProviderFamily) {
+		return displayContextWindow(model, *persisted)
+	}
+	return displayContextWindow(model, ResolveModelContextWindow(model))
+}
+
 // requiredContextWindowErr turns a resolveContextWindow miss into this
 // session's refusal, or into nothing at all.
 //

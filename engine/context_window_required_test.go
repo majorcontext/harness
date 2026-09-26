@@ -205,3 +205,128 @@ func TestSetModelToUnknownModelIsRefused(t *testing.T) {
 		t.Errorf("Prompt after switching to an unknown model = %v, want ErrUnknownContextWindow", err)
 	}
 }
+
+var (
+	firerouterRef = message.ModelRef{Provider: "bifrost", Model: "fireworks/accounts/fireworks/routers/firerouter"}
+	claudeCodeRef = message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"}
+)
+
+func TestSessionContextWindowTokensHidesGauge(t *testing.T) {
+	cases := []struct {
+		ref          message.ModelRef
+		wantCfgArmed bool
+	}{
+		{firerouterRef, true},
+		{claudeCodeRef, false},
+	}
+	for _, c := range cases {
+		s := NewSession(Config{Model: c.ref})
+		if armed := s.cfg.ContextWindowTokens != 0; armed != c.wantCfgArmed {
+			t.Errorf("%v: cfg.ContextWindowTokens armed = %v, want %v", c.ref, armed, c.wantCfgArmed)
+		}
+		if err := s.ContextWindowErr(); err != nil {
+			t.Errorf("%v: ContextWindowErr() = %v, want nil", c.ref, err)
+		}
+		if got := s.ContextWindowTokens(); got != 0 {
+			t.Errorf("%v: ContextWindowTokens() = %d, want 0", c.ref, got)
+		}
+	}
+}
+
+func TestContextGauge(t *testing.T) {
+	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
+
+	claudeCode := NewSession(Config{Model: claudeCodeRef, Providers: prov})
+	_, gen := claudeCode.beginClaudeCodeTurn()
+	claudeCode.setClaudeCodeContextUsage(gen, 15_554, 1_000_000)
+	if window, used, live := claudeCode.ContextGauge(); window != 1_000_000 || used != 15_554 || !live {
+		t.Errorf("claude-code: ContextGauge() = %d, %d, %v; want 1000000, 15554, true", window, used, live)
+	}
+	claudeCode.SetModel(message.ModelRef{Provider: "test", Model: "x"})
+	if _, ok := claudeCode.ContextUsedTokens(); ok {
+		t.Error("ContextUsedTokens() still ok after switching away from claude-code")
+	}
+
+	native := NewSession(Config{
+		Model:               message.ModelRef{Provider: "test", Model: "big"},
+		Providers:           prov,
+		ContextWindowTokens: 500_000,
+	})
+	native.mu.Lock()
+	native.lastUsage = provider.Usage{InputTokens: 100, CacheReadTokens: 20, CacheWriteTokens: 5}
+	native.haveLastUsage = true
+	native.mu.Unlock()
+	if window, used, live := native.ContextGauge(); window != 500_000 || used != 125 || live {
+		t.Errorf("native: ContextGauge() = %d, %d, %v; want 500000, 125, false", window, used, live)
+	}
+
+	// Explicit window + stale LastUsage, no live snapshot: must report
+	// unknown, not the aggregate.
+	explicitClaudeCode := NewSession(Config{
+		Model:               claudeCodeRef,
+		Providers:           prov,
+		ContextWindowTokens: 42_000,
+	})
+	explicitClaudeCode.mu.Lock()
+	explicitClaudeCode.lastUsage = provider.Usage{InputTokens: 1_700_000}
+	explicitClaudeCode.haveLastUsage = true
+	explicitClaudeCode.mu.Unlock()
+	if window, used, live := explicitClaudeCode.ContextGauge(); window != 0 || used != 0 || live {
+		t.Errorf("claude-code explicit window + stale LastUsage: ContextGauge() = %d, %d, %v; want 0, 0, false", window, used, live)
+	}
+}
+
+func TestSetClaudeCodeContextUsageRejects(t *testing.T) {
+	prov := provider.Registry{"test": &scriptedProvider{name: "test"}}
+	beginGen := func(s *Session) uint64 { _, gen := s.beginClaudeCodeTurn(); return gen }
+	cases := []struct {
+		name  string
+		cfg   Config
+		setup func(*Session) uint64 // returns the generation the late reading carries
+	}{
+		{"explicit window", Config{Model: claudeCodeRef, ContextWindowTokens: 42_000, Providers: prov}, beginGen},
+		{"opt-out", Config{Model: claudeCodeRef, ContextWindowTokens: -1, Providers: prov}, beginGen},
+		{"superseded by this session's next turn", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+			gen := beginGen(s)
+			beginGen(s)
+			return gen
+		}},
+		{"superseded by SetModel racing in a different claude-code alias before the response lands", Config{Model: claudeCodeRef, Providers: prov}, func(s *Session) uint64 {
+			gen := beginGen(s)
+			s.SetModel(message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"})
+			return gen
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSession(c.cfg)
+			s.setClaudeCodeContextUsage(c.setup(s), 15_554, 1_000_000)
+			if _, ok := s.ContextUsedTokens(); ok {
+				t.Error("ContextUsedTokens() ok, want rejected")
+			}
+		})
+	}
+}
+
+// TestContextGaugeSuppressesStaleAggregateBeforeFirstNativeTurn pins a
+// timing gap: forceCompactionCheck clears at maybeAutoCompact's own
+// under-threshold verdict, before the native call it precedes even runs —
+// not "when the first native turn completes." ContextGauge must stay
+// suppressed past that clear until real native usage lands.
+func TestContextGaugeSuppressesStaleAggregateBeforeFirstNativeTurn(t *testing.T) {
+	s := NewSession(Config{
+		Providers:           provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:               claudeCodeRef,
+		ContextWindowTokens: 500_000,
+	})
+	seedDelegatedTurn(s, "hello")
+	s.applyClaudeCodeUsage(provider.Usage{InputTokens: 100_000}, 0)
+	s.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+
+	if err := s.maybeAutoCompact(context.Background()); err != nil {
+		t.Fatalf("maybeAutoCompact: %v", err)
+	}
+	if _, used, live := s.ContextGauge(); live || used != 0 {
+		t.Errorf("ContextGauge() before the first native turn completes = used %d, live %v; want 0, false", used, live)
+	}
+}

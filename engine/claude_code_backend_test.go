@@ -2548,13 +2548,23 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading captured CLI stdin: %v", err)
 	}
-	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	lines := userInputLines(strings.TrimRight(string(stdinBytes), "\n"))
 	if len(lines) != 2 {
-		t.Fatalf("CLI stdin carried %d lines, want 2 (initial turn text + the mid-turn injected prompt): %q", len(lines), string(stdinBytes))
+		t.Fatalf("CLI stdin carried %d user input lines, want 2 (initial turn text + the mid-turn injected prompt): %q", len(lines), string(stdinBytes))
 	}
 	if !strings.Contains(lines[1], "QUEUE-MARKER: please continue") {
-		t.Errorf("CLI stdin's second line = %q, want it to carry the queued prompt's text", lines[1])
+		t.Errorf("CLI stdin's second user line = %q, want it to carry the queued prompt's text", lines[1])
 	}
+}
+
+func userInputLines(stdin string) []string {
+	var out []string
+	for _, line := range strings.Split(stdin, "\n") {
+		if strings.Contains(line, `"type":"user"`) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // TestClaudeCodeQueueInjectionStampsOperatorBatch is the named-failure
@@ -2897,9 +2907,9 @@ func TestClaudeCodeQueueInjectedMidTurnCarriesAttachments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading captured CLI stdin: %v", err)
 	}
-	lines := strings.Split(strings.TrimRight(string(stdinBytes), "\n"), "\n")
+	lines := userInputLines(strings.TrimRight(string(stdinBytes), "\n"))
 	if len(lines) != 2 {
-		t.Fatalf("CLI stdin carried %d lines, want 2: %q", len(lines), string(stdinBytes))
+		t.Fatalf("CLI stdin carried %d user input lines, want 2: %q", len(lines), string(stdinBytes))
 	}
 	injected := lines[1]
 	if !strings.Contains(injected, `"type":"image"`) {
@@ -3008,5 +3018,79 @@ func TestClaudeCodeForwardsCompactBoundaryAsEvent(t *testing.T) {
 	}
 	if found.ClaudeCodeCompactPreTokens != 123456 {
 		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", found.ClaudeCodeCompactPreTokens)
+	}
+}
+
+func TestWriteClaudeCodeContextUsageRequest(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeClaudeCodeContextUsageRequest(&buf, 7); err != nil {
+		t.Fatalf("writeClaudeCodeContextUsageRequest: %v", err)
+	}
+	want := `{"request":{"detail":"summary","subtype":"get_context_usage"},"request_id":"harness-context-usage-7","type":"control_request"}` + "\n"
+	if buf.String() != want {
+		t.Errorf("wrote %q, want %q", buf.String(), want)
+	}
+}
+
+func TestApplyClaudeCodeContextUsageResponseRejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name     string
+		response string
+	}{
+		{"missing totalTokens", `{"rawMaxTokens":1000000}`},
+		{"missing rawMaxTokens", `{"totalTokens":15554}`},
+		{"negative totalTokens", `{"totalTokens":-1,"rawMaxTokens":1000000}`},
+		{"negative rawMaxTokens", `{"totalTokens":15554,"rawMaxTokens":-1}`},
+		{"zero rawMaxTokens", `{"totalTokens":15554,"rawMaxTokens":0}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSession(Config{Model: claudeCodeRef, Providers: provider.Registry{"test": &scriptedProvider{name: "test"}}})
+			_, gen := s.beginClaudeCodeTurn()
+			raw := json.RawMessage(fmt.Sprintf(
+				`{"subtype":"success","request_id":"harness-context-usage-%d","response":%s}`, gen, c.response))
+			applyClaudeCodeContextUsageResponse(s, raw)
+			if _, ok := s.ContextUsedTokens(); ok {
+				t.Error("ContextUsedTokens() ok, want rejected")
+			}
+		})
+	}
+}
+
+func TestClaudeCodeContextGaugeFromCLI(t *testing.T) {
+	cases := []struct {
+		name     string
+		mode     string
+		prompt   string
+		wantUsed int
+	}{
+		{"get_context_usage reply", "", "hi", 15_554},
+		{"compact_boundary post_tokens", "compact_boundary", "keep going", 7_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := buildFakeClaude(t)
+			if c.mode != "" {
+				t.Setenv("FAKE_CLAUDE_MODE", c.mode)
+			}
+			t.Setenv("FAKE_CLAUDE_CONTEXT_USAGE", "15554/1000000")
+
+			s := NewSession(Config{
+				SessionDir: t.TempDir(),
+				Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "opus"},
+				ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+			})
+
+			if _, err := s.Prompt(context.Background(), c.prompt); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+
+			if got := s.ContextWindowTokens(); got != 1_000_000 {
+				t.Errorf("ContextWindowTokens() = %d, want 1000000", got)
+			}
+			if used, ok := s.ContextUsedTokens(); !ok || used != c.wantUsed {
+				t.Errorf("ContextUsedTokens() = %d, %v; want %d, true", used, ok, c.wantUsed)
+			}
+		})
 	}
 }

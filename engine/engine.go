@@ -1065,6 +1065,14 @@ type Session struct {
 	// before any turn ever ran against it in any process).
 	lastUsage     provider.Usage
 	haveLastUsage bool
+	// lastUsageDelegated is true when lastUsage was last written by a
+	// claude-code turn (applyClaudeCodeUsage), not a completed native one
+	// (appendWithUsage) — see ContextGauge, which must not treat that
+	// aggregate as the current native model's usage. Unlike
+	// forceCompactionCheck, this is NOT cleared by maybeAutoCompact's own
+	// verdict: that clear can land before the native provider call even
+	// runs, well before real native usage exists to replace this number.
+	lastUsageDelegated bool
 
 	// subscriptionUsage is this session's most recently captured
 	// subscription-lane rate-limit/quota snapshot (see
@@ -1505,6 +1513,9 @@ type Session struct {
 	contextWindowExplicit bool
 	contextWindowSource   string
 
+	contextUsage    *claudeCodeUsageSnapshot
+	contextUsageGen uint64
+
 	// contextWindowErr is the refusal a registry MISS produces when
 	// Config.RequireContextWindow is set — see that field's doc comment.
 	// Set by newSession, by LoadSession's post-replay re-derive, and by
@@ -1827,6 +1838,7 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	priorDelegated := s.model.Provider == ClaudeCodeProviderFamily
 	s.model = ref
+	s.clearContextUsageLocked()
 	switch {
 	case priorDelegated && ref.Provider != ClaudeCodeProviderFamily:
 		s.forceCompactionCheck = true
@@ -1849,6 +1861,40 @@ func (s *Session) SetModel(ref message.ModelRef) {
 	}
 	s.persistModel(ref) // after the window settles, to persist ref's window
 	s.emit(Event{Type: EventModelChanged, Model: ref})
+}
+
+type claudeCodeUsageSnapshot struct {
+	usedTokens, windowTokens int
+}
+
+// clearContextUsageLocked assumes the caller holds s.mu.
+func (s *Session) clearContextUsageLocked() uint64 {
+	s.contextUsage = nil
+	s.contextUsageGen++
+	return s.contextUsageGen
+}
+
+// beginClaudeCodeTurn binds the model to a fresh usage generation atomically,
+// so a SetModel racing the child's startup invalidates the pairing.
+func (s *Session) beginClaudeCodeTurn() (message.ModelRef, uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.model, s.clearContextUsageLocked()
+}
+
+func (s *Session) setClaudeCodeContextUsage(gen uint64, usedTokens, windowTokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// gen rejects a response a concurrent SetModel or later turn already moved past.
+	if gen != s.contextUsageGen || s.model.Provider != ClaudeCodeProviderFamily || s.contextWindowExplicit || s.contextWindowSource == contextWindowSourceOptOut {
+		return
+	}
+	s.contextUsage = &claudeCodeUsageSnapshot{usedTokens: usedTokens, windowTokens: windowTokens}
+}
+
+func (s *Session) ContextUsedTokens() (int, bool) {
+	_, used, live := s.ContextGauge()
+	return used, live
 }
 
 // ModelSupported reports whether ref names a configured provider — the same
@@ -2316,12 +2362,30 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
-// ContextWindowTokens returns this session's resolved context window — 0
-// when automatic compaction is disarmed.
+// ContextWindowTokens is display-safe; compaction arms off s.cfg.ContextWindowTokens directly (compact.go).
 func (s *Session) ContextWindowTokens() int {
+	window, _, _ := s.ContextGauge()
+	return window
+}
+
+// ContextGauge: live reports whether usedTokens came from a claude-code
+// reading. A claude-code session with no live reading reports unknown
+// (0, 0, false) rather than LastUsage's whole-turn aggregate; native lanes
+// keep the LastUsage fallback below.
+func (s *Session) ContextGauge() (windowTokens, usedTokens int, live bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cfg.ContextWindowTokens
+	if s.contextUsage != nil {
+		return s.contextUsage.windowTokens, s.contextUsage.usedTokens, true
+	}
+	if s.model.Provider == ClaudeCodeProviderFamily {
+		return 0, 0, false
+	}
+	windowTokens = displayContextWindow(s.model, s.cfg.ContextWindowTokens)
+	if s.haveLastUsage && !s.lastUsageDelegated {
+		usedTokens = s.lastUsage.InputTokens + s.lastUsage.CacheReadTokens + s.lastUsage.CacheWriteTokens
+	}
+	return windowTokens, usedTokens, false
 }
 
 // applySubscriptionUsage records u as this session's latest subscription-
@@ -2489,6 +2553,7 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.usage.CacheWriteTokens += usage.CacheWriteTokens
 		s.lastUsage = *usage
 		s.haveLastUsage = true
+		s.lastUsageDelegated = false
 		// This path is exclusively a native turn's real usage — a
 		// delegated turn's usage folds through applyClaudeCodeUsage
 		// instead (see that method's own doc comment), never here — so

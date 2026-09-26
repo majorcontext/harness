@@ -557,10 +557,31 @@ this section's trigger check compares: `used_tokens` is
 `InputTokens + CacheReadTokens + CacheWriteTokens` from the most recent
 completed turn, the identical expression `maybeAutoCompact` evaluates
 against `window_tokens`, so a console gauge and automatic compaction agree
-whenever the provider reported usage for that turn. They part company in one
-case: when every input component is zero, `maybeAutoCompact` falls back to
+whenever the provider reported usage for that turn. They part company in two
+cases: when every input component is zero, `maybeAutoCompact` falls back to
 `estimatePromptTokensFromHistory`, so compaction can act while `used_tokens`
-still reads 0.
+still reads 0; and on a lane `modelmeta.SuppressUsageGauge` covers (bifrost's
+firerouter), where `window_tokens` reports 0 even though automatic
+compaction stays armed against a real internal floor — see `server/
+openapi.yaml`'s `Context` schema. A claude-code session's `used_tokens` is
+the CLI's own live `get_context_usage` reading when one exists, not this
+section's `InputTokens + CacheReadTokens + CacheWriteTokens` expression,
+since a delegated turn's `Session.LastUsage` is a whole-turn aggregate
+across every internal call and subagent, never one prompt's occupancy.
+`ContextGauge` never falls back to `LastUsage` for a claude-code session:
+with no live reading, it reports the unknown pair `(0, 0)` rather than the
+CLI's aggregate, which can exceed any real window or read near-zero right
+after the CLI's own turn happens to compact. A `compact_boundary`
+envelope's `post_tokens` feeds that live reading directly — the CLI's own
+authoritative post-compaction occupancy — so the gauge shows real occupancy
+the moment compaction settles instead of going blank; it is recorded only
+against a window a prior live snapshot already established this turn, and
+only through the same generation/provider/explicit-window guards
+`setClaudeCodeContextUsage` already enforces. `contextJSONForInfo` and
+`contextJSONForIndex` (`server/handlers.go`) apply the identical
+suppression to the cold `GET /session/status` and cold `GET
+/session/{id}` paths, so a session read right after a wake — before any
+live reading exists — never surfaces the persisted aggregate either.
 
 ## 5. Non-goals
 

@@ -118,6 +118,80 @@ func TestGetSessionColdAnswersFromIndex(t *testing.T) {
 	}
 }
 
+// A claude-code session's persisted LastPromptTokens is a whole-turn
+// aggregate, not prompt occupancy, so both cold reads must report the
+// unknown pair the resident gauge reports.
+func TestColdContextSuppressesClaudeCodeAggregate(t *testing.T) {
+	bin := buildFakeClaudeForServer(t)
+	dir := t.TempDir()
+
+	claudeSess := coldSession(t, dir, func(cfg *engine.Config) {
+		cfg.Model = message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+		cfg.ClaudeCode = engine.ClaudeCodeConfig{BinaryPath: bin}
+	})
+	nativeSess := coldSession(t, dir, func(cfg *engine.Config) {
+		prov := &scriptedProvider{name: "native", turns: [][]provider.Event{withCachedUsageTurn("native reply", 200, 10, 30, 5)}}
+		cfg.Providers = provider.Registry{prov.name: prov}
+		cfg.Model = message.ModelRef{Provider: prov.name, Model: "m1"}
+	})
+	switchedSess := coldSession(t, dir, func(cfg *engine.Config) {
+		cfg.Model = message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+		cfg.ClaudeCode = engine.ClaudeCodeConfig{BinaryPath: bin}
+	})
+	switchedSess.SetModel(message.ModelRef{Provider: "test", Model: "m1"})
+	if err := switchedSess.PersistErr(); err != nil {
+		t.Fatalf("PersistErr after model switch: %v", err)
+	}
+
+	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
+
+	cases := []struct {
+		name       string
+		id         string
+		wantUsed   int
+		wantWindow int
+	}{
+		{"claude-code aggregate suppressed", claudeSess.ID, 0, 0},
+		{"native real value kept", nativeSess.ID, 200 + 30 + 5, 0},
+		{"claude-code aggregate suppressed after switch to native", switchedSess.ID, 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/GET session", func(t *testing.T) {
+			resp, data := h.do("GET", "/session/"+tc.id, nil)
+			if resp.StatusCode != 200 {
+				t.Fatalf("GET /session/%s = %d: %s", tc.id, resp.StatusCode, data)
+			}
+			got := decodeSession(t, data)
+			if got.Context.UsedTokens != tc.wantUsed {
+				t.Errorf("Context.UsedTokens = %d, want %d", got.Context.UsedTokens, tc.wantUsed)
+			}
+			if got.Context.WindowTokens != tc.wantWindow {
+				t.Errorf("Context.WindowTokens = %d, want %d", got.Context.WindowTokens, tc.wantWindow)
+			}
+		})
+		t.Run(tc.name+"/GET status", func(t *testing.T) {
+			resp, data := h.do("GET", "/session/status", nil)
+			if resp.StatusCode != 200 {
+				t.Fatalf("GET /session/status = %d: %s", resp.StatusCode, data)
+			}
+			var statuses map[string]struct {
+				Context contextJSONForTest `json:"context"`
+			}
+			mustUnmarshal(t, data, &statuses)
+			entry, ok := statuses[tc.id]
+			if !ok {
+				t.Fatalf("session %s missing from status map", tc.id)
+			}
+			if entry.Context.UsedTokens != tc.wantUsed {
+				t.Errorf("status Context.UsedTokens = %d, want %d", entry.Context.UsedTokens, tc.wantUsed)
+			}
+			if entry.Context.WindowTokens != tc.wantWindow {
+				t.Errorf("status Context.WindowTokens = %d, want %d", entry.Context.WindowTokens, tc.wantWindow)
+			}
+		})
+	}
+}
+
 // TestListSessionsColdAnswersFromIndex is the same claim for the list
 // endpoint, which used to pay one full replay per non-resident session.
 func TestListSessionsColdAnswersFromIndex(t *testing.T) {
