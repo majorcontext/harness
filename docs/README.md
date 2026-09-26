@@ -30,6 +30,7 @@ documents above and keep superseded chronology in `history/` or `plans/`.
 |---|---|
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
 | [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
+| [delegated-backends.md](design/delegated-backends.md) | Capability-declared interface for delegated agent CLIs |
 | [event-sink.md](design/event-sink.md) | Outbound journal forwarding to a configured HTTP receiver |
 | [fast-transcript-bootstrap.md](design/fast-transcript-bootstrap.md) | Windowed, index-backed transcript bootstrap for a non-resident session |
 | [fleet-model.md](design/fleet-model.md) | Task lineage, fleet state, and provider exhaustion |
