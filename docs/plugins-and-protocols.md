@@ -115,7 +115,7 @@ representation.
   `list_mcp_resources` merges every resource-capable server when `server`
   is omitted, tolerating one server's failure rather than failing the
   whole call, and caps and stops paging at 500 resources per server
-  (`truncated: true` when a server had more). `read_mcp_resource` returns
+  (`truncated` lists the servers that had more). `read_mcp_resource` returns
   text contents verbatim and a `mimeType`/size placeholder for a blob —
   never a raw base64 dump. When any server is resource-capable, the
   `<mcp_instructions>` system segment gains one line pointing the model at
