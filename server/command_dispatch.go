@@ -15,28 +15,14 @@ import (
 )
 
 func commandRouteBody(op command.Op, args map[string]any) []byte {
-	switch op {
-	case command.OpCompact:
-		if n, ok := args["keep_turns"].(int); ok {
-			b, _ := json.Marshal(map[string]int{"keep_turns": n})
-			return b
+	if len(args) == 0 {
+		if op == command.OpCompact {
+			return []byte("{}")
 		}
-		return []byte("{}")
-	case command.OpSetModel:
-		b, _ := json.Marshal(map[string]string{"model": args["model"].(string)})
-		return b
-	case command.OpSetThinking:
-		b, _ := json.Marshal(map[string]string{"effort": args["effort"].(string)})
-		return b
-	case command.OpSetServiceTier:
-		b, _ := json.Marshal(map[string]string{"service_tier": args["service_tier"].(string)})
-		return b
-	case command.OpSetGoal:
-		b, _ := json.Marshal(map[string]string{"condition": args["condition"].(string)})
-		return b
-	default:
 		return nil
 	}
+	body, _ := json.Marshal(args)
+	return body
 }
 
 // commandResponseWriter caps its buffer at commandResultCap+1 bytes.
