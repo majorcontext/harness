@@ -144,9 +144,11 @@ func TestOpRoutesMatchTheMux(t *testing.T) {
 }
 
 func TestServeSupportFollowsExecutableHandler(t *testing.T) {
-	orig := serveOpHandlers[command.OpSetModel]
-	delete(serveOpHandlers, command.OpSetModel)
-	t.Cleanup(func() { serveOpHandlers[command.OpSetModel] = orig })
+	rt := opRoutes[command.OpSetModel]
+	orig := rt
+	rt.handler = nil
+	opRoutes[command.OpSetModel] = rt
+	t.Cleanup(func() { opRoutes[command.OpSetModel] = orig })
 
 	h := newHarness(t, &scriptedProvider{name: "test"})
 	resp, data := h.do("GET", "/commands", nil)

@@ -18,22 +18,23 @@ import (
 // call. See docs/design/slash-commands.md's "Serve-mode resolution"
 // section.
 type route struct {
-	method string
-	path   string
+	method  string
+	path    string
+	handler func(*Server, http.ResponseWriter, *http.Request)
 }
 
 var opRoutes = map[command.Op]route{
-	command.OpCompact:        {"POST", "/session/{id}/compact"},
-	command.OpSetModel:       {"POST", "/session/{id}/model"},
-	command.OpSetThinking:    {"POST", "/session/{id}/thinking"},
-	command.OpSetServiceTier: {"POST", "/session/{id}/service-tier"},
-	command.OpAbort:          {"POST", "/session/{id}/abort"},
-	command.OpSetGoal:        {"POST", "/session/{id}/goal"},
-	command.OpClearGoal:      {"DELETE", "/session/{id}/goal"},
-	command.OpQueueList:      {"GET", "/session/{id}/queue"},
-	command.OpQueueClear:     {"DELETE", "/session/{id}/queue"},
-	command.OpStatus:         {"GET", "/session/{id}"},
-	command.OpProcessList:    {"GET", "/process"},
+	command.OpCompact:        {"POST", "/session/{id}/compact", (*Server).handleCompact},
+	command.OpSetModel:       {"POST", "/session/{id}/model", (*Server).handleSetModel},
+	command.OpSetThinking:    {"POST", "/session/{id}/thinking", (*Server).handleSetThinking},
+	command.OpSetServiceTier: {"POST", "/session/{id}/service-tier", (*Server).handleSetServiceTier},
+	command.OpAbort:          {"POST", "/session/{id}/abort", (*Server).handleAbort},
+	command.OpSetGoal:        {"POST", "/session/{id}/goal", (*Server).handleGoal},
+	command.OpClearGoal:      {"DELETE", "/session/{id}/goal", (*Server).handleGoalDelete},
+	command.OpQueueList:      {"GET", "/session/{id}/queue", (*Server).handleQueueGet},
+	command.OpQueueClear:     {"DELETE", "/session/{id}/queue", nil},
+	command.OpStatus:         {"GET", "/session/{id}", (*Server).handleGet},
+	command.OpProcessList:    {"GET", "/process", (*Server).handleProcessList},
 }
 
 const serveUnsupportedReason = "Not available in this client."
@@ -42,7 +43,7 @@ func serveSupport(spec *command.Spec) (supported bool, reason string) {
 	if spec.Kind != command.KindControl {
 		return false, serveUnsupportedReason
 	}
-	if _, ok := serveOpHandlers[spec.Op]; !ok {
+	if rt, ok := opRoutes[spec.Op]; !ok || rt.handler == nil {
 		return false, serveUnsupportedReason
 	}
 	return true, ""

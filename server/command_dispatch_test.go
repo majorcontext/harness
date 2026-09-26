@@ -276,11 +276,13 @@ func TestRunCommandHandlerPanicRecordsFailed(t *testing.T) {
 	id := h.createSession("test/m1")
 	sse := h.openSSE("?from=0", "")
 
-	orig := serveOpHandlers[command.OpStatus]
-	serveOpHandlers[command.OpStatus] = func(*Server, http.ResponseWriter, *http.Request) {
+	orig := opRoutes[command.OpStatus]
+	rt := orig
+	rt.handler = func(*Server, http.ResponseWriter, *http.Request) {
 		panic("boom")
 	}
-	t.Cleanup(func() { serveOpHandlers[command.OpStatus] = orig })
+	opRoutes[command.OpStatus] = rt
+	t.Cleanup(func() { opRoutes[command.OpStatus] = orig })
 
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts":  []map[string]string{{"type": "text", "text": "/status"}},

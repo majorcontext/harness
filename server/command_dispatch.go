@@ -14,21 +14,6 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// serveOpHandlers dispatches an Op in process, bypassing auth: the prompt
-// route that resolved this command already authenticated the caller.
-var serveOpHandlers = map[command.Op]func(*Server, http.ResponseWriter, *http.Request){
-	command.OpCompact:        (*Server).handleCompact,
-	command.OpSetModel:       (*Server).handleSetModel,
-	command.OpSetThinking:    (*Server).handleSetThinking,
-	command.OpSetServiceTier: (*Server).handleSetServiceTier,
-	command.OpAbort:          (*Server).handleAbort,
-	command.OpSetGoal:        (*Server).handleGoal,
-	command.OpClearGoal:      (*Server).handleGoalDelete,
-	command.OpQueueList:      (*Server).handleQueueGet,
-	command.OpStatus:         (*Server).handleGet,
-	command.OpProcessList:    (*Server).handleProcessList,
-}
-
 func commandRouteBody(op command.Op, args map[string]any) []byte {
 	switch op {
 	case command.OpCompact:
@@ -132,7 +117,7 @@ func (s *Server) runCommand(id string, sess *engine.Session, releaseSess func(),
 	}
 
 	cw := newCommandResponseWriter(res.Spec.Op)
-	serveOpHandlers[res.Spec.Op](s, cw, req)
+	rt.handler(s, cw, req)
 
 	managedChild := sess.TaskParentID() != ""
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = commandOutcome(res.Spec.Op, typed, cw.code, cw.body.Bytes(), s.isDraining(), res.Spec.AvailableDuringTask, managedChild)

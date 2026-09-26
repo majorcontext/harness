@@ -668,7 +668,7 @@ type Server struct {
 	coldWindowBootstrapRace func()
 
 	// commandDispatchRace is a test-only seam: when non-nil, runCommand
-	// invokes it right before calling serveOpHandlers[op], letting a test
+	// invokes it right before calling opRoutes[op].handler, letting a test
 	// force a concurrent eviction to land deterministically. Nil in production.
 	commandDispatchRace func()
 
