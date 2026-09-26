@@ -215,21 +215,11 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 			tokens, ok = bedrockAnthropicContextWindows[stripBedrockVersionSuffix(suffix)]
 		}
 	case claudeCodeProvider:
-		// A turn delegated to the Claude Code CLI (see
-		// engine/claude_code_backend.go) is driven entirely by that CLI's
-		// OWN context management: it runs its own tool loop and its own
-		// compaction over its own history, never harness's. This entry
-		// exists ONLY so engine.Config.RequireContextWindow (default true
-		// — an unrecognized model is a hard session-create refusal, see
-		// engine/context_window.go) does not refuse a claude-code model
-		// ref outright; harness's OWN automatic-compaction threshold is
-		// unconditionally skipped for a delegated turn regardless of what
-		// this reports (see PromptWithOrigin's early dispatch), so the
-		// exact figure here drives no real behavior. claudeCodeContextWindow
-		// (200,000, Sonnet's advertised first-party window) is a stand-in
-		// chosen only to be an honest, plausible-sounding number rather
-		// than an arbitrary placeholder like 0 or MaxInt.
-		tokens, ok = claudeCodeContextWindow, true
+		// The CLI resolves a bare alias itself and never reports what it
+		// chose, so no window here can be right. Report none rather than a
+		// plausible figure: a wrong denominator renders a session five times
+		// fuller than it is.
+		tokens, ok = 0, true
 	}
 	return tokens, ok
 }
@@ -249,11 +239,6 @@ const claudeCodeProvider = "claude-code"
 // provider's Client.Family for the same backend's wire format, not a
 // message.ModelRef.Provider value this package switches on.
 const codexProvider = "codex"
-
-// claudeCodeContextWindow is the stand-in context-window figure reported
-// for claudeCodeProvider — see the ContextWindow case above for why its
-// exact value carries no real weight.
-const claudeCodeContextWindow = 200_000
 
 // lastPathSegment returns the substring of model after its last '/', or
 // model unchanged if it contains no '/'. message.ModelRef.Model may itself
