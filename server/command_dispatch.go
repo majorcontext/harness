@@ -168,8 +168,19 @@ type compactDelegatedResultJSON struct {
 	ClaudeCodeDelegated bool `json:"claude_code_delegated"`
 }
 
+type compactCommandResponseJSON struct {
+	TurnsFolded         int    `json:"turns_folded"`
+	FirstID             string `json:"first_id"`
+	LastID              string `json:"last_id"`
+	SkipReason          string `json:"skip_reason"`
+	ClaudeCodeDelegated bool   `json:"claude_code_delegated"`
+	Summary             *struct {
+		ID string `json:"id"`
+	} `json:"summary"`
+}
+
 func compactCommandOutcome(typed string, body []byte) (message.CommandStatus, string, json.RawMessage, bool) {
-	var cr compactResponseJSON
+	var cr compactCommandResponseJSON
 	_ = json.Unmarshal(body, &cr)
 	if cr.SkipReason != "" {
 		return message.CommandFailed, "/compact did nothing: " + engine.CompactSkipMessage(cr.SkipReason), nil, false
