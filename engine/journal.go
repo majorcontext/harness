@@ -129,11 +129,8 @@ type JournalRecord struct {
 	PromptReason string `json:"prompt_reason,omitempty"`
 	PromptSeq    int64  `json:"prompt_seq,omitempty"`
 
-	// Command (Type == recCommand) -- metadata only, following this type's
-	// own content-exclusion rule: no line, args, text, or result, all of
-	// which GET /session/{id}/message's own commands field already carries.
-	// PromptSeq (above) is reused for a command's durable seq, on the first
-	// record of an /enqueue-dispatched one.
+	// Command (Type == recCommand) -- metadata only: no line, args, text, or
+	// result. PromptSeq (above) is reused for a command's durable seq.
 	CommandID     string `json:"command_id,omitempty"`
 	CommandName   string `json:"command_name,omitempty"`
 	CommandStatus string `json:"command_status,omitempty"`

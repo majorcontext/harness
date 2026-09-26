@@ -87,9 +87,7 @@ type MessagePage struct {
 	// HasMore reports whether at least one message older than FirstSeq
 	// exists. It is false for a page that starts at seq 1.
 	HasMore bool
-	// Commands holds the folded slash-command records (message.CommandRecord)
-	// whose AfterMessageID anchors them within this page's window — see
-	// CommandsInWindow. Never nil.
+	// Commands holds the folded command records anchored within this page. Never nil.
 	Commands []message.CommandRecord
 }
 
@@ -187,11 +185,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 	page := MessagePage{Total: ix.DurableMessages}
 	lo, hi, _ := MessagePageWindow(ix.DurableMessages, beforeSeq, limit)
 	if hi < lo && ix.DurableMessages != 0 {
-		// Empty page: an out-of-range beforeSeq names no window, so no
-		// command can match it either. A session with NO durable messages
-		// at all also takes hi < lo (MessagePageWindow's own empty-page
-		// return), but that case still needs the scan below — a command
-		// can be recorded before any message exists.
+		// A session with no durable messages falls through instead.
 		page.Commands = CommandsInWindow(nil, nil, false)
 		return page, nil
 	}
@@ -251,14 +245,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		page.LastSeq = hi
 		page.HasMore = page.FirstSeq > 1
 	}
-	// fromFirst also holds for a session with no durable messages at all
-	// (page.FirstSeq stays 0 then): a command recorded before any message
-	// exists is, by definition, "before every message" for such a session.
 	fromFirst := page.FirstSeq == 1 || ix.DurableMessages == 0
-	// Only now — with the window settled — does a command get decoded in
-	// full, and only the latest record of each id the window actually
-	// selects: everything above folded and filtered on the head alone (id,
-	// after_message_id, created_at), never on line, args, text, or result.
 	cmds, err := decodeCommandHeads(f, selectCommandHeadsInWindow(heads, page.Messages, fromFirst))
 	if err != nil {
 		return MessagePage{}, pageError(f, id, ix, err)
@@ -267,27 +254,16 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 	return page, nil
 }
 
-// CommandsInWindow returns the folded command records (in fold order) whose
-// AfterMessageID names a message in window, plus every record with an empty
-// AfterMessageID when fromFirst is true — a command recorded before the
-// session's first durable message, which only a window starting at the
-// session's own beginning can show. Never nil.
+// CommandsInWindow returns the folded command records anchored in window,
+// plus every empty-anchor record when fromFirst is true. Never nil.
 func CommandsInWindow(cmds []message.CommandRecord, window []message.Message, fromFirst bool) []message.CommandRecord {
 	return commandsInWindow(cmds, window, fromFirst, func(c message.CommandRecord) string { return c.AfterMessageID })
 }
 
-// selectCommandHeadsInWindow is CommandsInWindow's own selection rule,
-// applied to a page scan's unresolved command heads BEFORE any of them is
-// decoded in full — see decodeCommandHeads, which only ever sees what this
-// returns.
 func selectCommandHeadsInWindow(heads []commandHead, window []message.Message, fromFirst bool) []commandHead {
 	return commandsInWindow(heads, window, fromFirst, func(h commandHead) string { return h.AfterMessageID })
 }
 
-// commandsInWindow is CommandsInWindow's rule, shared with a page scan's own
-// unresolved command heads (selectCommandHeadsInWindow) the same way
-// foldCommandInto shares the fold rule: afterID lets each caller supply its
-// own type's field access to the identical selection.
 func commandsInWindow[T any](cmds []T, window []message.Message, fromFirst bool, afterID func(T) string) []T {
 	ids := make(map[string]bool, len(window))
 	for _, m := range window {
@@ -335,25 +311,9 @@ func pageError(f *os.File, id string, ix SessionIndex, cause error) error {
 // implementation of a fold this repository forbids, so the general path
 // below reuses the forward fold instead.
 //
-// It also gathers every command record the scan passes over, decoding only
-// its head — id, after_message_id, created_at, and the durable enqueue seq —
-// never its line, args, text, or result: those can run to message.
-// CommandRecord's own 16 KiB cap, and a page read touches as many command
-// records as the journal holds regardless of window (see this function's own
-// cost claim for messages, which a full command decode would undercut for a
-// session with many commands). A command's own anchor message is always
-// earlier in the log than the command's record (RecordCommand computes it
-// from history at record time), so every command anchored inside [lo,hi] is
-// written after message lo and is therefore scanned before the walk can stop
-// at lo. lo == 1 is the one case that needs more: a command recorded before
-// the session's first durable message (an empty anchor) sits EARLIER in the
-// log than message 1's own record, so the walk keeps going past message 1 to
-// the start of the file to find it. The gathered heads come back in the
-// order the backward scan found them — newest first — and the caller folds
-// them after reversing to log order. Each carries its own record's file span
-// so a head the caller's window later selects can be decoded in full with
-// one ReadAt (see decodeCommandHeads); a head the window excludes never
-// reads that span at all.
+// It also gathers every command record passed over, decoding only its head.
+// lo == 1 walks to the start of the file: a command anchored before the
+// first message sits earlier in the log than message 1's own record.
 func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]message.Message, []commandHead, bool, error) {
 	cur := total
 	var out []message.Message
@@ -441,12 +401,8 @@ func tailPage(src io.ReaderAt, logSize, size int64, total, lo, hi int) ([]messag
 	return out, foldCommandHeadsBackward(heads), true, nil
 }
 
-// commandHead is a page scan's own per-command fold entry: enough of a
-// recCommand record to fold by id (foldCommandHead) and select by window
-// (selectCommandHeadsInWindow) without decoding its line, args, text, or
-// result. Exactly one of fileSpan or line then locates the record a
-// selected head's full decode reads (see decodeCommandHeads) — never both,
-// since tailPage and foldedPage never run in the same page read.
+// commandHead is a page scan's per-command fold entry; exactly one of
+// fileSpan or line locates the full record.
 type commandHead struct {
 	ID             string
 	AfterMessageID string
@@ -455,24 +411,15 @@ type commandHead struct {
 	line           []byte          // set by foldedPage; aliases its data buffer
 }
 
-// commandFileSpan is a recCommand record's byte span in the journal file —
-// tailPage's own locator, read back with one ReadAt only for a head the
-// window selects.
 type commandFileSpan struct {
 	start, length int64
 }
 
-// commandHeadRaw is one recCommand record's head as tailPage's backward scan
-// collects it, before folding: seq is the fold's own torn-write input
-// (commandRecord's own doc comment) and never appears in a folded
-// commandHead.
 type commandHeadRaw struct {
 	commandHead
 	seq int64
 }
 
-// foldCommandHead folds one command head into heads, by ID. See
-// foldCommandInto for the rule this shares with foldCommand.
 func foldCommandHead(heads []commandHead, seqs map[string]int64, h commandHead, seq int64) []commandHead {
 	return foldCommandInto(heads, seqs, h, seq,
 		func(x commandHead) string { return x.ID },
@@ -483,10 +430,7 @@ func foldCommandHead(heads []commandHead, seqs map[string]int64, h commandHead, 
 }
 
 // foldCommandHeadsBackward folds raw — command heads a backward scan
-// collected NEWEST FIRST — into the by-ID, torn-seq result LoadSession's own
-// forward fold produces (foldCommand), with a fresh seq map local to this
-// one page read. Walking raw back to front visits them in LOG order without
-// a separate reverse pass.
+// collected newest first — into log order without a separate reverse pass.
 func foldCommandHeadsBackward(raw []commandHeadRaw) []commandHead {
 	if len(raw) == 0 {
 		return nil
@@ -499,29 +443,16 @@ func foldCommandHeadsBackward(raw []commandHeadRaw) []commandHead {
 	return folded
 }
 
-// reanchorCommandHeads is reanchorCommands' own rule, applied to foldedPage's
-// unresolved command heads instead of full records. See reanchorCommandsInto
-// for the rule this shares with reanchorCommands.
 func reanchorCommandHeads(heads []commandHead, history []message.Message, start, end int, summaryID string) {
 	reanchorCommandsInto(heads, history, start, end, summaryID,
 		func(h commandHead) string { return h.AfterMessageID },
 		func(h *commandHead, v string) { h.AfterMessageID = v })
 }
 
-// decodeCommandHeads fully decodes exactly the command records heads names —
-// the window selection a caller already ran (selectCommandHeadsInWindow) —
-// each from its own stored location: ReadAt(f) for a tailPage head, whose
-// fileSpan is a file byte range never yet read; a slice of data already in
-// memory for a foldedPage head, whose line is that slice. Nothing outside
-// heads is read or decoded, and a head this call never sees never performs
-// either.
-//
-// CreatedAt and AfterMessageID come from the head, not from the decoded
-// record's own fields: a compaction reanchors a head in memory
-// (reanchorCommandHeads) without rewriting the journal bytes a stale record
-// still carries, so the record's own AfterMessageID can be the anchor from
-// before that reanchor. Applying the head's values here is what makes this
-// decode's output byte-identical to a full fold's.
+// decodeCommandHeads fully decodes exactly the records heads names.
+// CreatedAt and AfterMessageID come from the head, not the decoded record: a
+// compaction reanchors a head in memory without rewriting the stale journal
+// bytes.
 func decodeCommandHeads(f *os.File, heads []commandHead) ([]message.CommandRecord, error) {
 	out := make([]message.CommandRecord, 0, len(heads))
 	for _, h := range heads {
@@ -547,10 +478,6 @@ func decodeCommandHeads(f *os.File, heads []commandHead) ([]message.CommandRecor
 	return out, nil
 }
 
-// recordHead is what a page walk needs to know about a record it is not
-// going to carry in full: its type, whether a message record has a body,
-// and a command record's own head fields — never its line, args, text, or
-// result (see commandHeadFields).
 type recordHead struct {
 	Type       string
 	hasMessage bool
@@ -615,10 +542,7 @@ func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
 // decodeRecordHeadFull decodes a whole record line into indexRecord — the
 // SAME type the fold decodes into (see foldSessionJournal's scanLog call) —
 // so parsed is false exactly where the fold's own decode fails, and
-// hasMessage is exactly the fold's own test for a body. indexRecord itself
-// carries no command payload (see index.go): a command record's line is
-// decoded a second time, into commandPayload alone, so an ordinary index
-// refold never pays for it.
+// hasMessage is exactly the fold's own test for a body.
 //
 // The type must stay indexRecord, not a slimmer shape that happens to carry
 // the fields this returns. The fold's tolerance is a property of EVERY
@@ -629,14 +553,9 @@ func classifyRecord(line logLine, isTail bool) (recordHead, bool, error) {
 // seq in the page. Sharing the fold's type makes the two agree by
 // construction rather than by a list of fields someone has to keep in step.
 //
-// commandPayload is deliberately narrower than that rule: it decodes only a
-// command record's own head fields (commandHeadFields), never its line,
-// args, text, or result. A page read tolerates a malformed one of those
-// fields on a command OUTSIDE the requested window — the window decides
-// which command gets decoded in full, never this walk (see
-// decodeCommandHeads) — where the index fold above tolerates nothing,
-// because DurableMessages counts every command-carrying line whether or not
-// any page ever asks for it.
+// commandPayload is deliberately narrower: a page read tolerates a
+// malformed field on a command outside the requested window, where the
+// fold above tolerates nothing.
 func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	var rec indexRecord
@@ -654,12 +573,6 @@ func decodeRecordHeadFull(raw []byte) (recordHead, bool) {
 	return head, true
 }
 
-// commandHeadFields is a recCommand record's own field, decoded to just the
-// fold's inputs: identity, anchor, timestamp, and the durable enqueue seq.
-// commandPayload decodes it out of indexRecord so the index fold never pays
-// for it — command.line, command.args, command.text, and command.result
-// never appear in this type, and never allocate for a record this decode
-// reads (see decodeRecordHeadFull's own doc comment for why that is safe).
 type commandHeadFields struct {
 	ID             string    `json:"id"`
 	AfterMessageID string    `json:"after_message_id,omitempty"`
@@ -667,8 +580,7 @@ type commandHeadFields struct {
 	Seq            int64     `json:"seq,omitempty"`
 }
 
-// commandPayload decodes just a recCommand record's own field, kept out of
-// indexRecord so the index fold never pays for it.
+// commandPayload is kept out of indexRecord so the index fold never pays for it.
 type commandPayload struct {
 	Command *commandHeadFields `json:"command"`
 }
@@ -698,19 +610,8 @@ type commandPayload struct {
 // message body in the file, which is the cost this whole endpoint exists to
 // avoid — a review caught it. The raw-line map is what removes it.
 //
-// It folds the command trail alongside, sharing this same pass: a
-// recCommand line folds into heads through foldCommandHead, keyed by a seq
-// map local to this one call, decoding only the line's head fields (never
-// its line, args, text, or result — the same restraint tailPage applies,
-// and for the same reason: a page read must not cost O(every command's
-// payload) for a session with many of them). A recCompact line re-anchors
-// heads through reanchorCommandHeads BEFORE fold.applyIndexRecord splices
-// the range away — exactly the order LoadSession's own replay uses
-// (store.go), so a command anchored inside a folded range still resolves
-// against the summary that replaced it. Each head keeps its own record's
-// raw line, a subslice of data the same way lineByOrdinal is below, so a
-// head the caller's window later selects can be decoded in full with no
-// second read (see decodeCommandHeads).
+// It folds the command trail alongside: a recCompact line re-anchors heads
+// before fold.applyIndexRecord splices the range away.
 func foldedPage(data []byte, lo, hi int) ([]message.Message, []commandHead, error) {
 	var fold indexFold
 	var heads []commandHead
@@ -735,9 +636,8 @@ func foldedPage(data []byte, lo, hi int) ([]message.Message, []commandHead, erro
 			if start, end, err := compactRecordBounds(fold.messages, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded); err == nil {
 				reanchorCommandHeads(heads, fold.messages, start, end, rec.Compact.Summary.ID)
 			}
-			// A bounds error here means fold.applyIndexRecord below fails or
-			// marks the fold broken over the identical computation — either
-			// way this call reports it, so skipping the reanchor is harmless.
+			// A bounds error here means fold.applyIndexRecord below fails on
+			// the same computation, so skipping the reanchor is harmless.
 		}
 		if rec.Type == recCommand {
 			var payload commandPayload

@@ -430,11 +430,8 @@ type Server struct {
 	// bounded by the number of message IDs, which are small, so retaining it for
 	// unloaded sessions is cheap and keeps replay/reconcile correct.
 	seen map[string]map[string]bool
-	// commandSeen maps session ID -> "id\x00status" (see commandSeenKey):
-	// reconcile's own dedupe against records loadJournal already replayed at
-	// boot, so its backfill loop journals a session's own repaired/pending
-	// commands exactly once — see commandSeenKey's own doc comment. Never
-	// evicted, same rationale as seen above.
+	// commandSeen dedupes reconcile's backfill against records loadJournal
+	// already replayed at boot. Never evicted, same rationale as seen above.
 	commandSeen map[string]map[string]bool
 	sessions    map[string]*sessionState // in-memory (resident) sessions
 
@@ -670,13 +667,8 @@ type Server struct {
 	coldWindowBootstrapRace func()
 
 	// commandDispatchRace is a test-only seam: when non-nil, runCommand
-	// (command_dispatch.go) invokes it right before calling
-	// serveOpHandlers[op], after the command's own "accepted" record is
-	// already durable — letting a test force a real concurrent eviction of
-	// the accepted record's own *engine.Session to land deterministically
-	// in the gap between that record's own session lookup and the route
-	// handler's independent one, instead of relying on an unobserved
-	// goroutine-scheduling coin flip. Always nil in production.
+	// invokes it right before calling serveOpHandlers[op], letting a test
+	// force a concurrent eviction to land deterministically. Nil in production.
 	commandDispatchRace func()
 
 	// worktreeBase is the directory 'worktree'-isolation sessions create
@@ -832,10 +824,8 @@ type sessionState struct {
 	cancel   context.CancelFunc
 	lastUsed time.Time
 	// pins counts outstanding residency holds a command dispatch takes
-	// through mutableSession: while positive, evictResidentLocked skips this
-	// entry exactly as it skips running, so the accepted and terminal
-	// records of one dispatched command always land on the same
-	// *engine.Session.
+	// through mutableSession; while positive, evictResidentLocked skips this
+	// entry exactly as it skips running.
 	pins int
 	// shareWorkdir opts this session out of the workdir-busy exclusivity rule
 	// in claimForPrompt (see workdir.go): set from POST /session's

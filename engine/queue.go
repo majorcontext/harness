@@ -169,11 +169,9 @@ func (f *promptQueueFold) queued(p promptRecord) {
 	}
 }
 
-// observeSeq advances f.seq to at least seq — the recCommand replay case's
-// (store.go) hook into this SAME watermark: a command record's Seq
-// (commandRecord.Seq, command.go) draws from the identical durable-enqueue
-// seq space a prompt.queued record's own Seq does, so a resumed session's
-// enqueueSeq must reflect whichever kind saw the higher value.
+// observeSeq advances f.seq to at least seq: a command record's Seq draws
+// from the same durable-enqueue seq space a prompt.queued record's Seq
+// does, so a resumed session's watermark must reflect whichever saw higher.
 func (f *promptQueueFold) observeSeq(seq int64) {
 	if seq > f.seq {
 		f.seq = seq

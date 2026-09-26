@@ -149,11 +149,9 @@ type sessionSnapshot struct {
 	PromptQueueNextID int64          `json:"prompt_queue_next_id,omitempty"`
 	EnqueueSeq        int64          `json:"enqueue_seq,omitempty"`
 
-	// Commands and CommandSeqs mirror Session.commands/commandSeqs (see
-	// command.go). Empty on an old snapshot written before slash commands
-	// existed — the same pre-fix behavior a full replay of that same tail
-	// also produces, since no recCommand record could predate this field
-	// either. No version bump: see sessionSnapshotVersion's own doc comment.
+	// Commands and CommandSeqs mirror Session.commands/commandSeqs. Empty on
+	// an old snapshot written before slash commands existed, matching what a
+	// full replay of that same tail also produces.
 	Commands    []message.CommandRecord `json:"commands,omitempty"`
 	CommandSeqs map[string]int64        `json:"command_seqs,omitempty"`
 

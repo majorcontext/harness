@@ -36,12 +36,9 @@ var opRoutes = map[command.Op]route{
 	command.OpProcessList:    {"GET", "/process"},
 }
 
-// serveModeOps declares which control Ops serve mode resolves through
-// its own routes, total over every command.Op: a new Op with no entry
-// here fails TestServeModeOpsTotal instead of silently reaching a
-// client as supported. queue-clear stays false: DELETE /session/{id}/queue
-// already exists, but nothing dispatches it through serve mode yet. See
-// docs/design/slash-commands.md's "Serve-mode resolution" section.
+// serveModeOps declares which control Ops serve mode resolves through its
+// own routes, total over every command.Op. queue-clear stays false: nothing
+// dispatches it through serve mode yet.
 var serveModeOps = map[command.Op]bool{
 	command.OpCompact:        true,
 	command.OpSetModel:       true,
@@ -56,13 +53,8 @@ var serveModeOps = map[command.Op]bool{
 	command.OpProcessList:    true,
 }
 
-// serveUnsupportedReason is published verbatim to the person typing. It
-// names no route and no internal term.
 const serveUnsupportedReason = "Not available in this client."
 
-// serveSupport reports whether serve mode resolves spec. A frontend
-// command names no route: the frontend owns the session pointer, not
-// serve mode.
 func serveSupport(spec *command.Spec) (supported bool, reason string) {
 	if spec.Kind == command.KindFrontend {
 		return false, serveUnsupportedReason
@@ -103,10 +95,6 @@ type serveSupportJSON struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// handleCommands returns the resolved registry. A frontend builds its
-// slash-menu autocomplete from this response; a client that resolves
-// commands itself, such as the Boxes console, also needs serve_support to
-// know which entries it can run without a frontend in front of it.
 func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 	specs := command.NewRegistry().All()
 	out := make([]commandEntryJSON, 0, len(specs))
@@ -140,8 +128,6 @@ func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 	}{Commands: out, ServeSupport: serveSupportOut})
 }
 
-// promptRoute selects which prompt-landing response shape
-// resolvePromptCommand writes for a resolved command.
 type promptRoute int
 
 const (
@@ -150,35 +136,15 @@ const (
 	promptRouteSend
 )
 
-// commandReceiptJSON is the small "command" block every prompt-landing
-// route's response carries when the request resolved to a command instead
-// of an ordinary prompt.
 type commandReceiptJSON struct {
 	ID        string                `json:"id"`
 	Status    message.CommandStatus `json:"status"`
 	ClientRef string                `json:"client_ref,omitempty"`
 }
 
-// resolvePromptCommand is the single entry point every prompt-landing
-// route (prompt_async, enqueue, send) calls directly after
-// parsePromptProvenance succeeds, before any other branch: it decides
-// whether text is a TYPED slash command and, if so, resolves, records, and
-// (for a dispatchable Op) runs it entirely in process — nothing reaches
-// the model. See docs/design/slash-commands.md's "Serve-mode resolution"
-// section for the status/text table this follows exactly.
-//
-// The typed check filters on the source the caller declares. Any holder of
-// the run token can declare `typed`. The check only keeps an untagged
-// caller's `/foo` text a prompt.
-//
-// clientRef is the caller's OPTIONAL client_ref (already validated by
-// sanitizeClientRef), kept off promptSourceInput/engine.PromptProvenance
-// deliberately: it is set on a resolved command's CommandRecord only, and
-// dropped for an ordinary prompt.
-//
-// reports whether text was a command and was handled (response already
-// written). When handled is false, the caller sends promptText, which is
-// res.Text for an escaped "//x" and text otherwise.
+// resolvePromptCommand decides whether text is a typed slash command and,
+// if so, resolves, records, and dispatches it entirely in process. Reports
+// whether it was handled (response already written).
 func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, id, text string,
 	blobs []*message.Blob, prov engine.PromptProvenance, seq int64, clientRef string) (promptText string, handled bool) {
 	if prov.Source.Normalized() != message.PromptSourceTyped {
@@ -243,11 +209,6 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 	return "", s.writeCommand(w, route, id, seq, rec, &res)
 }
 
-// typedCommandName extracts the name (or alias) the caller actually typed
-// from a line Resolve just accepted — e.g. "clear" for a line whose
-// canonical Resolution.Spec.Name is "new". Every status text uses this,
-// never Spec.Name (see docs/design/slash-commands.md's "Status and text"
-// table).
 func typedCommandName(line string) string {
 	body := strings.TrimPrefix(line, "/")
 	if i := strings.IndexFunc(body, unicode.IsSpace); i >= 0 {
@@ -256,21 +217,14 @@ func typedCommandName(line string) string {
 	return body
 }
 
-// writeCommand resolves the mutable session, admits and records rec as the
-// command's first durable record, writes the route's response, and — when
-// res is non-nil (rec.Status is CommandAccepted) — starts the dispatch
-// goroutine. Always returns true: every path through this function writes
-// a response.
 func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id string, seq int64, rec message.CommandRecord, res *command.Resolution) bool {
 	sess, releaseSess, ok := s.mutableSession(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return true
 	}
-	// handedOff is set only right before the dispatch goroutine takes over
-	// the pin (and the admit slot). Until then, these defers own both, so a
-	// panic anywhere below — a RecordCommand/RecordCommandDurable panic, or
-	// one from writeJSON/writeErr — releases them instead of leaking them.
+	// Until handedOff, these defers own the pin and admit slot, so a panic
+	// anywhere below releases them instead of leaking them.
 	handedOff := false
 	defer func() {
 		if !handedOff {
@@ -291,12 +245,8 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 		}()
 	}
 
-	// Sampled before this command's first durable record is written, so a
-	// prompt_async caller that resumes GET /event?from=fromSeq replays the
-	// accepted "command" event RecordCommand/RecordCommandDurable is about
-	// to journal (see claimForPrompt's identical fromSeq-before-work rule).
-	// A seq sampled after would equal or pass that event's own seq, and the
-	// resuming client would skip it.
+	// Sampled before the durable record is written, so a resuming
+	// GET /event?from=fromSeq caller still replays the accepted event.
 	fromSeq := s.currentSeq()
 
 	if route == promptRouteEnqueue {
@@ -333,24 +283,9 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 }
 
 // mutableSession resolves the one *engine.Session id's next durable
-// mutation must land on: a managed CHILD comes straight from
-// SessionManager's own resident node, never a second cold-loaded object
-// over the same on-disk log; a root goes through the ordinary s.sessions
-// residency map, cold-loading and racing exactly like claimForPrompt's own
-// cold path (an insert race against a concurrent request, and eviction).
-// Extracted from handleSetModel's identical selection block — see its own
-// doc comment for why two *engine.Session for one log must never both be
-// mutated. Used only by resolvePromptCommand and its own callees; every
-// other handler keeps its own copy.
-//
-// For a root, it pins the resolved sessionState (sessionState.pins, under
-// the same s.mu critical section that finds or inserts it) so
-// evictResidentLocked cannot unload it before the caller calls release —
-// otherwise a command's accepted and terminal records could land on two
-// different *engine.Session for the same id (see writeCommand and
-// runCommand). release decrements the pin and is safe to call more than
-// once. A managed child has no residency entry to pin; its release is a
-// no-op.
+// mutation must land on. For a root, it pins the resolved sessionState so
+// evictResidentLocked cannot unload it before release. release is safe to
+// call more than once; a managed child's release is a no-op.
 func (s *Server) mutableSession(id string) (sess *engine.Session, release func(), ok bool) {
 	if child, ok := s.sessMgr.Session(id); ok && child.TaskParentID() != "" {
 		return child, func() {}, true
@@ -375,9 +310,8 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 			st = &sessionState{sess: loaded, lastUsed: time.Now()}
 			s.sessions[id] = st
 		}
-		// Pin before the sweep: otherwise a freshly inserted entry, still at
-		// pins == 0, is its own sweep's eviction candidate whenever every
-		// other resident is running or pinned.
+		// Pin before the sweep, or a freshly inserted entry at pins == 0
+		// becomes its own sweep's eviction candidate.
 		st.pins++
 		if st.sess == loaded {
 			evicted = s.evictResidentLocked()
@@ -398,11 +332,6 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 	return st.sess, release, true
 }
 
-// admitCommand claims one Drain-visible slot for a dispatched command's
-// background goroutine, the same admission claimForPrompt performs for an
-// ordinary prompt turn: under s.mu, refuse once draining has started,
-// otherwise wg.Add(1) before releasing the lock, so Drain's wg.Wait can
-// never observe an Add that raced past draining=true.
 func (s *Server) admitCommand() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -413,9 +342,6 @@ func (s *Server) admitCommand() bool {
 	return true
 }
 
-// isDraining reports whether Drain has begun, for runCommand's terminal
-// outcome mapping (a non-2xx route error during drain is "interrupted",
-// not "failed").
 func (s *Server) isDraining() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

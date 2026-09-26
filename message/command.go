@@ -30,11 +30,9 @@ type CommandRecord struct {
 	Source      PromptSource   `json:"source"`
 	SourceID    string         `json:"source_id,omitempty"`
 	SourceLabel string         `json:"source_label,omitempty"`
-	// ClientRef is an OPTIONAL caller-minted correlation id (the Boxes
-	// console's own prompt id) carried verbatim from the resolving
-	// request onto every record of this command — see
-	// server.resolvePromptCommand's doc comment. Never set for an
-	// ordinary prompt: it exists only on a CommandRecord.
+	// ClientRef is an optional caller-minted correlation id, carried
+	// verbatim onto every record of this command. Never set for an
+	// ordinary prompt.
 	ClientRef       string          `json:"client_ref,omitempty"`
 	Status          CommandStatus   `json:"status"`
 	Text            string          `json:"text,omitempty"`

@@ -234,10 +234,7 @@ const (
 )
 
 // CompactSkipMessage renders a CompactResult.SkipReason as a sentence a
-// person can act on — shared by cmd/harness's own dispatcher and
-// server's serve-mode command dispatch (docs/design/slash-commands.md's
-// "Dispatch" section), so a skip reads identically however the caller
-// reached it.
+// person can act on, shared by every caller so a skip reads identically.
 func CompactSkipMessage(reason string) string {
 	switch reason {
 	case SkipReasonNotEnoughTurns:
@@ -857,18 +854,14 @@ func healCompactFoldEnd(history []message.Message, firstID string, turnsFolded i
 	return history[foldEnd].ID, nil
 }
 
-// compactRecordBounds folds one journaled compact record's range: the
-// LastID heal above, then the occurrence-aware bounds spliceCompactBounds
-// needs. It is the ONE implementation of "what messages a compact record
-// removes", shared by LoadSession's replay (store.go) and the metadata
-// index's own fold (index.go), so the two can never disagree about how many
-// messages a fold removed, and both can reanchorCommands over the exact same
-// range before splicing.
+// compactRecordBounds runs the LastID heal above, then returns the
+// occurrence-aware range spliceCompactBounds needs. It is the ONE
+// implementation of "what messages a compact record removes", shared by
+// LoadSession's replay and the metadata index's own fold.
 //
-// A FOUND lastID keeps the pre-heal behavior exactly: the heal never runs
-// for it. A failed heal falls through unchanged, so the caller's own splice
-// looks for the original (unhealed) LastID and returns its usual loud,
-// explicit error — never a silent best-effort guess.
+// A FOUND lastID keeps the pre-heal behavior exactly. A failed heal falls
+// through unchanged, so the caller's own splice returns its usual loud,
+// explicit error rather than a silent best-effort guess.
 func compactRecordBounds(history []message.Message, firstID, lastID string, turnsFolded int) (int, int, error) {
 	if _, found := indexOfMessageID(history, lastID); !found {
 		if healed, err := healCompactFoldEnd(history, firstID, turnsFolded); err == nil {

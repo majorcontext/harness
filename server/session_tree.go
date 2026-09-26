@@ -476,8 +476,7 @@ type sessionSendBody struct {
 	// once or sits in the queue first — see runPrompt's own doc comment
 	// on prov.
 	promptSourceInput
-	// ClientRef mirrors handlePrompt's own body.ClientRef — see
-	// sanitizeClientRef and resolvePromptCommand's own doc comment.
+	// ClientRef mirrors handlePrompt's own body.ClientRef.
 	ClientRef string `json:"client_ref"`
 }
 

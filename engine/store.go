@@ -205,13 +205,8 @@ const (
 	// applyClaudeCodeUsage's doc comment for why that divergence is safe
 	// here.
 	recClaudeCodeUsage = "claude_code.usage"
-	// recCommand is one resolved slash command's record (see command.go and
-	// message.CommandRecord): one per RecordCommand/RecordCommandDurable
-	// call — an accepted record, then a terminal one — never a recMessage,
-	// so a command never enters s.history or a provider request. Folded by
-	// id via foldCommand, last-writer-wins, exactly like recModel/recEffort's
-	// "value changed" replay shape, plus the torn-write same-seq collapse
-	// promptRecord.Seq already established for the prompt queue.
+	// recCommand is one resolved slash command's record, never a recMessage,
+	// so a command never enters s.history or a provider request.
 	recCommand = "command"
 )
 
@@ -301,8 +296,7 @@ type record struct {
 	// Prompt carries a prompt.queued/prompt.dequeued record's payload (see
 	// promptRecord and queue.go). nil on every other record type.
 	Prompt *promptRecord `json:"prompt,omitempty"`
-	// Command carries a recCommand record's payload (see commandRecord in
-	// command.go). nil on every other record type.
+	// Command carries a recCommand record's payload. nil otherwise.
 	Command *commandRecord `json:"command,omitempty"`
 	// TaskSpawn carries a recTaskSpawned record's payload (see
 	// taskSpawnRecord). nil on every other record type.
@@ -1509,9 +1503,6 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// two can never drift on the torn-write and ID-burn rules it holds.
 	qf := promptQueueFold{queue: s.promptQueue, nextID: s.promptQueueNextID, seq: s.enqueueSeq}
 
-	// The command trail folds through foldCommand (command.go), seeded from
-	// this fresh session's own state — or the snapshot's restored commands —
-	// exactly like qf above.
 	cmds, cSeqs := s.commands, s.commandSeqs
 
 	// apply is the switch every fold below writes into a Session field
@@ -1717,11 +1708,9 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				qf.dequeued(*rec.Prompt)
 			}
 		case recCommand:
-			// foldCommand owns the by-ID replace and the torn-seq
-			// last-writer-wins rule (see its own doc comment); qf.observeSeq
-			// advances the SAME durable-enqueue watermark recPromptQueued's
-			// own Seq advances — commands and durable-enqueued prompts share
-			// one seq space per session (see RecordCommandDurable).
+			// qf.observeSeq advances the same durable-enqueue watermark a
+			// prompt.queued record's own Seq does: commands and
+			// durably-enqueued prompts share one seq space per session.
 			if rec.Command != nil {
 				cmds = foldCommand(cmds, cSeqs, rec.Command.CommandRecord, rec.Command.Seq)
 				qf.observeSeq(rec.Command.Seq)
@@ -1876,13 +1865,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// error. Not a regression: main hard-fails this load every time,
 			// and a session that loads with a slightly-wrong fold beats a
 			// session that never loads again.
-			// compactRecordBounds (compact.go) runs the heal and returns the
-			// range to splice. It is shared with the metadata index's own
-			// fold (index.go), so both agree on how many messages a compact
-			// record removes. A failed heal falls through unchanged: the
-			// splice below looks for the original (unhealed) LastID, fails
-			// to find it exactly as before, and returns its usual loud,
-			// explicit error — never a silent best-effort guess.
+			// compactRecordBounds runs the heal and returns the range to
+			// splice, shared with the metadata index's own fold. A failed
+			// heal falls through unchanged: the splice below returns its
+			// usual loud, explicit error rather than a silent guess.
 			start, end, err := compactRecordBounds(s.history, rec.Compact.FirstID, rec.Compact.LastID, rec.Compact.TurnsFolded)
 			if err != nil {
 				return fmt.Errorf("%w at line %d", err, line)

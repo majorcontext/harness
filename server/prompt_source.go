@@ -24,20 +24,15 @@ import (
 const (
 	sourceIDMaxBytes    = 128
 	sourceLabelMaxBytes = 256
-	// clientRefMaxBytes bounds client_ref, the Boxes console's own prompt
-	// correlation id — see promptSourceInput's doc comment for why
-	// source_id shares the same shape and rule.
+	// clientRefMaxBytes bounds client_ref, a caller-minted correlation id.
 	clientRefMaxBytes = 128
 )
 
 // sanitizeASCIIID rejects in when it exceeds maxBytes or contains a byte
-// outside printable ASCII (0x20-0x7E), naming field in the error — the
-// shared rule sanitizeSourceID and sanitizeClientRef both apply to their
-// own caller-supplied identifier. An identifier is rejected outright
-// rather than truncated or stripped (unlike sourceLabel below): a
-// truncated or byte-mangled id looks up nothing, or the wrong thing,
-// later. Empty always passes (every caller of this treats its field as
-// optional).
+// outside printable ASCII (0x20-0x7E), naming field in the error. It
+// rejects outright rather than truncating or stripping (unlike sourceLabel
+// below): a truncated or byte-mangled id looks up nothing, or the wrong
+// thing, later. Empty always passes.
 func sanitizeASCIIID(field, in string, maxBytes int) (string, error) {
 	if len(in) > maxBytes {
 		return "", fmt.Errorf("%s exceeds %d bytes", field, maxBytes)
@@ -55,13 +50,7 @@ func sanitizeSourceID(in string) (string, error) {
 	return sanitizeASCIIID("source_id", in, sourceIDMaxBytes)
 }
 
-// sanitizeClientRef applies sanitizeASCIIID's rule to client_ref, the
-// optional caller-minted correlation id every prompt-landing route
-// (prompt_async, enqueue, send) accepts alongside promptSourceInput. Unlike
-// source_id/source_label, client_ref is never itself part of
-// promptSourceInput or engine.PromptProvenance: it rides through
-// resolvePromptCommand as its own value and is kept only on a resolved
-// command's own CommandRecord — see resolvePromptCommand's doc comment.
+// sanitizeClientRef applies sanitizeASCIIID's rule to client_ref.
 func sanitizeClientRef(in string) (string, error) {
 	return sanitizeASCIIID("client_ref", in, clientRefMaxBytes)
 }

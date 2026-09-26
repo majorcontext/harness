@@ -1270,10 +1270,7 @@ func (s *Server) handleTranscriptBootstrap(w http.ResponseWriter, id string, lim
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	// fromFirst is true exactly when the window below still starts at
-	// history's own first message: windowTranscriptTail returns msgs
-	// unchanged whenever limit does not truncate it, and limit == 0 never
-	// windows at all.
+	// fromFirst stays true unless the window below truncates msgs.
 	fromFirst := true
 	if limit > 0 {
 		before := len(msgs)
@@ -1398,10 +1395,6 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 // and docs/design/transcript-tail-seqs.md for the caller this exists for
 // and why the two numbering spaces must never be confused). A caller that
 // reads only Messages/StreamFrom/LiveFrom is unaffected.
-//
-// Commands is a FIFTH, additive field: the folded message.CommandRecord
-// values whose anchor sits inside the returned window (engine.
-// CommandsInWindow). Always present, [] for a window with none.
 type transcriptJSON struct {
 	Messages   []json.RawMessage       `json:"messages"`
 	StreamFrom int64                   `json:"stream_from"`
@@ -1460,9 +1453,7 @@ type messagePageJSON struct {
 	Total int `json:"total"`
 	// HasMore reports whether older messages exist before FirstSeq.
 	HasMore bool `json:"has_more"`
-	// Commands holds the folded message.CommandRecord values whose anchor
-	// sits inside this page (engine.CommandsInWindow), always present and
-	// never nil — [] for a page with none.
+	// Commands holds the folded command records anchored in this page. Never nil.
 	Commands []message.CommandRecord `json:"commands"`
 }
 
@@ -1779,12 +1770,9 @@ type promptAsyncResponse struct {
 	// engine.ResolveMessageID) — so a caller that pre-minted an id for its
 	// own optimistic render can confirm which id to reconcile against,
 	// whether this prompt started immediately or is still queued. Omitted
-	// (empty) when Status is "command": a resolved command never becomes a
-	// user message, so there is no id to report — see resolvePromptCommand.
+	// when Status is "command": a resolved command never becomes a message.
 	MessageID string `json:"message_id,omitempty"`
-	// Command carries the resolved command's receipt when Status is
-	// "command" — see resolvePromptCommand (command_dispatch.go/commands.go).
-	// Nil, and so omitted, otherwise.
+	// Command carries the resolved command's receipt when Status is "command".
 	Command *commandReceiptJSON `json:"command,omitempty"`
 }
 
@@ -1822,10 +1810,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		// dispatches at once or sits in the queue first — see runPrompt's
 		// own doc comment on prov.
 		promptSourceInput
-		// ClientRef is an OPTIONAL caller-minted correlation id — see
-		// sanitizeClientRef and resolvePromptCommand's own doc comment. Kept
-		// only on a resolved command's CommandRecord; dropped for an
-		// ordinary prompt.
+		// ClientRef is an optional caller-minted correlation id.
 		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it: blob data arrives as base64 and
@@ -2180,8 +2165,7 @@ type enqueueResponse struct {
 	Status    string `json:"status"` // "started" | "queued" | "duplicate" | "command"
 	Watermark int64  `json:"watermark"`
 	Queued    int    `json:"queued,omitempty"`
-	// Command carries the resolved command's receipt when Status is
-	// "command" — see resolvePromptCommand. Nil, and so omitted, otherwise.
+	// Command carries the resolved command's receipt when Status is "command".
 	Command *commandReceiptJSON `json:"command,omitempty"`
 	// MessageID mirrors promptAsyncResponse.MessageID: the id this
 	// request's own prompt was (or will be) recorded under. Omitted on a
@@ -2230,8 +2214,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		// promptSourceInput: OPTIONAL provenance (source/source_id/
 		// source_label) — see parsePromptProvenance.
 		promptSourceInput
-		// ClientRef mirrors handlePrompt's own body.ClientRef — see
-		// sanitizeClientRef and resolvePromptCommand's own doc comment.
+		// ClientRef mirrors handlePrompt's own body.ClientRef.
 		ClientRef string `json:"client_ref"`
 	}
 	// Bound the body BEFORE decoding it, for the same reason handlePrompt
