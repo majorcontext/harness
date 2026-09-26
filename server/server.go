@@ -1057,6 +1057,7 @@ func (s *Server) routes() {
 	// GET /process/{name}/logs: the processes panel's log tail, behind the
 	// same auth as every other process route — see handleProcessLogs.
 	mux.HandleFunc("GET /process/{name}/logs", s.auth(s.handleProcessLogs))
+	mux.HandleFunc("GET /git/changes", s.auth(s.handleGitChanges))
 	// /debug/goroutines: an authed HTTP alternative to sending SIGQUIT (see
 	// handleGoroutines's doc comment and cmd/harness/main.go's serveCmd,
 	// which confirms SIGQUIT still produces Go's default all-goroutine dump
