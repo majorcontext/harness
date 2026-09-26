@@ -3908,13 +3908,20 @@ paths:
       operationId: getGitChanges
       summary: A box's git diff, for the boxes web console's Changes panel.
       description: >
-        scope=uncommitted diffs HEAD against the working tree. scope=branch
-        (default) diffs merge-base(HEAD, the default branch) against the
-        working tree, so it shows what a PR would contain once the agent
-        commits. Both scopes fold in untracked files (respecting
-        .gitignore) as status "added". Never mutates the repository or
-        takes git locks: every git subprocess runs with
-        GIT_OPTIONAL_LOCKS=0 and never touches the index.
+        scope=uncommitted diffs HEAD (the empty tree, for a commit-less
+        repository) against the working tree. scope=branch (default) diffs
+        merge-base(HEAD, the default branch) against the working tree, so
+        it shows what a PR would contain once the agent commits. Both
+        scopes fold in untracked files (respecting .gitignore) as status
+        "added". dir always resolves to its repository's root first
+        (`git rev-parse --show-toplevel`), so a dir naming a subdirectory
+        still reports the whole repository's changes. Runs a constant
+        number of git subprocesses regardless of how many files changed.
+        Never mutates the repository or takes a lock on it: every git
+        subprocess runs read-only against a private, request-scoped copy
+        of the index (the real .git/index is only ever read, never opened
+        by a git command), with external diff/textconv/filter drivers,
+        fsmonitor, and hooks all disabled.
       parameters:
         - name: scope
           in: query
@@ -3939,8 +3946,10 @@ paths:
         "409":
           description: >
             dir is not a git work tree (error "not_a_git_repo"), or
-            scope=branch and no default branch could be resolved from
-            origin/HEAD, origin/main, or origin/master (error "no_base").
+            scope=branch and no base could be established (error
+            "no_base"): no default branch resolved from origin/HEAD,
+            origin/main, or origin/master; HEAD has no commit yet; or HEAD
+            and the default branch share no common ancestor.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
