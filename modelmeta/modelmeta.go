@@ -142,7 +142,10 @@ var bifrostVertexContextWindows = map[string]int{
 }
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
-// false for an unrecognized provider or model.
+// false for an unrecognized provider or model, and 0 with true for a
+// claude-code ref, which is recognized but has no knowable window: the CLI
+// resolves a bare alias itself and never reports its choice. A caller must
+// treat that 0 as "unknown", never as a usable size.
 //
 // ref.Model is normalized before lookup because the boxes platform
 // (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
