@@ -428,24 +428,112 @@ func TestCommandResponseWriterCapsBufferedBody(t *testing.T) {
 }
 
 func TestTypedCommandRefusedWhileDraining(t *testing.T) {
-	prov := newCapturingProvider()
+	cases := []struct {
+		name  string
+		parts []any
+	}{
+		{
+			name:  "bad args",
+			parts: []any{map[string]string{"type": "text", "text": "/compact abc"}},
+		},
+		{
+			name: "attachment",
+			parts: []any{
+				map[string]string{"type": "text", "text": "/model a/b"},
+				attachmentPart("image/png", testPNG(t)),
+			},
+		},
+		{
+			name:  "unsupported",
+			parts: []any{map[string]string{"type": "text", "text": "/new"}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, newCapturingProvider())
+			id := h.createSession("test/m1")
+			h.srv.mu.Lock()
+			h.srv.draining = true
+			h.srv.mu.Unlock()
+
+			resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+				"parts": tc.parts, "source": "typed",
+			})
+			if resp.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("prompt_async status %d, want 503: %s", resp.StatusCode, data)
+			}
+			if cmds := h.sessionDirect(id).Commands(); len(cmds) != 0 {
+				t.Fatalf("Commands() = %+v, want none", cmds)
+			}
+			if events := commandEventsForSession(h.srv, id); len(events) != 0 {
+				t.Fatalf("command events = %+v, want none", events)
+			}
+		})
+	}
+}
+
+func TestMidTurnCommandRefusedWhileDraining(t *testing.T) {
+	prov := &queueProv{name: "test", started: make(chan struct{}), release: make(chan struct{})}
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
+	defer close(prov.release)
 
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "occupant"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("occupant prompt status %d, want 202: %s", resp.StatusCode, data)
+	}
+	<-prov.started
 	h.srv.mu.Lock()
 	h.srv.draining = true
 	h.srv.mu.Unlock()
 
-	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
-		"parts":  []map[string]string{{"type": "text", "text": "/compact"}},
-		"source": "typed",
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "/compact"}}, "source": "typed",
 	})
 	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("prompt_async status %d, want 503: %s", resp.StatusCode, data)
+		t.Fatalf("/compact status %d, want 503: %s", resp.StatusCode, data)
+	}
+	if cmds := h.sessionDirect(id).Commands(); len(cmds) != 0 {
+		t.Fatalf("Commands() = %+v, want none", cmds)
+	}
+	if events := commandEventsForSession(h.srv, id); len(events) != 0 {
+		t.Fatalf("command events = %+v, want none", events)
+	}
+}
+
+func TestDrainingEnqueueBadArgsDoesNotConsumeSequence(t *testing.T) {
+	h := newHarness(t, newCapturingProvider())
+	id := h.createSession("test/m1")
+	body := map[string]any{
+		"parts":  []map[string]string{{"type": "text", "text": "/compact abc"}},
+		"source": "typed",
+		"seq":    17,
+	}
+	h.srv.mu.Lock()
+	h.srv.draining = true
+	h.srv.mu.Unlock()
+
+	resp, data := h.do("POST", "/session/"+id+"/enqueue", body)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("enqueue status %d, want 503: %s", resp.StatusCode, data)
+	}
+	if cmds := h.sessionDirect(id).Commands(); len(cmds) != 0 {
+		t.Fatalf("Commands() = %+v, want none", cmds)
+	}
+	if events := commandEventsForSession(h.srv, id); len(events) != 0 {
+		t.Fatalf("command events = %+v, want none", events)
 	}
 
-	sess := h.sessionDirect(id)
-	if cmds := sess.Commands(); len(cmds) != 0 {
-		t.Fatalf("Commands() = %+v, want none: a 503 refusal must not record anything", cmds)
+	h.srv.mu.Lock()
+	h.srv.draining = false
+	h.srv.mu.Unlock()
+	resp, data = h.do("POST", "/session/"+id+"/enqueue", body)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("enqueue retry status %d, want 202: %s", resp.StatusCode, data)
+	}
+	if got := h.sessionDirect(id).EnqueueSeq(); got != 17 {
+		t.Fatalf("enqueue watermark = %d, want 17", got)
 	}
 }

@@ -226,24 +226,23 @@ func (s *Server) writeCommand(w http.ResponseWriter, route promptRoute, id strin
 	// Until handedOff, these defers own the pin and admit slot, so a panic
 	// anywhere below releases them instead of leaking them.
 	handedOff := false
+	admitted := false
 	defer func() {
 		if !handedOff {
 			releaseSess()
+			if admitted {
+				s.wg.Done()
+			}
 		}
 	}()
 
-	dispatching := res != nil
-	if dispatching {
-		if !s.admitCommand() {
-			writeErr(w, http.StatusServiceUnavailable, "server shutting down")
-			return true
-		}
-		defer func() {
-			if !handedOff {
-				s.wg.Done()
-			}
-		}()
+	if !s.admitCommand() {
+		writeErr(w, http.StatusServiceUnavailable, "server shutting down")
+		return true
 	}
+	admitted = true
+
+	dispatching := res != nil
 
 	// Sampled before the durable record is written, so a resuming
 	// GET /event?from=fromSeq caller still replays the accepted event.
