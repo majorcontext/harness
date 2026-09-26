@@ -93,6 +93,13 @@ ZERO model ref (nothing to look up; the refusal belongs to whatever later
 names a model), and a model the registry KNOWS whose window is below
 `minAutoContextWindowTokens` (a known model, not a gap).
 
+A `claude-code` ref is a fifth: recognized, so it never refuses, but reported
+with a window of 0 because none is knowable. Harness invokes the CLI with a
+bare alias and the CLI resolves that to a concrete model without reporting
+back, so no table can hold the answer. It previously reported a 200,000
+stand-in, which rendered a session on a 1,000,000-token model as five times
+fuller than it was. Treat the 0 as unknown rather than as a size.
+
 The registry covers `anthropic`, `openai`, `codex`, `amazon-bedrock`,
 `claude-code`, and `bifrost` refs. The `bifrost` case
 (`modelmeta.bifrostFireworksContextWindows`,

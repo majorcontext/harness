@@ -115,6 +115,30 @@ func TestLiveEventsTextReasoningToolStartToolEnd(t *testing.T) {
 	}
 }
 
+// TestLiveEventsCarryAssistantMessageID: a delta's id must equal the message's id.
+func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{{
+		{Type: provider.EventTextDelta, Text: "Hi", ID: "resp_msgid_1"},
+		{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_msgid_1", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hi"}}}},
+	}}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "go"}}})
+
+	var delta, got *Event
+	for _, ev := range sse.collectUntilIdle(t) {
+		if ev.Type == engine.EventTextDelta {
+			delta = &ev
+		} else if ev.Type == engine.EventMessage {
+			got = &ev
+		}
+	}
+	if delta == nil || got == nil || got.Message == nil || delta.ID == "" || delta.ID != got.Message.ID {
+		t.Fatalf("delta=%+v msg=%+v, want matching non-empty ids", delta, got)
+	}
+}
+
 // TestLiveEventTurnRestartForwarded proves Server.Publish forwards the engine
 // EventTurnRestart marker onto the live SSE stream. A base-loop retry
 // (engine/prompt_retry.go) emits it so a client drops the failed attempt's

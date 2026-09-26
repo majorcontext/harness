@@ -96,8 +96,14 @@ func TestStreamAssembly(t *testing.T) {
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text += ev.Text
+			if ev.ID != "msg_01" {
+				t.Errorf("text delta ID = %q, want %q (message_start's own id)", ev.ID, "msg_01")
+			}
 		case provider.EventReasoningDelta:
 			reasoning += ev.Text
+			if ev.ID != "msg_01" {
+				t.Errorf("reasoning delta ID = %q, want %q (message_start's own id)", ev.ID, "msg_01")
+			}
 		case provider.EventToolCall:
 			toolCalls = append(toolCalls, ev.ToolCall)
 		case provider.EventDone:

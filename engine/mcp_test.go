@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -62,7 +63,17 @@ type fakeMCPHTTPServer struct {
 	// channel-closed-in-Cleanup pattern for hang simulation).
 	blockUntil chan struct{}
 
-	calls []string // tool names actually invoked, in order
+	// resources/resourceContents drive resources/list and resources/read;
+	// resourcesCapability is independent of len(resources).
+	resources           []map[string]any
+	resourcesPageSize   int // 0 = no pagination
+	resourcesCapability bool
+	resourceContents    map[string][]map[string]any // uri -> resources/read contents
+	failResourcesList   bool                        // resources/list returns an RPCError
+	noToolsCapability   bool                        // omit "tools" from initialize capabilities; tools/list errors
+
+	calls             []string // tool names actually invoked, in order
+	resourceListCalls int      // resources/list requests actually served
 }
 
 func (s *fakeMCPHTTPServer) start(t *testing.T) string {
@@ -89,9 +100,16 @@ func (s *fakeMCPHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	var result any
 	switch in.Method {
 	case "initialize":
+		caps := map[string]any{}
+		if !s.noToolsCapability {
+			caps["tools"] = map[string]any{}
+		}
+		if s.resourcesCapability {
+			caps["resources"] = map[string]any{}
+		}
 		init := map[string]any{
 			"protocolVersion": "2025-11-25",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"capabilities":    caps,
 			"serverInfo":      map[string]any{"name": "fake-mcp-http", "version": "0.0.1"},
 		}
 		if s.instructions != "" {
@@ -99,6 +117,12 @@ func (s *fakeMCPHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		result = init
 	case "tools/list":
+		if s.noToolsCapability {
+			w.Header().Set("Content-Type", "application/json")
+			resp := rpcMessage{JSONRPC: "2.0", ID: in.ID, Error: json.RawMessage(`{"code":-32601,"message":"method not found"}`)}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
 		var tools []map[string]any
 		for _, tool := range s.tools {
 			tools = append(tools, map[string]any{
@@ -126,6 +150,48 @@ func (s *fakeMCPHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
+	case "resources/list":
+		s.resourceListCalls++
+		if s.failResourcesList {
+			w.Header().Set("Content-Type", "application/json")
+			resp := rpcMessage{JSONRPC: "2.0", ID: in.ID, Error: json.RawMessage(`{"code":-32603,"message":"boom"}`)}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		var params struct {
+			Cursor string `json:"cursor"`
+		}
+		_ = json.Unmarshal(in.Params, &params)
+		start := 0
+		if params.Cursor != "" {
+			_, _ = fmt.Sscanf(params.Cursor, "page:%d", &start)
+		}
+		if s.resourcesPageSize <= 0 {
+			result = map[string]any{"resources": s.resources}
+			break
+		}
+		end := start + s.resourcesPageSize
+		if end > len(s.resources) {
+			end = len(s.resources)
+		}
+		page := map[string]any{"resources": s.resources[start:end]}
+		if end < len(s.resources) {
+			page["nextCursor"] = fmt.Sprintf("page:%d", end)
+		}
+		result = page
+	case "resources/read":
+		var params struct {
+			URI string `json:"uri"`
+		}
+		_ = json.Unmarshal(in.Params, &params)
+		contents, ok := s.resourceContents[params.URI]
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			resp := rpcMessage{JSONRPC: "2.0", ID: in.ID, Error: json.RawMessage(`{"code":-32602,"message":"unknown resource"}`)}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		result = map[string]any{"contents": contents}
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -137,6 +203,23 @@ func (s *fakeMCPHTTPServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 func textContent(s string) map[string]any {
 	return map[string]any{"type": "text", "text": s}
+}
+
+// resourceObj is one raw resources/list entry for fakeMCPHTTPServer.resources.
+func resourceObj(uri, name string) map[string]any {
+	return map[string]any{"uri": uri, "name": name}
+}
+
+// textResourceContents is one resources/read contents entry with a text
+// payload.
+func textResourceContents(uri, mimeType, text string) map[string]any {
+	return map[string]any{"uri": uri, "mimeType": mimeType, "text": text}
+}
+
+// blobResourceContents is one resources/read contents entry with a base64
+// blob payload.
+func blobResourceContents(uri, mimeType, blobBase64 string) map[string]any {
+	return map[string]any{"uri": uri, "mimeType": mimeType, "blob": blobBase64}
 }
 
 // TestMCPToolName covers the namespacing convention:
@@ -216,6 +299,128 @@ func TestMCPManagerCallToolIsError(t *testing.T) {
 	}
 	if out.Text() != "boom: rate limited" {
 		t.Errorf("output = %q", out.Text())
+	}
+}
+
+// TestMCPManagerConnectsResourcesOnlyServerWithoutToolsCapability: a server
+// that advertises resources but not tools must still connect (never calling
+// tools/list, which it does not implement) and must serve its resources.
+func TestMCPManagerConnectsResourcesOnlyServerWithoutToolsCapability(t *testing.T) {
+	srv := &fakeMCPHTTPServer{
+		noToolsCapability:   true,
+		resourcesCapability: true,
+		resources:           []map[string]any{resourceObj("skill://index.json", "index")},
+	}
+	mgr := NewMCPManager(map[string]MCPServerConfig{"figma": {URL: srv.start(t)}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	if defs := mgr.Tools(context.Background()); len(defs) != 0 {
+		t.Fatalf("Tools() = %+v, want none from a tools-capability-less server", defs)
+	}
+	for _, st := range mgr.Status() {
+		if st.Name == "figma" && !st.Connected {
+			t.Fatalf("status = %+v, want figma connected", st)
+		}
+	}
+	got, _, err := mgr.ListResources(context.Background(), "figma")
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(got) != 1 || got[0].URI != "skill://index.json" {
+		t.Fatalf("ListResources() = %+v", got)
+	}
+}
+
+// TestMCPManagerListResourcesPaging covers ListResources actually draining
+// a server's pagination (rather than one unpaginated response) and, for a
+// server past mcpResourcesCap, stopping early with truncated=true instead
+// of draining every page first.
+func TestMCPManagerListResourcesPaging(t *testing.T) {
+	cases := []struct {
+		name      string
+		count     int
+		wantLen   int
+		wantTrunc bool
+		maxCalls  int
+	}{
+		{"under the cap", 3, 3, false, 3},
+		{"over the cap", mcpResourcesCap + 50, mcpResourcesCap, true, mcpResourcesCap/10 + 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resources := make([]map[string]any, tc.count)
+			for i := range resources {
+				resources[i] = resourceObj(fmt.Sprintf("skill://r%d", i), fmt.Sprintf("r%d", i))
+			}
+			srv := &fakeMCPHTTPServer{resourcesCapability: true, resourcesPageSize: 1, resources: resources}
+			if tc.count > 3 {
+				srv.resourcesPageSize = 10
+			}
+			mgr := NewMCPManager(map[string]MCPServerConfig{"figma": {URL: srv.start(t)}})
+			t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+			got, truncated, err := mgr.ListResources(context.Background(), "figma")
+			if err != nil {
+				t.Fatalf("ListResources: %v", err)
+			}
+			if truncated != tc.wantTrunc {
+				t.Errorf("truncated = %v, want %v", truncated, tc.wantTrunc)
+			}
+			if len(got) != tc.wantLen {
+				t.Fatalf("len(got) = %d, want %d", len(got), tc.wantLen)
+			}
+			if got[0].URI != "skill://r0" {
+				t.Errorf("got[0].URI = %q, want skill://r0 (page order preserved)", got[0].URI)
+			}
+			if srv.resourceListCalls > tc.maxCalls {
+				t.Fatalf("resources/list calls = %d, want at most %d", srv.resourceListCalls, tc.maxCalls)
+			}
+		})
+	}
+}
+
+// TestMCPManagerListResourcesErrors names two distinct failures ListResources
+// must produce, never a nil-map panic: an unconfigured server, and a
+// connected server that simply does not support resources.
+func TestMCPManagerListResourcesErrors(t *testing.T) {
+	url := (&fakeMCPHTTPServer{}).start(t)
+	mgr := NewMCPManager(map[string]MCPServerConfig{"plain": {URL: url}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	cases := []struct {
+		name   string
+		server string
+		want   string
+	}{
+		{"unconfigured server", "nope", "is not configured"},
+		{"connected server without resources capability", "plain", "does not support MCP resources"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := mgr.ListResources(context.Background(), tc.server)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ListResources(%q) err = %v, want it to contain %q", tc.server, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestMCPManagerReadResourceUnknownURI: the server-side unknown-uri RPCError
+// passes through unsanitized (it names no endpoint).
+func TestMCPManagerReadResourceUnknownURI(t *testing.T) {
+	srv := &fakeMCPHTTPServer{resourcesCapability: true}
+	url := srv.start(t)
+
+	mgr := NewMCPManager(map[string]MCPServerConfig{"figma": {URL: url}})
+	t.Cleanup(func() { _ = mgr.Close(context.Background()) })
+
+	_, err := mgr.ReadResource(context.Background(), "figma", "skill://missing")
+	var rerr *mcp.RPCError
+	if !errors.As(err, &rerr) {
+		t.Fatalf("err = %v, want *mcp.RPCError passed through unsanitized", err)
+	}
+	if !strings.Contains(rerr.Message, "unknown resource") {
+		t.Errorf("RPCError.Message = %q, want the server's own %q text", rerr.Message, "unknown resource")
 	}
 }
 
@@ -690,9 +895,9 @@ func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	const payload = "not valid base64!!!"
-	data := decodeMCPBase64("weather", "get_forecast", payload)
-	if data != nil {
-		t.Errorf("decodeMCPBase64() = %v, want nil for malformed input", data)
+	data, ok := decodeMCPBase64("weather", "get_forecast", payload)
+	if ok || data != nil {
+		t.Errorf("decodeMCPBase64() = (%v, %v), want (nil, false) for malformed input", data, ok)
 	}
 
 	out := buf.String()

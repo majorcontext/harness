@@ -40,6 +40,9 @@ func TestStreamReasoningDetailsExtracted(t *testing.T) {
 		}
 		if ev.Type == provider.EventReasoningDelta {
 			reasoningDeltas = append(reasoningDeltas, ev.Text)
+			if ev.ID != "chunk_1" {
+				t.Errorf("reasoning delta ID = %q, want chunk_1", ev.ID)
+			}
 		} else if ev.Type == provider.EventDone {
 			e := ev
 			done = &e

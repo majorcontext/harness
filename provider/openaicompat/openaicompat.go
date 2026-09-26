@@ -465,7 +465,7 @@ func (s *stream) handle(data []byte) error {
 	if choice.Delta.Content != "" {
 		s.haveText = true
 		s.text.WriteString(choice.Delta.Content)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: choice.Delta.Content, ID: s.id})
 	}
 	// A gateway carries reasoning in reasoning_content (DeepSeek/Bifrost) or
 	// reasoning (OpenRouter), and Gemini via Bifrost delivers structured
@@ -479,7 +479,7 @@ func (s *stream) handle(data []byte) error {
 			hasDetailText = true
 			s.haveReasoning = true
 			s.reasoningText.WriteString(rd.Text)
-			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text})
+			s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rd.Text, ID: s.id})
 			detailJoined += rd.Text
 		}
 	}
@@ -494,11 +494,11 @@ func (s *stream) handle(data []byte) error {
 	} else if rc := choice.Delta.ReasoningContent; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id})
 	} else if rc := choice.Delta.Reasoning; rc != "" {
 		s.haveReasoning = true
 		s.reasoningText.WriteString(rc)
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: rc, ID: s.id})
 	}
 	for _, tc := range choice.Delta.ToolCalls {
 		if s.toolCalls == nil {

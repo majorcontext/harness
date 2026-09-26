@@ -105,8 +105,12 @@ type Tool struct {
 // Event is one entry in the session's event stream. Event types follow ACP
 // naming where a choice is arbitrary (see docs/plugins-and-protocols.md).
 type Event struct {
-	Type       string              `json:"type"`
-	SessionID  string              `json:"session_id"`
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	// ID, on EventTextDelta/EventReasoningDelta/EventToolStart only, is the
+	// id the turn's own EventMessage will carry — see provider.Event.ID and
+	// claudeCodeUpstreamID. Empty until known.
+	ID         string              `json:"id,omitempty"`
 	Text       string              `json:"text,omitempty"`
 	Message    *message.Message    `json:"message,omitempty"`
 	ToolCall   *message.ToolCall   `json:"tool_call,omitempty"`
@@ -1766,6 +1770,8 @@ func newSession(cfg Config) *Session {
 		// nothing to act on. Policy is fixed for the session's life, so
 		// the def stays byte-stable across requests.
 		s.tools[mcpSessionToolName] = mcpTool(s.mcpPolicyCanDefer())
+		s.tools[mcpListResourcesToolName] = mcpListResourcesTool()
+		s.tools[mcpReadResourceToolName] = mcpReadResourceTool()
 	}
 	// task is registered here unconditionally whenever a SessionManager is
 	// present; SessionManager itself withholds it post-construction for a
@@ -2865,8 +2871,8 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	if s.claudeCodeDelegated() {
-		return s.dispatchClaudeCodeTurn(ctx, text, origin, id, prov, operatorBatch, blobs...)
+	if backend, ok := s.delegatedBackend(); ok {
+		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -2935,11 +2941,22 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	return s.runAgenticLoop(ctx)
 }
 
-// dispatchClaudeCodeTurn appends text and runs it through the Claude Code
-// CLI. RunCompactCommand calls this directly rather than promptWithOrigin
-// so a model switch after its own lane check cannot send "/compact" to a
-// native model as plain text.
-func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
+// delegatedBackend resolves the DelegatedBackend for s's CURRENT model, if
+// any is registered. Every internal dispatch site calls this exactly once
+// and carries the result forward, rather than each re-resolving s.Model()
+// on its own: SetModel is allowed mid-turn, so a second, later lookup could
+// disagree with the first and abort a turn a concurrent switch already
+// committed to running.
+func (s *Session) delegatedBackend() (DelegatedBackend, bool) {
+	b, err := delegatedBackends.For(s.Model())
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// dispatchClaudeCodeTurn appends text and runs it through backend.
+func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
 		Role:          message.RoleUser,
@@ -2952,17 +2969,17 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, text string, origi
 		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
 	}
 	s.append(msg)
-	return s.runDelegatedTurn(ctx)
+	return s.runDelegatedTurn(ctx, backend)
 }
 
-// runDelegatedTurn runs one Claude Code CLI turn. Callers that already
-// checked claudeCodeDelegated call this directly, not runAgenticLoop, so a
-// model switch in between cannot send their text to the wrong lane.
-func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error) {
+// runDelegatedTurn runs one turn through backend, resolved by the caller's
+// own delegatedBackend() call — see that method's own doc comment for why
+// this never re-resolves the model itself.
+func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()
-	msg, err := s.runClaudeCodeTurn(ctx)
+	msg, err := backend.RunTurn(ctx, s)
 	if err != nil {
 		s.requeueTaskNotifications()
 		s.emitSessionError(err)
@@ -2992,8 +3009,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error
 // docs/design/goal-retry-directive-reuse.md.
 //
 // A session whose model names ClaudeCodeProviderFamily dispatches to
-// runClaudeCodeTurn (engine/claude_code_backend.go) instead, at the very
-// top, before any of the native-loop machinery below runs: maxTokensUsed
+// runDelegatedTurn (delegated_backend.go) instead, at the very top, before
+// any of the native-loop machinery below runs: maxTokensUsed
 // accounting, streamTurnWithRetry, runToolCalls, and
 // drainQueuedPromptsIntoHistory's tool-call-boundary drain are ALL native-
 // provider-call concepts that make no sense for a turn Claude Code itself
@@ -3006,8 +3023,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context) (*message.Message, error
 // entirely, so THIS is the one choke point every route into the agentic
 // loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
-	if s.claudeCodeDelegated() {
-		return s.runDelegatedTurn(ctx)
+	if backend, ok := s.delegatedBackend(); ok {
+		return s.runDelegatedTurn(ctx, backend)
 	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
@@ -3249,8 +3266,8 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 	if err != nil {
 		return nil, err
 	}
-	tools, mcpCatalog, mcpServers := s.toolDefsWithCatalog(ctx)
-	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers)
+	tools, mcpCatalog, mcpServers, resourceServers := s.toolDefsWithCatalog(ctx)
+	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers, resourceServers)
 
 	system := append([]string(nil), s.cfg.System...)
 	system = append(system, s.cfg.AppendSystemPrompt...)
@@ -3405,6 +3422,12 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// why.
 	var text strings.Builder
 	var toolCalls []*message.ToolCall
+	// streamID latches the first non-empty ev.ID this stream reports (see
+	// provider.Event.ID's doc comment: stable for the whole stream once
+	// known), so an interrupted turn's assemblePartial below can reuse the
+	// same id its deltas already streamed under instead of minting a second
+	// one the deltas never carried.
+	var streamID string
 	// firstDeltaAt is set once, on the first non-EventActivity event this
 	// stream yields (see provider.EventActivity's doc comment: it carries no
 	// content, so it must not count as "first byte"). If EventDone is
@@ -3429,7 +3452,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			}
 			return nil, "", provider.Usage{}, &interruptedTurnError{
 				err:     err,
-				partial: s.assemblePartial(text.String(), toolCalls),
+				partial: s.assemblePartial(streamID, text.String(), toolCalls),
 			}
 		}
 		watch.kick()
@@ -3440,9 +3463,15 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 		switch ev.Type {
 		case provider.EventTextDelta:
 			text.WriteString(ev.Text)
-			s.emit(Event{Type: EventTextDelta, Text: ev.Text})
+			if streamID == "" {
+				streamID = ev.ID
+			}
+			s.emit(Event{Type: EventTextDelta, Text: ev.Text, ID: ev.ID})
 		case provider.EventReasoningDelta:
-			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text})
+			if streamID == "" {
+				streamID = ev.ID
+			}
+			s.emit(Event{Type: EventReasoningDelta, Text: ev.Text, ID: ev.ID})
 		case provider.EventToolCall:
 			// A complete tool_use/tool_call block: the provider has
 			// finished emitting its arguments (see
@@ -3516,10 +3545,19 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 // more tool calls but before EventDone. It mirrors the shape a provider
 // adapter's own assemble (e.g. provider/anthropic/anthropic.go's
 // stream.assemble) would produce for the same partial content: any
-// accumulated text first, then the tool calls in emission order.
-func (s *Session) assemblePartial(text string, toolCalls []*message.ToolCall) *message.Message {
+// accumulated text first, then the tool calls in emission order. id is
+// streamTurn's latched streamID, used verbatim so the salvaged message
+// reuses the id its own deltas already streamed under — the same rule
+// every native adapter's own assemble (e.g. provider/anthropic/
+// anthropic.go's stream.assemble) applies to Message.ID, never
+// ResolveMessageID's reserved-prefix rewrite. Empty only mints, matching
+// streamTurn never latching an id when the provider sent none.
+func (s *Session) assemblePartial(id, text string, toolCalls []*message.ToolCall) *message.Message {
+	if id == "" {
+		id = newID("msg")
+	}
 	msg := &message.Message{
-		ID:        newID("msg"),
+		ID:        id,
 		Role:      message.RoleAssistant,
 		Model:     s.Model(),
 		CreatedAt: time.Now().UTC(),
@@ -3977,25 +4015,44 @@ func (e *emptyTurnError) Error() string {
 // deliberately gathers tool names before its own Lock, and streamTurn builds
 // the whole request before its s.mu section.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
-	defs, _, _ := s.toolDefsWithCatalog(ctx)
+	defs, _, _, _ := s.toolDefsWithCatalog(ctx)
 	return defs
 }
 
 // toolDefsWithCatalog is toolDefs plus the stage-1 MCP catalog segment that
-// belongs in the same request's system prompt (see mcp_lazy.go). The two
-// come from ONE plan, and therefore from one MCPRegistry.Tools call, because
-// that call is what triggers a server's first connect attempt: computing
-// them separately would dial twice and could disagree if a background retry
-// committed between the two reads.
+// belongs in the same request's system prompt, and the resource-capable
+// server names the instructions segment must also fold into its own
+// server snapshot (see mcpInstructionsSegmentFrom) — a resources-only
+// server contributes no tool def, so plan.servers alone would never see
+// it.
 //
 // The catalog is "" whenever nothing is deferred, which includes every
 // session that did not opt into deferral at all.
-func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool) {
+func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool, []string) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
-	for _, t := range s.tools {
+	for name, t := range s.tools {
+		// Presence here is decided below by live capability, not by
+		// static s.tools membership.
+		if name == mcpListResourcesToolName || name == mcpReadResourceToolName {
+			continue
+		}
 		defs = append(defs, t.Def)
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
+
+	listTool, hasListTool := s.tools[mcpListResourcesToolName]
+	readTool, hasReadTool := s.tools[mcpReadResourceToolName]
+	// AND, not independent per-tool checks: restrictTools may have removed
+	// one but not the other, and the instructions line below promises BOTH
+	// tools, so a session missing either must advertise neither.
+	resourceServers := mcpResourceCapableServers(ctx, s.cfg.MCP)
+	if !hasListTool || !hasReadTool {
+		resourceServers = nil
+	}
+	if len(resourceServers) > 0 {
+		defs = append(defs, listTool.Def, readTool.Def)
+	}
+
 	plan := s.planMCPTools(ctx)
 	defs = append(defs, plan.defs...)
 	if s.cfg.Hooks != nil {
@@ -4007,7 +4064,7 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 			})
 		}
 	}
-	return defs, plan.catalog, plan.servers
+	return defs, plan.catalog, plan.servers, resourceServers
 }
 
 // runToolCalls executes every tool call in an assistant message and returns

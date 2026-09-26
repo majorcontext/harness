@@ -184,6 +184,49 @@ func TestOrphanedToolCallAppendsSyntheticResult(t *testing.T) {
 	}
 }
 
+// TestInterruptedNativeTurnKeepsStreamID: before the fix, assemblePartial
+// minted a fresh id, disagreeing with the id its own delta streamed under.
+func TestInterruptedNativeTurnKeepsStreamID(t *testing.T) {
+	prov := &diesAfterToolCallProvider{
+		name: "test",
+		dying: []provider.Event{
+			{Type: provider.EventTextDelta, Text: "working", ID: "resp_native_1"},
+			{Type: provider.EventToolCall, ToolCall: toolCall("orphan2", "bash", `{"command":"echo hi"}`)},
+		},
+		dieErr: errTransportDropped,
+	}
+	s := NewSession(Config{Providers: provider.Registry{"test": prov}, Model: message.ModelRef{Provider: "test", Model: "m1"}})
+	if _, err := s.Prompt(context.Background(), "go"); err == nil {
+		t.Fatal("Prompt = nil error, want the transport error surfaced")
+	}
+	if h := s.History(); len(h) < 2 || h[1].ID != "resp_native_1" {
+		t.Fatalf("interrupted assistant message = %+v, want ID %q", h, "resp_native_1")
+	}
+}
+
+// TestInterruptedNativeTurnKeepsReservedPrefixStreamID: before the fix,
+// assemblePartial ran the salvaged id through ResolveMessageID, which mints
+// a fresh id for any reserved-prefix (e.g. "cmpsum") provider id — a native
+// adapter's own assemble() never does this, so the salvaged message
+// disagreed with the id its own delta already streamed under.
+func TestInterruptedNativeTurnKeepsReservedPrefixStreamID(t *testing.T) {
+	prov := &diesAfterToolCallProvider{
+		name: "test",
+		dying: []provider.Event{
+			{Type: provider.EventTextDelta, Text: "working", ID: "cmpsum_upstream"},
+			{Type: provider.EventToolCall, ToolCall: toolCall("orphan3", "bash", `{"command":"echo hi"}`)},
+		},
+		dieErr: errTransportDropped,
+	}
+	s := NewSession(Config{Providers: provider.Registry{"test": prov}, Model: message.ModelRef{Provider: "test", Model: "m1"}})
+	if _, err := s.Prompt(context.Background(), "go"); err == nil {
+		t.Fatal("Prompt = nil error, want the transport error surfaced")
+	}
+	if h := s.History(); len(h) < 2 || h[1].ID != "cmpsum_upstream" {
+		t.Fatalf("interrupted assistant message = %+v, want ID %q verbatim, not rewritten by ResolveMessageID", h, "cmpsum_upstream")
+	}
+}
+
 // TestOrphanedToolCallMultipleCalls covers a turn that recorded more than
 // one complete tool_call before dying: every one of them must get its own
 // synthetic result, in emission order, none silently dropped.

@@ -97,6 +97,26 @@ You are a meticulous reviewer. Check for correctness and style.
 	}
 }
 
+// TestLoadAgentDefsAcceptsMCPResourceTools: list_mcp_resources and
+// read_mcp_resource must be valid tools: entries, not rejected as unknown.
+func TestLoadAgentDefsAcceptsMCPResourceTools(t *testing.T) {
+	dir := t.TempDir()
+	writeAgentDef(t, dir, "skill-reader.md", `---
+name: skill-reader
+description: Reads MCP resources
+tools: list_mcp_resources, read_mcp_resource
+---
+Read skill resources before answering.
+`)
+	defs, err := LoadAgentDefs(dir)
+	if err != nil {
+		t.Fatalf("LoadAgentDefs: %v", err)
+	}
+	if _, ok := defs["skill-reader"]; !ok {
+		t.Fatalf("skill-reader not loaded: %v", defs)
+	}
+}
+
 func TestLoadAgentDefsOmittedToolsMeansFullSet(t *testing.T) {
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "helper.md", `---

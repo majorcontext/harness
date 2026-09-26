@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/typeid"
 )
 
 // fakeClaudeBin is the path to the compiled fakeclaude stand-in (see
@@ -310,6 +311,9 @@ func TestClaudeCodeQueuedEmptyResultSkippedUntilRealTurn(t *testing.T) {
 		}
 		if got := msg.Parts.Text(); got != "second" {
 			t.Errorf("final message text = %q, want %q", got, "second")
+		}
+		if tid, err := typeid.Parse(msg.ID); err != nil || tid.Prefix() != "msg" {
+			t.Errorf("final message ID = %q, want a minted \"msg\" TypeID (the fixture's own envelope carries no upstream id)", msg.ID)
 		}
 		if len(metrics) != 1 {
 			t.Fatalf("OnTurnMetrics called %d times, want 1 (the placeholder must not emit its own): %+v", len(metrics), metrics)
@@ -1306,6 +1310,8 @@ func TestClaudeCodeDisallowsNativeSpawnTools(t *testing.T) {
 // result is held behind the assembled message and lands after it.
 func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "parallel_tools")
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
 	if _, err := s.Prompt(context.Background(), "run both"); err != nil {
 		t.Fatalf("Prompt: %v", err)
 	}
@@ -1342,6 +1348,15 @@ func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	if _, ok := asst.Parts[0].(*message.Reasoning); !ok {
 		t.Errorf("hist[1].Parts[0] = %T, want the response's own Reasoning first", asst.Parts[0])
 	}
+	if asst.ID != "msg_011FAKEPARALLEL" {
+		t.Errorf("hist[1].ID = %q, want the upstream response id verbatim, not a minted id", asst.ID)
+	}
+	for _, ev := range events {
+		isGroupDelta := ev.Type == EventToolStart || ev.Type == EventReasoningDelta
+		if isGroupDelta && ev.ID != asst.ID {
+			t.Errorf("delta event %+v carries ID %q, want %q", ev, ev.ID, asst.ID)
+		}
+	}
 
 	// Both results follow the message that carries their calls, in arrival
 	// order, and the NEXT response's own id ends the group rather than
@@ -1358,6 +1373,9 @@ func TestClaudeCodeGroupsParallelToolCallsByUpstreamID(t *testing.T) {
 	}
 	if got := hist[4].Parts.Text(); got != "done" {
 		t.Errorf("hist[4] text = %q, want the separate response %q", got, "done")
+	}
+	if hist[4].ID != "msg_011FAKEFINAL" {
+		t.Errorf("hist[4].ID = %q, want the separate response's own upstream id, distinct from hist[1]'s", hist[4].ID)
 	}
 }
 
@@ -1388,6 +1406,49 @@ func TestClaudeCodeBufferedReasoningStreamsOnce(t *testing.T) {
 	}
 	if reasoningDeltas != 1 {
 		t.Errorf("reasoning.delta for the buffered thinking block emitted %d times, want exactly 1", reasoningDeltas)
+	}
+}
+
+// TestClaudeCodeReservedUpstreamIDStillMergesReasoning proves the
+// reasoning-buffer merge groups on the RAW upstream id from
+// claudeCodeUpstreamID, not one already resolved through ResolveMessageID.
+// Before the fix, the buffered thinking block's comparison id was the
+// RESOLVED id (a fresh mint, since "cmpsum..." is reserved), so the next
+// envelope's own raw "cmpsum..." id never matched it and the two envelopes
+// wrongly flushed as two separate messages instead of merging into one.
+func TestClaudeCodeReservedUpstreamIDStillMergesReasoning(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "thinking_reserved_id")
+
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.Prompt(context.Background(), "think under a reserved id"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	hist := s.History()
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2 (user, one merged assistant message): %+v", len(hist), hist)
+	}
+	asst := hist[1]
+	if len(asst.Parts) != 2 {
+		t.Fatalf("hist[1].Parts = %+v, want [Reasoning, Text] merged into one message", asst.Parts)
+	}
+	if _, ok := asst.Parts[0].(*message.Reasoning); !ok {
+		t.Errorf("hist[1].Parts[0] = %T, want Reasoning", asst.Parts[0])
+	}
+	if _, ok := asst.Parts[1].(*message.Text); !ok {
+		t.Errorf("hist[1].Parts[1] = %T, want Text", asst.Parts[1])
+	}
+	if strings.HasPrefix(asst.ID, "cmpsum") {
+		t.Errorf("hist[1].ID = %q, want a minted id, not the reserved upstream id verbatim", asst.ID)
+	}
+	for _, ev := range events {
+		if ev.Type == EventReasoningDelta || ev.Type == EventTextDelta {
+			if ev.ID != asst.ID {
+				t.Errorf("delta event %+v carries ID %q, want %q (the merged message's own id)", ev, ev.ID, asst.ID)
+			}
+		}
 	}
 }
 
@@ -1584,9 +1645,15 @@ func TestClaudeCodeThinkingBlockDecodesToReasoningPart(t *testing.T) {
 	for _, ev := range events {
 		if ev.Type == EventReasoningDelta && ev.Text == "Let me reason about this." {
 			sawReasoningDelta = true
+			if ev.ID != asst.ID {
+				t.Errorf("reasoning delta ID = %q, want the merged message's ID %q", ev.ID, asst.ID)
+			}
 		}
 		if ev.Type == EventTextDelta && ev.Text == "Here is my answer." {
 			sawTextDelta = true
+			if ev.ID != asst.ID {
+				t.Errorf("text delta ID = %q, want the merged message's ID %q", ev.ID, asst.ID)
+			}
 		}
 	}
 	if !sawReasoningDelta {
@@ -1770,6 +1837,32 @@ func TestClaudeCodeReasoningFlushesStandaloneAcrossSubagentBoundary(t *testing.T
 	subagentMsg := hist[2]
 	if subagentMsg.Role != message.RoleAssistant || subagentMsg.ParentToolUseID != "toolu_parent" || subagentMsg.Parts.Text() != "Working inside the subagent." {
 		t.Fatalf("hist[2] = %+v, want an assistant Text on parent toolu_parent", subagentMsg)
+	}
+}
+
+// TestClaudeCodeReasoningFlushesStandaloneOnDivergingUpstreamID proves a
+// buffered thinking envelope (upstream id A) does not merge into a
+// same-parent envelope carrying a DIFFERENT upstream id B: each stays its
+// own message, under its own id.
+func TestClaudeCodeReasoningFlushesStandaloneOnDivergingUpstreamID(t *testing.T) {
+	s := NewSession(Config{SessionDir: t.TempDir(), Model: message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"}})
+	stream := `{"type":"assistant","message":{"id":"msg_A","role":"assistant","content":[{"type":"thinking","thinking":"reasoning for A","signature":"sig-a"}]}}
+{"type":"assistant","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"text for B"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"text for B"}
+`
+	if _, _, err, _ := s.consumeClaudeCodeStream(strings.NewReader(stream), s.model); err != nil {
+		t.Fatalf("consumeClaudeCodeStream: %v", err)
+	}
+
+	hist := s.History()
+	if len(hist) != 2 {
+		t.Fatalf("History() len = %d, want 2: %+v", len(hist), hist)
+	}
+	if hist[0].ID != "msg_A" || len(hist[0].Parts) != 1 {
+		t.Errorf("hist[0] = %+v, want a standalone Reasoning message with id msg_A", hist[0])
+	}
+	if hist[1].ID != "msg_B" || hist[1].Parts.Text() != "text for B" {
+		t.Errorf("hist[1] = %+v, want a Text(%q) message with id msg_B, distinct from hist[0]'s", hist[1], "text for B")
 	}
 }
 

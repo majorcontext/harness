@@ -2108,6 +2108,16 @@ components:
             present on a "service_tier" event, even on a clear: an empty
             string means cleared to the provider default, never a dropped
             field. Absent on every other event type.
+        id:
+          type: string
+          description: >
+            The upstream assistant message id this event's turn will
+            eventually journal (see Message.id) — the same rule
+            provider.Event.ID and engine.Event.ID document. Present only on
+            text.delta, reasoning.delta, and tool.start; empty until the
+            provider's first frame reports it, so a client keying a
+            streaming row on this value must fall back to a synthetic key
+            until it turns non-empty. Absent on every other event type.
         text:
           type: string
           description: Delta text for text.delta / reasoning.delta.
