@@ -127,6 +127,51 @@ type CallToolResult struct {
 	IsError           bool            `json:"isError,omitempty"`
 }
 
+// Resource describes one resource a server exposes, as returned by
+// resources/list.
+type Resource struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+}
+
+// listResourcesParams is the resources/list request payload.
+type listResourcesParams struct {
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// ListResourcesResult is the resources/list response payload. A non-empty
+// NextCursor means more results are available; pass it as the cursor to
+// the next call to Client.ListResources.
+type ListResourcesResult struct {
+	Resources  []Resource `json:"resources"`
+	NextCursor string     `json:"nextCursor,omitempty"`
+}
+
+// readResourceParams is the resources/read request payload.
+type readResourceParams struct {
+	URI string `json:"uri"`
+}
+
+// ResourceContents is one item of a resources/read response: either Text
+// or Blob (base64) is populated, matching EmbeddedResource's convention for
+// the same fields. Blob is a pointer so a present-but-empty "blob":""
+// (a valid, if unusual, zero-length resource) is distinguishable from a
+// wholly absent field — a plain string would collapse both to "".
+type ResourceContents struct {
+	URI      string  `json:"uri"`
+	MimeType string  `json:"mimeType,omitempty"`
+	Text     string  `json:"text,omitempty"`
+	Blob     *string `json:"blob,omitempty"` // base64
+}
+
+// ReadResourceResult is the resources/read response payload.
+type ReadResourceResult struct {
+	Contents []ResourceContents `json:"contents"`
+}
+
 // cancelledParams is the notifications/cancelled payload.
 type cancelledParams struct {
 	RequestID json.RawMessage `json:"requestId"`

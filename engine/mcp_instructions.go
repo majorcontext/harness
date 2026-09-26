@@ -150,22 +150,25 @@ func (r mcpToolsSnapshotRegistry) CallServerTool(ctx context.Context, server, na
 	return r.inner.CallServerTool(ctx, server, name, args)
 }
 
-func renderMCPInstructions(reg MCPRegistry) string {
-	if reg == nil {
-		return ""
+// mcpResourcesInstructionLine tells the model the native resource tools
+// exist, appended when a connected server advertised the resources
+// capability.
+const mcpResourcesInstructionLine = "This session can also list and read MCP resources with the " +
+	mcpListResourcesToolName + " and " + mcpReadResourceToolName + " tools."
+
+func renderMCPInstructions(reg MCPRegistry, hasResources bool) string {
+	// hasResources must decide even when reg is nil: a resources-only
+	// server has no tool defs, so it never lands in the plan's server set.
+	var entries []MCPServerInstructions
+	if reg != nil {
+		if reader, ok := reg.(mcpInstructionsReader); ok {
+			entries = reader.Instructions()
+		}
 	}
-	reader, ok := reg.(mcpInstructionsReader)
-	if !ok {
-		return ""
-	}
-	// Drop an entry with nothing to say BEFORE anything is written. The
-	// contract above is "" when no connected server set instructions, and
-	// this function takes the narrow mcpInstructionsReader — it cannot
-	// assume its caller filtered the way MCPManager.Instructions does, and
-	// an unfiltered entry would otherwise render an empty <server> element
-	// and a block that says nothing at full prefix cost. Trimming once here
-	// also settles the display form for the write loop below.
-	entries := reader.Instructions()
+	// Drop an entry with nothing to say BEFORE anything is written: an
+	// unfiltered empty entry would otherwise render an empty <server>
+	// element at full prefix cost. Trimming once here also settles the
+	// display form for the write loop below.
 	kept := make([]MCPServerInstructions, 0, len(entries))
 	for _, e := range entries {
 		text := strings.TrimSpace(e.Text)
@@ -176,7 +179,7 @@ func renderMCPInstructions(reg MCPRegistry) string {
 		e.Text = text
 		kept = append(kept, e)
 	}
-	if len(kept) == 0 {
+	if len(kept) == 0 && !hasResources {
 		return ""
 	}
 	// Sort here as well as in MCPManager.Instructions. This string is a
@@ -188,6 +191,10 @@ func renderMCPInstructions(reg MCPRegistry) string {
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	var b strings.Builder
 	b.WriteString(mcpInstructionsOpenTag)
+	if hasResources {
+		b.WriteString("\n")
+		b.WriteString(mcpResourcesInstructionLine)
+	}
 	for _, e := range entries {
 		b.WriteString("\n<server name=\"")
 		b.WriteString(neutralizeMCPAttr(e.Name))
@@ -279,20 +286,48 @@ func neutralizeMCPAttr(s string) string {
 // mcpStatusSegment still tells the model that server exists and is now
 // healthy. Revisit only with a cache-cost measurement in hand.
 func (s *Session) mcpInstructionsSegment() string {
-	return s.mcpInstructionsSegmentFrom(s.liveMCPToolServers())
+	_, hasListTool := s.tools[mcpListResourcesToolName]
+	_, hasReadTool := s.tools[mcpReadResourceToolName]
+	var resourceServers []string
+	if hasListTool && hasReadTool {
+		resourceServers = mcpResourceCapableServers(context.Background(), s.cfg.MCP)
+	}
+	return s.mcpInstructionsSegmentFrom(s.liveMCPToolServers(), resourceServers)
 }
 
 // mcpInstructionsSegmentFrom renders the frozen segment from the SAME tool
-// snapshot the request's plan read, so a retry committing between two
-// registry reads cannot cache instructions advertising tools the request
-// does not carry.
-func (s *Session) mcpInstructionsSegmentFrom(servers map[string]bool) string {
+// snapshot the request's plan already read, unioned with resourceServers —
+// every resource-capable server the resources gate is actually on for (see
+// toolDefsWithCatalog). A resources-only server contributes no tool def, so
+// it would never appear in servers on its own; without the union, its own
+// initialize instructions would be dropped even though it connected and the
+// resources line names it implicitly. Passing "" instead of a real snapshot
+// desynchronizes nothing here: both inputs are read from the same request's
+// single toolDefsWithCatalog call.
+func (s *Session) mcpInstructionsSegmentFrom(servers map[string]bool, resourceServers []string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mcpInstrLoaded {
 		return s.mcpInstrSeg
 	}
-	s.mcpInstrSeg = renderMCPInstructions(mcpRegistryFromServers(s.cfg.MCP, servers))
+	merged := unionMCPServerNames(servers, resourceServers)
+	s.mcpInstrSeg = renderMCPInstructions(mcpRegistryFromServers(s.cfg.MCP, merged), len(resourceServers) > 0)
 	s.mcpInstrLoaded = true
 	return s.mcpInstrSeg
+}
+
+// unionMCPServerNames returns servers plus extra, as a fresh map — servers
+// itself (plan.servers) is never mutated, since other callers read it too.
+func unionMCPServerNames(servers map[string]bool, extra []string) map[string]bool {
+	if len(extra) == 0 {
+		return servers
+	}
+	merged := make(map[string]bool, len(servers)+len(extra))
+	for name := range servers {
+		merged[name] = true
+	}
+	for _, name := range extra {
+		merged[name] = true
+	}
+	return merged
 }

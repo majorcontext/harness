@@ -1754,6 +1754,8 @@ func newSession(cfg Config) *Session {
 		// nothing to act on. Policy is fixed for the session's life, so
 		// the def stays byte-stable across requests.
 		s.tools[mcpSessionToolName] = mcpTool(s.mcpPolicyCanDefer())
+		s.tools[mcpListResourcesToolName] = mcpListResourcesTool()
+		s.tools[mcpReadResourceToolName] = mcpReadResourceTool()
 	}
 	// task is registered here unconditionally whenever a SessionManager is
 	// present; SessionManager itself withholds it post-construction for a
@@ -3234,8 +3236,8 @@ func (s *Session) assembleRequest(ctx context.Context) (*assembledRequest, error
 	if err != nil {
 		return nil, err
 	}
-	tools, mcpCatalog, mcpServers := s.toolDefsWithCatalog(ctx)
-	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers)
+	tools, mcpCatalog, mcpServers, resourceServers := s.toolDefsWithCatalog(ctx)
+	instrSeg := s.mcpInstructionsSegmentFrom(mcpServers, resourceServers)
 
 	system := append([]string(nil), s.cfg.System...)
 	system = append(system, s.cfg.AppendSystemPrompt...)
@@ -3983,25 +3985,44 @@ func (e *emptyTurnError) Error() string {
 // deliberately gathers tool names before its own Lock, and streamTurn builds
 // the whole request before its s.mu section.
 func (s *Session) toolDefs(ctx context.Context) []provider.ToolDef {
-	defs, _, _ := s.toolDefsWithCatalog(ctx)
+	defs, _, _, _ := s.toolDefsWithCatalog(ctx)
 	return defs
 }
 
 // toolDefsWithCatalog is toolDefs plus the stage-1 MCP catalog segment that
-// belongs in the same request's system prompt (see mcp_lazy.go). The two
-// come from ONE plan, and therefore from one MCPRegistry.Tools call, because
-// that call is what triggers a server's first connect attempt: computing
-// them separately would dial twice and could disagree if a background retry
-// committed between the two reads.
+// belongs in the same request's system prompt, and the resource-capable
+// server names the instructions segment must also fold into its own
+// server snapshot (see mcpInstructionsSegmentFrom) — a resources-only
+// server contributes no tool def, so plan.servers alone would never see
+// it.
 //
 // The catalog is "" whenever nothing is deferred, which includes every
 // session that did not opt into deferral at all.
-func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool) {
+func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, string, map[string]bool, []string) {
 	defs := make([]provider.ToolDef, 0, len(s.tools))
-	for _, t := range s.tools {
+	for name, t := range s.tools {
+		// Presence here is decided below by live capability, not by
+		// static s.tools membership.
+		if name == mcpListResourcesToolName || name == mcpReadResourceToolName {
+			continue
+		}
 		defs = append(defs, t.Def)
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
+
+	listTool, hasListTool := s.tools[mcpListResourcesToolName]
+	readTool, hasReadTool := s.tools[mcpReadResourceToolName]
+	// AND, not independent per-tool checks: restrictTools may have removed
+	// one but not the other, and the instructions line below promises BOTH
+	// tools, so a session missing either must advertise neither.
+	resourceServers := mcpResourceCapableServers(ctx, s.cfg.MCP)
+	if !hasListTool || !hasReadTool {
+		resourceServers = nil
+	}
+	if len(resourceServers) > 0 {
+		defs = append(defs, listTool.Def, readTool.Def)
+	}
+
 	plan := s.planMCPTools(ctx)
 	defs = append(defs, plan.defs...)
 	if s.cfg.Hooks != nil {
@@ -4013,7 +4034,7 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 			})
 		}
 	}
-	return defs, plan.catalog, plan.servers
+	return defs, plan.catalog, plan.servers, resourceServers
 }
 
 // runToolCalls executes every tool call in an assistant message and returns

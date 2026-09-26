@@ -104,6 +104,22 @@ representation.
   failure result — is `classifyMCPConnectError`'s output, never a raw
   error (which can embed the server's endpoint URL and any secret it
   carries).
+
+  `list_mcp_resources`/`read_mcp_resource` are two more built-in session
+  tools, registered alongside `mcp` whenever a server is configured, that
+  give the native loop the `resources/list`/`resources/read` capability
+  Claude Code's CLI lane already gets from its own MCP client. Their defs
+  join the request's tool array only once a connected server has
+  advertised the `resources` capability in its `initialize` response — a
+  session with no resource-capable server never sees either tool.
+  `list_mcp_resources` merges every resource-capable server when `server`
+  is omitted, tolerating one server's failure rather than failing the
+  whole call, and caps and stops paging at 500 resources per server
+  (`truncated` lists the servers that had more). `read_mcp_resource` returns
+  text contents verbatim and a `mimeType`/size placeholder for a blob —
+  never a raw base64 dump. When any server is resource-capable, the
+  `<mcp_instructions>` system segment gains one line pointing the model at
+  both tools, frozen at the same point the rest of that segment freezes.
 - **OpenTelemetry GenAI semantic conventions** — for span/metric naming when
   observability lands. Configuration via standard `OTEL_*` env vars only.
 - **A2A** — deliberately not implemented. Cross-org agent meshes are a
