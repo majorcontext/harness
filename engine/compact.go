@@ -299,11 +299,11 @@ func isExplicitCompactCommand(text string, blobs []*message.Blob) bool {
 // RunCompactCommand is the one entry point both POST /session/{id}/compact
 // and an explicit "/compact" prompt call.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
-	if s.claudeCodeDelegated() {
+	if backend, ok := s.delegatedBackend(); ok {
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
 			return CompactResult{}, errors.New("engine: keep_turns/model are not applicable to a session delegated to the Claude Code CLI, which owns its own context")
 		}
-		if _, err := s.dispatchClaudeCodeTurn(ctx, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
+		if _, err := s.dispatchClaudeCodeTurn(ctx, backend, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
 			return CompactResult{}, err
 		}
 		return CompactResult{ClaudeCodeDelegated: true}, nil
