@@ -4269,6 +4269,11 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
+	if s.commandColdLoads[id] > 0 {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "session is running a command; retry after it finishes")
+		return
+	}
 	st := s.sessions[id]
 	if st == nil {
 		s.mu.Unlock()

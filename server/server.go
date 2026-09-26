@@ -432,8 +432,9 @@ type Server struct {
 	seen map[string]map[string]bool
 	// commandSeen dedupes reconcile's backfill against records loadJournal
 	// already replayed at boot. Never evicted, same rationale as seen above.
-	commandSeen map[string]map[string]bool
-	sessions    map[string]*sessionState // in-memory (resident) sessions
+	commandSeen      map[string]map[string]bool
+	sessions         map[string]*sessionState // in-memory (resident) sessions
+	commandColdLoads map[string]int
 
 	// lastRequest holds the latest fully-assembled model request per session,
 	// in memory only (never persisted): GET /session/{id}/request reads it, and
@@ -897,6 +898,7 @@ func New(opts Options) (*Server, error) {
 		seen:              make(map[string]map[string]bool),
 		commandSeen:       make(map[string]map[string]bool),
 		sessions:          make(map[string]*sessionState),
+		commandColdLoads:  make(map[string]int),
 		lastRequest:       make(map[string]*requestSnapshot),
 		lastReqHash:       make(map[string]string),
 		lastPersistErr:    make(map[string]string),

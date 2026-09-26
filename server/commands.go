@@ -293,9 +293,24 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 	st := s.sessions[id]
 	if st != nil {
 		st.pins++
+		s.mu.Unlock()
 	}
-	s.mu.Unlock()
 	if st == nil {
+		s.commandColdLoads[id]++
+		s.mu.Unlock()
+		reserved := true
+		defer func() {
+			if reserved {
+				s.mu.Lock()
+				if s.commandColdLoads[id] == 1 {
+					delete(s.commandColdLoads, id)
+				} else {
+					s.commandColdLoads[id]--
+				}
+				s.mu.Unlock()
+			}
+		}()
+
 		loaded, err := s.opts.LoadSession(id)
 		if err != nil {
 			return nil, nil, false
@@ -315,6 +330,12 @@ func (s *Server) mutableSession(id string) (sess *engine.Session, release func()
 		if st.sess == loaded {
 			evicted = s.evictResidentLocked()
 		}
+		if s.commandColdLoads[id] == 1 {
+			delete(s.commandColdLoads, id)
+		} else {
+			s.commandColdLoads[id]--
+		}
+		reserved = false
 		s.mu.Unlock()
 		releaseEvicted(evicted)
 	}
