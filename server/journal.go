@@ -59,12 +59,16 @@ type Event struct {
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ID mirrors engine.Event.ID: present only on text.delta, reasoning.delta,
 	// and tool.start, empty until the turn's upstream id is known.
-	ID       string            `json:"id,omitempty"`
-	Text     string            `json:"text,omitempty"`
-	ToolCall *message.ToolCall `json:"tool_call,omitempty"`
-	Output   message.Parts     `json:"output,omitempty"`
-	IsError  bool              `json:"is_error,omitempty"`
-	Error    string            `json:"error,omitempty"`
+	ID string `json:"id,omitempty"`
+	// CreatedAt mirrors engine.Event.CreatedAt, on the same three record
+	// types as ID, and is the same instant the turn's own message record
+	// carries as Message.CreatedAt. Zero until known.
+	CreatedAt time.Time         `json:"created_at,omitzero"`
+	Text      string            `json:"text,omitempty"`
+	ToolCall  *message.ToolCall `json:"tool_call,omitempty"`
+	Output    message.Parts     `json:"output,omitempty"`
+	IsError   bool              `json:"is_error,omitempty"`
+	Error     string            `json:"error,omitempty"`
 
 	// request.meta fields: a durable, replayable record of the assembled model
 	// request. SystemHash fingerprints the joined system segments; the full
@@ -416,9 +420,9 @@ func (s *Server) Publish(ev engine.Event) {
 	case engine.EventMessage:
 		s.syncMessages(ev.SessionID)
 	case engine.EventTextDelta:
-		s.publishLive(Event{Type: engine.EventTextDelta, SessionID: ev.SessionID, Text: ev.Text, ID: ev.ID})
+		s.publishLive(Event{Type: engine.EventTextDelta, SessionID: ev.SessionID, Text: ev.Text, ID: ev.ID, CreatedAt: ev.CreatedAt})
 	case engine.EventReasoningDelta:
-		s.publishLive(Event{Type: engine.EventReasoningDelta, SessionID: ev.SessionID, Text: ev.Text, ID: ev.ID})
+		s.publishLive(Event{Type: engine.EventReasoningDelta, SessionID: ev.SessionID, Text: ev.Text, ID: ev.ID, CreatedAt: ev.CreatedAt})
 	case engine.EventTurnRestart:
 		// A base-loop retry (engine/prompt_retry.go) is about to re-stream a
 		// turn whose partial text/reasoning deltas already reached this
@@ -427,7 +431,7 @@ func (s *Server) Publish(ev engine.Event) {
 		// engine.EventTurnRestart. Live only (Seq 0); it is never journaled.
 		s.publishLive(Event{Type: engine.EventTurnRestart, SessionID: ev.SessionID})
 	case engine.EventToolStart:
-		s.publishLive(Event{Type: engine.EventToolStart, SessionID: ev.SessionID, ToolCall: ev.ToolCall, ID: ev.ID})
+		s.publishLive(Event{Type: engine.EventToolStart, SessionID: ev.SessionID, ToolCall: ev.ToolCall, ID: ev.ID, CreatedAt: ev.CreatedAt})
 	case engine.EventToolEnd:
 		s.publishLive(Event{
 			Type: engine.EventToolEnd, SessionID: ev.SessionID,

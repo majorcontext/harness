@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -115,11 +116,13 @@ func TestLiveEventsTextReasoningToolStartToolEnd(t *testing.T) {
 	}
 }
 
-// TestLiveEventsCarryAssistantMessageID: a delta's id must equal the message's id.
+// TestLiveEventsCarryAssistantMessageID: a delta's id and created_at must
+// equal the message's own id and created_at.
 func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
+	createdAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{{
-		{Type: provider.EventTextDelta, Text: "Hi", ID: "resp_msgid_1"},
-		{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_msgid_1", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hi"}}}},
+		{Type: provider.EventTextDelta, Text: "Hi", ID: "resp_msgid_1", CreatedAt: createdAt},
+		{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_msgid_1", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "Hi"}}, CreatedAt: createdAt}},
 	}}}
 	h := newHarness(t, prov)
 	id := h.createSession("test/m1")
@@ -136,6 +139,60 @@ func TestLiveEventsCarryAssistantMessageID(t *testing.T) {
 	}
 	if delta == nil || got == nil || got.Message == nil || delta.ID == "" || delta.ID != got.Message.ID {
 		t.Fatalf("delta=%+v msg=%+v, want matching non-empty ids", delta, got)
+	}
+	if delta.CreatedAt.IsZero() || !delta.CreatedAt.Equal(got.Message.CreatedAt) {
+		t.Fatalf("delta.CreatedAt=%v msg.CreatedAt=%v, want matching non-zero times", delta.CreatedAt, got.Message.CreatedAt)
+	}
+}
+
+// TestLiveEventsToolStartCarriesOwningMessageID proves a native turn's
+// tool.start carries the id and created_at of the assistant message that
+// turn produces, exactly like a text/reasoning delta already does (see
+// TestLiveEventsCarryAssistantMessageID). Before this test, runToolCall
+// (engine.go) emitted EventToolStart with only a ToolCall, so a native
+// tool.start reached the wire with a zero id and created_at even though the
+// EventMessage moments earlier, for the same turn, carried both.
+func TestLiveEventsToolStartCarriesOwningMessageID(t *testing.T) {
+	createdAt := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		{
+			{
+				Type: provider.EventDone,
+				Message: &message.Message{
+					ID:        "resp_tool_msgid",
+					Role:      message.RoleAssistant,
+					CreatedAt: createdAt,
+					Parts:     message.Parts{&message.ToolCall{CallID: "call_1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}},
+				},
+				StopReason: provider.StopToolUse,
+			},
+		},
+		{
+			{Type: provider.EventDone, StopReason: provider.StopEndTurn, Message: &message.Message{ID: "resp_tool_final", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "done"}}}},
+		},
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "go"}}})
+
+	var turnMsg, toolStart *Event
+	for _, ev := range sse.collectUntilIdle(t) {
+		switch {
+		case ev.Type == engine.EventMessage && ev.Message != nil && ev.Message.Role == message.RoleAssistant && turnMsg == nil:
+			turnMsg = &ev
+		case ev.Type == engine.EventToolStart && toolStart == nil:
+			toolStart = &ev
+		}
+	}
+	if turnMsg == nil || toolStart == nil {
+		t.Fatalf("turnMsg=%+v toolStart=%+v, want both", turnMsg, toolStart)
+	}
+	if toolStart.ID == "" || toolStart.ID != turnMsg.Message.ID {
+		t.Errorf("tool.start ID = %q, want %q (the owning assistant message's id)", toolStart.ID, turnMsg.Message.ID)
+	}
+	if toolStart.CreatedAt.IsZero() || !toolStart.CreatedAt.Equal(turnMsg.Message.CreatedAt) {
+		t.Errorf("tool.start CreatedAt = %v, want %v (the owning assistant message's created_at)", toolStart.CreatedAt, turnMsg.Message.CreatedAt)
 	}
 }
 

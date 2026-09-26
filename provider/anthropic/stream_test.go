@@ -152,6 +152,48 @@ func TestStreamAssembly(t *testing.T) {
 	}
 }
 
+// TestStreamAssemblyWithoutMessageStart proves a message_stop reached with
+// no prior message_start still assembles a message with a non-zero
+// CreatedAt. A bare passthrough gateway can start the SSE body mid-stream
+// and never sends message_start, which otherwise left s.msgCreatedAt at its
+// Go zero value straight through to assemble.
+func TestStreamAssemblyWithoutMessageStart(t *testing.T) {
+	fixture := strings.Join([]string{
+		sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`),
+		sse("content_block_stop", `{"type":"content_block_stop","index":0}`),
+		sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`),
+		sse("message_stop", `{"type":"message_stop"}`),
+	}, "")
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, fixture) //nolint:errcheck
+	})
+
+	s, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: Family, Model: "m"},
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "hi"}}}},
+		MaxTokens: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	var done *provider.Event
+	for _, ev := range collect(t, s) {
+		if ev.Type == provider.EventDone {
+			done = &ev
+		}
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	if done.Message.CreatedAt.IsZero() {
+		t.Errorf("message CreatedAt is zero, want a fallback timestamp with no message_start")
+	}
+}
+
 func TestStreamHTTPError(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -71,11 +72,11 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 		// ToolConcurrency 1 to escape concurrency gets exactly that —
 		// serial execution — not a revert of the whole change.
 		for i, tc := range calls {
-			outputs[i], errs[i] = s.runOneGuarded(ctx, tc)
+			outputs[i], errs[i] = s.runOneGuarded(ctx, tc, asst.ID, asst.CreatedAt)
 			done[i] = true
 		}
 	} else {
-		s.runToolBatchParallel(ctx, calls, outputs, errs, done)
+		s.runToolBatchParallel(ctx, calls, asst.ID, asst.CreatedAt, outputs, errs, done)
 	}
 
 	// Backfill preserves one result per call after cancellation or a panic.
@@ -165,11 +166,11 @@ const (
 // it is safe because an aborted turn's event stream is already incomplete
 // by definition. The transcript, which the provider validates, still
 // pairs every tool_use with a tool_result.
-func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall) (message.Parts, bool) {
+func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall, id string, createdAt time.Time) (message.Parts, bool) {
 	if ctx.Err() != nil {
 		return message.Parts{&message.Text{Text: toolCallCanceledText}}, true
 	}
-	return s.runToolCall(ctx, tc)
+	return s.runToolCall(ctx, tc, id, createdAt)
 }
 
 // runOneGuarded is the single execution wrapper every path uses. It turns a
@@ -187,14 +188,14 @@ func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall) (messag
 // This also changes sequential mode, which previously let a tool panic
 // unwind through Prompt. That is deliberate: the guarantee must not depend
 // on which execution mode a session runs in.
-func (s *Session) runOneGuarded(ctx context.Context, tc *message.ToolCall) (out message.Parts, isErr bool) {
+func (s *Session) runOneGuarded(ctx context.Context, tc *message.ToolCall, id string, createdAt time.Time) (out message.Parts, isErr bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = message.Parts{&message.Text{Text: fmt.Sprintf("%s: %v", toolCallPanicText, r)}}
 			isErr = true
 		}
 	}()
-	return s.admitAndRun(ctx, tc)
+	return s.admitAndRun(ctx, tc, id, createdAt)
 }
 
 // toolCallsOf extracts asst's ToolCall parts in order.
@@ -282,11 +283,11 @@ func (s *Session) toolKey(name string, args json.RawMessage) (key string) {
 // runToolBatchParallel executes calls' segments in order, filling outputs/
 // errs by original batch index. Caller has already checked
 // s.toolConcurrency > 1.
-func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.ToolCall, outputs []message.Parts, errs []bool, done []bool) {
+func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.ToolCall, id string, createdAt time.Time, outputs []message.Parts, errs []bool, done []bool) {
 	for _, seg := range s.splitBatch(calls) {
 		if seg.serial {
 			i := seg.idx[0]
-			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0])
+			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0], id, createdAt)
 			done[i] = true
 			continue
 		}
@@ -299,11 +300,11 @@ func (s *Session) runToolBatchParallel(ctx context.Context, calls []*message.Too
 			// no sibling to exclude. Running it inline is what the serial
 			// branch above already does.
 			i := seg.idx[0]
-			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0])
+			outputs[i], errs[i] = s.runOneGuarded(ctx, seg.calls[0], id, createdAt)
 			done[i] = true
 			continue
 		}
-		s.runParallelSegment(ctx, seg, outputs, errs, done)
+		s.runParallelSegment(ctx, seg, id, createdAt, outputs, errs, done)
 	}
 }
 
@@ -339,7 +340,7 @@ func (c *keyChain) wait(key string) (predecessor <-chan struct{}, release func()
 // s.toolConcurrency in flight, honoring per-key exclusion. Every call gets
 // exactly one result, in outputs/errs at its ORIGINAL batch index, even if
 // ctx is already cancelled.
-func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outputs []message.Parts, errs []bool, done []bool) {
+func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, id string, createdAt time.Time, outputs []message.Parts, errs []bool, done []bool) {
 	// Baton hand-off is wired up front, on THIS goroutine, for every call
 	// in the segment before any worker starts — see the invariant in the
 	// batching contract.
@@ -397,7 +398,7 @@ func (s *Session) runParallelSegment(ctx context.Context, seg batchSegment, outp
 			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			outputs[j.idx], errs[j.idx] = s.runOneGuarded(ctx, j.tc)
+			outputs[j.idx], errs[j.idx] = s.runOneGuarded(ctx, j.tc, id, createdAt)
 			done[j.idx] = true
 		}(j)
 	}

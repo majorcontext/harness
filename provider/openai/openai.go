@@ -430,10 +430,11 @@ type stream struct {
 	// behaving as it always has.
 	family string
 
-	respID      string
-	items       []*assembledItem
-	usage       provider.Usage
-	hasToolCall bool
+	respID        string
+	respCreatedAt time.Time
+	items         []*assembledItem
+	usage         provider.Usage
+	hasToolCall   bool
 	// subUsage is this response's captured subscription-usage snapshot —
 	// set only for a CodexFamily client (see Client.codexSubscriptionUsage
 	// and wsPool.stream, the two sources), nil otherwise. Carried onto the
@@ -772,6 +773,7 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("openai: bad response.created: %w", err)
 		}
 		s.respID = ev.Response.ID
+		s.respCreatedAt = time.Now().UTC()
 
 	case "response.output_text.delta":
 		var ev struct {
@@ -790,7 +792,7 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		it.text.WriteString(ev.Delta)
 		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta, ID: s.respID})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventTextDelta, Text: ev.Delta, ID: s.respID, CreatedAt: s.respCreatedAt})
 
 	case "response.reasoning_summary_text.delta":
 		var ev struct {
@@ -824,7 +826,7 @@ func (s *stream) handle(name string, data []byte) error {
 		s.reasoningSummary = ev.SummaryIndex
 		s.reasoningStreamed = true
 		s.visibleOutput = true
-		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta, ID: s.respID})
+		s.queue = append(s.queue, provider.Event{Type: provider.EventReasoningDelta, Text: delta, ID: s.respID, CreatedAt: s.respCreatedAt})
 
 	case "response.output_item.done":
 		var ev struct {
@@ -910,6 +912,9 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		if ev.Response.ID != "" {
 			s.respID = ev.Response.ID
+		}
+		if s.respCreatedAt.IsZero() {
+			s.respCreatedAt = time.Now().UTC()
 		}
 		assistant := s.assemble()
 		if name == "response.completed" && s.onComplete != nil {
@@ -1004,7 +1009,7 @@ func (s *stream) assemble() *message.Message {
 		ID:        s.respID,
 		Role:      message.RoleAssistant,
 		Model:     s.model,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: s.respCreatedAt,
 	}
 	for _, it := range s.items {
 		if it == nil {
