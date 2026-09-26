@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +31,14 @@ func gitChangesGet(t *testing.T, h *harness, query string) (*http.Response, gitC
 	return resp, got
 }
 
+// gitChangesUncommitted is gitChangesGet's shorthand for the common
+// single-request scope=uncommitted case, over a fresh harness.
+func gitChangesUncommitted(t *testing.T, dir string) gitChangesJSON {
+	t.Helper()
+	_, got := gitChangesGet(t, newGitChangesHarness(t, dir), "?scope=uncommitted&dir="+dir)
+	return got
+}
+
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -41,6 +51,14 @@ func mkdirAllTest(t *testing.T, path string) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func filesByPath(files []gitChangeFile) map[string]gitChangeFile {
+	m := make(map[string]gitChangeFile, len(files))
+	for _, f := range files {
+		m[f.Path] = f
+	}
+	return m
 }
 
 // TestHandleGitChangesBadRequest covers every 400 case.
@@ -141,8 +159,7 @@ func TestHandleGitChangesUncommitted(t *testing.T) {
 	dir := newGitRepo(t)
 	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
 	writeTestFile(t, filepath.Join(dir, "new.txt"), "hello\n")
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if got.Base != nil {
 		t.Errorf("Base = %+v, want nil for scope=uncommitted", got.Base)
 	}
@@ -152,10 +169,7 @@ func TestHandleGitChangesUncommitted(t *testing.T) {
 	if len(got.Files) != 2 {
 		t.Fatalf("Files = %+v, want exactly 2 entries (no surplus)", got.Files)
 	}
-	byPath := map[string]gitChangeFile{}
-	for _, f := range got.Files {
-		byPath[f.Path] = f
-	}
+	byPath := filesByPath(got.Files)
 	if seed := byPath["seed.txt"]; seed.Status != "modified" || seed.Additions != 1 {
 		t.Errorf("seed.txt entry = %+v, want modified/+1", seed)
 	}
@@ -196,10 +210,7 @@ func TestHandleGitChangesBranchScopeMergeBase(t *testing.T) {
 	if len(got.Files) != 2 {
 		t.Fatalf("Files = %+v, want exactly 2 entries (no surplus)", got.Files)
 	}
-	byPath := map[string]gitChangeFile{}
-	for _, f := range got.Files {
-		byPath[f.Path] = f
-	}
+	byPath := filesByPath(got.Files)
 	if f := byPath["feature.txt"]; f.Status != "added" {
 		t.Errorf("feature.txt entry = %+v, want added", f)
 	}
@@ -215,8 +226,7 @@ func TestHandleGitChangesDetachedHead(t *testing.T) {
 	dir := newGitRepo(t)
 	head := strings.TrimSpace(runTestGit(t, dir, "rev-parse", "HEAD"))
 	runTestGit(t, dir, "checkout", "-q", head)
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if got.Branch != "" {
 		t.Errorf("Branch = %q, want empty (detached HEAD)", got.Branch)
 	}
@@ -234,8 +244,7 @@ func TestHandleGitChangesRenamedFile(t *testing.T) {
 	runTestGit(t, dir, "commit", "-q", "-m", "grow seed")
 	runTestGit(t, dir, "mv", "seed.txt", "renamed.txt")
 	writeTestFile(t, filepath.Join(dir, "renamed.txt"), body+"extra\n")
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if len(got.Files) != 1 {
 		t.Fatalf("Files = %+v, want exactly 1 entry", got.Files)
 	}
@@ -253,8 +262,7 @@ func TestHandleGitChangesDeletedFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "seed.txt")); err != nil {
 		t.Fatal(err)
 	}
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if len(got.Files) != 1 || got.Files[0].Status != "deleted" || got.Files[0].Deletions != 1 {
 		t.Fatalf("Files = %+v, want one deleted seed.txt with 1 deletion", got.Files)
 	}
@@ -263,11 +271,8 @@ func TestHandleGitChangesDeletedFile(t *testing.T) {
 // TestHandleGitChangesBinaryFile proves Binary=true, zero counts, no raw content in patch.
 func TestHandleGitChangesBinaryFile(t *testing.T) {
 	dir := newGitRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "bin.dat"), []byte{0x00, 0x01, 0x02, 0x03}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	writeTestFile(t, filepath.Join(dir, "bin.dat"), "\x00\x01\x02\x03")
+	got := gitChangesUncommitted(t, dir)
 	if len(got.Files) != 1 || !got.Files[0].Binary || got.Files[0].Additions != 0 {
 		t.Fatalf("Files = %+v, want one binary bin.dat with 0 additions", got.Files)
 	}
@@ -286,8 +291,7 @@ func TestHandleGitChangesPatchTruncatesAtFileBoundary(t *testing.T) {
 	big := strings.Repeat("b\n", gitChangesPatchCap) // its patch alone exceeds the cap
 	writeTestFile(t, filepath.Join(dir, "a_small.txt"), small)
 	writeTestFile(t, filepath.Join(dir, "z_big.txt"), big)
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if !got.Truncated {
 		t.Fatal("Truncated = false, want true")
 	}
@@ -313,11 +317,16 @@ func gitCmdCount(t *testing.T) *int {
 }
 
 // TestHandleGitChangesSubprocessCountIsConstant proves subprocess count doesn't grow with file count.
+// TestHandleGitChangesSubprocessCountIsConstant also doubles as the scale
+// guard: 50k untracked files in one directory would take ~24s in add -N
+// alone if pathspec matching regressed to quadratic (per the review's own
+// repro), so a generous but discriminating time bound catches that too.
 func TestHandleGitChangesSubprocessCountIsConstant(t *testing.T) {
 	populate := func(dir string, n int) {
+		sub := filepath.Join(dir, "bigdir")
+		mkdirAllTest(t, sub)
 		for i := 0; i < n; i++ {
-			name := fmt.Sprintf("f%03d.txt", i)
-			writeTestFile(t, filepath.Join(dir, name), "x\n")
+			writeTestFile(t, filepath.Join(sub, fmt.Sprintf("f%05d.txt", i)), "x\n")
 		}
 	}
 
@@ -331,18 +340,22 @@ func TestHandleGitChangesSubprocessCountIsConstant(t *testing.T) {
 	}
 	smallCount := *count
 
+	const n = 50000
 	big := newGitRepo(t)
-	populate(big, 60)
+	populate(big, n)
 	count = gitCmdCount(t)
 	h = newGitChangesHarness(t, big)
+	start := time.Now()
 	_, got = gitChangesGet(t, h, "?scope=uncommitted&dir="+big)
-	if len(got.Files) != 60 {
-		t.Fatalf("Files = %+v", got.Files)
+	elapsed := time.Since(start)
+	if len(got.Files) != n {
+		t.Fatalf("Files count = %d, want %d", len(got.Files), n)
 	}
-	bigCount := *count
-
-	if bigCount != smallCount {
-		t.Errorf("git subprocess count = %d for 3 files, %d for 60 files; want equal", smallCount, bigCount)
+	if elapsed > 20*time.Second {
+		t.Errorf("request took %s for %d untracked files, want well under quadratic (~24s)", elapsed, n)
+	}
+	if *count != smallCount {
+		t.Errorf("git subprocess count = %d for 3 files, %d for %d files; want equal", smallCount, *count, n)
 	}
 }
 
@@ -351,13 +364,22 @@ func TestHandleGitChangesSingleHugeFileCapped(t *testing.T) {
 	dir := newGitRepo(t)
 	huge := strings.Repeat("b\n", 2*gitChangesPatchCap)
 	writeTestFile(t, filepath.Join(dir, "huge.txt"), huge)
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if !got.Truncated || got.Patch != "" {
 		t.Errorf("Truncated = %v, Patch = %q, want true/empty (not even one whole file fits)", got.Truncated, got.Patch)
 	}
 	if len(got.Files) != 1 || got.Files[0].Path != "huge.txt" {
 		t.Errorf("Files = %+v, want one huge.txt entry regardless of patch truncation", got.Files)
+	}
+}
+
+// TestLastWholeFileBoundaryKeepsFileEndingExactlyAtLimit: a file ending exactly at limit is kept, not dropped.
+func TestLastWholeFileBoundaryKeepsFileEndingExactlyAtLimit(t *testing.T) {
+	const limit = 20
+	file1 := strings.Repeat("a", limit-1) + "\n" // ends with '\n' at index limit-1
+	data := append([]byte(file1), []byte("diff --git a/file2 b/file2\n...")...)
+	if got := lastWholeFileBoundary(data, limit); got != limit {
+		t.Errorf("lastWholeFileBoundary = %d, want %d (file1 kept whole)", got, limit)
 	}
 }
 
@@ -386,8 +408,7 @@ func TestHandleGitChangesNeverRunsExternalDiffOrTextconv(t *testing.T) {
 	sentinel := filepath.Join(t.TempDir(), "external-diff-ran")
 	runTestGit(t, dir, "config", "diff.external", "touch "+sentinel+" #")
 	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
-	h := newGitChangesHarness(t, dir)
-	gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	gitChangesUncommitted(t, dir)
 	if _, err := os.Stat(sentinel); err == nil {
 		t.Fatal("diff.external ran: a hostile repo config executed an arbitrary command")
 	}
@@ -403,34 +424,55 @@ func TestHandleGitChangesGlobLikeFilenameTreatedLiterally(t *testing.T) {
 	writeTestFile(t, filepath.Join(dir, "b*.txt"), "b\nmore\n")
 	writeTestFile(t, filepath.Join(dir, "bx.txt"), "x\nmore\n")
 
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if n := strings.Count(got.Patch, "diff --git a/bx.txt b/bx.txt"); n != 1 {
 		t.Errorf("patch contains %d bx.txt diff headers, want exactly 1 (got: %s)", n, got.Patch)
 	}
 }
 
-// TestHandleGitChangesUntrackedIndexInputSkipsMissingAndDirectories: a missing path or a directory (a nested repo) is dropped, not fatal.
+// TestHandleGitChangesUntrackedIndexInputSkipsMissingAndDirectories: a
+// missing path is dropped; a clean directory is one pathspec; a directory
+// containing a nested repo keeps its sibling files but drops the repo.
 func TestHandleGitChangesUntrackedIndexInputSkipsMissingAndDirectories(t *testing.T) {
 	dir := t.TempDir()
 	writeTestFile(t, filepath.Join(dir, "keep.txt"), "keep\n")
-	mkdirAllTest(t, filepath.Join(dir, "vendor", "dep"))
-	lsFilesOut := "keep.txt\x00vendor/dep/\x00gone.txt\x00"
-	got := string(untrackedIndexInput(dir, lsFilesOut))
-	if got != "keep.txt\x00" {
-		t.Errorf("untrackedIndexInput = %q, want only %q", got, "keep.txt\x00")
+	mkdirAllTest(t, filepath.Join(dir, "clean_dir"))
+	mkdirAllTest(t, filepath.Join(dir, "mixed", "vendor", "dep"))
+	writeTestFile(t, filepath.Join(dir, "mixed", "normal.txt"), "n\n")
+	runTestGit(t, filepath.Join(dir, "mixed", "vendor", "dep"), "init", "-q")
+
+	lsFilesOut := "keep.txt\x00clean_dir/\x00mixed/\x00gone.txt\x00"
+	got := splitNulZ(string(untrackedIndexInput(dir, lsFilesOut)))
+	sort.Strings(got)
+	want := "clean_dir/,keep.txt,mixed/normal.txt"
+	if strings.Join(got, ",") != want {
+		t.Errorf("untrackedIndexInput = %v, want %s", got, want)
 	}
 }
 
-func TestHandleGitChangesNestedRepoNeverErrorsOrFakes(t *testing.T) {
+// TestHandleGitChangesRetriesOnVanishedUntrackedFile: gitCmdHook deletes an
+// untracked file as `add -N` is about to run, so the request must retry
+// against a fresh listing rather than 500ing on the vanished pathspec.
+func TestHandleGitChangesRetriesOnVanishedUntrackedFile(t *testing.T) {
 	dir := newGitRepo(t)
-	mkdirAllTest(t, filepath.Join(dir, "vendor", "dep"))
-	runTestGit(t, filepath.Join(dir, "vendor", "dep"), "init", "-q")
-	writeTestFile(t, filepath.Join(dir, "real.txt"), "hi\n")
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
-	if len(got.Files) != 1 || got.Files[0].Path != "real.txt" {
-		t.Errorf("Files = %+v, want only real.txt (no vendor/dep/ entry)", got.Files)
+	vanish := filepath.Join(dir, "vanish.txt")
+	writeTestFile(t, vanish, "v\n")
+	writeTestFile(t, filepath.Join(dir, "keep.txt"), "k\n")
+
+	deleted := false
+	old := gitCmdHook
+	gitCmdHook = func(args []string) {
+		if deleted || !slices.Contains(args, "-N") {
+			return
+		}
+		os.Remove(vanish)
+		deleted = true
+	}
+	t.Cleanup(func() { gitCmdHook = old })
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "keep.txt" {
+		t.Errorf("Files = %+v, want only keep.txt (vanish.txt dropped, not fatal)", got.Files)
 	}
 }
 
@@ -443,17 +485,13 @@ func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	indexPath := strings.TrimSpace(runTestGit(t, dir, "rev-parse", "--git-path", "index"))
-	if !filepath.IsAbs(indexPath) {
-		indexPath = filepath.Join(dir, indexPath)
-	}
+	indexPath := filepath.Join(dir, ".git", "index")
 	before, err := os.Stat(indexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	h := newGitChangesHarness(t, dir)
-	gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	gitChangesUncommitted(t, dir)
 
 	after, err := os.Stat(indexPath)
 	if err != nil {
@@ -461,6 +499,21 @@ func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 	}
 	if !os.SameFile(before, after) || before.ModTime() != after.ModTime() {
 		t.Errorf(".git/index changed: before mtime=%s, after mtime=%s", before.ModTime(), after.ModTime())
+	}
+}
+
+// TestHandleGitChangesNoSplitIndexFileWritten: with core.splitIndex=true, no sharedindex.* file lands in the real .git.
+func TestHandleGitChangesNoSplitIndexFileWritten(t *testing.T) {
+	dir := newGitRepo(t)
+	runTestGit(t, dir, "config", "core.splitIndex", "true")
+	h := newGitChangesHarness(t, dir)
+	for i := 0; i < 3; i++ {
+		writeTestFile(t, filepath.Join(dir, fmt.Sprintf("f%d.txt", i)), "x\n")
+		gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, ".git", "sharedindex.*"))
+	if len(matches) != 0 {
+		t.Errorf("sharedindex files in .git = %v, want none", matches)
 	}
 }
 
@@ -480,13 +533,18 @@ func TestHandleGitChangesSubdirectoryDirStillCoversWholeRepo(t *testing.T) {
 	if got.Dir != sub {
 		t.Errorf("Dir = %q, want the requested subdirectory %q", got.Dir, sub)
 	}
-	var sawSubFile, sawRootUntracked bool
-	for _, f := range got.Files {
-		sawSubFile = sawSubFile || f.Path == "sub/f.txt"
-		sawRootUntracked = sawRootUntracked || f.Path == "root_untracked.txt"
+	if len(got.Files) != 2 {
+		t.Fatalf("Files = %+v, want exactly 2 entries (no surplus)", got.Files)
 	}
-	if !sawSubFile || !sawRootUntracked {
+	byPath := filesByPath(got.Files)
+	if _, ok := byPath["sub/f.txt"]; !ok {
 		t.Errorf("Files = %+v, want both sub/f.txt and root_untracked.txt", got.Files)
+	}
+	if _, ok := byPath["root_untracked.txt"]; !ok {
+		t.Errorf("Files = %+v, want both sub/f.txt and root_untracked.txt", got.Files)
+	}
+	if !strings.Contains(got.Patch, "+more") || !strings.Contains(got.Patch, "+root") {
+		t.Errorf("patch missing expected hunks (both tracked and untracked): %q", got.Patch)
 	}
 }
 
@@ -498,8 +556,7 @@ func TestHandleGitChangesUnbornHEAD(t *testing.T) {
 	runTestGit(t, dir, "config", "user.name", "test")
 	writeTestFile(t, filepath.Join(dir, "new.txt"), "hi\n")
 
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
+	got := gitChangesUncommitted(t, dir)
 	if got.Head != "" {
 		t.Errorf("Head = %q, want empty (unborn)", got.Head)
 	}
@@ -507,6 +564,7 @@ func TestHandleGitChangesUnbornHEAD(t *testing.T) {
 		t.Errorf("Files = %+v, want one new.txt added", got.Files)
 	}
 
+	h := newGitChangesHarness(t, dir)
 	resp, body := h.do(http.MethodGet, "/git/changes?scope=branch&dir="+dir, nil)
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("branch status = %d, want 409: %s", resp.StatusCode, body)
@@ -534,19 +592,6 @@ func TestHandleGitChangesStaleOriginHEADFallsThrough(t *testing.T) {
 	}
 }
 
-func TestHandleGitChangesGitignoreHonored(t *testing.T) {
-	dir := newGitRepo(t)
-	writeTestFile(t, filepath.Join(dir, ".gitignore"), "*.log\n")
-	runTestGit(t, dir, "add", ".gitignore")
-	runTestGit(t, dir, "commit", "-q", "-m", "add gitignore")
-	writeTestFile(t, filepath.Join(dir, "debug.log"), "noisy\n")
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
-	if len(got.Files) != 0 {
-		t.Errorf("Files = %+v, want empty (debug.log is gitignored)", got.Files)
-	}
-}
-
 // TestHandleGitChangesPatchNotHTMLEscaped proves the patch is not HTML-escaped.
 func TestHandleGitChangesPatchNotHTMLEscaped(t *testing.T) {
 	dir := newGitRepo(t)
@@ -561,46 +606,77 @@ func TestHandleGitChangesPatchNotHTMLEscaped(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesNeutralizesFilterDrivers: a repo-configured filter driver (e.g. git-lfs) never runs.
+// TestHandleGitChangesNeutralizesFilterDrivers: a filter driver never runs, including one named with a dot ("a.b").
 func TestHandleGitChangesNeutralizesFilterDrivers(t *testing.T) {
-	dir := newGitRepo(t)
-	sentinel := filepath.Join(t.TempDir(), "filter-ran")
-	// Attach and commit before configuring the driver, or add/commit invokes it early.
-	writeTestFile(t, filepath.Join(dir, ".gitattributes"), "seed.txt filter=testdrv\n")
-	runTestGit(t, dir, "add", ".gitattributes")
-	runTestGit(t, dir, "commit", "-q", "-m", "attach filter")
-	runTestGit(t, dir, "config", "filter.testdrv.clean", "touch "+sentinel+" #")
-	runTestGit(t, dir, "config", "filter.testdrv.process", "touch "+sentinel+" #")
-	runTestGit(t, dir, "config", "filter.testdrv.required", "true")
-	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
+	for _, driver := range []string{"testdrv", "a.b"} {
+		t.Run(driver, func(t *testing.T) {
+			dir := newGitRepo(t)
+			sentinel := filepath.Join(t.TempDir(), "filter-ran")
+			// Attach and commit before configuring the driver, or add/commit invokes it early.
+			writeTestFile(t, filepath.Join(dir, ".gitattributes"), "seed.txt filter="+driver+"\n")
+			runTestGit(t, dir, "add", ".gitattributes")
+			runTestGit(t, dir, "commit", "-q", "-m", "attach filter")
+			runTestGit(t, dir, "config", "filter."+driver+".clean", "touch "+sentinel+" #")
+			runTestGit(t, dir, "config", "filter."+driver+".process", "touch "+sentinel+" #")
+			runTestGit(t, dir, "config", "filter."+driver+".required", "true")
+			writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
 
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
-	if _, err := os.Stat(sentinel); err == nil {
-		t.Fatal("filter.testdrv ran: a repo-configured filter driver executed an arbitrary command")
-	}
-	if !strings.Contains(got.Patch, "+more") {
-		t.Errorf("patch missing the real diff content: %q", got.Patch)
+			got := gitChangesUncommitted(t, dir)
+			if _, err := os.Stat(sentinel); err == nil {
+				t.Fatal("filter driver ran: a repo-configured filter driver executed an arbitrary command")
+			}
+			if !strings.Contains(got.Patch, "+more") {
+				t.Errorf("patch missing the real diff content: %q", got.Patch)
+			}
+		})
 	}
 }
 
-// TestHandleGitChangesDirtySubmoduleNotWalked proves a dirty submodule is reported unchanged, not walked.
-func TestHandleGitChangesDirtySubmoduleNotWalked(t *testing.T) {
-	dir := newGitRepo(t)
-	subRepo := t.TempDir()
-	runTestGit(t, subRepo, "init", "-q")
-	runTestGit(t, subRepo, "config", "user.email", "test@example.com")
-	runTestGit(t, subRepo, "config", "user.name", "test")
-	writeTestFile(t, filepath.Join(subRepo, "f.txt"), "f\n")
-	runTestGit(t, subRepo, "add", "f.txt")
-	runTestGit(t, subRepo, "commit", "-q", "-m", "init")
-	runTestGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subRepo, "sub")
-	runTestGit(t, dir, "commit", "-q", "-m", "add submodule")
-	writeTestFile(t, filepath.Join(dir, "sub", "f.txt"), "f\ndirty\n")
-
-	h := newGitChangesHarness(t, dir)
-	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+dir)
-	if len(got.Files) != 0 {
-		t.Errorf("Files = %+v, want empty (a dirty submodule is ignored, not walked)", got.Files)
+// TestHandleGitChangesFileCounts covers scenarios distinguished only by
+// how many files (and which) end up in the response: a gitignored
+// untracked file, an untracked nested repo, and a dirty submodule are all
+// excluded.
+func TestHandleGitChangesFileCounts(t *testing.T) {
+	cases := []struct {
+		name      string
+		setup     func(t *testing.T) string
+		wantCount int
+		wantPath  string
+	}{
+		{"gitignore honored", func(t *testing.T) string {
+			dir := newGitRepo(t)
+			writeTestFile(t, filepath.Join(dir, ".gitignore"), "*.log\n")
+			runTestGit(t, dir, "add", ".gitignore")
+			runTestGit(t, dir, "commit", "-q", "-m", "add gitignore")
+			writeTestFile(t, filepath.Join(dir, "debug.log"), "noisy\n")
+			return dir
+		}, 0, ""},
+		{"nested repo dropped, not faked", func(t *testing.T) string {
+			dir := newGitRepo(t)
+			mkdirAllTest(t, filepath.Join(dir, "vendor", "dep"))
+			runTestGit(t, filepath.Join(dir, "vendor", "dep"), "init", "-q")
+			writeTestFile(t, filepath.Join(dir, "real.txt"), "hi\n")
+			return dir
+		}, 1, "real.txt"},
+		{"dirty submodule not walked", func(t *testing.T) string {
+			dir := newGitRepo(t)
+			subRepo := newGitRepo(t)
+			runTestGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", subRepo, "sub")
+			runTestGit(t, dir, "commit", "-q", "-m", "add submodule")
+			writeTestFile(t, filepath.Join(dir, "sub", "seed.txt"), "seed\ndirty\n")
+			return dir
+		}, 0, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := c.setup(t)
+			got := gitChangesUncommitted(t, dir)
+			if len(got.Files) != c.wantCount {
+				t.Fatalf("Files = %+v, want %d entries", got.Files, c.wantCount)
+			}
+			if c.wantPath != "" && got.Files[0].Path != c.wantPath {
+				t.Errorf("Files[0].Path = %q, want %q", got.Files[0].Path, c.wantPath)
+			}
+		})
 	}
 }
