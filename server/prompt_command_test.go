@@ -13,6 +13,67 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
+func TestRepositoryCommandEnqueueRetrySkipsInvalidFile(t *testing.T) {
+	work := t.TempDir()
+	path := filepath.Join(work, ".agents", "commands", "review.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\ndescription: Review\n---\nReview $ARGUMENTS"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := newCapturingProvider(asstTurn("ok"))
+	dir := t.TempDir()
+	srv := newServer(t, dir, prov, 0, func(o *Options) { o.WorkspaceRoots = []string{work} })
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	id := h.createSessionBody(map[string]string{"model": "test/m1", "workdir": work})
+	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": "/review HEAD"}}, "seq": int64(9), "source": "typed"}
+	resp, data := h.do("POST", "/session/"+id+"/enqueue", body)
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first enqueue: %d %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+	if err := os.WriteFile(path, []byte("broken frontmatter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resp, data = h.do("POST", "/session/"+id+"/enqueue", body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(data), `"status":"duplicate"`) {
+		t.Fatalf("retry after file changed: %d %s, want duplicate", resp.StatusCode, data)
+	}
+}
+
+func TestRepositoryPromptCommandSanitizesTypedLine(t *testing.T) {
+	work := t.TempDir()
+	path := filepath.Join(work, ".agents", "commands", "review.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\ndescription: Review\n---\nReview $ARGUMENTS"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := newCapturingProvider(asstTurn("ok"))
+	dir := t.TempDir()
+	srv := newServer(t, dir, prov, 0, func(o *Options) { o.WorkspaceRoots = []string{work} })
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	id := h.createSessionBody(map[string]string{"model": "test/m1", "workdir": work})
+	line := "/review " + strings.Repeat("a", 300) + "\u202e"
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": line}}, "source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async: %d %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+	users := h.userMessages(id)
+	if len(users) != 1 || len(users[0].SourceLabel) > sourceLabelMaxBytes || strings.ContainsRune(users[0].SourceLabel, '\u202e') {
+		t.Fatalf("unsafe source label: %+v", users)
+	}
+}
+
 func TestInvalidRepositoryCommandNameStaysOrdinaryPrompt(t *testing.T) {
 	prov := newCapturingProvider(asstTurn("ok"))
 	h := newHarness(t, prov)

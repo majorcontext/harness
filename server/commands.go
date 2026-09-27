@@ -161,6 +161,19 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 	if prov.Source.Normalized() != message.PromptSourceTyped {
 		return text, false
 	}
+	if route == promptRouteEnqueue && seq > 0 {
+		sess, release, ok := s.mutableSession(id)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return "", true
+		}
+		watermark := sess.EnqueueSeq()
+		release()
+		if seq <= watermark {
+			writeJSON(w, http.StatusOK, enqueueResponse{Status: "duplicate", Watermark: watermark})
+			return "", true
+		}
+	}
 
 	res, err := command.NewRegistry().Resolve(text)
 	if err != nil {
@@ -193,9 +206,14 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 				writeErr(w, http.StatusInternalServerError, err.Error())
 				return "", true
 			}
+			label, err := sanitizeSourceLabel(text)
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return "", true
+			}
 			args := strings.TrimSpace(strings.TrimPrefix(text, "/"+unknown.Name))
 			prov.Source = message.PromptSourceCommand
-			prov.SourceLabel = text
+			prov.SourceLabel = label
 			return command.Expand(body, args), false
 		}
 		var argsErr *command.ArgsError

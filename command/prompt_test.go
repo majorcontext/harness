@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestPromptCommandRootSymlinkRejected(t *testing.T) {
+	outside := t.TempDir()
+	writePromptCommand(t, outside, "review.md", "---\ndescription: Outside\n---\noutside\n")
+	root := filepath.Join(t.TempDir(), "commands")
+	if err := os.Symlink(outside, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover([]string{root}); err == nil {
+		t.Fatal("Discover followed a symlinked command root")
+	}
+	if _, err := LookupPrompt([]string{root}, "review"); err == nil {
+		t.Fatal("LookupPrompt followed a symlinked command root")
+	}
+}
+
 func TestDiscoverPromptCommands(t *testing.T) {
 	root := t.TempDir()
 	writePromptCommand(t, root, "review.md", "---\ndescription: Review changes\nargument-hint: <ref>\n---\nReview $1 and $ARGUMENTS\n")

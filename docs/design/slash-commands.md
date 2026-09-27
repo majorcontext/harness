@@ -540,9 +540,9 @@ EXPANDED text, because that is what the model reads, and the log stores
 canonical messages.
 
 Attribution uses `PromptSourceCommand` in `message.PromptSource`.
-`source_label` carries the original typed line (`/review HEAD~1`) so a
-frontend can show what the person typed. The user message stores only the
-expanded text that the model reads. Harness sets this source after a typed
+`source_label` carries a bounded, sanitized display form of the typed line
+(`/review HEAD~1`), so a frontend can show the command. The user message
+stores the expanded text that the model reads. Harness sets this source after a typed
 request; HTTP callers cannot assert `source: command` directly.
 
 No new event type enters. Expanded command text is user-trust text. It

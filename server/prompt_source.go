@@ -55,7 +55,7 @@ func sanitizeClientRef(in string) (string, error) {
 	return sanitizeASCIIID("client_ref", in, clientRefMaxBytes)
 }
 
-// sanitizeSourceLabel bounds and cleans in for durable storage and
+// SanitizeSourceLabel bounds and cleans in for durable storage and
 // display — see promptSourceInput's own doc comment: SourceLabel is
 // "free-form, human-readable... display only, never parsed," so unlike
 // sourceID above this REPAIRS a merely-too-long value (truncates to
@@ -68,6 +68,10 @@ func sanitizeClientRef(in string) (string, error) {
 // is no well-defined truncation or per-byte strip that recovers a
 // caller's intended text from malformed encoding, so this returns an
 // error instead of guessing.
+func SanitizeSourceLabel(in string) (string, error) {
+	return sanitizeSourceLabel(in)
+}
+
 func sanitizeSourceLabel(in string) (string, error) {
 	if !utf8.ValidString(in) {
 		return "", fmt.Errorf("source_label is not valid UTF-8")

@@ -640,6 +640,19 @@ func modelDecidableBeforeSession(resume string, cont bool, modelSet bool) bool {
 	return (resume == "" && !cont) || modelSet
 }
 
+func expandRepositoryCommand(cfg *config.Config, workdir, name, line string) (string, bool, error) {
+	prompt, err := command.LookupPrompt(commandsDirs(cfg, workdir), name)
+	if err != nil || prompt == nil {
+		return "", false, err
+	}
+	body, err := prompt.LoadBody()
+	if err != nil {
+		return "", false, err
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(line, "/"+name))
+	return command.Expand(body, args), true, nil
+}
+
 func runCmd(args []string) error {
 	// Captured once, at the top of the command, before any flag parsing or
 	// session create/load — the ambient engine-identity block's StartedAt
@@ -727,29 +740,55 @@ func runCmd(args []string) error {
 		return err
 	}
 	var promptCommandLine string
-	if unknownCmd != nil {
-		prompt, err := command.LookupPrompt(commandsDirs(cfg, workDir), unknownCmd.Name)
+	if unknownCmd != nil && opts.resume == "" && !opts.cont {
+		expanded, found, err := expandRepositoryCommand(cfg, workDir, unknownCmd.Name, opts.prompt)
 		if err != nil {
 			return err
 		}
-		if prompt != nil {
-			body, err := prompt.LoadBody()
-			if err != nil {
-				return err
-			}
+		if found {
 			promptCommandLine = opts.prompt
-			args := strings.TrimSpace(strings.TrimPrefix(opts.prompt, "/"+unknownCmd.Name))
-			res = command.Resolution{Text: command.Expand(body, args)}
+			res = command.Resolution{Text: expanded}
 			resErr = command.ErrNotCommand
 			unknownCmd = nil
 		}
 	}
-	if unknownCmd != nil && model.Provider != claudecode.Family && modelDecidableBeforeSession(opts.resume, opts.cont, modelSet) {
-		return resErr
-	}
 	sesDir, err := sessionDir(opts.noSave, cfg.SessionDir)
 	if err != nil {
 		return err
+	}
+	if unknownCmd != nil && sesDir != "" && (opts.resume != "" || opts.cont) {
+		id := opts.resume
+		if opts.cont {
+			infos, err := engine.ListSessions(sesDir)
+			if err != nil {
+				return err
+			}
+			if len(infos) > 0 {
+				id = infos[len(infos)-1].ID
+			}
+		}
+		if id != "" {
+			ix, err := engine.ReadSessionIndex(sesDir, id)
+			if err == nil {
+				commandWorkDir := ix.WorkDir
+				if commandWorkDir == "" {
+					commandWorkDir = workDir
+				}
+				expanded, found, err := expandRepositoryCommand(cfg, commandWorkDir, unknownCmd.Name, opts.prompt)
+				if err != nil {
+					return err
+				}
+				if found {
+					promptCommandLine = opts.prompt
+					res = command.Resolution{Text: expanded}
+					resErr = command.ErrNotCommand
+					unknownCmd = nil
+				}
+			}
+		}
+	}
+	if unknownCmd != nil && model.Provider != claudecode.Family && modelDecidableBeforeSession(opts.resume, opts.cont, modelSet) {
+		return resErr
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -893,6 +932,18 @@ func runCmd(args []string) error {
 	// restored from a log neither Options field above already
 	// registered elsewhere in THIS process), safe to ignore.
 	_ = sessMgr.AdoptReloaded(s)
+	if unknownCmd != nil && (opts.resume != "" || opts.cont) {
+		expanded, found, err := expandRepositoryCommand(cfg, s.WorkDir(), unknownCmd.Name, opts.prompt)
+		if err != nil {
+			return err
+		}
+		if found {
+			promptCommandLine = opts.prompt
+			res = command.Resolution{Text: expanded}
+			resErr = command.ErrNotCommand
+			unknownCmd = nil
+		}
+	}
 
 	goalNotAchieved := false
 	switch {
@@ -922,8 +973,12 @@ func runCmd(args []string) error {
 		}
 	default:
 		if promptCommandLine != "" {
+			label, err := server.SanitizeSourceLabel(promptCommandLine)
+			if err != nil {
+				return err
+			}
 			if err := promptSession(ctx, sessMgr, s, res.Text, engine.PromptProvenance{
-				Source: message.PromptSourceCommand, SourceLabel: promptCommandLine,
+				Source: message.PromptSourceCommand, SourceLabel: label,
 			}); err != nil {
 				return err
 			}

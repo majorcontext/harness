@@ -73,7 +73,7 @@ const OriginOperatorBatch = "operator_batch"
 // to a provider and never changes how the engine schedules or delivers the
 // prompt.
 //
-// # Trust model: every value here is a CLAIM, not a verified fact
+// # Trust model: caller-supplied values are claims, not verified facts
 //
 // Harness authenticates an HTTP caller with a single bearer token
 // (server.Options.AuthToken) — one trust level, not one per human/service

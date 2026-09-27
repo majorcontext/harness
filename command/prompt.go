@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -80,13 +81,12 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 		if !info.IsDir() {
 			return nil, fmt.Errorf("command directory %q is not a directory", root)
 		}
-		root, err = filepath.EvalSymlinks(root)
+		canonical, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			return nil, err
 		}
-		root, err = filepath.Abs(root)
-		if err != nil {
-			return nil, err
+		if canonical != root {
+			return nil, fmt.Errorf("command directory %q must not contain symlinks", root)
 		}
 		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
@@ -116,6 +116,9 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 				return err
 			}
 			prompt.root = root
+			if previous := commands[name]; previous != nil {
+				slog.Warn("prompt command shadowed", "name", name, "previous", previous.Path, "winner", path)
+			}
 			commands[name] = prompt
 			return nil
 		})
@@ -147,16 +150,15 @@ func LookupPrompt(dirs []string, name string) (*PromptCommand, error) {
 		if err != nil {
 			return nil, err
 		}
-		root, err = filepath.EvalSymlinks(root)
+		canonical, err := filepath.EvalSymlinks(root)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, err
 		}
-		root, err = filepath.Abs(root)
-		if err != nil {
-			return nil, err
+		if canonical != root {
+			return nil, fmt.Errorf("command directory %q must not contain symlinks", root)
 		}
 		path := filepath.Join(root, file)
 		if _, err := validatePromptPath(root, path, name); err != nil {

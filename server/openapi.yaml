@@ -992,8 +992,8 @@ components:
         source_label:
           type: string
           description: >
-            Display label for the source. For `source: command`, the original
-            typed line; message parts hold the expanded prompt.
+            Display label for the source. For `source: command`, a bounded,
+            sanitized form of the typed line; parts hold the expanded prompt.
 
     OperatorBatchEntry:
       type: object
