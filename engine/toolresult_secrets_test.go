@@ -420,30 +420,35 @@ func maskSecretsPerfInput(secretEvery int) string {
 // that reintroduces the O(n²) shape earlier rounds fixed).
 func TestMaskSecretsPerformance(t *testing.T) {
 	cases := []struct {
-		name    string
-		input   string
-		ceiling time.Duration
+		name     string
+		input    string
+		ceiling  time.Duration
+		skipRace bool
 	}{
 		// Never observed above ~20ms (the fast-reject path barely touches
 		// the regex engine at all) — 1s is already >>10x its worst
 		// observed cost, so it's left as-is.
-		{"no_candidates", maskSecretsPerfInput(0), 1 * time.Second},
+		{"no_candidates", maskSecretsPerfInput(0), 1 * time.Second, false},
 		// Documented worst-case-under-load: 1.06s (see the three CI runs
 		// cited in this function's doc comment). 10s is ~10x that, and
 		// ~15x the clean-isolation baseline (~0.66s).
-		{"sparse_realistic", maskSecretsPerfInput(300), 10 * time.Second}, // ~1 secret line per ~300 ordinary lines
-		// 120s, not 2s: this is the one case with no line-level fast-reject
-		// (see maskSecrets's doc comment), the pattern grew two more
-		// alternatives in round 3 (quoted-env values), and the race
-		// detector's instrumentation overhead on a regex-heavy path is
-		// large — measured ~1.8s plain, ~50s under `go test -race` after
-		// round 3 (was ~650ms / ~18s before). Still a ceiling, not a
-		// promise: it exists to catch a true hang, not to hold this
-		// documented-slower path to the sparse-case target.
-		{"single_huge_line", "TOKEN=" + strings.Repeat("y", 4_400_000), 120 * time.Second},
+		{"sparse_realistic", maskSecretsPerfInput(300), 10 * time.Second, false}, // ~1 secret line per ~300 ordinary lines
+		// This is the one case with no line-level fast-reject (see
+		// maskSecrets's doc comment), so it is the case most worth a
+		// ceiling. 20s is ~10x the observed plain-mode cost (~1.9s),
+		// the same headroom multiple as sparse_realistic. Skipped
+		// under -race: the race detector's instrumentation overhead on
+		// this regex-heavy path dominates the measurement, so the
+		// ceiling would guard instrumentation cost, not maskSecrets.
+		// BenchmarkMaskSecrets tracks real timing instead.
+		{"single_huge_line", "TOKEN=" + strings.Repeat("y", 4_400_000), 20 * time.Second, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipRace && raceEnabled {
+				t.Skip("ceiling measures race instrumentation, not maskSecrets; see BenchmarkMaskSecrets")
+			}
+
 			start := time.Now()
 			out := maskSecrets(tc.input)
 			elapsed := time.Since(start)
