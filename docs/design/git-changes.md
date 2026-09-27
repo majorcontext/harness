@@ -217,6 +217,12 @@ mixed-relative paths (untracked files outside the subdirectory would be
 invisible; a per-file pathspec would not match anything there). The
 response's own `dir` field still echoes the originally resolved `dir`.
 
+An omitted `dir` is the process's own working directory, as for `POST
+/session`'s `workdir`, and like it is not checked against the workspace
+roots: the operator chose it. It gets no root-derived
+`GIT_CEILING_DIRECTORIES` and no `repoRoot` re-check. Only an explicit `dir`
+is confined to the roots.
+
 `GIT_CEILING_DIRECTORIES` is itself colon-separated with no escape for a
 colon in a path, so a workspace root under a path component containing
 one defeats it silently: git ignores the malformed ceiling and keeps

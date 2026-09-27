@@ -321,6 +321,24 @@ func TestHandleGitChangesSharedCloneResolvesAlternates(t *testing.T) {
 	}
 }
 
+// TestHandleGitChangesEmptyDirIsProcessCwd: an omitted dir means the
+// process's own cwd, as for POST /session's workdir, which is never checked
+// against WorkspaceRoots; an explicit dir outside them is still a 400.
+func TestHandleGitChangesEmptyDirIsProcessCwd(t *testing.T) {
+	dir := newGitRepo(t)
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
+	t.Chdir(dir)
+	h := newGitChangesHarness(t, t.TempDir()) // cwd is outside every root
+
+	_, got := gitChangesGet(t, h, "?scope=uncommitted")
+	if len(got.Files) != 1 || got.Files[0].Path != "new.txt" {
+		t.Errorf("Files = %+v, want the cwd repository's new.txt", got.Files)
+	}
+	if resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("explicit dir outside roots: status = %d, want 400: %s", resp.StatusCode, body)
+	}
+}
+
 func TestHandleGitChangesRequiresAuth(t *testing.T) {
 	dir := newGitRepo(t)
 	h := newGitChangesHarness(t, dir)

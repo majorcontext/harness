@@ -89,12 +89,21 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("scope %q must be \"branch\" or \"uncommitted\"", scope))
 		return
 	}
-	dir, err := resolveWorkDir(s.opts.WorkspaceRoots, r.URL.Query().Get("dir"))
+	rawDir := r.URL.Query().Get("dir")
+	dir, err := resolveWorkDir(s.opts.WorkspaceRoots, rawDir)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	realDir, ceiling, err := verifyDirWithinRoots(s.opts.WorkspaceRoots, dir)
+	// An omitted dir is the process's own cwd, which POST /session also
+	// never checks against WorkspaceRoots: the operator chose it. Only an
+	// explicit dir is confined to the roots (and to their ceiling).
+	var realDir, ceiling string
+	if rawDir == "" {
+		realDir, err = filepath.EvalSymlinks(dir)
+	} else {
+		realDir, ceiling, err = verifyDirWithinRoots(s.opts.WorkspaceRoots, dir)
+	}
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -116,9 +125,11 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 	// colon in a path, so a workspace root containing one could let git walk
 	// past the intended boundary into a parent repository. Re-checking
 	// repoRoot the same way dir itself was checked catches that regardless.
-	if _, _, err := verifyDirWithinRoots(s.opts.WorkspaceRoots, repoRoot); err != nil {
-		writeErr(w, http.StatusConflict, fmt.Sprintf("not_a_git_repo: %q is not a git work tree", dir))
-		return
+	if rawDir != "" {
+		if _, _, err := verifyDirWithinRoots(s.opts.WorkspaceRoots, repoRoot); err != nil {
+			writeErr(w, http.StatusConflict, fmt.Sprintf("not_a_git_repo: %q is not a git work tree", dir))
+			return
+		}
 	}
 
 	head := "" // empty means an unborn branch (no commit yet)
@@ -378,7 +389,11 @@ func isGitWorkTreeErr(err error) bool {
 // (GIT_CEILING_DIRECTORIES). ok is false, err nil, when dir is not inside
 // any git work tree up to that boundary.
 func gitRepoRootAt(ctx context.Context, dir, ceiling string) (root string, ok bool, err error) {
-	out, err := gitOut(ctx, dir, []string{"GIT_CEILING_DIRECTORIES=" + ceiling}, "rev-parse", "--show-toplevel")
+	var env []string
+	if ceiling != "" {
+		env = []string{"GIT_CEILING_DIRECTORIES=" + ceiling}
+	}
+	out, err := gitOut(ctx, dir, env, "rev-parse", "--show-toplevel")
 	if err != nil {
 		if ctx.Err() == nil && isGitWorkTreeErr(err) {
 			return "", false, nil
