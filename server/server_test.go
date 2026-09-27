@@ -540,6 +540,25 @@ func TestHealthReportsVCSInfo(t *testing.T) {
 	}
 }
 
+// TestHealthReportsCapabilities pins /health's capabilities array.
+func TestHealthReportsCapabilities(t *testing.T) {
+	h := newHarness(t, &scriptedProvider{name: "test"})
+	resp, err := h.ts.Client().Get(h.ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Capabilities) != 1 || body.Capabilities[0] != CapabilityDeltaRowIdentity {
+		t.Errorf("capabilities = %v, want [%s]", body.Capabilities, CapabilityDeltaRowIdentity)
+	}
+}
+
 // TestHealthReportsSessionSyncAndStartedAt is /health's machine-checkable
 // counterpart to the ambient in-session engine-identity block (see
 // engine/identity_status_test.go): an unauthenticated caller — a canary —

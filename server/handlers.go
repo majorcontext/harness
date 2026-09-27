@@ -556,7 +556,8 @@ type healthJSON struct {
 	// StartedAt is this server process's start time (Options.StartedAt),
 	// rendered as an RFC3339 UTC timestamp, or "" when Options.StartedAt was
 	// never set (e.g. a test harness that doesn't care about it).
-	StartedAt string `json:"started_at"`
+	StartedAt    string   `json:"started_at"`
+	Capabilities []string `json:"capabilities"`
 }
 
 // pseudoVersionRe matches the trailing "<14-digit-UTC-timestamp>-
@@ -660,11 +661,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		startedAt = s.opts.StartedAt.UTC().Format(time.RFC3339)
 	}
 	writeJSON(w, http.StatusOK, healthJSON{
-		Version:     s.opts.Version,
-		VCSRevision: rev,
-		VCSTime:     t,
-		SessionSync: effectiveSessionSync(s.opts.SessionSync),
-		StartedAt:   startedAt,
+		Version:      s.opts.Version,
+		VCSRevision:  rev,
+		VCSTime:      t,
+		SessionSync:  effectiveSessionSync(s.opts.SessionSync),
+		StartedAt:    startedAt,
+		Capabilities: Capabilities,
 	})
 }
 
