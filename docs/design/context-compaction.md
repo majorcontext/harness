@@ -587,8 +587,16 @@ measurement — `compactHysteresis` already guards re-compaction separately,
 and re-deriving it from a fold would defeat that guard. So `Session.Compact`
 sets a second, independent flag (`contextUnknown`, exposed as
 `Session.ContextUnknown()`) the moment a fold succeeds, and every
-`used_tokens` projection (`contextJSONForSession`/`contextJSONForInfo`/
-`contextJSONForIndex`, `server/handlers.go`) reports 0 whenever it is set —
+`used_tokens` projection reports 0 whenever it is set: the three read
+projections `contextJSONForSession`/`contextJSONForInfo`/`contextJSONForIndex`,
+and `recordTurnEnd`, which carries the mirrored `turn.end.context_used_tokens`
+field. `recordTurnEnd` matters most of the four, because `turn.end` is the
+live path a console gauge follows during a session while the read projections
+only answer on load. The two projections that hold a live `Session` read it
+through `Session.ContextReading()`, which returns the usage and the flag under
+one lock, so a fold landing between two separate reads cannot pair a stale
+usage with a cleared flag, and a projection cannot report the usage while
+forgetting the gate —
 the same "0 means unknown, never a real reading" convention `window_tokens`
 already uses, so the wire shape gains no new representation for the
 condition. The flag clears the moment a turn next completes and

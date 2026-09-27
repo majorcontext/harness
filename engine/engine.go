@@ -2358,6 +2358,20 @@ func (s *Session) ContextUnknown() bool {
 	return s.contextUnknown
 }
 
+// ContextReading returns the usage a projection may report, with ok false
+// when no measurement stands. It answers under one lock what LastUsage and
+// ContextUnknown answer separately, so a fold landing between two reads
+// cannot pair a stale usage with a cleared flag, and so a projection cannot
+// report the usage while forgetting the gate.
+func (s *Session) ContextReading() (provider.Usage, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextUnknown {
+		return provider.Usage{}, false
+	}
+	return s.lastUsage, s.haveLastUsage
+}
+
 // ContextWindowTokens returns this session's resolved context window — 0
 // when automatic compaction is disarmed. On the claude-code lane, a window
 // the CLI reported replaces modelmeta's stand-in.

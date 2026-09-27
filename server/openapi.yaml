@@ -2374,8 +2374,12 @@ components:
             Carried on turn.end only: the same value as Context.used_tokens
             (see that schema), read from the session at the moment the
             turn settled — so an SSE consumer's gauge updates every turn
-            without a separate GET /session poll. Absent (0) when the
-            server had no live session to read at settle time.
+            without a separate GET /session poll. Absent (0) when there is
+            no known reading: the server had no live session to read at
+            settle time, or a compaction folded history since the last
+            measurement and this turn recorded none. A present session is
+            therefore not proof the field was measured, and a consumer must
+            treat an absent value as "unknown", never as "empty".
         context_window_tokens:
           type: integer
           description: >

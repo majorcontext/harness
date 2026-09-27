@@ -306,7 +306,7 @@ type contextJSON struct {
 // contextJSONForSession mirrors usageJSONForSession.
 func contextJSONForSession(sess *engine.Session) contextJSON {
 	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
-	if last, ok := sess.LastUsage(); ok && !sess.ContextUnknown() {
+	if last, ok := sess.ContextReading(); ok {
 		out.UsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 	}
 	return out
