@@ -1047,10 +1047,20 @@ func TestHandleGitChangesPatchNotHTMLEscaped(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesNeutralizesFilterDrivers: a filter driver never runs, including one named with a dot ("a.b").
+// TestHandleGitChangesNeutralizesFilterDrivers: a filter driver never runs,
+// including one whose name holds a dot ("a.b") or an "=" ("x=y"), which a
+// `-c filter.<name>.clean=` override would split at the wrong "=".
 func TestHandleGitChangesNeutralizesFilterDrivers(t *testing.T) {
-	for _, driver := range []string{"testdrv", "a.b"} {
-		t.Run(driver, func(t *testing.T) {
+	cases := []struct {
+		driver       string
+		missingIndex bool
+	}{
+		{"testdrv", false}, {"a.b", false}, {"x=y", false}, {"p=q.r", false},
+		{"x=y", true},
+	}
+	for _, c := range cases {
+		driver := c.driver
+		t.Run(fmt.Sprintf("%s/missingIndex=%v", driver, c.missingIndex), func(t *testing.T) {
 			dir := newGitRepo(t)
 			sentinel := filepath.Join(t.TempDir(), "filter-ran")
 			// Attach and commit before configuring the driver, or add/commit invokes it early.
@@ -1061,6 +1071,11 @@ func TestHandleGitChangesNeutralizesFilterDrivers(t *testing.T) {
 			runTestGit(t, dir, "config", "filter."+driver+".process", "touch "+sentinel+" #")
 			runTestGit(t, dir, "config", "filter."+driver+".required", "true")
 			writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
+			if c.missingIndex {
+				if err := os.Remove(filepath.Join(dir, ".git", "index")); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			got := gitChangesUncommitted(t, dir)
 			if _, err := os.Stat(sentinel); err == nil {

@@ -117,12 +117,12 @@ change set's metadata alone grow a response's memory without bound.
 
 Filter-driver discovery (`git config --get-regexp`) has its own, much
 smaller cap, `gitFilterDiscoveryCap` (64 KiB). Each discovered driver
-becomes three `-c` overrides on every later diff's argv, and argv shares
-`ARG_MAX` (2 MiB on Linux) with the environment, so a config that fits the
-32 MiB metadata cap could still make the diff's exec fail with `E2BIG`.
-Moving the overrides into `GIT_CONFIG_*` variables would not help, for the
-same reason. At 64 KiB of discovery output the overrides stay under about
-450 KiB; exceeding it answers `409 too_many_changes`.
+becomes three `GIT_CONFIG_KEY_i`/`GIT_CONFIG_VALUE_i` override pairs in
+every later diff's environment, and the environment shares `ARG_MAX` (2 MiB
+on Linux) with argv, so a config that fits the 32 MiB metadata cap could
+still make the diff's exec fail with `E2BIG`. At 64 KiB of discovery output
+the overrides stay under about 450 KiB; exceeding it answers `409
+too_many_changes`.
 
 ## Never writing the index or objects
 
@@ -166,10 +166,15 @@ invocation, not just the patch diff:
 - A clean/process content filter driver (e.g. git-lfs's own
   `filter.lfs.clean`/`filter.lfs.process`, at any config scope):
   discovered once per request via `git config --get-regexp
-  '^filter\..*\.(clean|process)$'` and neutralized per driver with `-c
-  filter.<d>.clean= -c filter.<d>.process= -c filter.<d>.required=false`.
-  A driver name may itself contain a dot (`filter.a.b.clean`); the split
-  takes everything before the LAST `.`, not the first.
+  '^filter\..*\.(clean|process)$'` and neutralized per driver by setting
+  `filter.<d>.clean` and `filter.<d>.process` to empty and
+  `filter.<d>.required` to `false`. A driver name may itself contain a dot
+  (`filter.a.b.clean`); the split takes everything before the LAST `.`,
+  not the first. The overrides go in `GIT_CONFIG_COUNT` plus
+  `GIT_CONFIG_KEY_i`/`GIT_CONFIG_VALUE_i` pairs, set after the inherited
+  environment is stripped, not as `-c filter.<d>.clean=`: git splits `-c
+  k=v` at the first `=`, so a driver named `x=y` would never be overridden
+  and would run.
 - `core.fsmonitor`: `-c core.fsmonitor=false`.
 - An ambiguous bare-repository layout: `-c safe.bareRepository=explicit`.
   No command run here uses hooks, so `core.hooksPath` is not set.

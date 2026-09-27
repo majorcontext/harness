@@ -37,10 +37,11 @@ const gitChangesPatchCap = 1 << 20
 var gitChangesMetadataCap = 32 << 20
 
 // gitFilterDiscoveryCap bounds filter-driver discovery far below
-// gitChangesMetadataCap: each discovered driver becomes three -c overrides
-// on every diff's argv (up to ~7x its discovery bytes), and argv shares
-// ARG_MAX (2 MiB on Linux) with the environment. 64 KiB keeps that under
-// ~450 KiB, while a real repository configures a handful of drivers.
+// gitChangesMetadataCap: each discovered driver becomes three
+// GIT_CONFIG_KEY/VALUE override pairs in every diff's environment (up to
+// ~7x its discovery bytes), and the environment shares ARG_MAX (2 MiB on
+// Linux) with argv. 64 KiB keeps that under ~450 KiB, while a real
+// repository configures a handful of drivers.
 const gitFilterDiscoveryCap = 64 << 10
 
 // untrackedLargeCutoff mirrors opencode's snapshot (sst/opencode
@@ -562,9 +563,11 @@ func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string,
 	return nil
 }
 
-// diffFilterDriverArgs neutralizes every repo-configured clean/process
-// filter driver, discovered once per request, not per file.
-func diffFilterDriverArgs(ctx context.Context, dir string) ([]string, error) {
+// diffFilterDriverEnv neutralizes every repo-configured clean/process filter
+// driver, discovered once per request, not per file. It returns
+// GIT_CONFIG_COUNT/KEY/VALUE pairs, not `-c` arguments: git splits `-c k=v`
+// at the first "=", so a driver named "x=y" would never be overridden.
+func diffFilterDriverEnv(ctx context.Context, dir string) ([]string, error) {
 	out, err := gitOutCapped(ctx, dir, nil, gitFilterDiscoveryCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if err != nil {
 		if isGitWorkTreeErr(err) {
@@ -587,15 +590,21 @@ func diffFilterDriverArgs(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	sort.Strings(names)
-	var args []string
-	for _, name := range names {
-		args = append(args,
-			"-c", "filter."+name+".clean=",
-			"-c", "filter."+name+".process=",
-			"-c", "filter."+name+".required=false",
-		)
+	var env []string
+	n := 0
+	set := func(key, value string) {
+		env = append(env, fmt.Sprintf("GIT_CONFIG_KEY_%d=%s", n, key), fmt.Sprintf("GIT_CONFIG_VALUE_%d=%s", n, value))
+		n++
 	}
-	return args, nil
+	for _, name := range names {
+		set("filter."+name+".clean", "")
+		set("filter."+name+".process", "")
+		set("filter."+name+".required", "false")
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	return append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(n)), nil
 }
 
 // gitRealPath resolves gitPath (e.g. "index", "objects") via `git rev-parse
@@ -668,10 +677,13 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 		"GIT_OBJECT_DIRECTORY=" + tmpObjects,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects),
 	}
-	filterArgs, err := diffFilterDriverArgs(ctx, repoRoot)
+	filterEnv, err := diffFilterDriverEnv(ctx, repoRoot)
 	if err != nil {
 		return nil, "", false, err
 	}
+	// diffEnv is env plus the filter overrides, for every command that can
+	// hash or diff working-tree content.
+	diffEnv := append(append([]string{}, env...), filterEnv...)
 
 	// A missing real index leaves tmpIndex unwritten, which git reads as a
 	// fresh empty index: right for an unborn repository. With a commit, an
@@ -684,8 +696,7 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 		if _, err := gitOut(ctx, repoRoot, env, append(noSplit, "read-tree", "HEAD")...); err != nil {
 			return nil, "", false, err
 		}
-		refresh := append(append(noSplit, filterArgs...), "update-index", "-q", "--refresh")
-		if _, err := gitOut(ctx, repoRoot, env, refresh...); err != nil {
+		if _, err := gitOut(ctx, repoRoot, diffEnv, append(noSplit, "update-index", "-q", "--refresh")...); err != nil {
 			return nil, "", false, err
 		}
 	}
@@ -705,16 +716,15 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 	// flag is a diff option and must follow it.
 	diffArgs := func(rest ...string) []string {
 		args := []string{"-c", "diff.autoRefreshIndex=false"}
-		args = append(args, filterArgs...)
 		args = append(args, "diff", "--no-ext-diff", "--no-textconv", "--submodule=short", "--ignore-submodules=dirty")
 		return append(args, rest...)
 	}
 
-	numstatOut, err := gitOutCapped(ctx, repoRoot, env, gitChangesMetadataCap, diffArgs("--numstat", "-z", "-M", baseTreeish)...)
+	numstatOut, err := gitOutCapped(ctx, repoRoot, diffEnv, gitChangesMetadataCap, diffArgs("--numstat", "-z", "-M", baseTreeish)...)
 	if err != nil {
 		return nil, "", false, err
 	}
-	nameStatusOut, err := gitOutCapped(ctx, repoRoot, env, gitChangesMetadataCap, diffArgs("--name-status", "-z", "-M", baseTreeish)...)
+	nameStatusOut, err := gitOutCapped(ctx, repoRoot, diffEnv, gitChangesMetadataCap, diffArgs("--name-status", "-z", "-M", baseTreeish)...)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -752,7 +762,7 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 		}
 	}
 
-	patch, truncated, err = runPatchCapped(ctx, repoRoot, env,
+	patch, truncated, err = runPatchCapped(ctx, repoRoot, diffEnv,
 		diffArgs("--no-color", "-M", baseTreeish), patchCap)
 	if err != nil {
 		return nil, "", false, err
