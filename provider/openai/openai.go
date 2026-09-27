@@ -531,6 +531,7 @@ func (s *stream) Next() (provider.Event, error) {
 				s.usage = provider.Usage{}
 				s.hasToolCall = false
 				s.responseFrames = 0
+				s.subUsage = nil
 				s.queue = nil
 				continue
 			}

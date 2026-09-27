@@ -1184,3 +1184,100 @@ func TestChainMissRecoversAfterRateLimitsFrame(t *testing.T) {
 		t.Fatalf("request metadata = %+v, want ChainRecovered", terminal.RequestMetadata)
 	}
 }
+
+// TestChainMissAfterRateLimitsFrameKeepsEntryBusyUntilRecovery pins the pool
+// consequence of the same miscount: wsFrameSource.observe counted the
+// codex.rate_limits frame toward framesRead, so onTerminal saw first=false
+// and released entry.busy (and invalidated the socket) before
+// recoverChainMiss redialed, leaving a window where a second request for the
+// same session could acquire the entry while recovery was still in flight.
+func TestChainMissAfterRateLimitsFrameKeepsEntryBusyUntilRecovery(t *testing.T) {
+	release := make(chan struct{})
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "busy-race")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"codex.rate_limits","plan_type":"team","rate_limits":{"primary":{"used_percent":12,"window_minutes":300,"reset_at":111}}}`,
+		chainMissFrame(),
+	}}
+	server.scripts <- wsLineageScript{wait: release, afterWait: completedLineageFrames("resp_recovered", "four")}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_probe", "ignored")}
+
+	stream, err := client.Stream(context.Background(), lineageRequest("busy-race", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	type turnResult struct {
+		events []provider.Event
+		err    error
+	}
+	done := make(chan turnResult, 1)
+	go func() {
+		var events []provider.Event
+		for {
+			ev, nextErr := stream.Next()
+			if nextErr != nil {
+				done <- turnResult{events: events, err: nextErr}
+				return
+			}
+			events = append(events, ev)
+		}
+	}()
+
+	<-server.frames // the turn's own incremental request, on the reused connection
+	<-server.frames // recoverChainMiss's complete request, on the redialed connection
+
+	entry := client.wsPoolFor().entryFor("busy-race")
+	entry.mu.Lock()
+	busy := entry.busy
+	entry.mu.Unlock()
+	if !busy {
+		t.Fatal("pool entry is not busy while chain-miss recovery is still redialing")
+	}
+
+	before := server.connCount()
+	probe, probeErr := client.Stream(context.Background(), lineageRequest("busy-race", userMessage("probe")))
+	if probeErr != nil {
+		t.Fatalf("probe Stream: %v", probeErr)
+	}
+	_, _ = drainLineageStream(probe)
+	_ = probe.Close()
+	if after := server.connCount(); after != before {
+		t.Fatalf("pool entry was acquirable during chain-miss recovery: connections %d -> %d", before, after)
+	}
+
+	close(release)
+	res := <-done
+	if res.err != io.EOF {
+		t.Fatalf("stream ended with %v, want io.EOF after recovery", res.err)
+	}
+	terminal := res.events[len(res.events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("terminal event = %+v, want a recovered EventDone", terminal)
+	}
+	_ = stream.Close()
+}
+
+// TestChainMissRecoveryClearsStaleSubscriptionUsage pins the per-turn
+// contract: a codex.rate_limits snapshot captured before a chain miss must
+// not survive onto a recovered response that carries no rate-limits event of
+// its own.
+func TestChainMissRecoveryClearsStaleSubscriptionUsage(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "stale-usage")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"codex.rate_limits","plan_type":"team","rate_limits":{"primary":{"used_percent":12,"window_minutes":300,"reset_at":111}}}`,
+		chainMissFrame(),
+	}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("stale-usage", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone || terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("terminal event = %+v, want a recovered EventDone", terminal)
+	}
+	if terminal.SubscriptionUsage != nil {
+		t.Fatalf("recovered EventDone carries subscription usage %+v from the failed attempt, want none", terminal.SubscriptionUsage)
+	}
+}

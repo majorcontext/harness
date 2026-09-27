@@ -60,7 +60,7 @@ func (w *wsFrameSource) observe(name string, data []byte, err error) {
 	if w.terminal {
 		return
 	}
-	if err == nil {
+	if err == nil && name != codexRateLimitsEventType {
 		w.framesRead++
 	}
 	switch {
