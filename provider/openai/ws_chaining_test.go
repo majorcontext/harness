@@ -1160,3 +1160,27 @@ func TestWebSocketDroppedConnectionRefusalKeepsItsCause(t *testing.T) {
 		})
 	}
 }
+
+// TestChainMissRecoversAfterRateLimitsFrame: a codex.rate_limits frame is
+// telemetry and must not consume the first-frame budget recoverChainMiss
+// gates on. Counting it turns a recoverable chain miss into a hard failure
+// whenever the backend reports usage before the error.
+func TestChainMissRecoversAfterRateLimitsFrame(t *testing.T) {
+	server := newWSLineageServer(t)
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	establishRecoveryLineage(t, server, client, "chain-miss-after-ratelimits")
+	server.scripts <- wsLineageScript{beforeWait: []string{
+		`{"type":"codex.rate_limits","plan_type":"team","rate_limits":{"primary":{"used_percent":12,"window_minutes":300,"reset_at":111}}}`,
+		chainMissFrame(),
+	}}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_recovered", "four")}
+
+	events := streamLineageTurn(t, client, lineageRequest("chain-miss-after-ratelimits", userMessage("one"), assistantMessage("resp_secret_lineage", "two"), userMessage("three")))
+	terminal := events[len(events)-1]
+	if terminal.Type != provider.EventDone {
+		t.Fatalf("terminal event = %+v, want EventDone after recovery", terminal)
+	}
+	if terminal.RequestMetadata == nil || !terminal.RequestMetadata.ChainRecovered {
+		t.Fatalf("request metadata = %+v, want ChainRecovered", terminal.RequestMetadata)
+	}
+}

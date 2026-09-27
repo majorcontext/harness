@@ -289,6 +289,11 @@ func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
 // why family is the gate: an ordinary "openai" entry never even looks at
 // these headers, whether or not a proxy in front of it happens to echo
 // some of the same header names.
+// codexRateLimitsEventType names the Codex websocket telemetry frame
+// carrying a rate-limit snapshot. It carries no response content, so it
+// never counts toward stream.responseFrames.
+const codexRateLimitsEventType = "codex.rate_limits"
+
 func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsage {
 	if c.family() != CodexFamily {
 		return nil
@@ -508,7 +513,9 @@ func (s *stream) Next() (provider.Event, error) {
 			// retryable.
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
-		s.responseFrames++
+		if name != codexRateLimitsEventType {
+			s.responseFrames++
+		}
 		if err := s.handle(name, data); err != nil {
 			var miss *previousResponseNotFoundError
 			if errors.As(err, &miss) && s.recoverChainMiss != nil {
@@ -868,7 +875,7 @@ func (s *stream) handle(name string, data []byte) error {
 			}
 		}
 
-	case "codex.rate_limits":
+	case codexRateLimitsEventType:
 		// Usage reporting is cosmetic: an unparseable frame is treated as
 		// absent, never a turn failure. An error here would also bypass
 		// recoverChainMiss, which runs only for previousResponseNotFound.
