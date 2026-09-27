@@ -165,7 +165,10 @@ type Event struct {
 
 	// ContextUsedTokens/ContextWindowTokens are carried by evtTurnEnd only,
 	// mirroring contextJSON's two fields. Both 0 (key absent) when
-	// recordTurnEnd had no live *engine.Session to read.
+	// recordTurnEnd had no live *engine.Session to read. ContextUsedTokens
+	// is also 0 for a live session whose reading a fold invalidated with no
+	// later turn to remeasure it, while ContextWindowTokens stays populated:
+	// 0 here means unknown, never empty.
 	ContextUsedTokens   int `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
