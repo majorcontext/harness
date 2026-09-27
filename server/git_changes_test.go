@@ -284,6 +284,43 @@ func TestHandleGitChangesManyFilterDriversIsTooManyChanges409(t *testing.T) {
 	}
 }
 
+// TestHandleGitChangesMissingIndexInCommittedRepo: a committed repository
+// whose .git/index is missing must not report every unchanged tracked file
+// (deleted, or modified 0/0) just because the private index started empty.
+func TestHandleGitChangesMissingIndexInCommittedRepo(t *testing.T) {
+	dir := newGitRepo(t)
+	writeTestFileBytes(t, filepath.Join(dir, "big.bin"), make([]byte, untrackedLargeCutoff+1))
+	runTestGit(t, dir, "add", "big.bin")
+	runTestGit(t, dir, "commit", "-q", "-m", "big")
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
+	if err := os.Remove(filepath.Join(dir, ".git", "index")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "seed.txt" || got.Files[0].Status != "modified" || got.Files[0].Additions != 1 {
+		t.Errorf("Files = %+v, want only seed.txt modified +1 (big.bin is unchanged)", got.Files)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "index")); !os.IsNotExist(err) {
+		t.Errorf("real .git/index exists after the request (err=%v); only the private copy may be written", err)
+	}
+}
+
+// TestHandleGitChangesSharedCloneResolvesAlternates: a `clone --shared`
+// repository keeps its objects in objects/info/alternates; the private
+// GIT_OBJECT_DIRECTORY must still reach them through the real objects dir.
+func TestHandleGitChangesSharedCloneResolvesAlternates(t *testing.T) {
+	src := newGitRepo(t)
+	dir := filepath.Join(t.TempDir(), "shared")
+	runTestGit(t, src, "clone", "-q", "--shared", src, dir)
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "seed.txt" || got.Files[0].Additions != 1 {
+		t.Errorf("Files = %+v, want seed.txt modified +1", got.Files)
+	}
+}
+
 func TestHandleGitChangesRequiresAuth(t *testing.T) {
 	dir := newGitRepo(t)
 	h := newGitChangesHarness(t, dir)

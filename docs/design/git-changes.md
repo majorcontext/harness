@@ -17,7 +17,13 @@ total subprocess count stays constant:
    this works inside a git worktree, not just a plain clone) to a private
    temporary file. A missing real index (an unborn repository) leaves the
    copy unwritten; git treats a `GIT_INDEX_FILE` path that doesn't exist
-   as a fresh empty index.
+   as a fresh empty index. A committed repository whose index is missing
+   instead gets its private index seeded from `HEAD` (`git read-tree
+   HEAD`, then `git update-index -q --refresh` with filter drivers
+   neutralized), the state `git reset --mixed` would produce: an empty
+   index there would report every unchanged tracked file as deleted or
+   modified. `ls-files --others` reads the same private index, so it
+   agrees with the diffs on what is tracked.
 2. List untracked paths with `git ls-files --others --exclude-standard`
    (no `--directory`): an entry ending in `/` is exactly a nested git
    repository, which git itself refuses to descend into. `untrackedEntries`

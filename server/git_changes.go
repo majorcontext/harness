@@ -176,7 +176,7 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 		baseTreeish = emptyTree
 	}
 
-	files, patch, truncated, err := gitChangeSet(ctx, repoRoot, baseTreeish, gitChangesPatchCap)
+	files, patch, truncated, err := gitChangeSet(ctx, repoRoot, head, baseTreeish, gitChangesPatchCap)
 	if err != nil {
 		writeGitErr(w, ctx, err)
 		return
@@ -628,7 +628,7 @@ func gitQuotePathListEntry(path string) string {
 // untracked files in as "added" via a private index copy, in a constant
 // number of subprocesses regardless of file count. files is always
 // complete; patch stops at the last whole file within patchCap.
-func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap int) (files []gitChangeFile, patch string, truncated bool, err error) {
+func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patchCap int) (files []gitChangeFile, patch string, truncated bool, err error) {
 	tmpDir, err := os.MkdirTemp("", "harness-git-changes-")
 	if err != nil {
 		return nil, "", false, err
@@ -644,15 +644,16 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	if err != nil {
 		return nil, "", false, err
 	}
+	indexMissing := false
 	if data, err := os.ReadFile(realIndex); err == nil {
 		if err := os.WriteFile(tmpIndex, data, 0o600); err != nil {
 			return nil, "", false, err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		indexMissing = true
+	} else {
 		return nil, "", false, err
 	}
-	// A missing realIndex (unborn repository) leaves tmpIndex unwritten:
-	// git treats a nonexistent GIT_INDEX_FILE as a fresh empty index.
 
 	realObjects, err := gitRealPath(ctx, repoRoot, "objects")
 	if err != nil {
@@ -667,8 +668,31 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 		"GIT_OBJECT_DIRECTORY=" + tmpObjects,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects),
 	}
+	filterArgs, err := diffFilterDriverArgs(ctx, repoRoot)
+	if err != nil {
+		return nil, "", false, err
+	}
 
-	lsFilesOut, err := gitOutCapped(ctx, repoRoot, nil, gitChangesMetadataCap, "ls-files", "--others", "--exclude-standard", "-z")
+	// A missing real index leaves tmpIndex unwritten, which git reads as a
+	// fresh empty index: right for an unborn repository. With a commit, an
+	// empty index would make every tracked file look deleted or untracked,
+	// so seed it from HEAD instead, as `git reset --mixed` would. read-tree
+	// writes no stat data and the diffs never refresh it, so refresh once
+	// here (filters neutralized, since refresh hashes working-tree files).
+	if indexMissing && head != "" {
+		noSplit := []string{"-c", "core.splitIndex=false"}
+		if _, err := gitOut(ctx, repoRoot, env, append(noSplit, "read-tree", "HEAD")...); err != nil {
+			return nil, "", false, err
+		}
+		refresh := append(append(noSplit, filterArgs...), "update-index", "-q", "--refresh")
+		if _, err := gitOut(ctx, repoRoot, env, refresh...); err != nil {
+			return nil, "", false, err
+		}
+	}
+
+	// ls-files reads the private index too, so it agrees with the diffs on
+	// what is tracked.
+	lsFilesOut, err := gitOutCapped(ctx, repoRoot, env, gitChangesMetadataCap, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -677,10 +701,6 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 		return nil, "", false, err
 	}
 
-	filterArgs, err := diffFilterDriverArgs(ctx, repoRoot)
-	if err != nil {
-		return nil, "", false, err
-	}
 	// Global -c overrides must precede the "diff" subcommand; every other
 	// flag is a diff option and must follow it.
 	diffArgs := func(rest ...string) []string {
