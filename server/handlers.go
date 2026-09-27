@@ -290,14 +290,16 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	}
 }
 
-// contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
-// the exact sum maybeAutoCompact (engine/compact.go) compares against
-// WindowTokens, so this gauge and auto-compaction never disagree. UsedTokens
-// is 0 when there is no known reading — no turn has completed yet, or a
-// compaction folded history since the retained measurement and no later
-// turn has remeasured it (engine.Session.ContextUnknown) — a caller must
-// treat 0 as "unknown", never as "empty", mirroring WindowTokens' own 0
-// meaning "unknown", never "full".
+// contextJSON is the Session/StatusEntry context sub-object. While a reading
+// is known, UsedTokens is the exact sum maybeAutoCompact (engine/compact.go)
+// compares against WindowTokens, so the gauge and auto-compaction agree.
+// UsedTokens is 0 when there is no known reading — no turn has completed
+// yet, or a compaction folded history since the retained measurement and no
+// later turn has remeasured it (engine.Session.ContextUnknown). The two part
+// company exactly there: auto-compaction keeps comparing that retained
+// measurement, while the gauge reports unknown rather than a reading the
+// fold already invalidated. A caller must treat 0 as "unknown", never as
+// "empty", mirroring WindowTokens' own 0 meaning "unknown", never "full".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
