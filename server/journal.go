@@ -770,7 +770,10 @@ func (s *Server) publishQueue(ev engine.Event) {
 // it is journaled, streamed, or exposed), nil on a clean completion. sess
 // supplies the record's context fields when non-nil; onChildTurnEnd's
 // resolveLive lookup can pass nil for a child this process does not hold
-// live at settle time.
+// live at settle time. ContextUsedTokens is gated on sess.ContextUnknown()
+// like contextJSONForSession, so a turn ending without remeasuring after a
+// fold reports 0 rather than the stale pre-fold reading. The window is never
+// gated: it stays known when the usage reading does not.
 //
 // This is the "idle because done" vs "idle because the turn died" wire
 // contract: today, three plain-prompt turns died mid-stream (final assistant
@@ -806,7 +809,7 @@ func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome s
 	}
 	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr}
 	if sess != nil {
-		if last, ok := sess.LastUsage(); ok {
+		if last, ok := sess.LastUsage(); ok && !sess.ContextUnknown() {
 			ev.ContextUsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 		}
 		ev.ContextWindowTokens = sess.ContextWindowTokens()

@@ -164,6 +164,49 @@ func TestCompactEndpointMarksContextUnknownUntilNextTurn(t *testing.T) {
 	}
 }
 
+// TestCompactThenFailedTurnReportsTurnEndContextUsedTokensUnknown is the
+// red-first test for recordTurnEnd's own stale-gauge bug: after a successful
+// /compact, a turn that ends without recording fresh usage (here, a
+// provider failure) must still emit turn.end.context_used_tokens as 0, not
+// the pre-compaction reading — mirroring the GET /session/{id} contract
+// TestCompactEndpointMarksContextUnknownUntilNextTurn already pins for
+// Session.context.
+func TestCompactThenFailedTurnReportsTurnEndContextUsedTokensUnknown(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 20}),
+		compactAsstTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
+	}
+
+	// from=<seq after compact> so waitFor below sees go3's own turn.end, not
+	// go1/go2's replayed turn.end records.
+	sse := h.openSSE(fmt.Sprintf("?from=%d", h.getSessionJSON(id).Seq), "")
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "go3"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status %d: %s", resp.StatusCode, data)
+	}
+
+	end := sse.waitFor(t, "turn.end")
+	if end.Outcome != "error" {
+		t.Fatalf("turn.end outcome = %q, want error (scripted provider is out of turns)", end.Outcome)
+	}
+	if end.ContextUsedTokens != 0 {
+		t.Errorf("turn.end context_used_tokens = %d, want 0 (unknown after compact, no fresh usage recorded)", end.ContextUsedTokens)
+	}
+}
+
 // TestCompactEndpointKeepTurnsFloor is the red-first test for the hard
 // floor on keep_turns: 0 or negative is a 400, never silently clamped.
 func TestCompactEndpointKeepTurnsFloor(t *testing.T) {
