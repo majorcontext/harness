@@ -436,10 +436,11 @@ type stream struct {
 	usage         provider.Usage
 	hasToolCall   bool
 	// subUsage is this response's captured subscription-usage snapshot —
-	// set only for a CodexFamily client (see Client.codexSubscriptionUsage
-	// and wsPool.stream, the two sources), nil otherwise. Carried onto the
-	// EventDone event queued in the "response.completed"/"response.
-	// incomplete" case below.
+	// set only for a CodexFamily client, from the HTTP path's response
+	// headers (Client.codexSubscriptionUsage) or the ws path's in-band
+	// "codex.rate_limits" event (this file's handle), nil otherwise.
+	// Carried onto the EventDone event queued in the "response.completed"/
+	// "response.incomplete" case below.
 	subUsage *message.SubscriptionUsage
 
 	// onComplete publishes transport-local response lineage after stream.handle
@@ -864,6 +865,17 @@ func (s *stream) handle(name string, data []byte) error {
 		case "message":
 			if it.kind == "" {
 				it.kind = "message"
+			}
+		}
+
+	case "codex.rate_limits":
+		if familyOrDefault(s.family) == CodexFamily {
+			usage, err := codexSubscriptionUsageFromRateLimitsEvent(data)
+			if err != nil {
+				return fmt.Errorf("openai: bad codex.rate_limits: %w", err)
+			}
+			if usage != nil {
+				s.subUsage = usage
 			}
 		}
 

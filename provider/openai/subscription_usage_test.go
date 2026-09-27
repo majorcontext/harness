@@ -2,10 +2,13 @@ package openai
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/message"
@@ -133,48 +136,114 @@ func TestStreamCapturesCodexSubscriptionUsageOverHTTP(t *testing.T) {
 	})
 }
 
-// TestWebSocketTransportCapturesCodexSubscriptionUsage proves the websocket
-// path (ws.go/ws_pool.go) reads the SAME x-codex-* headers off the upgrade
-// RESPONSE (coder/websocket's own Dial return, not any frame on the wire)
-// and attaches them to EventDone identically to the HTTP path above.
-func TestWebSocketTransportCapturesCodexSubscriptionUsage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for k, vs := range codexHeaders() {
-			for _, v := range vs {
-				w.Header().Add(k, v)
+// TestCodexSubscriptionUsageFromRateLimitsEvent proves the event -> message.SubscriptionUsage mapping, reusing codexWindowLabel.
+func TestCodexSubscriptionUsageFromRateLimitsEvent(t *testing.T) {
+	w := func(k, l string, u float64, r int64) message.SubscriptionUsageWindow {
+		return message.SubscriptionUsageWindow{Key: k, Label: l, UsedPercent: u, ResetsAt: r}
+	}
+	cases := []struct {
+		name, event string
+		want        *message.SubscriptionUsage
+	}{
+		{"full snapshot, unknown fields ignored",
+			`{"type":"codex.rate_limits","plan_type":"team","rate_limits":{"primary":{"used_percent":36,"window_minutes":300,"reset_at":1790482956},"secondary":{"used_percent":21,"window_minutes":10080,"reset_at":1791037689}},"credits":{"has_credits":false,"unlimited":false,"balance":null},"metered_limit_name":"codex","limit_name":null}`,
+			&message.SubscriptionUsage{Provider: "codex", Plan: "team", Windows: []message.SubscriptionUsageWindow{w("primary", "5-hour", 36, 1790482956), w("secondary", "Weekly", 21, 1791037689)}}},
+		{"null secondary window dropped",
+			`{"type":"codex.rate_limits","plan_type":"pro","rate_limits":{"primary":{"used_percent":5,"window_minutes":300,"reset_at":111}}}`,
+			&message.SubscriptionUsage{Provider: "codex", Plan: "pro", Windows: []message.SubscriptionUsageWindow{w("primary", "5-hour", 5, 111)}}},
+		{"missing window_minutes and reset_at",
+			`{"type":"codex.rate_limits","plan_type":"pro","rate_limits":{"primary":{"used_percent":5}}}`,
+			&message.SubscriptionUsage{Provider: "codex", Plan: "pro", Windows: []message.SubscriptionUsageWindow{w("primary", "", 5, 0)}}},
+		{"no plan and no rate_limits maps to nil", `{"type":"codex.rate_limits"}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := codexSubscriptionUsageFromRateLimitsEvent([]byte(tc.event))
+			if err != nil {
+				t.Fatalf("codexSubscriptionUsageFromRateLimitsEvent: %v", err)
 			}
-		}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("codexSubscriptionUsageFromRateLimitsEvent() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// newRateLimitsWSServer replays next's used_percent per response.create.
+func newRateLimitsWSServer(t *testing.T, next func() (usedPercent float64, ok bool)) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			return
 		}
 		defer conn.Close(websocket.StatusNormalClosure, "")
-		if _, _, err := conn.Read(r.Context()); err != nil {
-			return
-		}
-		for _, f := range wsCannedFrames {
-			if err := conn.Write(context.Background(), websocket.MessageText, []byte(f)); err != nil {
+		for {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			_, _, err := conn.Read(ctx)
+			cancel()
+			if err != nil {
 				return
+			}
+			used, ok := next()
+			if !ok {
+				return
+			}
+			frames := []string{
+				fmt.Sprintf(`{"type":"codex.rate_limits","plan_type":"team","rate_limits":{"primary":{"used_percent":%v,"window_minutes":300,"reset_at":111}}}`, used),
+				`{"type":"response.created","response":{"id":"resp_ws_1"}}`,
+				`{"type":"response.completed","response":{"id":"resp_ws_1","usage":{"input_tokens":5,"output_tokens":2}}}`,
+			}
+			for _, f := range frames {
+				if err := conn.Write(context.Background(), websocket.MessageText, []byte(f)); err != nil {
+					return
+				}
 			}
 		}
 	}))
 	t.Cleanup(srv.Close)
+	return srv
+}
 
-	c := &Client{APIKey: "k", BaseURL: srv.URL, Family: CodexFamily, UseWebSocketTransport: true}
-	s, err := c.Stream(context.Background(), wsRequest("sess-subusage"))
+func streamDone(t *testing.T, c *Client, req *provider.Request) *provider.Event {
+	t.Helper()
+	s, err := c.Stream(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	defer s.Close()
-	done := lastDoneEvent(t, s)
-	if done.SubscriptionUsage == nil {
-		t.Fatal("SubscriptionUsage = nil, want a captured snapshot from the upgrade response header")
+	return lastDoneEvent(t, s)
+}
+
+// TestWebSocketStreamReportsRateLimitsPerTurn proves each turn reports its
+// own codex.rate_limits event, not one frozen from the pooled dial.
+func TestWebSocketStreamReportsRateLimitsPerTurn(t *testing.T) {
+	percents := []float64{10, 90}
+	srv := newRateLimitsWSServer(t, func() (float64, bool) {
+		if len(percents) == 0 {
+			return 0, false
+		}
+		p := percents[0]
+		percents = percents[1:]
+		return p, true
+	})
+	c := &Client{APIKey: "k", BaseURL: srv.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	req := wsRequest("sess-ratelimits-per-turn")
+	if got := streamDone(t, c, req).SubscriptionUsage; got == nil || got.Windows[0].UsedPercent != 10 {
+		t.Fatalf("turn 1 SubscriptionUsage = %+v, want a 10%% primary window", got)
 	}
-	if done.SubscriptionUsage.Provider != "codex" || done.SubscriptionUsage.Plan != "pro" {
-		t.Errorf("SubscriptionUsage = %+v", done.SubscriptionUsage)
+	if got := streamDone(t, c, req).SubscriptionUsage; got == nil || got.Windows[0].UsedPercent != 90 {
+		t.Fatalf("turn 2 SubscriptionUsage = %+v, want a 90%% primary window (not turn 1's frozen 10%%)", got)
 	}
-	if len(done.SubscriptionUsage.Windows) != 2 {
-		t.Errorf("Windows = %+v, want 2 entries", done.SubscriptionUsage.Windows)
+}
+
+// TestWebSocketStreamIgnoresRateLimitsForNonCodexFamily proves a non-Codex-
+// family ws client never attaches a codex.rate_limits event to EventDone.
+func TestWebSocketStreamIgnoresRateLimitsForNonCodexFamily(t *testing.T) {
+	srv := newRateLimitsWSServer(t, func() (float64, bool) { return 50, true })
+	c := &Client{APIKey: "k", BaseURL: srv.URL, UseWebSocketTransport: true}
+	if got := streamDone(t, c, wsRequest("sess-ratelimits-non-codex")).SubscriptionUsage; got != nil {
+		t.Errorf("SubscriptionUsage = %+v, want nil (not a codex-family client)", got)
 	}
 }
 

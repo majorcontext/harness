@@ -51,11 +51,10 @@ func toWebSocketURL(rawURL string) string {
 // response — coder/websocket's own Dial return, non-nil on a successful
 // upgrade (a normal 101 Switching Protocols) and often non-nil even on a
 // failed one (a rejected upgrade the server answered with an ordinary HTTP
-// error). wsPool.stream reads its Header off this for the x-codex-*
-// subscription-usage headers (see codexSubscriptionUsageFromHeaders) —
-// the Codex backend sends them on this same upgrade response, not inside
-// any websocket frame, so there is no other point in this transport where
-// they are ever visible.
+// error). The upgrade response carries no x-codex-* subscription-usage
+// headers; the Codex backend reports that snapshot as an in-band
+// "codex.rate_limits" stream event instead (see
+// codexSubscriptionUsageFromRateLimitsEvent).
 func dialResponsesWebSocket(ctx context.Context, url string, headers http.Header, httpClient *http.Client, timeout time.Duration) (*websocket.Conn, *http.Response, error) {
 	dialCtx := ctx
 	var cancel context.CancelFunc

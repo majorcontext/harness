@@ -42,8 +42,6 @@ type wsPoolEntry struct {
 	streamFailures int
 	generation     uint64
 	lineage        *wsLineage
-	// subUsage is captured during the WebSocket upgrade and can be stale.
-	subUsage *message.SubscriptionUsage
 }
 
 // wsPool reuses a persistent Codex Responses WebSocket for each session.
@@ -135,31 +133,21 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 	var chainRefusalDetail string
 	var chainRefusalItem *int
 
-	var subUsage *message.SubscriptionUsage
 	if !reuse {
 		p.invalidate(entry)
-		newConn, resp, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
+		newConn, _, err := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 		if err != nil {
 			p.recordFailure(entry)
 			p.release(entry)
 			return nil, false
 		}
-		// Only Codex-family requests use subscription usage headers.
-		if req.Family == CodexFamily && resp != nil {
-			subUsage = codexSubscriptionUsageFromHeaders(resp.Header)
-		}
 		entry.mu.Lock()
 		entry.conn = newConn
 		entry.connectedAt = time.Now()
-		entry.subUsage = subUsage
 		entry.lineage = nil
 		entry.generation++
 		entry.mu.Unlock()
 		conn = newConn
-	} else {
-		entry.mu.Lock()
-		subUsage = entry.subUsage
-		entry.mu.Unlock()
 	}
 
 	var completeRequest apiRequest
@@ -280,7 +268,6 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		wsConn:           newSource(firstName, firstData),
 		model:            req.Model,
 		family:           req.Family,
-		subUsage:         subUsage,
 		requestMetadata:  metadata,
 		recoverChainMiss: nil,
 		onComplete: func(responseID string, assistant *message.Message) {
@@ -338,7 +325,7 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			// generation-bump-twice pattern stream() itself uses on a non-reuse
 			// dial, so a concurrent invalidation cannot resurrect stale state.
 			p.invalidate(entry)
-			newConn, dialResp, dialErr := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
+			newConn, _, dialErr := p.dial(ctx, req.URL, req.Headers, req.HTTPClient, p.connectTimeout)
 			if dialErr != nil {
 				p.recordFailure(entry)
 				p.release(entry)
@@ -347,9 +334,6 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 			entry.mu.Lock()
 			entry.conn = newConn
 			entry.connectedAt = time.Now()
-			if req.Family == CodexFamily && dialResp != nil {
-				entry.subUsage = codexSubscriptionUsageFromHeaders(dialResp.Header)
-			}
 			entry.lineage = nil
 			entry.generation++
 			generation = entry.generation

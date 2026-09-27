@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -12,9 +13,10 @@ import (
 // wire (chatgpt.com/backend-api/codex/responses) — see cmd/harness's
 // registerOpenAIProviders, where a config.TypeOpenAI entry's Family is set
 // to its own providers-map key. Only a client whose resolved family equals
-// this constant captures the x-codex-* response headers below (see
-// Client.Stream and wsPool.stream); an ordinary "openai" entry never reads
-// or reports them.
+// this constant captures a Codex subscription-usage signal — the x-codex-*
+// HTTP response headers (see Client.Stream) or the codex.rate_limits
+// websocket event (see stream.handle); an ordinary "openai" entry never
+// reads or reports either.
 //
 // This is a naming convention, not something buildsResponsesAdapter or any
 // other config validation enforces — the same "the operator's own key IS
@@ -97,11 +99,12 @@ func codexWindow(prefix string, h http.Header) (message.SubscriptionUsageWindow,
 
 // codexSubscriptionUsageFromHeaders maps the ChatGPT Codex backend's
 // x-codex-* response headers into message.SubscriptionUsage — present on
-// every chatgpt.com/backend-api/codex/responses reply, HTTP response
-// headers or the websocket upgrade response's own header alike (see
-// Client.Stream and ws_pool.go's stream, the two callers). Windows, in
-// order: "primary" (the plan's own primary window — Weekly at 10080
-// minutes in the documented capture); "bengalfox_primary" (a second,
+// every chatgpt.com/backend-api/codex/responses HTTP reply (see
+// Client.codexSubscriptionUsage, its only caller: the websocket transport's
+// upgrade response carries none of these headers, so its subscription
+// snapshot comes from codexSubscriptionUsageFromRateLimitsEvent instead).
+// Windows, in order: "primary" (the plan's own primary window — Weekly at
+// 10080 minutes in the documented capture); "bengalfox_primary" (a second,
 // separately-named 5-hour+weekly bucket riding alongside the plan windows —
 // only its primary/5-hour window is captured); "secondary", when its own
 // window-minutes is positive (the documented capture's secondary is
@@ -114,13 +117,6 @@ func codexWindow(prefix string, h http.Header) (message.SubscriptionUsageWindow,
 // non-Codex OpenAI-compatible endpoint by misconfiguration, or an older
 // backend build that has not shipped these headers yet — so a caller only
 // ever applies a genuinely captured signal, never a hollow zero-value one.
-//
-// Freshness differs by caller: the HTTP path (Client.codexSubscriptionUsage)
-// calls this on every single request, so its result is always current as
-// of that turn. The websocket path (wsPool.stream) calls this only when
-// its pooled connection is dialed, NOT on every turn the connection then
-// serves — see wsPoolEntry.subUsage's own doc comment for the resulting
-// staleness bound on an actively-reused connection.
 func codexSubscriptionUsageFromHeaders(h http.Header) *message.SubscriptionUsage {
 	plan := h.Get("x-codex-plan-type")
 	windows := []message.SubscriptionUsageWindow{}
@@ -142,4 +138,79 @@ func codexSubscriptionUsageFromHeaders(h http.Header) *message.SubscriptionUsage
 		Plan:     plan,
 		Windows:  windows,
 	}
+}
+
+// codexRateLimitsEvent is the codex.rate_limits websocket event's wire
+// shape (codex-rs/codex-api/src/rate_limits.rs's RateLimitEvent in the
+// Codex CLI source). Fields this file does not read (credits,
+// metered_limit_name, limit_name, allowed, limit_reached,
+// code_review_rate_limits) are ignored.
+type codexRateLimitsEvent struct {
+	PlanType   string                       `json:"plan_type"`
+	RateLimits *codexRateLimitsEventDetails `json:"rate_limits"`
+}
+
+type codexRateLimitsEventDetails struct {
+	Primary   *codexRateLimitsEventWindow `json:"primary"`
+	Secondary *codexRateLimitsEventWindow `json:"secondary"`
+}
+
+type codexRateLimitsEventWindow struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes *int64  `json:"window_minutes"`
+	ResetAt       *int64  `json:"reset_at"`
+}
+
+// codexSubscriptionUsageFromRateLimitsEvent maps one codex.rate_limits
+// websocket event into message.SubscriptionUsage — the ws transport's
+// analog of codexSubscriptionUsageFromHeaders. rate_limits, and each of
+// its primary/secondary windows, can be absent; a present window's
+// window_minutes and reset_at are themselves optional (RateLimitEventWindow
+// declares both Option). Returns nil, nil when the event carries neither a
+// plan nor any window.
+func codexSubscriptionUsageFromRateLimitsEvent(data []byte) (*message.SubscriptionUsage, error) {
+	var ev codexRateLimitsEvent
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return nil, err
+	}
+	windows := []message.SubscriptionUsageWindow{}
+	if ev.RateLimits != nil {
+		if w, ok := codexRateLimitEventWindow("primary", ev.RateLimits.Primary); ok {
+			windows = append(windows, w)
+		}
+		if w, ok := codexRateLimitEventWindow("secondary", ev.RateLimits.Secondary); ok {
+			windows = append(windows, w)
+		}
+	}
+	if ev.PlanType == "" && len(windows) == 0 {
+		return nil, nil
+	}
+	return &message.SubscriptionUsage{
+		Provider: "codex",
+		Plan:     ev.PlanType,
+		Windows:  windows,
+	}, nil
+}
+
+// codexRateLimitEventWindow maps one present window (ok=false only when w
+// is nil, e.g. an absent secondary) to key, reusing codexWindowLabel for
+// its human label.
+func codexRateLimitEventWindow(key string, w *codexRateLimitsEventWindow) (message.SubscriptionUsageWindow, bool) {
+	if w == nil {
+		return message.SubscriptionUsageWindow{}, false
+	}
+	var label string
+	if w.WindowMinutes != nil {
+		label = codexWindowLabel(*w.WindowMinutes)
+	}
+	var resetsAt int64
+	if w.ResetAt != nil {
+		resetsAt = *w.ResetAt
+	}
+	return message.SubscriptionUsageWindow{
+		Key:         key,
+		Label:       label,
+		UsedPercent: w.UsedPercent,
+		ResetsAt:    resetsAt,
+	}, true
 }
