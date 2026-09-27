@@ -19,6 +19,9 @@ func newGitRepo(t *testing.T) string {
 	runTestGit(t, dir, "init", "-q")
 	runTestGit(t, dir, "config", "user.email", "test@example.com")
 	runTestGit(t, dir, "config", "user.name", "test")
+	// Newer git detaches `maintenance run --auto` after commit; left on, it
+	// can still hold .git/objects/maintenance.lock after this returns.
+	runTestGit(t, dir, "config", "maintenance.auto", "false")
 	if err := os.WriteFile(filepath.Join(dir, "seed.txt"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
