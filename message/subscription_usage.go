@@ -6,9 +6,10 @@ type SubscriptionUsage struct {
 	// Provider names which lane captured this snapshot: "claude" or
 	// "codex" — see this type's own doc comment.
 	Provider string `json:"provider"`
-	// Plan is the subscription tier ("max"/"pro" for codex, from its
-	// x-codex-plan-type header on the HTTP lane or the codex.rate_limits
-	// event's plan_type on the websocket lane). Empty when the lane has no
+	// Plan is the subscription tier exactly as the provider reports it --
+	// codex sends it in the x-codex-plan-type header on the HTTP lane and
+	// in the codex.rate_limits event's plan_type on the websocket lane, and
+	// its vocabulary is the provider's to extend. Empty when the lane has no
 	// cheap source for it — the claude lane's rate_limit_event carries no
 	// plan field of its own, and this package does not shell out to
 	// `claude auth status` just to learn one.
