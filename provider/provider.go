@@ -234,8 +234,9 @@ type Event struct {
 	// nil for every other event, and nil on EventDone itself unless the
 	// adapter is a subscription lane that found the signal on this
 	// response (provider/openai's codex family reads it from x-codex-*
-	// response headers; see engine.streamTurn's EventDone case for where
-	// this rides onto Session.SubscriptionUsage).
+	// response headers on the HTTP lane and from a codex.rate_limits frame
+	// on the websocket lane; see engine.streamTurn's EventDone case for
+	// where this rides onto Session.SubscriptionUsage).
 	SubscriptionUsage *message.SubscriptionUsage
 }
 
