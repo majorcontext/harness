@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	mathrand "math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,6 +48,13 @@ func gitChangesUncommitted(t *testing.T, dir string) gitChangesJSON {
 func writeTestFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTestFileBytes(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -168,6 +177,49 @@ func TestHandleGitChangesCeilingColonDoesNotLeakOuterRepo(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "not_a_git_repo") {
 		t.Errorf("body = %s, want error code not_a_git_repo, not the outer repository's own changes", body)
+	}
+}
+
+// TestHandleGitChangesRepoRootTrailingSpace: a repository whose real path
+// ends in a space is still found, not misread as not_a_git_repo.
+func TestHandleGitChangesRepoRootTrailingSpace(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "repo ") // TrimSpace would eat this trailing space
+	mkdirAllTest(t, dir)
+	runTestGit(t, dir, "init", "-q")
+	runTestGit(t, dir, "config", "user.email", "test@example.com")
+	runTestGit(t, dir, "config", "user.name", "test")
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\n")
+	runTestGit(t, dir, "add", "seed.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "init")
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
+
+	h := newGitChangesHarness(t, dir)
+	_, got := gitChangesGet(t, h, "?scope=uncommitted&dir="+url.QueryEscape(dir))
+	if len(got.Files) != 1 || got.Files[0].Path != "new.txt" {
+		t.Errorf("Files = %+v, want one added new.txt", got.Files)
+	}
+}
+
+// TestHandleGitChangesRepoPathColonDoesNotBreakObjectResolution: a
+// legitimately granted repository whose own path contains a colon must
+// still resolve objects through GIT_ALTERNATE_OBJECT_DIRECTORIES (itself
+// colon-separated), not fail with "bad object".
+func TestHandleGitChangesRepoPathColonDoesNotBreakObjectResolution(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "my:repo")
+	mkdirAllTest(t, dir)
+	runTestGit(t, dir, "init", "-q")
+	runTestGit(t, dir, "config", "user.email", "test@example.com")
+	runTestGit(t, dir, "config", "user.name", "test")
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\n")
+	runTestGit(t, dir, "add", "seed.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "init")
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "new.txt" {
+		t.Errorf("Files = %+v, want one added new.txt", got.Files)
 	}
 }
 
@@ -530,6 +582,25 @@ func TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated(t *testing.T) {
 				t.Errorf("d.bin entry = %+v, want large=true", f)
 			}
 		}},
+		{"rename pairs the large old path via oldPath, not just newPath", func(t *testing.T, dir string) {
+			full := make([]byte, untrackedLargeCutoff+100_000)
+			mathrand.New(mathrand.NewSource(1)).Read(full)
+			writeTestFileBytes(t, filepath.Join(dir, "p.bin"), full)
+			runTestGit(t, dir, "add", "p.bin")
+			runTestGit(t, dir, "commit", "-q", "-m", "add p.bin")
+			runTestGit(t, dir, "rm", "-q", "--cached", "p.bin")
+			// q.bin is under the cutoff (staged normally) but shares most of
+			// p.bin's own content, so -M's default 50% threshold pairs them.
+			writeTestFileBytes(t, filepath.Join(dir, "q.bin"), full[:untrackedLargeCutoff-50_000])
+		}, func(t *testing.T, got gitChangesJSON) {
+			if len(got.Files) != 1 {
+				t.Fatalf("Files = %+v, want exactly 1 entry (a rename, not also a duplicate large:true added)", got.Files)
+			}
+			f := got.Files[0]
+			if f.Status != "renamed" || f.OldPath != "p.bin" || f.Path != "q.bin" || f.Large {
+				t.Errorf("Files[0] = %+v, want a renamed p.bin -> q.bin, not large", f)
+			}
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -571,6 +642,27 @@ func TestHandleGitChangesTooManyChanges409(t *testing.T) {
 	oldTimeout := gitChangesTimeout
 	gitChangesTimeout = gitChangesResponseMargin // internal budget: 0
 	t.Cleanup(func() { gitChangesTimeout = oldTimeout })
+
+	h := newGitChangesHarness(t, dir)
+	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "too_many_changes") {
+		t.Errorf("body = %s, want error code too_many_changes", body)
+	}
+}
+
+// TestHandleGitChangesMetadataCapIsTooManyChanges409: ls-files/--numstat/
+// --name-status output over gitChangesMetadataCap is 409, not an unbounded
+// allocation.
+func TestHandleGitChangesMetadataCapIsTooManyChanges409(t *testing.T) {
+	dir := newGitRepo(t)
+	writeTestFile(t, filepath.Join(dir, "untracked.txt"), "n\n")
+
+	oldCap := gitChangesMetadataCap
+	gitChangesMetadataCap = 4 // smaller than even one NUL-terminated path
+	t.Cleanup(func() { gitChangesMetadataCap = oldCap })
 
 	h := newGitChangesHarness(t, dir)
 	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)

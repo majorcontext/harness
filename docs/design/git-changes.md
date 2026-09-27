@@ -70,6 +70,11 @@ on its own. Reporting it here too would duplicate that entry.
 candidate large path is looked up against the diff's own already-parsed
 file paths, a plain in-memory set membership check with no separate git
 call and no line-oriented protocol to get a path's own newline wrong.
+Rename detection (`-M`) can pair a large old path with a small new one
+(`git rm --cached`'d `p.txt`, its own content similar enough to a new,
+under-cutoff `q.txt`, reports `R p.txt q.txt`); the membership check marks
+both the rename's new and old path as seen, so `p.txt` isn't ALSO reported
+as a synthetic `large:true` "added" entry alongside the rename.
 
 ## Bounded memory: reading the patch
 
@@ -92,6 +97,13 @@ truncation.
 The cap is ~1 MiB (`gitChangesPatchCap = 1<<20`): large enough for a
 typical PR-sized diff, small enough to keep a single response bounded.
 
+`ls-files`, `--numstat`, and `--name-status` can't be truncated the same
+way — `files` must stay complete — so `gitOutCapped` bounds each of their
+own stdout to `gitChangesMetadataCap` (32 MiB) instead: exceeding it kills
+the subprocess and answers `409 too_many_changes`, the same scale-ceiling
+response a deadline produces, rather than letting an unusually large
+change set's metadata alone grow a response's memory without bound.
+
 ## Never writing the index or objects
 
 Porcelain `git diff` refreshes the index (`refresh_index_quietly`) when a
@@ -113,7 +125,12 @@ private, request-scoped directory instead;
 `GIT_ALTERNATE_OBJECT_DIRECTORIES` points reads at the real objects
 directory (resolved via `git rev-parse --git-path objects`, the same
 worktree-aware pattern as the index), so a diff against real history
-still resolves every blob it needs.
+still resolves every blob it needs. Like `GIT_CEILING_DIRECTORIES`, this
+is itself a colon-separated git path list, but unlike it, git's alternates
+parsing DOES honor a double-quoted, backslash-escaped entry (the same
+syntax `objects/info/alternates` accepts) — `gitQuotePathListEntry` applies
+that quoting, so a repository whose own path contains a colon still
+resolves every object instead of failing with "bad object".
 
 ## Command execution surfaces neutralized
 
@@ -169,6 +186,11 @@ walking up past the intended boundary into an enclosing repository. The
 resolved `repoRoot` is re-checked with the same `verifyDirWithinRoots`
 used on `dir`, so that escape is caught regardless of what confused the
 ceiling.
+
+`--show-toplevel`'s own output is trimmed with `strings.TrimSuffix(out,
+"\n")`, not `TrimSpace`: a repository whose real path ends in a space is a
+legitimate, if unusual, directory name, and `TrimSpace` would silently
+drop it, making the endpoint report `not_a_git_repo` for a real repository.
 
 ## Base resolution edge cases
 

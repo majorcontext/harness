@@ -30,6 +30,12 @@ const gitChangesResponseMargin = 2 * time.Second
 
 const gitChangesPatchCap = 1 << 20
 
+// gitChangesMetadataCap bounds each of ls-files/--numstat/--name-status's
+// own stdout: unlike the patch, files must stay complete, so a change set
+// this large answers 409 too_many_changes instead of truncating it. A var,
+// not a const, so a test can shrink it to reach that path deterministically.
+var gitChangesMetadataCap = 32 << 20
+
 // untrackedLargeCutoff mirrors opencode's snapshot (sst/opencode
 // packages/opencode/src/snapshot/index.ts): an untracked file this large
 // contributes no hunk, so a request never buffers or diffs a multi-
@@ -178,7 +184,7 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 // err (a killed git subprocess) — a bounded, expected scale ceiling, not a
 // server fault — rather than a generic 500.
 func writeGitErr(w http.ResponseWriter, ctx context.Context, err error) {
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, errMetadataTooLarge) {
 		writeErr(w, http.StatusConflict, "too_many_changes: request exceeded its time budget diffing a large change set")
 		return
 	}
@@ -281,6 +287,44 @@ func gitOut(ctx context.Context, dir string, extraEnv []string, args ...string) 
 	return stdout.String(), nil
 }
 
+// errMetadataTooLarge marks a gitOutCapped overflow, mapped by writeGitErr to
+// 409 too_many_changes regardless of ctx's own remaining budget: unlike the
+// patch, metadata output must stay complete, so exceeding cap is a scale
+// ceiling to report, not something to truncate.
+var errMetadataTooLarge = errors.New("git metadata exceeded its size bound")
+
+// gitOutCapped is gitOut bounded to at most cap bytes of stdout, so a
+// change set with unbounded file-list or numstat/name-status output can't
+// allocate unbounded memory before ctx's own deadline has a chance to kill
+// the subprocess.
+func gitOutCapped(ctx context.Context, dir string, extraEnv []string, maxBytes int, args ...string) (string, error) {
+	cmd := gitCmd(ctx, dir, extraEnv, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxBytes)+1))
+	if readErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), readErr)
+	}
+	if len(data) > maxBytes {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return "", errMetadataTooLarge
+	}
+	if err := cmd.Wait(); err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return string(data), nil
+}
+
 // isGitWorkTreeErr distinguishes a plain non-zero git exit from a start/exec
 // failure, so a bad answer turns into 409 rather than 500.
 func isGitWorkTreeErr(err error) bool {
@@ -299,7 +343,10 @@ func gitRepoRootAt(ctx context.Context, dir, ceiling string) (root string, ok bo
 		}
 		return "", false, err
 	}
-	return strings.TrimSpace(out), true, nil
+	// TrimSpace would also strip a trailing space that's part of the
+	// directory's own real name; --show-toplevel's output ends in exactly
+	// one record-terminating newline.
+	return strings.TrimSuffix(out, "\n"), true, nil
 }
 
 // gitEmptyTree returns dir's empty tree object (SHA-1 or SHA-256, whichever
@@ -526,6 +573,16 @@ func gitRealPath(ctx context.Context, repoRoot, gitPath string) (string, error) 
 	return p, nil
 }
 
+// gitQuotePathListEntry quotes path for inclusion in a colon-separated git
+// path list (GIT_ALTERNATE_OBJECT_DIRECTORIES): a bare colon in path would
+// otherwise split it into more than one entry. Unlike
+// GIT_CEILING_DIRECTORIES, git's alternates parsing honors a double-quoted,
+// backslash-escaped entry the same way objects/info/alternates does.
+func gitQuotePathListEntry(path string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(path)
+	return `"` + escaped + `"`
+}
+
 // gitChangeSet computes files and patch against baseTreeish, folding
 // untracked files in as "added" via a private index copy, in a constant
 // number of subprocesses regardless of file count. files is always
@@ -567,10 +624,10 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	env := []string{
 		"GIT_INDEX_FILE=" + tmpIndex,
 		"GIT_OBJECT_DIRECTORY=" + tmpObjects,
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + realObjects,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitQuotePathListEntry(realObjects),
 	}
 
-	lsFilesOut, err := gitOut(ctx, repoRoot, nil, "ls-files", "--others", "--exclude-standard", "-z")
+	lsFilesOut, err := gitOutCapped(ctx, repoRoot, nil, gitChangesMetadataCap, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -592,11 +649,11 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 		return append(args, rest...)
 	}
 
-	numstatOut, err := gitOut(ctx, repoRoot, env, diffArgs("--numstat", "-z", "-M", baseTreeish)...)
+	numstatOut, err := gitOutCapped(ctx, repoRoot, env, gitChangesMetadataCap, diffArgs("--numstat", "-z", "-M", baseTreeish)...)
 	if err != nil {
 		return nil, "", false, err
 	}
-	nameStatusOut, err := gitOut(ctx, repoRoot, env, diffArgs("--name-status", "-z", "-M", baseTreeish)...)
+	nameStatusOut, err := gitOutCapped(ctx, repoRoot, env, gitChangesMetadataCap, diffArgs("--name-status", "-z", "-M", baseTreeish)...)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -615,6 +672,9 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 			Binary:    ns.binary,
 		})
 		seenPath[e.newPath] = true
+		if e.oldPath != "" {
+			seenPath[e.oldPath] = true
+		}
 	}
 	// A big path already excluded from staging shows up here on its own,
 	// under its real (typically "deleted") status, whenever baseTreeish
