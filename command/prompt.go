@@ -81,6 +81,7 @@ func DiscoverWithErrors(dirs []string) ([]*PromptCommand, []PromptError, error) 
 func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, error) {
 	commands := make(map[string]*PromptCommand)
 	failures := make(map[string]string)
+	var general []PromptError
 	for _, dir := range dirs {
 		root, err := filepath.Abs(dir)
 		if err != nil {
@@ -111,7 +112,12 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 				return nil
 			}
 			if entry.Type()&os.ModeSymlink != 0 && filepath.Ext(entry.Name()) != ".md" {
-				return fmt.Errorf("command path %q must not contain symlinks", path)
+				err := fmt.Errorf("command path %q must not contain symlinks", path)
+				if !keepErrors {
+					return err
+				}
+				general = append(general, PromptError{Reason: err.Error()})
+				return nil
 			}
 			if filepath.Ext(entry.Name()) != ".md" {
 				return nil
@@ -121,10 +127,20 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 				return err
 			}
 			if err := checkPromptName(name); err != nil {
-				return fmt.Errorf("%s: %w", path, err)
+				err = fmt.Errorf("%s: %w", path, err)
+				if !keepErrors {
+					return err
+				}
+				general = append(general, PromptError{Reason: err.Error()})
+				return nil
 			}
 			if builtinName(name) {
-				return fmt.Errorf("%s: prompt command name %q conflicts with a builtin", path, name)
+				err = fmt.Errorf("%s: prompt command name %q conflicts with a builtin", path, name)
+				if !keepErrors {
+					return err
+				}
+				general = append(general, PromptError{Reason: err.Error()})
+				return nil
 			}
 			var prompt *PromptCommand
 			if entry.Type()&os.ModeSymlink != 0 {
@@ -164,7 +180,7 @@ func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, 
 		invalid = append(invalid, PromptError{Name: name, Reason: reason})
 	}
 	sort.Slice(invalid, func(i, j int) bool { return invalid[i].Name < invalid[j].Name })
-	return out, invalid, nil
+	return out, append(invalid, general...), nil
 }
 
 // LookupPrompt reads one named command from dirs. A later directory shadows
@@ -178,6 +194,7 @@ func LookupPrompt(dirs []string, name string) (*PromptCommand, error) {
 	}
 	file := filepath.FromSlash(strings.ReplaceAll(name, ":", "/")) + ".md"
 	var found *PromptCommand
+	var invalid error
 	for _, dir := range dirs {
 		root, err := filepath.Abs(dir)
 		if err != nil {
@@ -198,15 +215,19 @@ func LookupPrompt(dirs []string, name string) (*PromptCommand, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, err
+			invalid = err
+			found = nil
+			continue
 		}
 		found, err = loadPromptMetadata(path, name)
 		if err != nil {
-			return nil, err
+			invalid = err
+			continue
 		}
+		invalid = nil
 		found.root = root
 	}
-	return found, nil
+	return found, invalid
 }
 
 // Expand substitutes $ARGUMENTS with args and $1 through $9 with positional
@@ -356,7 +377,7 @@ func withoutPromptArguments(frontmatter string) string {
 	lines := strings.Split(frontmatter, "\n")
 	var kept []string
 	for i := 0; i < len(lines); i++ {
-		if lines[i] != "arguments:" {
+		if strings.TrimRight(lines[i], "\r \t") != "arguments:" {
 			kept = append(kept, lines[i])
 			continue
 		}

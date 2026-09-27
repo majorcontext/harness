@@ -132,15 +132,21 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		})
 		serveSupportOut[prompt.Name] = serveSupportJSON{Supported: true}
 	}
+	var discoveryErrors []string
 	for _, failed := range invalid {
+		if failed.Name == "" {
+			discoveryErrors = append(discoveryErrors, failed.Reason)
+			continue
+		}
 		out = append(out, commandEntryJSON{Name: failed.Name, Kind: string(command.KindPrompt), Category: string(command.CategoryInfo)})
 		serveSupportOut[failed.Name] = serveSupportJSON{Reason: failed.Reason}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, struct {
-		Commands     []commandEntryJSON          `json:"commands"`
-		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
-	}{Commands: out, ServeSupport: serveSupportOut})
+		Commands        []commandEntryJSON          `json:"commands"`
+		ServeSupport    map[string]serveSupportJSON `json:"serve_support"`
+		DiscoveryErrors []string                    `json:"discovery_errors,omitempty"`
+	}{Commands: out, ServeSupport: serveSupportOut, DiscoveryErrors: discoveryErrors})
 }
 
 type promptRoute int

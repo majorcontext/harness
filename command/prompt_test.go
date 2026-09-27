@@ -75,6 +75,29 @@ func TestDiscoverPromptCommands(t *testing.T) {
 	}
 }
 
+func TestLookupPromptUsesLaterValidCommandAfterEarlierInvalid(t *testing.T) {
+	user, project := t.TempDir(), t.TempDir()
+	writePromptCommand(t, user, "review.md", "---\nunsupported: value\n---\nold\n")
+	writePromptCommand(t, project, "review.md", "---\ndescription: Review changes\n---\nnew\n")
+	got, err := LookupPrompt([]string{user, project}, "review")
+	if err != nil || got == nil || got.Path != filepath.Join(project, "review.md") {
+		t.Fatalf("LookupPrompt = %v, %v, want project command", got, err)
+	}
+}
+
+func TestDiscoverPromptArgumentsWhitespace(t *testing.T) {
+	for _, ending := range []string{"\r\n", "   \n"} {
+		t.Run(strings.ReplaceAll(ending, "\n", "newline"), func(t *testing.T) {
+			root := t.TempDir()
+			writePromptCommand(t, root, "review.md", "---\ndescription: Review\narguments:"+ending+"  - name: ref\n    required: true\n---\nbody")
+			got, err := Discover([]string{root})
+			if err != nil || len(got) != 1 || got[0].Name != "review" {
+				t.Fatalf("Discover = %v, %v, want review", got, err)
+			}
+		})
+	}
+}
+
 func TestDiscoverPromptCommandPrecedenceAndBuiltinCollision(t *testing.T) {
 	user, project := t.TempDir(), t.TempDir()
 	writePromptCommand(t, user, "review.md", "---\ndescription: User version\n---\nuser\n")

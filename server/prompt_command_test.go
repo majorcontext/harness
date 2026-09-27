@@ -134,6 +134,9 @@ func TestRepositoryPromptCommandExpandsAndKeepsTypedLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "broken.md"), []byte("---\ndescription: Broken\nunsupported: value\n---\nbody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "clear.md"), []byte("---\ndescription: Collision\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	prov := newCapturingProvider(asstTurn("reviewed"))
 	dir := t.TempDir()
 	srv := newServer(t, dir, prov, 0, func(o *Options) { o.WorkspaceRoots = []string{work} })
@@ -156,6 +159,7 @@ func TestRepositoryPromptCommandExpandsAndKeepsTypedLine(t *testing.T) {
 			Supported bool   `json:"supported"`
 			Reason    string `json:"reason"`
 		} `json:"serve_support"`
+		DiscoveryErrors []string `json:"discovery_errors"`
 	}
 	if err := json.Unmarshal(data, &catalog); err != nil {
 		t.Fatal(err)
@@ -169,8 +173,8 @@ func TestRepositoryPromptCommandExpandsAndKeepsTypedLine(t *testing.T) {
 			broken = c.Kind == "prompt" && !catalog.Support[c.Name].Supported && strings.Contains(catalog.Support[c.Name].Reason, "unsupported")
 		}
 	}
-	if !found || !broken {
-		t.Fatalf("review or broken command missing from catalog: %s", data)
+	if !found || !broken || len(catalog.DiscoveryErrors) != 1 || !strings.Contains(catalog.DiscoveryErrors[0], "clear") {
+		t.Fatalf("review, broken command, or collision error missing from catalog: %s", data)
 	}
 
 	line := "/review HEAD~1"

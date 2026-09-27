@@ -519,7 +519,8 @@ Review the changes in $1 against AGENTS.md. Report only defects.
 The parser reads `description` and `argument-hint`. It ignores an optional
 `arguments:` block used by other command formats; Harness still expands only
 `$ARGUMENTS` and `$1` through `$9`. A malformed command appears disabled in
-`GET /commands` with its error. Other commands stay available.
+`GET /commands` with its error. Other commands stay available. Name errors
+that cannot become command entries appear in `discovery_errors`.
 
 The parser reuses `skill/frontmatter.go`. Extract `splitFrontmatter` and
 `parseFrontmatter` into a shared internal package, or export them. Do not

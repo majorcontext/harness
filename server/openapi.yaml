@@ -307,10 +307,10 @@ components:
         reason:
           type: string
           description: >
-            Present only when `supported` is false. Always the literal
-            "Not available in this client." — the exact sentence serve
-            mode returns to the person who typed the command. Names no
-            route and no internal term.
+            Present only when `supported` is false. For a frontend-only
+            command, it is "Not available in this client." For an invalid
+            repository command, it names the metadata error. A client can
+            show this reason in the command menu.
 
     Session:
       type: object
@@ -2949,6 +2949,13 @@ paths:
                   commands:
                     type: array
                     items: { $ref: "#/components/schemas/Command" }
+                  discovery_errors:
+                    type: array
+                    items: { type: string }
+                    description: >
+                      Errors for command files that cannot appear as named
+                      entries, such as a reserved builtin name. These errors
+                      do not hide valid commands.
                   serve_support:
                     type: object
                     additionalProperties:
