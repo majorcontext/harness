@@ -221,6 +221,7 @@ func LookupPrompt(dirs []string, name string) (*PromptCommand, error) {
 		}
 		found, err = loadPromptMetadata(path, name)
 		if err != nil {
+			found = nil
 			invalid = err
 			continue
 		}

@@ -85,6 +85,16 @@ func TestLookupPromptUsesLaterValidCommandAfterEarlierInvalid(t *testing.T) {
 	}
 }
 
+func TestLookupPromptRejectsLaterInvalidCommand(t *testing.T) {
+	user, project := t.TempDir(), t.TempDir()
+	writePromptCommand(t, user, "review.md", "---\ndescription: User review\n---\nold\n")
+	writePromptCommand(t, project, "review.md", "---\nunsupported: value\n---\nnew\n")
+	got, err := LookupPrompt([]string{user, project}, "review")
+	if err == nil || got != nil {
+		t.Fatalf("LookupPrompt = %v, %v, want nil command and error", got, err)
+	}
+}
+
 func TestDiscoverPromptArgumentsWhitespace(t *testing.T) {
 	for _, ending := range []string{"\r\n", "   \n"} {
 		t.Run(strings.ReplaceAll(ending, "\n", "newline"), func(t *testing.T) {
