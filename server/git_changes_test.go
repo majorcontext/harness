@@ -258,20 +258,29 @@ func TestHandleGitChangesIgnoresInheritedPathspecMode(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesFilterDiscoveryIsCapped: filter-driver discovery's
-// config output counts against gitChangesMetadataCap like the file lists.
-func TestHandleGitChangesFilterDiscoveryIsCapped(t *testing.T) {
-	dir := newGitRepo(t) // clean: ls-files and the diffs print nothing
-	runTestGit(t, dir, "config", "filter.drv.clean", "cat")
-
-	oldCap := gitChangesMetadataCap
-	gitChangesMetadataCap = 4 // shorter than "filter.drv.clean"
-	t.Cleanup(func() { gitChangesMetadataCap = oldCap })
+// TestHandleGitChangesManyFilterDriversIsTooManyChanges409: 50,000 filter
+// drivers fit gitChangesMetadataCap as discovery output (~1 MiB), but their
+// -c overrides (~5 MiB) exceed ARG_MAX, so git diff's exec fails with E2BIG.
+// That is a scale ceiling (409), not a server fault (500).
+func TestHandleGitChangesManyFilterDriversIsTooManyChanges409(t *testing.T) {
+	dir := newGitRepo(t)
+	var cfg strings.Builder
+	for i := range 50_000 {
+		fmt.Fprintf(&cfg, "[filter \"d%05d\"]\n\tclean = cat\n", i)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(cfg.String()); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
 
 	h := newGitChangesHarness(t, dir)
 	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)
 	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "too_many_changes") {
-		t.Errorf("status = %d, body = %s, want 409 too_many_changes", resp.StatusCode, body)
+		t.Errorf("status = %d, body = %.300s, want 409 too_many_changes", resp.StatusCode, body)
 	}
 }
 
@@ -663,11 +672,13 @@ func TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesVanishedUntrackedFileNotFatal: a file deleted right as add -N runs is silently absent, not fatal.
+// TestHandleGitChangesVanishedUntrackedFileNotFatal: a file (large or not) deleted right as add -N runs is silently absent, not fatal.
 func TestHandleGitChangesVanishedUntrackedFileNotFatal(t *testing.T) {
 	dir := newGitRepo(t)
 	vanish := filepath.Join(dir, "vanish.txt")
+	vanishBig := filepath.Join(dir, "vanish.bin")
 	writeTestFile(t, vanish, "v\n")
+	writeTestFileBytes(t, vanishBig, make([]byte, untrackedLargeCutoff+1))
 	writeTestFile(t, filepath.Join(dir, "keep.txt"), "k\n")
 
 	deleted := false
@@ -677,13 +688,14 @@ func TestHandleGitChangesVanishedUntrackedFileNotFatal(t *testing.T) {
 			return
 		}
 		os.Remove(vanish)
+		os.Remove(vanishBig)
 		deleted = true
 	}
 	t.Cleanup(func() { gitCmdHook = old })
 
 	got := gitChangesUncommitted(t, dir)
 	if len(got.Files) != 1 || got.Files[0].Path != "keep.txt" {
-		t.Errorf("Files = %+v, want only keep.txt (vanish.txt dropped, not fatal)", got.Files)
+		t.Errorf("Files = %+v, want only keep.txt (vanish.txt and large vanish.bin dropped, not fatal)", got.Files)
 	}
 }
 

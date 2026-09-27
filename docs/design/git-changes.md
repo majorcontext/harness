@@ -75,6 +75,9 @@ Rename detection (`-M`) can pair a large old path with a small new one
 under-cutoff `q.txt`, reports `R p.txt q.txt`); the membership check marks
 both the rename's new and old path as seen, so `p.txt` isn't ALSO reported
 as a synthetic `large:true` "added" entry alongside the rename.
+A large candidate that no longer exists when the diff finishes (removed
+after `ls-files` ran) is dropped, the same as an ordinary untracked file
+that `add -N` no longer finds.
 
 ## Bounded memory: reading the patch
 
@@ -97,13 +100,21 @@ truncation.
 The cap is ~1 MiB (`gitChangesPatchCap = 1<<20`): large enough for a
 typical PR-sized diff, small enough to keep a single response bounded.
 
-`ls-files`, `--numstat`, `--name-status`, and filter-driver discovery
-(`git config --get-regexp`) can't be truncated the same
+`ls-files`, `--numstat`, and `--name-status` can't be truncated the same
 way — `files` must stay complete — so `gitOutCapped` bounds each of their
 own stdout to `gitChangesMetadataCap` (32 MiB) instead: exceeding it kills
 the subprocess and answers `409 too_many_changes`, the same scale-ceiling
 response a deadline produces, rather than letting an unusually large
 change set's metadata alone grow a response's memory without bound.
+
+Filter-driver discovery (`git config --get-regexp`) has its own, much
+smaller cap, `gitFilterDiscoveryCap` (64 KiB). Each discovered driver
+becomes three `-c` overrides on every later diff's argv, and argv shares
+`ARG_MAX` (2 MiB on Linux) with the environment, so a config that fits the
+32 MiB metadata cap could still make the diff's exec fail with `E2BIG`.
+Moving the overrides into `GIT_CONFIG_*` variables would not help, for the
+same reason. At 64 KiB of discovery output the overrides stay under about
+450 KiB; exceeding it answers `409 too_many_changes`.
 
 ## Never writing the index or objects
 

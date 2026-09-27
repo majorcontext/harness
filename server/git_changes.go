@@ -31,10 +31,17 @@ const gitChangesResponseMargin = 2 * time.Second
 const gitChangesPatchCap = 1 << 20
 
 // gitChangesMetadataCap bounds each of ls-files/--numstat/--name-status's
-// (and filter-driver discovery's) own stdout: unlike the patch, files must stay complete, so a change set
+// own stdout: unlike the patch, files must stay complete, so a change set
 // this large answers 409 too_many_changes instead of truncating it. A var,
 // not a const, so a test can shrink it to reach that path deterministically.
 var gitChangesMetadataCap = 32 << 20
+
+// gitFilterDiscoveryCap bounds filter-driver discovery far below
+// gitChangesMetadataCap: each discovered driver becomes three -c overrides
+// on every diff's argv (up to ~7x its discovery bytes), and argv shares
+// ARG_MAX (2 MiB on Linux) with the environment. 64 KiB keeps that under
+// ~450 KiB, while a real repository configures a handful of drivers.
+const gitFilterDiscoveryCap = 64 << 10
 
 // untrackedLargeCutoff mirrors opencode's snapshot (sst/opencode
 // packages/opencode/src/snapshot/index.ts): an untracked file this large
@@ -558,7 +565,7 @@ func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string,
 // diffFilterDriverArgs neutralizes every repo-configured clean/process
 // filter driver, discovered once per request, not per file.
 func diffFilterDriverArgs(ctx context.Context, dir string) ([]string, error) {
-	out, err := gitOutCapped(ctx, dir, nil, gitChangesMetadataCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
+	out, err := gitOutCapped(ctx, dir, nil, gitFilterDiscoveryCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if err != nil {
 		if isGitWorkTreeErr(err) {
 			return nil, nil // no configured filter driver matches
@@ -715,6 +722,11 @@ func gitChangeSet(ctx context.Context, repoRoot, baseTreeish string, patchCap in
 	// already has it under the same path (e.g. a large tracked file `git rm
 	// --cached`'d) — reported below too, it would duplicate that entry.
 	for _, p := range bigPaths {
+		// Recheck: a large file removed after ls-files is silently absent,
+		// the same as an ordinary one add -N no longer finds.
+		if _, err := os.Lstat(filepath.Join(repoRoot, p)); err != nil {
+			continue
+		}
 		if !seenPath[p] {
 			files = append(files, gitChangeFile{Path: p, Status: "added", Large: true})
 		}
