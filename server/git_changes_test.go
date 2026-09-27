@@ -141,6 +141,36 @@ func TestHandleGitChangesConflict(t *testing.T) {
 	}
 }
 
+// TestHandleGitChangesCeilingColonDoesNotLeakOuterRepo: GIT_CEILING_DIRECTORIES
+// is itself colon-separated with no escape, so a workspace root under a path
+// component containing a colon can't defeat it and reach an enclosing
+// repository outside every granted root.
+func TestHandleGitChangesCeilingColonDoesNotLeakOuterRepo(t *testing.T) {
+	base := t.TempDir()
+	outerRepo := filepath.Join(base, "outer")
+	runTestGit(t, base, "init", "-q", outerRepo)
+	runTestGit(t, outerRepo, "config", "user.email", "test@example.com")
+	runTestGit(t, outerRepo, "config", "user.name", "test")
+	writeTestFile(t, filepath.Join(outerRepo, "secret.txt"), "outer\n")
+	runTestGit(t, outerRepo, "add", "secret.txt")
+	runTestGit(t, outerRepo, "commit", "-q", "-m", "outer repo")
+
+	// "har:ness" defeats GIT_CEILING_DIRECTORIES (colon-separated, no
+	// escape); root is the only granted workspace root, a plain
+	// subdirectory with no .git of its own.
+	root := filepath.Join(outerRepo, "har:ness", "root")
+	mkdirAllTest(t, root)
+
+	h := newGitChangesHarness(t, root)
+	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+root, nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "not_a_git_repo") {
+		t.Errorf("body = %s, want error code not_a_git_repo, not the outer repository's own changes", body)
+	}
+}
+
 func TestHandleGitChangesRequiresAuth(t *testing.T) {
 	dir := newGitRepo(t)
 	h := newGitChangesHarness(t, dir)
@@ -425,10 +455,9 @@ func TestHandleGitChangesGlobLikeFilenameTreatedLiterally(t *testing.T) {
 }
 
 // TestHandleGitChangesUntrackedEntries: missing dropped; nested repo and
-// every over-cutoff file excluded from intent-to-add either way; an
-// over-cutoff file with no match in the base tree is reported large here,
-// while one that already exists in the base tree (by path) is excluded
-// but left unreported, for the normal diff to report on its own.
+// every over-cutoff file excluded from intent-to-add and reported as a big
+// path candidate, regardless of whether it turns out to exist in the base
+// tree (gitChangeSet, not this function, decides that from the diff).
 func TestHandleGitChangesUntrackedEntries(t *testing.T) {
 	dir := newGitRepo(t)
 	bigContent := make([]byte, untrackedLargeCutoff+1)
@@ -444,25 +473,24 @@ func TestHandleGitChangesUntrackedEntries(t *testing.T) {
 	runTestGit(t, dir, "rm", "-q", "--cached", "tracked_big.bin")
 
 	lsFilesOut := "keep.txt\x00big.bin\x00tracked_big.bin\x00vendor/dep/\x00gone.txt\x00"
-	excludeArgs, large, err := untrackedEntries(t.Context(), dir, "HEAD", lsFilesOut)
-	if err != nil {
-		t.Fatal(err)
-	}
+	excludeArgs, bigPaths := untrackedEntries(dir, lsFilesOut)
 
-	wantExclude := ":(exclude,literal)vendor/dep/,:(exclude,literal)big.bin,:(exclude,literal)tracked_big.bin"
+	wantExclude := ":(exclude,literal)big.bin,:(exclude,literal)tracked_big.bin,:(exclude,literal)vendor/dep/"
 	if strings.Join(excludeArgs, ",") != wantExclude {
 		t.Errorf("excludeArgs = %v, want %s", excludeArgs, wantExclude)
 	}
-	if len(large) != 1 || large[0].Path != "big.bin" || !large[0].Large {
-		t.Errorf("large = %+v, want one big.bin entry with Large=true", large)
+	wantBig := []string{"big.bin", "tracked_big.bin"}
+	if !slices.Equal(bigPaths, wantBig) {
+		t.Errorf("bigPaths = %v, want %v", bigPaths, wantBig)
 	}
 }
 
 // TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated: `git rm
 // --cached` of a tracked file over the large-file cutoff reports it once,
 // as deleted — not also as a synthetic large:true "added" entry. A
-// newline in one large file's own name must not shift cat-file
-// --batch-check's answers for any of the others.
+// newline in one large file's own path must not affect any sibling's
+// status, since the base-tree check is now a plain path lookup against
+// the already-parsed diff, not a line-oriented subprocess protocol.
 func TestHandleGitChangesLargeFileAlreadyInBaseIsNotDuplicated(t *testing.T) {
 	big := strings.Repeat("x\n", 3*1024*1024/2)
 	cases := []struct {
@@ -825,6 +853,26 @@ func TestHandleGitChangesNeutralizesFilterDrivers(t *testing.T) {
 				t.Errorf("patch missing the real diff content: %q", got.Patch)
 			}
 		})
+	}
+}
+
+// TestHandleGitChangesNeutralizesHooksPath: a repo-configured post-index-change hook never runs.
+func TestHandleGitChangesNeutralizesHooksPath(t *testing.T) {
+	dir := newGitRepo(t)
+	sentinel := filepath.Join(t.TempDir(), "hook-ran")
+	hooksDir := filepath.Join(dir, ".githooks")
+	mkdirAllTest(t, hooksDir)
+	hook := filepath.Join(hooksDir, "post-index-change")
+	writeTestFile(t, hook, "#!/bin/sh\ntouch "+sentinel+"\n")
+	if err := os.Chmod(hook, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, dir, "config", "core.hooksPath", ".githooks")
+	writeTestFile(t, filepath.Join(dir, "untracked.txt"), "new\n")
+
+	gitChangesUncommitted(t, dir)
+	if _, err := os.Stat(sentinel); err == nil {
+		t.Fatal("post-index-change hook ran: a repo-configured hook executed an arbitrary command")
 	}
 }
 

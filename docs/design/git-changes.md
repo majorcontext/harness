@@ -66,13 +66,10 @@ commonly a large tracked file `git rm --cached`'d) is excluded from
 of the temp index is exactly its real state, so the normal numstat/
 name-status diff already reports its true status (typically "deleted")
 on its own. Reporting it here too would duplicate that entry.
-`existsInBaseTree` answers this with one `git cat-file --batch-check`
-call for every candidate large file in the request, not one call per
-file. `--batch-check` is newline-delimited (its `-z` mode needs git
-2.42; the fleet runs 2.39), so a candidate whose own name contains a
-literal newline is left out of that batch and conservatively treated as
-not in the base — including it would shift every later answer by a
-line.
+`gitChangeSet` decides this after running the normal diff, not before: a
+candidate large path is looked up against the diff's own already-parsed
+file paths, a plain in-memory set membership check with no separate git
+call and no line-oriented protocol to get a path's own newline wrong.
 
 ## Bounded memory: reading the patch
 
@@ -124,6 +121,10 @@ A git repository can configure several commands that run automatically
 while diffing a working-tree file. Every one is disabled on every
 invocation, not just the patch diff:
 
+- `core.hooksPath`: `-c core.hooksPath=/dev/null`. `add -N` (like `add` and
+  `commit`) runs the repository's own `post-index-change` hook after
+  writing the index, so a repo-controlled hooksPath would otherwise run
+  arbitrary code as this process on every request.
 - `diff.external` / `*.textconv`: `--no-ext-diff --no-textconv`.
 - A clean/process content filter driver (e.g. git-lfs's own
   `filter.lfs.clean`/`filter.lfs.process`, at any config scope):
@@ -160,6 +161,14 @@ subdirectory, and running commands there directly instead would produce
 mixed-relative paths (untracked files outside the subdirectory would be
 invisible; a per-file pathspec would not match anything there). The
 response's own `dir` field still echoes the originally resolved `dir`.
+
+`GIT_CEILING_DIRECTORIES` is itself colon-separated with no escape for a
+colon in a path, so a workspace root under a path component containing
+one defeats it silently: git ignores the malformed ceiling and keeps
+walking up past the intended boundary into an enclosing repository. The
+resolved `repoRoot` is re-checked with the same `verifyDirWithinRoots`
+used on `dir`, so that escape is caught regardless of what confused the
+ceiling.
 
 ## Base resolution edge cases
 
