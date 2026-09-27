@@ -961,6 +961,17 @@ components:
             prompt DequeueAllPrompts returned at once, rather than one
             message per prompt; see `operator_batch` below for its
             structured constituent-prompt list.
+        parent_tool_use_id:
+          type: string
+          description: >
+            The tool_use call that spawned the Claude Code CLI subagent turn
+            which produced this message. Present only when `origin` is
+            `claude_code` and the stream-json event carried a non-null
+            parent_tool_use_id. Absent for a top-level delegated turn's own
+            messages, and for every message no delegated turn produced. Like
+            `origin`, this is presentation/lineage metadata only — a client
+            reconstructs subagent nesting from it, no model ever sees it, and
+            no transcoder interprets it.
         operator_batch:
           type: array
           description: >
