@@ -402,9 +402,15 @@ func sessionDir(noSave bool, configDir string) (string, error) {
 // SessionManager's point of view and fire a concurrent resume turn on the
 // SAME session this call is still driving. resume is fired synchronously
 // if non-nil, exactly like runGoal's own tail.
-func promptSession(ctx context.Context, sessMgr *engine.SessionManager, s *engine.Session, text string) error {
+func promptSession(ctx context.Context, sessMgr *engine.SessionManager, s *engine.Session, text string, provenance ...engine.PromptProvenance) error {
 	sessMgr.ReportTurnStart(s)
-	msg, promptErr := s.Prompt(ctx, text)
+	var msg *message.Message
+	var promptErr error
+	if len(provenance) > 0 {
+		msg, promptErr = s.PromptWithOriginFrom(ctx, text, "", "", provenance[0])
+	} else {
+		msg, promptErr = s.Prompt(ctx, text)
+	}
 	resume := sessMgr.ReportTurnEnd(s.ID, msg, promptErr)
 	if promptErr != nil {
 		return promptErr
@@ -716,12 +722,30 @@ func runCmd(args []string) error {
 	// SetModel, which durably persists a model record — see
 	// modelDecidableBeforeSession's doc comment for which runs can decide
 	// early enough to refuse before that happens.
-	if unknownCmd != nil && model.Provider != claudecode.Family && modelDecidableBeforeSession(opts.resume, opts.cont, modelSet) {
-		return resErr
-	}
 	workDir, err := os.Getwd()
 	if err != nil {
 		return err
+	}
+	var promptCommandLine string
+	if unknownCmd != nil {
+		prompt, err := command.LookupPrompt(commandsDirs(cfg, workDir), unknownCmd.Name)
+		if err != nil {
+			return err
+		}
+		if prompt != nil {
+			body, err := prompt.LoadBody()
+			if err != nil {
+				return err
+			}
+			promptCommandLine = opts.prompt
+			args := strings.TrimSpace(strings.TrimPrefix(opts.prompt, "/"+unknownCmd.Name))
+			res = command.Resolution{Text: command.Expand(body, args)}
+			resErr = command.ErrNotCommand
+			unknownCmd = nil
+		}
+	}
+	if unknownCmd != nil && model.Provider != claudecode.Family && modelDecidableBeforeSession(opts.resume, opts.cont, modelSet) {
+		return resErr
 	}
 	sesDir, err := sessionDir(opts.noSave, cfg.SessionDir)
 	if err != nil {
@@ -897,7 +921,13 @@ func runCmd(args []string) error {
 			return derr
 		}
 	default:
-		if err := promptSession(ctx, sessMgr, s, res.Text); err != nil {
+		if promptCommandLine != "" {
+			if err := promptSession(ctx, sessMgr, s, res.Text, engine.PromptProvenance{
+				Source: message.PromptSourceCommand, SourceLabel: promptCommandLine,
+			}); err != nil {
+				return err
+			}
+		} else if err := promptSession(ctx, sessMgr, s, res.Text); err != nil {
 			return err
 		}
 	}
@@ -1753,6 +1783,7 @@ func serveCmd(args []string) error {
 		SessionSync:   cfg.SessionSync,
 		StartedAt:     startedAt,
 		CORSOrigin:    corsOrigin,
+		CommandsDirs:  func(sessionWorkDir string) []string { return commandsDirs(cfg, sessionWorkDir) },
 		GoalEvaluator: goalEval,
 		MCP:           mcpRegistry(mcpMgr),
 		Processes:     processRegistry(procMgr),
@@ -2045,6 +2076,28 @@ func agentDefsDirs(cfg *config.Config, flagDirs []string, workDir string) []stri
 			out[i] = d
 		} else {
 			out[i] = filepath.Join(workDir, d)
+		}
+	}
+	return out
+}
+
+func commandsDirs(cfg *config.Config, workDir string) []string {
+	var dirs []string
+	if cfg != nil {
+		dirs = cfg.CommandsDirs
+	}
+	if dirs == nil {
+		dirs = []string{filepath.Join(workDir, ".agents", "commands")}
+	}
+	if len(dirs) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(dirs))
+	for i, dir := range dirs {
+		if filepath.IsAbs(dir) {
+			out[i] = dir
+		} else {
+			out[i] = filepath.Join(workDir, dir)
 		}
 	}
 	return out

@@ -499,7 +499,7 @@ every empty-anchor record; always `[]` when empty); and
 
 ## 7. Prompt commands
 
-Stage 2. A prompt command is a Markdown file under `.agents/commands/`,
+A prompt command is a Markdown file under `.agents/commands/`,
 beside the existing `.agents/skills/` and `.agents/*.md` agent
 definitions (`engine/agentdef.go`).
 
@@ -539,12 +539,11 @@ A prompt command appends one ordinary user message. The message holds the
 EXPANDED text, because that is what the model reads, and the log stores
 canonical messages.
 
-Attribution uses the path that exists: add `PromptSourceCommand` to
-`message.PromptSource` (`message/message.go`) and stamp it through
-`Session.PromptWithOriginFrom` (`engine/engine.go`), which already carries
-a `PromptProvenance` onto the appended message. The typed line
-(`/review HEAD~1`) rides as provenance, so a frontend renders what the
-human typed.
+Attribution uses `PromptSourceCommand` in `message.PromptSource`.
+`source_label` carries the original typed line (`/review HEAD~1`) so a
+frontend can show what the person typed. The user message stores only the
+expanded text that the model reads. Harness sets this source after a typed
+request; HTTP callers cannot assert `source: command` directly.
 
 No new event type enters. Expanded command text is user-trust text. It
 never becomes a `message.EngineContext` part.
@@ -601,10 +600,10 @@ box. Wrapping is not owning, and it is out of scope here.
 5. `.agents/commands/*.md` discovery, `commands_dirs`, substitution, and
    `PromptSourceCommand`.
 
-Stages 1 through 4 add no new session behavior. Stage 5 adds the first new
-file format. Stage 3 is optional for a first release: it adds no
-capability `harness serve` lacks, but it proves the `Op` currency carries
-two dispatchers.
+Stage 5 adds the first file-backed command format. `/commands` scans the
+selected workdir; a typed command reads only its named file. The command
+expands to one user message with `source: command` and the original typed
+line in `source_label`. No shell command runs during expansion.
 
 ## 12. Testing
 

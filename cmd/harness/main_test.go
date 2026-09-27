@@ -605,6 +605,20 @@ func TestInstructionsConfig(t *testing.T) {
 	})
 }
 
+func TestCommandsDirs(t *testing.T) {
+	if got := commandsDirs(&config.Config{}, "/work"); len(got) != 1 || got[0] != filepath.Join("/work", ".agents", "commands") {
+		t.Fatalf("default dirs = %v", got)
+	}
+	got := commandsDirs(&config.Config{CommandsDirs: []string{"a/commands", "/abs/commands"}}, "/work")
+	want := []string{filepath.Join("/work", "a/commands"), "/abs/commands"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("resolved dirs = %v, want %v", got, want)
+	}
+	if got := commandsDirs(&config.Config{CommandsDirs: []string{}}, "/work"); got == nil || len(got) != 0 {
+		t.Fatalf("explicit empty dirs = %v, want non-nil empty slice", got)
+	}
+}
+
 func TestSkillsDirsExplicitEmptyDisables(t *testing.T) {
 	// A config file with "skills_dirs": [] is an explicit opt-out and must
 	// reach the engine as a non-nil empty slice (disable), not nil

@@ -94,6 +94,10 @@ type Config struct {
 	// default in place: use <WorkDir>/.agents. Same merge/override contract
 	// as SkillsDirs in every respect (see that field's own doc comment).
 	AgentDefsDirs []string `json:"agent_defs_dirs,omitempty"`
+	// CommandsDirs lists directories scanned for prompt commands (*.md files).
+	// A nil value uses <WorkDir>/.agents/commands. A non-empty project value
+	// replaces the user value during config merge; explicit [] disables discovery.
+	CommandsDirs []string `json:"commands_dirs,omitempty"`
 	// GoalEvaluatorModel names the model ref (or alias) used to evaluate goal
 	// completion for `harness run --goal` and the server's goal endpoints.
 	// There is no default — goal use requires this field to be set. Resolve it
@@ -1249,7 +1253,9 @@ func Path() string {
 //     InstructionsMode: a non-empty project value overrides.
 //   - SkillsDirs, AgentDefsDirs: a non-empty project slice replaces the user
 //     slice entirely (arrays override, they do not concatenate); an
-//     empty/omitted project value inherits the user value.
+//     empty/omitted project value inherits the user value. CommandsDirs follows
+//     the same override rule, except an explicit empty project array disables
+//     command discovery and an omitted value inherits the user value.
 //   - AppendSystemPrompt: the ONE additive key. The user (platform) segments
 //     come first, then the project segments; neither layer can drop the
 //     other's. See the field's own doc comment.
@@ -1499,6 +1505,13 @@ func merge(base, over *Config) *Config {
 	}
 	if len(agentDefsSrc) > 0 {
 		out.AgentDefsDirs = append([]string(nil), agentDefsSrc...)
+	}
+	commandsSrc := out.CommandsDirs
+	if over.CommandsDirs != nil {
+		commandsSrc = over.CommandsDirs
+	}
+	if commandsSrc != nil {
+		out.CommandsDirs = append([]string{}, commandsSrc...)
 	}
 	// AppendSystemPrompt CONCATENATES, base first — the one additive slice
 	// rule in this function. See the field's own doc comment for why a

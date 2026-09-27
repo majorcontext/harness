@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -79,7 +81,24 @@ type serveSupportJSON struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) commandDirs(workdir string) []string {
+	if s.opts.CommandsDirs != nil {
+		return s.opts.CommandsDirs(workdir)
+	}
+	return []string{filepath.Join(workdir, ".agents", "commands")}
+}
+
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
+	workdir, err := resolveWorkDir(s.opts.WorkspaceRoots, r.URL.Query().Get("workdir"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	prompts, err := command.Discover(s.commandDirs(workdir))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	specs := command.NewRegistry().All()
 	out := make([]commandEntryJSON, 0, len(specs))
 	serveSupportOut := make(map[string]serveSupportJSON, len(specs))
@@ -106,6 +125,14 @@ func (s *Server) handleCommands(w http.ResponseWriter, _ *http.Request) {
 		}
 		out = append(out, e)
 	}
+	for _, prompt := range prompts {
+		out = append(out, commandEntryJSON{
+			Name: prompt.Name, Kind: string(command.KindPrompt), Summary: prompt.Description,
+			ArgHint: prompt.ArgHint, Category: string(command.CategoryInfo),
+		})
+		serveSupportOut[prompt.Name] = serveSupportJSON{Supported: true}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, struct {
 		Commands     []commandEntryJSON          `json:"commands"`
 		ServeSupport map[string]serveSupportJSON `json:"serve_support"`
@@ -130,7 +157,7 @@ type commandReceiptJSON struct {
 // if so, resolves, records, and dispatches it entirely in process. Reports
 // whether it was handled (response already written).
 func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, id, text string,
-	blobs []*message.Blob, prov engine.PromptProvenance, seq int64, clientRef string) (promptText string, handled bool) {
+	blobs []*message.Blob, prov *engine.PromptProvenance, seq int64, clientRef string) (promptText string, handled bool) {
 	if prov.Source.Normalized() != message.PromptSourceTyped {
 		return text, false
 	}
@@ -142,7 +169,34 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 		}
 		var unknown *command.UnknownCommandError
 		if errors.As(err, &unknown) {
-			return text, false
+			sess, release, ok := s.mutableSession(id)
+			if !ok {
+				writeErr(w, http.StatusNotFound, "no such session")
+				return "", true
+			}
+			workdir := sess.WorkDir()
+			release()
+			prompt, err := command.LookupPrompt(s.commandDirs(workdir), unknown.Name)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return "", true
+			}
+			if prompt == nil {
+				return text, false
+			}
+			if len(blobs) > 0 {
+				writeErr(w, http.StatusBadRequest, "prompt commands take no attachments")
+				return "", true
+			}
+			body, err := prompt.LoadBody()
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return "", true
+			}
+			args := strings.TrimSpace(strings.TrimPrefix(text, "/"+unknown.Name))
+			prov.Source = message.PromptSourceCommand
+			prov.SourceLabel = text
+			return command.Expand(body, args), false
 		}
 		var argsErr *command.ArgsError
 		if errors.As(err, &argsErr) {

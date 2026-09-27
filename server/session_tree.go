@@ -564,7 +564,7 @@ func (s *Server) handleSessionSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text, handled := s.resolvePromptCommand(w, promptRouteSend, id, text, blobs, prov, 0, clientRef)
+	text, handled := s.resolvePromptCommand(w, promptRouteSend, id, text, blobs, &prov, 0, clientRef)
 	if handled {
 		return
 	}

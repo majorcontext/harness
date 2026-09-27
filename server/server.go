@@ -128,6 +128,9 @@ type Options struct {
 	// request that omits workdir always defaults to the process's current
 	// working directory, which is never itself checked against this list.
 	WorkspaceRoots []string
+	// CommandsDirs resolves prompt-command directories for a session workdir.
+	// Nil selects <workdir>/.agents/commands. An empty result disables discovery.
+	CommandsDirs func(workdir string) []string
 	// HeartbeatInterval is the SSE keep-alive comment period; 0 defaults to
 	// 30s.
 	HeartbeatInterval time.Duration

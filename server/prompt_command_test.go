@@ -13,6 +13,23 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
+func TestInvalidRepositoryCommandNameStaysOrdinaryPrompt(t *testing.T) {
+	prov := newCapturingProvider(asstTurn("ok"))
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "/review.bad"}}, "source": "typed",
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async: %d %s", resp.StatusCode, data)
+	}
+	h.waitIdle(id)
+	users := h.userMessages(id)
+	if len(users) != 1 || users[0].Parts.Text() != "/review.bad" {
+		t.Fatalf("user messages = %+v, want literal unknown command", users)
+	}
+}
+
 func TestRepositoryPromptCommandExpandsAndKeepsTypedLine(t *testing.T) {
 	work := t.TempDir()
 	path := filepath.Join(work, ".agents", "commands", "review.md")
@@ -30,13 +47,17 @@ func TestRepositoryPromptCommandExpandsAndKeepsTypedLine(t *testing.T) {
 	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
 	id := h.createSessionBody(map[string]string{"model": "test/m1", "workdir": work})
 
-	resp, data := h.do("GET", "/commands?workdir="+url.QueryEscape(work), nil)
+	resp, data := h.do("GET", "/commands?workdir="+url.QueryEscape(t.TempDir()), nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("commands outside workspace: %d %s, want 400", resp.StatusCode, data)
+	}
+	resp, data = h.do("GET", "/commands?workdir="+url.QueryEscape(work), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("commands: %d %s", resp.StatusCode, data)
 	}
 	var catalog struct {
-		Commands []struct{ Name, Kind string } `json:"commands"`
-		Support map[string]struct{ Supported bool } `json:"serve_support"`
+		Commands []struct{ Name, Kind string }       `json:"commands"`
+		Support  map[string]struct{ Supported bool } `json:"serve_support"`
 	}
 	if err := json.Unmarshal(data, &catalog); err != nil {
 		t.Fatal(err)

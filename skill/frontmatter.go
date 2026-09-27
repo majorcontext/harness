@@ -42,10 +42,31 @@ func splitFrontmatter(doc string) (frontmatter, body string, err error) {
 	return "", "", errors.New("unterminated frontmatter: no closing '---' delimiter found")
 }
 
+// SplitFrontmatter separates the frontmatter block and body from a document.
+// It reports an error when the document has no opening or closing delimiter.
+func SplitFrontmatter(doc string) (frontmatter, body string, err error) {
+	return splitFrontmatter(doc)
+}
+
+// ParseFrontmatterFields parses frontmatter scalars with the supplied allowed
+// keys. It uses the same parser as Agent Skills.
+func ParseFrontmatterFields(frontmatter string, allowedKeys ...string) (map[string]string, error) {
+	allowed := make(map[string]bool, len(allowedKeys))
+	for _, key := range allowedKeys {
+		allowed[key] = true
+	}
+	fields, _, err := parseFrontmatterWithKeys(frontmatter, allowed)
+	return fields, err
+}
+
 // parseFrontmatter parses the frontmatter block into top-level scalar fields
 // and an optional one-level-deep metadata map. See the package doc for the
 // supported subset of YAML.
 func parseFrontmatter(fm string) (fields map[string]string, meta map[string]string, err error) {
+	return parseFrontmatterWithKeys(fm, knownKeys)
+}
+
+func parseFrontmatterWithKeys(fm string, allowed map[string]bool) (fields map[string]string, meta map[string]string, err error) {
 	fields = make(map[string]string)
 	lines := strings.Split(fm, "\n")
 
@@ -64,7 +85,7 @@ func parseFrontmatter(fm string) (fields map[string]string, meta map[string]stri
 		if !ok {
 			return nil, nil, fmt.Errorf("malformed frontmatter line (expected 'key: value'): %q", trimmed)
 		}
-		if !knownKeys[key] {
+		if !allowed[key] {
 			return nil, nil, fmt.Errorf("unknown frontmatter key: %q", key)
 		}
 

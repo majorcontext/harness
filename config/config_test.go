@@ -460,6 +460,39 @@ func TestLoadInstructionsFields(t *testing.T) {
 	})
 }
 
+func TestLoadCommandsDirs(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	writeFile(t, p, `{"commands_dirs": ["a/commands", "b/commands"]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(c.CommandsDirs) != 2 || c.CommandsDirs[0] != "a/commands" || c.CommandsDirs[1] != "b/commands" {
+		t.Errorf("CommandsDirs = %v", c.CommandsDirs)
+	}
+	writeFile(t, p, `{"commands_dirs": []}`)
+	c, err = Load(p)
+	if err != nil {
+		t.Fatalf("Load explicit empty: %v", err)
+	}
+	if c.CommandsDirs == nil || len(c.CommandsDirs) != 0 {
+		t.Errorf("explicit empty CommandsDirs = %v, want non-nil empty", c.CommandsDirs)
+	}
+}
+
+func TestMergeCommandsDirs(t *testing.T) {
+	base := &Config{CommandsDirs: []string{"user/commands"}}
+	if got := merge(base, &Config{CommandsDirs: []string{"project/commands"}}); len(got.CommandsDirs) != 1 || got.CommandsDirs[0] != "project/commands" {
+		t.Errorf("merged CommandsDirs = %v, want project override", got.CommandsDirs)
+	}
+	if got := merge(base, &Config{}); len(got.CommandsDirs) != 1 || got.CommandsDirs[0] != "user/commands" {
+		t.Errorf("merged CommandsDirs = %v, want inherited user value", got.CommandsDirs)
+	}
+	if got := merge(base, &Config{CommandsDirs: []string{}}); got.CommandsDirs == nil || len(got.CommandsDirs) != 0 {
+		t.Errorf("merged CommandsDirs = %v, want explicit empty opt-out", got.CommandsDirs)
+	}
+}
+
 func TestLoadSkillsDirs(t *testing.T) {
 	t.Run("array parsed", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "config.json")

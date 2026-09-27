@@ -137,6 +137,13 @@ func TestEnqueueProvenanceExposedOnQueueGet(t *testing.T) {
 }
 
 // TestEnqueueRejectsReservedSource proves the HTTP layer surfaces
+func TestParsePromptProvenanceRejectsCommand(t *testing.T) {
+	_, code, err := parsePromptProvenance(promptSourceInput{Source: string(message.PromptSourceCommand)})
+	if err == nil || code != http.StatusBadRequest {
+		t.Fatalf("parsePromptProvenance(command) = (%d, %v), want 400", code, err)
+	}
+}
+
 // parsePromptProvenance's rejection as a 400, not a silently-accepted
 // enqueue.
 func TestEnqueueRejectsReservedSource(t *testing.T) {

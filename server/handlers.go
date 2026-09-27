@@ -1856,7 +1856,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, prov, 0, clientRef)
+	text, handled := s.resolvePromptCommand(w, promptRouteAsync, id, text, blobs, &prov, 0, clientRef)
 	if handled {
 		return
 	}
@@ -2267,7 +2267,7 @@ func (s *Server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, prov, body.Seq, clientRef)
+	text, handled := s.resolvePromptCommand(w, promptRouteEnqueue, id, text, blobs, &prov, body.Seq, clientRef)
 	if handled {
 		return
 	}

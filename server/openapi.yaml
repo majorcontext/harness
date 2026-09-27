@@ -139,8 +139,8 @@ components:
           description: >
             What the name resolves to. "control" runs an existing session
             operation. "frontend" changes which session the user talks to,
-            with no op or route of its own. "prompt" appends one user
-            message; reserved, no v1 entry uses it.
+            with no op or route of its own. "prompt" expands a repository
+            Markdown command into one user message.
         op:
           type: string
           description: >
@@ -991,7 +991,9 @@ components:
           description: Free-form identifier for `source`'s own instance. Omitted when `source` names no such id, or none was given.
         source_label:
           type: string
-          description: Free-form, human-readable label for the same instance. Display only, never parsed.
+          description: >
+            Display label for the source. For `source: command`, the original
+            typed line; message parts hold the expanded prompt.
 
     OperatorBatchEntry:
       type: object
@@ -1780,10 +1782,9 @@ components:
         source at all: a generic programmatic caller. `schedule` marks a
         schedule/cron delivery (the boxes control plane's own
         schedule_task/cron worker, notably). `cross_box` marks a prompt
-        relayed from another box. `task` marks this engine's own internal
-        cross-session task-tool relay — the ONE value here harness itself
-        computes; every other value is journaled and surfaced exactly as
-        the caller asserted it, unverified.
+        relayed from another box. `task` marks an internal task-tool relay.
+        `command` marks a repository command expanded by harness. Neither
+        `task` nor `command` can be asserted by an HTTP caller.
 
 
         Trust model: harness authenticates an HTTP caller with a single
@@ -1793,21 +1794,17 @@ components:
         CLI process running inside a box reaches this same session's HTTP
         surface through that session's own token, so `typed` is reachable
         from inside the box, not only from a human-facing console. Treat
-        every value (`task` excepted) as the caller's own unverified claim
-        — an attribution hint, never proof of the message's real origin.
-      enum: [typed, api, schedule, task, cross_box]
+        every caller-supplied value as an unverified attribution hint, not
+        proof of the message's real origin.
+      enum: [typed, api, schedule, task, cross_box, command]
 
     PromptSourceRequest:
       type: string
       description: >
         PromptSource's caller-suppliable subset — every value a request
-        (PromptRequest, EnqueueRequest) may assert. Excludes `task`: it
-        names the engine's own internal task-tool relay, which no HTTP
-        caller reaches through these routes, so it is not offered here at
-        all rather than merely rejected at request time (see
-        PromptRequest's `source` description for the actual 400 a request
-        naming it gets — this narrower enum only keeps a generated client
-        from offering the value in the first place).
+        (PromptRequest, EnqueueRequest) may assert. Excludes `task` and
+        `command`: harness computes both internally. A generated client
+        must not offer them, and a direct request naming either gets 400.
       enum: [typed, api, schedule, cross_box]
 
     Event:
@@ -2927,7 +2924,17 @@ paths:
         Every command a human can type, with the argument shape each one
         takes. A control command carries `op`, `method`, and `path`. A
         frontend command carries none of the three: the client owns that
-        action. See docs/design/slash-commands.md.
+        action. A prompt command expands a Markdown file from the requested
+        workdir into one user message. See docs/design/slash-commands.md.
+      parameters:
+        - in: query
+          name: workdir
+          required: false
+          schema: { type: string }
+          description: >
+            Workdir used to discover repository commands. Omitted, uses the
+            server process directory. An explicit path must be under a
+            configured workspace root.
       responses:
         "200":
           description: The registry.
