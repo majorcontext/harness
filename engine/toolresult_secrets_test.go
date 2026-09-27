@@ -21,8 +21,8 @@ import (
 // anywhere close to the whole remainder.
 func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 	before := "https://example.com/callback?state=xyz&"
-	secret := strings.Repeat("A", 1_000_000) // a 1 MB "value" with no whitespace anywhere near it
-	after := "&next=" + strings.Repeat("legituserdata", 5000) + "&done=1"
+	secret := strings.Repeat("A", 6_000) // no whitespace near it; far above the {8,1000} cap
+	after := "&next=" + strings.Repeat("legituserdata", 50) + "&done=1"
 	in := before + "token=" + secret + after
 
 	got := maskSecrets(in)
@@ -37,12 +37,12 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 	// The masked SPAN itself must be small (per the {8,1000} cap — round-3
 	// raised it from 200 so a long SECRET masks more completely; the
 	// character class alone is what protects adjacent content): the vast
-	// majority of the 1 MB run of "A"s must still be present, UNMASKED, in
-	// the output — only the first (up to) 1000 of them are inside the
-	// match. (Direct length subtraction is not a safe measure: with the
-	// bulk of the "A" run surviving, len(got) is barely smaller than
-	// len(in), which is exactly the point — so this counts surviving "A"
-	// runs directly instead.)
+	// majority of the "A" run must still be present, UNMASKED, in the
+	// output — only the first (up to) 1000 of them are inside the match.
+	// (Direct length subtraction is not a safe measure: with the bulk of
+	// the "A" run surviving, len(got) is barely smaller than len(in),
+	// which is exactly the point — so this counts surviving "A" runs
+	// directly instead.)
 	longestARun := 0
 	current := 0
 	for _, r := range got {
@@ -56,7 +56,7 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 		}
 	}
 	if longestARun < len(secret)-1050 {
-		t.Errorf("masking destroyed the bulk of a 1 MB legitimate value: longest surviving run of \"A\" = %d, want close to the original %d (only ~1000 chars should ever be inside the match)",
+		t.Errorf("masking destroyed the bulk of a large legitimate value: longest surviving run of \"A\" = %d, want close to the original %d (only ~1000 chars should ever be inside the match)",
 			longestARun, len(secret))
 	}
 }
