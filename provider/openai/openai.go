@@ -869,12 +869,11 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 
 	case "codex.rate_limits":
+		// Usage reporting is cosmetic: an unparseable frame is treated as
+		// absent, never a turn failure. An error here would also bypass
+		// recoverChainMiss, which runs only for previousResponseNotFound.
 		if familyOrDefault(s.family) == CodexFamily {
-			usage, err := codexSubscriptionUsageFromRateLimitsEvent(data)
-			if err != nil {
-				return fmt.Errorf("openai: bad codex.rate_limits: %w", err)
-			}
-			if usage != nil {
+			if usage, err := codexSubscriptionUsageFromRateLimitsEvent(data); err == nil && usage != nil {
 				s.subUsage = usage
 			}
 		}

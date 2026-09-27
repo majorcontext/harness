@@ -6,8 +6,9 @@ type SubscriptionUsage struct {
 	// Provider names which lane captured this snapshot: "claude" or
 	// "codex" — see this type's own doc comment.
 	Provider string `json:"provider"`
-	// Plan is the subscription tier ("max"/"pro" for codex, from its own
-	// x-codex-plan-type header). Empty when the capturing lane has no
+	// Plan is the subscription tier ("max"/"pro" for codex, from its
+	// x-codex-plan-type header on the HTTP lane or the codex.rate_limits
+	// event's plan_type on the websocket lane). Empty when the lane has no
 	// cheap source for it — the claude lane's rate_limit_event carries no
 	// plan field of its own, and this package does not shell out to
 	// `claude auth status` just to learn one.
@@ -17,10 +18,9 @@ type SubscriptionUsage struct {
 	// SubscriptionUsage exists, even if empty.
 	Windows []SubscriptionUsageWindow `json:"windows"`
 	// Overage describes a pay-as-you-go overage state riding on top of the
-	// subscription (claude's rate_limit_event only — the codex lane's
-	// x-codex-* headers carry no overage concept, so this is always nil
-	// for provider "codex"). nil (omitted on the wire) when not
-	// applicable.
+	// subscription (claude's rate_limit_event only — neither codex source
+	// carries an overage concept, so this is always nil for provider
+	// "codex"). nil (omitted on the wire) when not applicable.
 	Overage *SubscriptionOverage `json:"overage,omitempty"`
 	// CapturedAt is when this snapshot was captured — harness's own clock
 	// (Config.Now), not a provider-reported time — Unix seconds.
@@ -29,8 +29,8 @@ type SubscriptionUsage struct {
 	// completed "claude"-lane delegated turn, summed turn over turn from
 	// the `claude` CLI's own per-turn total_cost_usd accounting (see
 	// engine/claude_code_backend.go's claudeCodeEnvelope.TotalCostUSD).
-	// Always nil for provider "codex" (its x-codex-* headers carry no
-	// cost figure).
+	// Always nil for provider "codex": neither its headers nor its
+	// codex.rate_limits event carries a cost figure.
 	//
 	// The `claude` CLI reports total_cost_usd on EVERY delegated turn's
 	// "result" event, live-verified against a real `claude` 2.1.252

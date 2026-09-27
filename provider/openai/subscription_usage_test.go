@@ -260,3 +260,48 @@ func lastDoneEvent(t *testing.T, s provider.Stream) *provider.Event {
 	t.Fatal("no EventDone")
 	return nil
 }
+
+// TestWebSocketStreamSurvivesMalformedRateLimits: usage reporting is
+// cosmetic, so a rate-limits frame this package cannot parse must leave the
+// turn intact rather than failing it — the same permissive posture
+// codexHeaderFloat documents for the header lane. Failing here would also
+// bypass recoverChainMiss, which only runs for a previousResponseNotFound.
+func TestWebSocketStreamSurvivesMalformedRateLimits(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{wsProtocolHeader}})
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+		frames := []string{
+			`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":"not-a-number"}}}`,
+			`{"type":"response.created","response":{"id":"resp_bad_rl"}}`,
+			`{"type":"response.completed","response":{"id":"resp_bad_rl","usage":{"input_tokens":5,"output_tokens":2}}}`,
+		}
+		for _, f := range frames {
+			if err := conn.Write(context.Background(), websocket.MessageText, []byte(f)); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{APIKey: "k", BaseURL: srv.URL, Family: CodexFamily, UseWebSocketTransport: true}
+	s, err := c.Stream(context.Background(), wsRequest("sess-bad-ratelimits"))
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer s.Close()
+	done := lastDoneEvent(t, s)
+	if done == nil {
+		t.Fatal("no done event: a malformed rate-limits frame must not fail the turn")
+	}
+	if done.SubscriptionUsage != nil {
+		t.Errorf("SubscriptionUsage = %+v, want nil for an unparseable frame", done.SubscriptionUsage)
+	}
+}
