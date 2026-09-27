@@ -291,7 +291,7 @@ func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
 // some of the same header names.
 // codexRateLimitsEventType names the Codex websocket telemetry frame
 // carrying a rate-limit snapshot. It carries no response content, so it
-// never counts toward stream.responseFrames.
+// never counts toward wsFrameSource.framesRead.
 const codexRateLimitsEventType = "codex.rate_limits"
 
 func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsage {
@@ -457,7 +457,6 @@ type stream struct {
 	// immutable complete request on the same socket. It is nil for HTTP.
 	recoverChainMiss func(first bool, visible bool, chainErr error) (*wsFrameSource, *provider.RequestMetadata, error)
 	visibleOutput    bool
-	responseFrames   int
 
 	// A consumer joins consecutive reasoning deltas into one block, so
 	// reasoning that resumes under a different item or summary part needs a
@@ -513,13 +512,10 @@ func (s *stream) Next() (provider.Event, error) {
 			// retryable.
 			return provider.Event{}, provider.MarkStreamTruncated(err)
 		}
-		if name != codexRateLimitsEventType {
-			s.responseFrames++
-		}
 		if err := s.handle(name, data); err != nil {
 			var miss *previousResponseNotFoundError
 			if errors.As(err, &miss) && s.recoverChainMiss != nil {
-				source, metadata, recoverErr := s.recoverChainMiss(s.responseFrames == 1, s.visibleOutput, err)
+				source, metadata, recoverErr := s.recoverChainMiss(s.wsConn.framesRead == 1, s.visibleOutput, err)
 				s.recoverChainMiss = nil
 				if recoverErr != nil {
 					return provider.Event{}, recoverErr
@@ -530,7 +526,6 @@ func (s *stream) Next() (provider.Event, error) {
 				s.items = nil
 				s.usage = provider.Usage{}
 				s.hasToolCall = false
-				s.responseFrames = 0
 				s.subUsage = nil
 				s.queue = nil
 				continue
