@@ -94,7 +94,7 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	prompts, err := command.Discover(s.commandDirs(workdir))
+	prompts, invalid, err := command.DiscoverWithErrors(s.commandDirs(workdir))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -131,6 +131,10 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
 			ArgHint: prompt.ArgHint, Category: string(command.CategoryInfo),
 		})
 		serveSupportOut[prompt.Name] = serveSupportJSON{Supported: true}
+	}
+	for _, failed := range invalid {
+		out = append(out, commandEntryJSON{Name: failed.Name, Kind: string(command.KindPrompt), Category: string(command.CategoryInfo)})
+		serveSupportOut[failed.Name] = serveSupportJSON{Reason: failed.Reason}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, struct {

@@ -65,44 +65,56 @@ func (c *PromptCommand) LoadBody() (string, error) {
 // have increasing precedence: a later directory shadows an earlier one.
 // Results are sorted by command name. It does not read command bodies.
 func Discover(dirs []string) ([]*PromptCommand, error) {
+	commands, _, err := discover(dirs, false)
+	return commands, err
+}
+
+type PromptError struct {
+	Name   string
+	Reason string
+}
+
+func DiscoverWithErrors(dirs []string) ([]*PromptCommand, []PromptError, error) {
+	return discover(dirs, true)
+}
+
+func discover(dirs []string, keepErrors bool) ([]*PromptCommand, []PromptError, error) {
 	commands := make(map[string]*PromptCommand)
+	failures := make(map[string]string)
 	for _, dir := range dirs {
 		root, err := filepath.Abs(dir)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		info, err := os.Stat(root)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("command directory %q is not a directory", root)
+			return nil, nil, fmt.Errorf("command directory %q is not a directory", root)
 		}
 		canonical, err := filepath.EvalSymlinks(root)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if canonical != root {
-			return nil, fmt.Errorf("command directory %q must not contain symlinks", root)
+			return nil, nil, fmt.Errorf("command directory %q must not contain symlinks", root)
 		}
 		err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
-			if entry.Type()&os.ModeSymlink != 0 {
-				return fmt.Errorf("command path %q must not contain symlinks", path)
-			}
 			if entry.IsDir() {
 				return nil
 			}
+			if entry.Type()&os.ModeSymlink != 0 && filepath.Ext(entry.Name()) != ".md" {
+				return fmt.Errorf("command path %q must not contain symlinks", path)
+			}
 			if filepath.Ext(entry.Name()) != ".md" {
 				return nil
-			}
-			if !entry.Type().IsRegular() {
-				return fmt.Errorf("command file %q is not a regular file", path)
 			}
 			name, err := promptName(root, path)
 			if err != nil {
@@ -114,19 +126,32 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 			if builtinName(name) {
 				return fmt.Errorf("%s: prompt command name %q conflicts with a builtin", path, name)
 			}
-			prompt, err := loadPromptMetadata(path, name)
-			if err != nil {
+			var prompt *PromptCommand
+			if entry.Type()&os.ModeSymlink != 0 {
+				err = fmt.Errorf("command path %q must not contain symlinks", path)
+			} else if !entry.Type().IsRegular() {
+				err = fmt.Errorf("command file %q is not a regular file", path)
+			} else {
+				prompt, err = loadPromptMetadata(path, name)
+			}
+			if err != nil && !keepErrors {
 				return err
 			}
-			prompt.root = root
 			if previous := commands[name]; previous != nil {
 				slog.Warn("prompt command shadowed", "name", name, "previous", previous.Path, "winner", path)
 			}
-			commands[name] = prompt
+			delete(commands, name)
+			delete(failures, name)
+			if err != nil {
+				failures[name] = err.Error()
+			} else {
+				prompt.root = root
+				commands[name] = prompt
+			}
 			return nil
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	out := make([]*PromptCommand, 0, len(commands))
@@ -134,7 +159,12 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 		out = append(out, prompt)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out, nil
+	invalid := make([]PromptError, 0, len(failures))
+	for name, reason := range failures {
+		invalid = append(invalid, PromptError{Name: name, Reason: reason})
+	}
+	sort.Slice(invalid, func(i, j int) bool { return invalid[i].Name < invalid[j].Name })
+	return out, invalid, nil
 }
 
 // LookupPrompt reads one named command from dirs. A later directory shadows
@@ -303,7 +333,7 @@ func loadPromptMetadata(path, name string) (*PromptCommand, error) {
 	if !utf8.ValidString(frontmatter.String()) {
 		return nil, fmt.Errorf("%s: frontmatter is not valid UTF-8", path)
 	}
-	fields, err := skill.ParseFrontmatterFields(frontmatter.String(), "description", "argument-hint")
+	fields, err := skill.ParseFrontmatterFields(withoutPromptArguments(frontmatter.String()), "description", "argument-hint")
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -320,6 +350,21 @@ func loadPromptMetadata(path, name string) (*PromptCommand, error) {
 		ArgHint:     fields["argument-hint"],
 		Path:        path,
 	}, nil
+}
+
+func withoutPromptArguments(frontmatter string) string {
+	lines := strings.Split(frontmatter, "\n")
+	var kept []string
+	for i := 0; i < len(lines); i++ {
+		if lines[i] != "arguments:" {
+			kept = append(kept, lines[i])
+			continue
+		}
+		for i+1 < len(lines) && (strings.TrimSpace(lines[i+1]) == "" || lines[i+1][0] == ' ' || lines[i+1][0] == '\t') {
+			i++
+		}
+	}
+	return strings.Join(kept, "\n")
 }
 
 func promptName(root, path string) (string, error) {

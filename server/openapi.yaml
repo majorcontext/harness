@@ -2925,7 +2925,10 @@ paths:
         takes. A control command carries `op`, `method`, and `path`. A
         frontend command carries none of the three: the client owns that
         action. A prompt command expands a Markdown file from the requested
-        workdir into one user message. See docs/design/slash-commands.md.
+        workdir into one user message. A command file with invalid metadata
+        stays in the list as a disabled prompt command, with its error in
+        `serve_support[name].reason`; other commands remain available. See
+        docs/design/slash-commands.md.
       parameters:
         - in: query
           name: workdir
