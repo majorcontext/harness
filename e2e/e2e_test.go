@@ -1266,6 +1266,9 @@ func TestAppendSystemPromptReachesModelOnServe(t *testing.T) {
 	}
 
 	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
 	projCfg := []byte(`{"append_system_prompt": ["` + repoSeg + `"]}`)
 	if err := os.WriteFile(filepath.Join(workDir, ".harness.json"), projCfg, 0o644); err != nil {
 		t.Fatalf("write project config: %v", err)
