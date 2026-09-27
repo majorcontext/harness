@@ -1900,6 +1900,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt
 			s.contextUnknown = true
+			s.contextFoldEstimate = estimatePromptTokensFromHistory(s.history)
 			// Cumulative usage ONLY (see record.Usage's doc comment above
 			// and the "Usage accounting" section of the design doc):
 			// lastUsage/haveLastUsage must never be touched by a compact

@@ -668,6 +668,7 @@ func TestCompactNoopWhenNotEnoughTurns(t *testing.T) {
 	})
 	runTurns(t, s, 1)
 
+	wantUsage, _ := s.LastUsage()
 	before := s.History()
 	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2})
 	if err != nil {
@@ -678,6 +679,9 @@ func TestCompactNoopWhenNotEnoughTurns(t *testing.T) {
 	}
 	if res.SkipReason != SkipReasonNotEnoughTurns {
 		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonNotEnoughTurns)
+	}
+	if got, ok := s.ContextReading(); !ok || got != wantUsage {
+		t.Errorf("ContextReading after a no-progress skip = (%+v, %v), want (%+v, true): nothing folded, so the retained measurement must stand unchanged", got, ok, wantUsage)
 	}
 	if len(prov.requests) != 1 {
 		t.Errorf("provider calls = %d, want 1 (only the worker turn — no summarization call)", len(prov.requests))
@@ -810,6 +814,42 @@ func TestCompactMarksContextUnknownUntilNextTurnRemeasures(t *testing.T) {
 	}
 }
 
+// TestCompactFoldReportsEstimateInsteadOfZero is the red-first test for the
+// corrected design: after a real fold with no later turn to remeasure it,
+// the retained pre-fold usage is genuinely stale, but the post-fold history
+// is right there, so ContextReading must report a positive size estimate
+// over it instead of the bare "unknown" (InputTokens 0) the prior fix
+// reported.
+func TestCompactFoldReportsEstimateInsteadOfZero(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 100, OutputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 200, OutputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 7, OutputTokens: 3}),
+	}}
+	s := NewSession(Config{
+		Providers: provider.Registry{"test": prov},
+		Model:     message.ModelRef{Provider: "test", Model: "m1"},
+	})
+	runTurns(t, s, 2)
+
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ContextUnknown() {
+		t.Fatal("ContextUnknown after a real fold = false, want true")
+	}
+	usage, ok := s.ContextReading()
+	if !ok {
+		t.Fatal("ContextReading ok = false after a real fold, want true (an estimate stands)")
+	}
+	if usage.InputTokens <= 0 {
+		t.Errorf("ContextReading().InputTokens = %d, want a positive estimate over post-fold history, not 0", usage.InputTokens)
+	}
+	if want := estimatePromptTokensFromHistory(s.History()); usage.InputTokens != want {
+		t.Errorf("ContextReading().InputTokens = %d, want %d (estimatePromptTokensFromHistory over the current post-fold history)", usage.InputTokens, want)
+	}
+}
+
 // TestCompactFailureNoJournalNoMutation is the red-first test for §2's
 // "Failure handling": when the summarization call itself errors, compaction
 // aborts cleanly — no history mutation, no journal write, and an emitted
@@ -907,6 +947,7 @@ func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
 	before := s.History()
 	beforeCount := s.CompactionCount()
 	beforeUsage := s.Usage()
+	wantLastUsage, _ := s.LastUsage()
 	evs = nil // discard the two ordinary turns' events
 
 	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
@@ -918,6 +959,9 @@ func TestCompactEmptySummarySkipsGracefully(t *testing.T) {
 	}
 	if res.SkipReason != SkipReasonSummarizerEmpty {
 		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonSummarizerEmpty)
+	}
+	if got, ok := s.ContextReading(); !ok || got != wantLastUsage {
+		t.Errorf("ContextReading after a summarizer-empty skip = (%+v, %v), want (%+v, true): nothing folded, so the retained measurement must stand unchanged", got, ok, wantLastUsage)
 	}
 
 	// The empty-summary call still cost real tokens and must not vanish
@@ -997,6 +1041,7 @@ func TestCompactSkipsLoneExistingSummaryRangeWithoutCallingProvider(t *testing.T
 		t.Fatalf("third turn: %v", err)
 	}
 	requestsBefore := len(prov.requests)
+	wantUsage, _ := s.LastUsage()
 
 	res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2})
 	if err != nil {
@@ -1007,6 +1052,9 @@ func TestCompactSkipsLoneExistingSummaryRangeWithoutCallingProvider(t *testing.T
 	}
 	if res.SkipReason != SkipReasonLoneExistingSummary {
 		t.Errorf("SkipReason = %q, want %q (review follow-up on PR #136, Finding A/C)", res.SkipReason, SkipReasonLoneExistingSummary)
+	}
+	if got, ok := s.ContextReading(); !ok || got != wantUsage {
+		t.Errorf("ContextReading after a lone-existing-summary skip = (%+v, %v), want (%+v, true): nothing folded, so the retained measurement must stand unchanged", got, ok, wantUsage)
 	}
 	if got := len(prov.requests); got != requestsBefore {
 		t.Errorf("provider calls = %d, want %d (no summarization call for a lone existing-summary range)", got, requestsBefore)

@@ -130,6 +130,13 @@ type sessionSnapshot struct {
 	LastUsage      provider.Usage `json:"last_usage,omitzero"`
 	HaveLastUsage  bool           `json:"have_last_usage,omitempty"`
 	ContextUnknown bool           `json:"context_unknown,omitempty"`
+	// ContextFoldEstimate mirrors Session.contextFoldEstimate: the fold-time
+	// estimate ContextReading reports while ContextUnknown holds. It is
+	// captured verbatim, not recomputed from History at restore — a
+	// snapshot's History can already include turn-in-progress messages
+	// appended after the fold, which would disagree with the frozen value a
+	// full replay's own recCompact case produces.
+	ContextFoldEstimate int `json:"context_fold_estimate,omitempty"`
 
 	// ForceCompactionCheck mirrors Session.forceCompactionCheck — see its
 	// own doc comment. Set only by a fold (recModel/recMessage, store.go)
@@ -508,6 +515,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		LastUsage:            s.lastUsage,
 		HaveLastUsage:        s.haveLastUsage,
 		ContextUnknown:       s.contextUnknown,
+		ContextFoldEstimate:  s.contextFoldEstimate,
 		ForceCompactionCheck: s.forceCompactionCheck,
 		GoalActive:           s.goalActive,
 		GoalCondition:        s.goalCondition,
@@ -584,6 +592,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.lastUsage = snap.LastUsage
 	s.haveLastUsage = snap.HaveLastUsage
 	s.contextUnknown = snap.ContextUnknown
+	s.contextFoldEstimate = snap.ContextFoldEstimate
 	s.forceCompactionCheck = snap.ForceCompactionCheck
 	s.goalActive = snap.GoalActive
 	s.goalCondition = snap.GoalCondition

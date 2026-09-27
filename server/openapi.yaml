@@ -652,16 +652,24 @@ components:
         used_tokens:
           type: integer
           description: >
-            The most recent completed turn's provider-reported input_tokens
-            plus cache_read_tokens plus cache_write_tokens — the full prompt
-            size, not input_tokens alone (which under prompt caching can be
-            a small fraction of it). 0 when there is no known reading: no
-            turn has completed yet, or a compaction folded history since the
-            last measurement and no later turn has remeasured it. Automatic
-            compaction can still act on its own internal size estimate in
-            that case, so a caller must treat 0 as "unknown", never as
-            "empty" — mirroring window_tokens' own 0 meaning "unknown",
-            never "full".
+            While a turn's own usage is known, the most recent completed
+            turn's provider-reported input_tokens plus cache_read_tokens
+            plus cache_write_tokens — the full prompt size, not input_tokens
+            alone (which under prompt caching can be a small fraction of
+            it). After a compaction folds history with no later turn to
+            remeasure it, this instead carries a byte-derived SIZE ESTIMATE
+            over the post-fold history — the same estimate automatic
+            compaction itself already trusts as a fallback trigger signal —
+            for a session read from a live process (GET /session, and the
+            turn.end context_used_tokens mirror). A caller cannot tell a
+            measurement from an estimate by inspecting this field alone,
+            and does not need to: both answer the same question, "how full
+            is context now," to the precision each has available. A cold
+            read (GET /session/status for a non-resident session) cannot
+            estimate and reports plain 0 in that case instead. 0 always
+            means "no known reading" — also true before any turn has
+            completed — never "empty", mirroring window_tokens' own 0
+            meaning "unknown", never "full".
         window_tokens:
           type: integer
           description: >
@@ -2401,14 +2409,14 @@ components:
           type: integer
           description: >
             Carried on turn.end only: the same value as Context.used_tokens
-            (see that schema), read from the session at the moment the
-            turn settled — so an SSE consumer's gauge updates every turn
-            without a separate GET /session poll. Absent (0) when there is
-            no known reading: the server had no live session to read at
-            settle time, or a compaction folded history since the last
-            measurement and this turn recorded none. A present session is
-            therefore not proof the field was measured, and a consumer must
-            treat an absent value as "unknown", never as "empty".
+            (see that schema, including the measurement-vs-estimate split),
+            read from the session at the moment the turn settled — so an
+            SSE consumer's gauge updates every turn without a separate
+            GET /session poll. Absent (0) only when the server had no live
+            session to read at settle time; a compaction fold with no
+            later remeasurement instead carries the same post-fold size
+            estimate Context.used_tokens does. A consumer must treat an
+            absent value as "unknown", never as "empty".
         context_window_tokens:
           type: integer
           description: >

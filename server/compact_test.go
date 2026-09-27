@@ -129,10 +129,12 @@ func TestCompactEndpointFoldsHistoryAndReportsResult(t *testing.T) {
 }
 
 // TestCompactEndpointMarksContextUnknownUntilNextTurn is the red-first test
-// for the stale gauge bug on the wire: GET /session/{id}'s context.used_tokens
-// must read 0 (unknown, per its own "never a stale number" contract) right
-// after a successful /compact, and the real value again once the next turn
-// completes.
+// for the corrected design: GET /session/{id}'s context.used_tokens must
+// stop reporting the stale PRE-compaction reading right after a successful
+// /compact, replacing it with a positive size ESTIMATE over the post-fold
+// history — not the bare 0 an earlier fix reported, which rendered as an
+// uninformative em dash on the console gauge — and the real measured value
+// again once the next turn completes.
 func TestCompactEndpointMarksContextUnknownUntilNextTurn(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
@@ -154,8 +156,8 @@ func TestCompactEndpointMarksContextUnknownUntilNextTurn(t *testing.T) {
 		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
 	}
 
-	if got := h.getSessionJSON(id).Context.UsedTokens; got != 0 {
-		t.Errorf("after compact context.used_tokens = %d, want 0 (unknown)", got)
+	if got := h.getSessionJSON(id).Context.UsedTokens; got <= 0 {
+		t.Errorf("after compact context.used_tokens = %d, want a positive post-fold estimate, not 0", got)
 	}
 
 	h.promptAndWaitIdle(id, "go3")
@@ -165,10 +167,11 @@ func TestCompactEndpointMarksContextUnknownUntilNextTurn(t *testing.T) {
 }
 
 // TestCompactThenFailedTurnReportsTurnEndContextUsedTokensUnknown is the
-// red-first test for recordTurnEnd's own stale-gauge bug: after a successful
-// /compact, a turn that ends without recording fresh usage (here, a
-// provider failure) must still emit turn.end.context_used_tokens as 0, not
-// the pre-compaction reading — mirroring the GET /session/{id} contract
+// red-first test for recordTurnEnd's own share of the corrected design:
+// after a successful /compact, a turn that ends without recording fresh
+// usage (here, a provider failure) must still emit
+// turn.end.context_used_tokens as a positive post-fold estimate, never the
+// stale pre-compaction reading — mirroring the GET /session/{id} contract
 // TestCompactEndpointMarksContextUnknownUntilNextTurn already pins for
 // Session.context.
 func TestCompactThenFailedTurnReportsTurnEndContextUsedTokensUnknown(t *testing.T) {
@@ -202,8 +205,8 @@ func TestCompactThenFailedTurnReportsTurnEndContextUsedTokensUnknown(t *testing.
 	if end.Outcome != "error" {
 		t.Fatalf("turn.end outcome = %q, want error (scripted provider is out of turns)", end.Outcome)
 	}
-	if end.ContextUsedTokens != 0 {
-		t.Errorf("turn.end context_used_tokens = %d, want 0 (unknown after compact, no fresh usage recorded)", end.ContextUsedTokens)
+	if end.ContextUsedTokens <= 0 {
+		t.Errorf("turn.end context_used_tokens = %d, want a positive post-fold estimate after compact, not 0", end.ContextUsedTokens)
 	}
 }
 

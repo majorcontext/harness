@@ -580,36 +580,87 @@ switch clears it. Until the CLI reports one, `window_tokens` is 0:
 configuration value sets it. `maybeAutoCompact` never runs for a delegated
 turn and reads neither value.
 
-**The reading goes unknown across a fold, on purpose.** A successful native
-compaction removes the very history `LastUsage` was measured against, but
+**The retained measurement goes stale across a fold, on purpose — but the
+reading does not have to go unknown.** A successful native compaction
+removes the very history `LastUsage` was measured against, but
 `LastUsage`/`maybeAutoCompact` must keep comparing against that retained
 measurement — `compactHysteresis` already guards re-compaction separately,
 and re-deriving it from a fold would defeat that guard. So `Session.Compact`
 sets a second, independent flag (`contextUnknown`, exposed as
-`Session.ContextUnknown()`) the moment a fold succeeds, and every
-`used_tokens` projection reports 0 whenever it is set: the three read
-projections `contextJSONForSession`/`contextJSONForInfo`/`contextJSONForIndex`,
-and `recordTurnEnd`, which carries the mirrored `turn.end.context_used_tokens`
-field. `recordTurnEnd` matters most of the four, because `turn.end` is the
-live path a console gauge follows during a session while the read projections
-only answer on load. The two projections that hold a live `Session` read it
-through `Session.ContextReading()`, which returns the usage and the flag under
-one lock, so a fold landing between two separate reads cannot pair a stale
-usage with a cleared flag, and a projection cannot report the usage while
-forgetting the gate —
-the same "0 means unknown, never a real reading" convention `window_tokens`
-already uses, so the wire shape gains no new representation for the
-condition. The flag clears the moment a turn next completes and
-measures a fresh `LastUsage` (`appendWithUsage`/`applyClaudeCodeUsage`), the
-same event that already updates the gauge. It never marks a skip
+`Session.ContextUnknown()`) the moment a fold succeeds, and it stays set
+until a turn next completes and measures a fresh `LastUsage`
+(`appendWithUsage`/`applyClaudeCodeUsage`), the same event that already
+updates the gauge. It never marks a skip
 (`not_enough_turns`/`lone_existing_summary`/`summarizer_empty`): none of
 those fold anything, so the retained reading still describes current
-history. It survives a reload: `LoadSession`'s `recCompact` replay sets it
-exactly where live `Compact` does, and the durable sidecar index
-(`SessionIndex.ContextUnknown`, `engine/index.go`) and the journal-scan
-fallback (`SessionInfo.ContextUnknown`, `engine/store.go`) fold the same
-rule from the same records, so a cold read never resurrects the stale
-number a live process would have suppressed.
+history.
+
+An earlier version of this fix made every `used_tokens` projection report 0
+whenever `contextUnknown` was set — reusing `window_tokens`' own "0 means
+unknown" convention rather than inventing a second wire shape for the
+condition. That was strictly worse than necessary: the post-fold history is
+right there, and `estimatePromptTokensFromHistory` (above) is already the
+signal `maybeAutoCompact` itself trusts to decide whether to compact at
+all. Reporting "no known reading" to a gauge while simultaneously trusting
+an estimate to trigger compaction was an unnecessary asymmetry. So
+`Session.Compact` also computes `contextFoldEstimate` — the same
+`estimatePromptTokensFromHistory` call, over the post-fold history, cached
+once at the fold rather than recomputed on every read — and
+`Session.ContextReading()` returns it (folded into `InputTokens`, since an
+estimate does not split into input/cache-read/cache-write components) for
+as long as `contextUnknown` holds. `used_tokens` therefore now carries
+either an exact measurement or a size estimate, never distinguishing the
+two on the wire: both answer the same question, "how full is context now,"
+to the precision each has available, and no consumer needs to tell them
+apart (see `server/openapi.yaml`'s `used_tokens` description).
+
+This split is honestly asymmetric across the four projections, not
+uniform. `contextJSONForSession` and `recordTurnEnd` (`server/handlers.go`,
+`server/journal.go`) hold a live `*engine.Session` and read
+`Session.ContextReading()` directly, so they estimate. `recordTurnEnd`
+matters most of the four, because `turn.end` is the live path a console
+gauge follows during a session while the other three projections only
+answer on a read. `contextJSONForInfo` and `contextJSONForIndex` are cold
+projections built from `SessionInfo`/`SessionIndex` — metadata sidecars
+that carry `ContextUnknown` and `LastPromptTokens` but never the message
+history a fold-time estimate needs — so they cannot estimate and keep
+reporting plain 0, exactly as before. `ContextReading()` returns the usage
+and the flag under one lock, so a fold landing between two separate reads
+cannot pair a stale usage with a cleared flag, and a projection cannot
+report the usage while forgetting the gate.
+
+The estimate is deliberately cached AT THE FOLD, not recomputed on every
+read: `estimatePromptTokensFromHistory` walks every message's parts, and a
+session's history can hold hundreds of messages (the 631-message session in
+its own doc comment is the extreme case on file) — cheap once per
+compaction, but a GET /session poll runs far more often than a fold does,
+and would otherwise pay that walk on every request for as long as
+`contextUnknown` holds. Both the live fold (`Session.Compact`) and its
+`LoadSession` replay counterpart (`recCompact`, `engine/store.go`) compute
+`contextFoldEstimate` once, immediately after splicing the post-fold
+history, so a reload reconstructs the identical value a live process would
+have cached. A snapshot taken while `contextUnknown` holds carries
+`contextFoldEstimate` as its own field (`engine/snapshot.go`) rather than
+recomputing it from the snapshot's `History` at restore — `History` there
+can already include turn-in-progress messages appended after the fold,
+which would disagree with the frozen value a full replay produces.
+
+This design deliberately does NOT extend the estimate to the OTHER
+zero-reading case: a session with no completed turn yet reports plain 0
+too, unchanged. `contextUnknown` cannot collapse into "no measurement
+recorded" (`LastPromptTokens == 0`) to cover both cases uniformly, because
+the cold projections already need the two distinguished —
+`contextJSONForInfo`/`contextJSONForIndex` gate on `!ContextUnknown &&
+LastPromptTokens != 0` precisely so a fold-invalidated reading and a
+genuinely fresh session read the same 0 for different, and separately
+necessary, reasons. Estimating the pre-first-turn case would also have no
+fold event to cache it at, reopening the same per-read cost this design
+avoids everywhere else. It survives a reload: `LoadSession`'s `recCompact`
+replay sets `contextUnknown` exactly where live `Compact` does, and the
+durable sidecar index (`SessionIndex.ContextUnknown`, `engine/index.go`)
+and the journal-scan fallback (`SessionInfo.ContextUnknown`,
+`engine/store.go`) fold the same rule from the same records, so a cold read
+never resurrects the stale number a live process would have suppressed.
 
 ## 5. Non-goals
 

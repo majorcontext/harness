@@ -290,22 +290,30 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 	}
 }
 
-// contextJSON is the Session/StatusEntry context sub-object. While a reading
-// is known, UsedTokens is the exact sum maybeAutoCompact (engine/compact.go)
-// compares against WindowTokens, so the gauge and auto-compaction agree.
-// UsedTokens is 0 when there is no known reading — no turn has completed
-// yet, or a compaction folded history since the retained measurement and no
-// later turn has remeasured it (engine.Session.ContextUnknown). The two part
-// company exactly there: auto-compaction keeps comparing that retained
-// measurement, while the gauge reports unknown rather than a reading the
-// fold already invalidated. A caller must treat 0 as "unknown", never as
-// "empty", mirroring WindowTokens' own 0 meaning "unknown", never "full".
+// contextJSON is the Session/StatusEntry context sub-object. While a
+// measurement is known, UsedTokens is the exact sum maybeAutoCompact
+// (engine/compact.go) compares against WindowTokens, so the gauge and
+// auto-compaction agree. After a compaction fold with no later turn to
+// remeasure it (engine.Session.ContextUnknown), the two LIVE projections
+// below (contextJSONForSession, and recordTurnEnd's own turn.end mirror)
+// report engine's own size estimate over post-fold history instead — a
+// caller cannot tell a measurement from an estimate by inspecting
+// UsedTokens alone, and does not need to: both describe the same question,
+// "how full is context now," to the precision each has available. The two
+// COLD projections below (contextJSONForInfo, contextJSONForIndex) cannot
+// estimate — SessionInfo/SessionIndex carry no message history to walk —
+// so they report plain 0 in that case. UsedTokens is also 0 whenever no
+// turn has completed yet, in any of the four projections. A caller must
+// treat 0 as "unknown", never as "empty",
+// mirroring WindowTokens' own 0 meaning "unknown", never "full".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
 }
 
-// contextJSONForSession mirrors usageJSONForSession.
+// contextJSONForSession mirrors usageJSONForSession. It can estimate after a
+// fold (see contextJSON's own doc comment): ContextReading returns the
+// estimate whenever ContextUnknown holds.
 func contextJSONForSession(sess *engine.Session) contextJSON {
 	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
 	if last, ok := sess.ContextReading(); ok {
@@ -314,7 +322,9 @@ func contextJSONForSession(sess *engine.Session) contextJSON {
 	return out
 }
 
-// contextJSONForInfo mirrors usageJSONForInfo.
+// contextJSONForInfo mirrors usageJSONForInfo. It cannot estimate after a
+// fold (see contextJSON's own doc comment): SessionInfo carries no history,
+// only LastPromptTokens, so it reports 0 whenever ContextUnknown holds.
 func contextJSONForInfo(info engine.SessionInfo) contextJSON {
 	out := contextJSON{WindowTokens: info.WindowTokens}
 	if !info.ContextUnknown && info.LastPromptTokens != 0 {
@@ -323,7 +333,9 @@ func contextJSONForInfo(info engine.SessionInfo) contextJSON {
 	return out
 }
 
-// contextJSONForIndex mirrors buildSessionFromIndex's cold projections.
+// contextJSONForIndex mirrors buildSessionFromIndex's cold projections. It
+// cannot estimate after a fold, for the same reason contextJSONForInfo
+// cannot — see contextJSON's own doc comment.
 func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
 	out := contextJSON{WindowTokens: ix.WindowTokens}
 	if !ix.ContextUnknown && ix.LastPromptTokens != 0 {

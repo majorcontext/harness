@@ -165,10 +165,12 @@ type Event struct {
 
 	// ContextUsedTokens/ContextWindowTokens are carried by evtTurnEnd only,
 	// mirroring contextJSON's two fields. Both 0 (key absent) when
-	// recordTurnEnd had no live *engine.Session to read. ContextUsedTokens
-	// is also 0 for a live session whose reading a fold invalidated with no
-	// later turn to remeasure it, while ContextWindowTokens stays populated:
-	// 0 here means unknown, never empty.
+	// recordTurnEnd had no live *engine.Session to read. For a live session
+	// whose reading a fold invalidated with no later turn to remeasure it,
+	// ContextUsedTokens instead carries engine's own size estimate (see
+	// contextJSON's own doc comment), never a fold-invalidated measurement;
+	// ContextWindowTokens stays populated throughout. 0 here means unknown,
+	// never empty.
 	ContextUsedTokens   int `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
@@ -774,9 +776,10 @@ func (s *Server) publishQueue(ev engine.Event) {
 // supplies the record's context fields when non-nil; onChildTurnEnd's
 // resolveLive lookup can pass nil for a child this process does not hold
 // live at settle time. ContextUsedTokens comes from sess.ContextReading(),
-// so a turn ending without remeasuring after a fold reports 0 rather than
-// the stale pre-fold reading. The window is never gated: it stays known when
-// the usage reading does not.
+// so a turn ending without remeasuring after a fold reports engine's size
+// estimate over post-fold history rather than the stale pre-fold reading.
+// The window is never gated: it stays known when the usage reading does
+// not.
 //
 // This is the "idle because done" vs "idle because the turn died" wire
 // contract: today, three plain-prompt turns died mid-stream (final assistant

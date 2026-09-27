@@ -28,6 +28,7 @@ type foldState struct {
 	LastUsage                  provider.Usage
 	HaveLastUsage              bool
 	ContextUnknown             bool
+	ContextFoldEstimate        int
 	ForceCompactionCheck       bool
 	GoalActive                 bool
 	GoalCondition              string
@@ -72,6 +73,7 @@ func foldStateOf(t *testing.T, s *Session) string {
 		LastUsage:                  s.lastUsage,
 		HaveLastUsage:              s.haveLastUsage,
 		ContextUnknown:             s.contextUnknown,
+		ContextFoldEstimate:        s.contextFoldEstimate,
 		ForceCompactionCheck:       s.forceCompactionCheck,
 		GoalActive:                 s.goalActive,
 		GoalCondition:              s.goalCondition,

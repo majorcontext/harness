@@ -1082,6 +1082,12 @@ type Session struct {
 	// keeps comparing against it), so this is the only signal a reporter
 	// has that the retained number describes history the fold removed.
 	contextUnknown bool
+	// contextFoldEstimate is estimatePromptTokensFromHistory's reading over
+	// history immediately after the fold that set contextUnknown, cached
+	// once at that fold (Session.Compact, and its store.go replay
+	// counterpart) rather than recomputed on every read: ContextReading
+	// answers a GET, which can run far more often than a fold does.
+	contextFoldEstimate int
 
 	// subscriptionUsage is this session's most recently captured
 	// subscription-lane rate-limit/quota snapshot (see
@@ -2358,16 +2364,24 @@ func (s *Session) ContextUnknown() bool {
 	return s.contextUnknown
 }
 
-// ContextReading returns the usage a projection may report, with ok false
-// when no measurement stands. It answers under one lock what LastUsage and
-// ContextUnknown answer separately, so a fold landing between two reads
-// cannot pair a stale usage with a cleared flag, and so a projection cannot
-// report the usage while forgetting the gate.
+// ContextReading returns the best available reading a projection may
+// report, with ok false only when no turn has completed and no fold has
+// run — a genuinely fresh session. It answers under one lock what
+// LastUsage and ContextUnknown answer separately, so a fold landing
+// between two reads cannot pair a stale usage with a cleared flag, and so
+// a projection cannot report the usage while forgetting the gate.
+//
+// While contextUnknown holds, lastUsage describes history the fold
+// already removed, so this returns contextFoldEstimate instead — folded
+// into InputTokens, the same field every caller already sums with
+// CacheReadTokens/CacheWriteTokens, since an estimate does not split into
+// those components: a real, positive size a caller can render, distinct
+// from the "no known reading" 0 a genuinely fresh session still reports.
 func (s *Session) ContextReading() (provider.Usage, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.contextUnknown {
-		return provider.Usage{}, false
+		return provider.Usage{InputTokens: s.contextFoldEstimate}, true
 	}
 	return s.lastUsage, s.haveLastUsage
 }
