@@ -11,6 +11,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -270,6 +271,20 @@ type Stream interface {
 type StartupPrewarmer interface {
 	StartupPrewarmEnabled() bool
 	Prewarm(context.Context, *Request) error
+}
+
+// ErrSubscriptionUsageRefreshUnsupported reports that a session's current
+// provider configuration has no on-demand subscription-usage read. A caller
+// must treat this as a documented outcome, distinct from a fetch failure.
+var ErrSubscriptionUsageRefreshUnsupported = errors.New("provider: no on-demand subscription-usage read for this configuration")
+
+// SubscriptionUsageRefresher is an optional provider capability that answers
+// a subscription-usage read outside a turn, returning the same shape a
+// turn-side signal would produce. A Provider without this capability, or one
+// that returns ErrSubscriptionUsageRefreshUnsupported, has no way to answer
+// the question except by inference from a turn's own signal.
+type SubscriptionUsageRefresher interface {
+	RefreshSubscriptionUsage(ctx context.Context) (*message.SubscriptionUsage, error)
 }
 
 // Provider is one model API family.

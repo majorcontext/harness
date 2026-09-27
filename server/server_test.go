@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -554,8 +555,9 @@ func TestHealthReportsCapabilities(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Capabilities) != 1 || body.Capabilities[0] != "delta_row_identity" {
-		t.Errorf("capabilities = %v, want [delta_row_identity]", body.Capabilities)
+	want := []string{"delta_row_identity", "subscription_usage_refresh"}
+	if !reflect.DeepEqual(body.Capabilities, want) {
+		t.Errorf("capabilities = %v, want %v", body.Capabilities, want)
 	}
 }
 

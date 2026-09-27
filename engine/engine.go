@@ -2399,6 +2399,33 @@ func (s *Session) applySubscriptionUsage(u message.SubscriptionUsage) {
 	s.subscriptionUsage = &u
 }
 
+// RefreshSubscriptionUsage asks this session's current provider for a
+// subscription-usage read outside a turn, applies a successful result
+// through the same applySubscriptionUsage choke point a turn-side capture
+// uses, and returns the resulting snapshot. Returns
+// provider.ErrSubscriptionUsageRefreshUnsupported, unchanged, when the
+// current provider does not implement provider.SubscriptionUsageRefresher
+// or reports that error itself — a documented outcome the caller must not
+// treat as a failure. Any other error is a genuine fetch failure.
+func (s *Session) RefreshSubscriptionUsage(ctx context.Context) (*message.SubscriptionUsage, error) {
+	configured, err := s.cfg.Providers.For(s.Model())
+	if err != nil {
+		return nil, err
+	}
+	refresher, ok := configured.(provider.SubscriptionUsageRefresher)
+	if !ok {
+		return nil, provider.ErrSubscriptionUsageRefreshUnsupported
+	}
+	usage, err := refresher.RefreshSubscriptionUsage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if usage != nil {
+		s.applySubscriptionUsage(*usage)
+	}
+	return s.SubscriptionUsage(), nil
+}
+
 // SubscriptionUsage returns this session's most recently captured
 // subscription-usage snapshot (see applySubscriptionUsage), or nil if no
 // turn in this process has carried the signal yet — see

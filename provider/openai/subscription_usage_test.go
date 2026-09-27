@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -303,5 +304,111 @@ func TestWebSocketStreamSurvivesMalformedRateLimits(t *testing.T) {
 	}
 	if done.SubscriptionUsage != nil {
 		t.Errorf("SubscriptionUsage = %+v, want nil for an unparseable frame", done.SubscriptionUsage)
+	}
+}
+
+// codexUsageBody is a documented-shape GET .../usage response body: a plan
+// type plus a rate_limit object carrying primary and secondary windows, in
+// codex_backend_openapi_models::RateLimitStatusPayload's own field names.
+const codexUsageBody = `{"plan_type":"pro","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":42,"limit_window_seconds":604800,"reset_after_seconds":600,"reset_at":1788785267},"secondary_window":{"used_percent":7,"limit_window_seconds":18000,"reset_after_seconds":120,"reset_at":1788700000}}}`
+
+// TestRefreshSubscriptionUsageChatGPTPathStyle: a CodexFamily client whose
+// BaseURL contains "/backend-api" (boxes' own deployed shape,
+// "https://chatgpt.com/backend-api/codex") issues its on-demand read at
+// "<prefix through /backend-api>/wham/usage" — the suffix after
+// "/backend-api" ("/codex") is dropped, exactly as
+// codex-rs's PathStyle::ChatGptApi builds it — with a plain Bearer
+// Authorization header, and maps the JSON body into
+// message.SubscriptionUsage.
+func TestRefreshSubscriptionUsageChatGPTPathStyle(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(codexUsageBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{APIKey: "test-key", BaseURL: srv.URL + "/backend-api/codex", Family: CodexFamily}
+	got, err := c.RefreshSubscriptionUsage(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshSubscriptionUsage: %v", err)
+	}
+	if gotPath != "/backend-api/wham/usage" {
+		t.Errorf("request path = %q, want /backend-api/wham/usage", gotPath)
+	}
+	if gotAuth != "Bearer test-key" {
+		t.Errorf("Authorization = %q, want Bearer test-key", gotAuth)
+	}
+	if got == nil {
+		t.Fatal("RefreshSubscriptionUsage = nil, want a captured snapshot")
+	}
+	if got.Provider != "codex" || got.Plan != "pro" {
+		t.Errorf("got Provider=%q Plan=%q, want codex/pro", got.Provider, got.Plan)
+	}
+	if len(got.Windows) != 2 {
+		t.Fatalf("len(Windows) = %d, want 2", len(got.Windows))
+	}
+	if got.Windows[0].Key != "primary" || got.Windows[0].Label != "Weekly" || got.Windows[0].UsedPercent != 42 {
+		t.Errorf("primary window = %+v, want key=primary label=Weekly used_percent=42", got.Windows[0])
+	}
+	if got.Windows[1].Key != "secondary" || got.Windows[1].Label != "5-hour" {
+		t.Errorf("secondary window = %+v, want key=secondary label=5-hour", got.Windows[1])
+	}
+}
+
+// TestRefreshSubscriptionUsageCodexAPIPathStyle: a CodexFamily client whose
+// BaseURL carries no "/backend-api" segment issues its on-demand read at
+// "<base>/api/codex/usage" instead — codex-rs's PathStyle::CodexApi shape.
+func TestRefreshSubscriptionUsageCodexAPIPathStyle(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(codexUsageBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{APIKey: "test-key", BaseURL: srv.URL, Family: CodexFamily}
+	if _, err := c.RefreshSubscriptionUsage(context.Background()); err != nil {
+		t.Fatalf("RefreshSubscriptionUsage: %v", err)
+	}
+	if gotPath != "/api/codex/usage" {
+		t.Errorf("request path = %q, want /api/codex/usage", gotPath)
+	}
+}
+
+// TestRefreshSubscriptionUsageUnsupportedFamilySkipsNetwork: a client whose
+// family is not CodexFamily reports
+// provider.ErrSubscriptionUsageRefreshUnsupported without dialing out — a
+// bogus, unresolvable BaseURL proves no request was attempted: a real dial
+// attempt would surface a DNS/connection error, not the exact sentinel.
+func TestRefreshSubscriptionUsageUnsupportedFamilySkipsNetwork(t *testing.T) {
+	c := &Client{APIKey: "test-key", BaseURL: "http://usage-refresh-unsupported.invalid", Family: "openai"}
+	_, err := c.RefreshSubscriptionUsage(context.Background())
+	if !errors.Is(err, provider.ErrSubscriptionUsageRefreshUnsupported) {
+		t.Fatalf("err = %v, want provider.ErrSubscriptionUsageRefreshUnsupported", err)
+	}
+}
+
+// TestRefreshSubscriptionUsageUpstreamError: a non-200 response surfaces as
+// a real error distinct from provider.ErrSubscriptionUsageRefreshUnsupported
+// — an upstream failure must not be misreported as "this lane has no
+// on-demand read".
+func TestRefreshSubscriptionUsageUpstreamError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limited","type":"rate_limit_error"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := &Client{APIKey: "test-key", BaseURL: srv.URL, Family: CodexFamily}
+	_, err := c.RefreshSubscriptionUsage(context.Background())
+	if err == nil {
+		t.Fatal("err = nil, want a upstream-error failure")
+	}
+	if errors.Is(err, provider.ErrSubscriptionUsageRefreshUnsupported) {
+		t.Fatalf("err = %v, want a real fetch failure, not the unsupported sentinel", err)
 	}
 }

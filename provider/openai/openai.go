@@ -301,6 +301,44 @@ func (c *Client) codexSubscriptionUsage(h http.Header) *message.SubscriptionUsag
 	return codexSubscriptionUsageFromHeaders(h)
 }
 
+// RefreshSubscriptionUsage issues a plain authenticated GET against the
+// Codex backend's own rate-limit-status endpoint (see subscriptionUsageURL)
+// and reports message.SubscriptionUsage from the decoded body — no turn, no
+// websocket, and no interaction with the pooled connection real turns use.
+// Only a client configured under CodexFamily supports this; any other
+// family reports provider.ErrSubscriptionUsageRefreshUnsupported without
+// touching the network, mirroring codexSubscriptionUsage's own gate.
+func (c *Client) RefreshSubscriptionUsage(ctx context.Context) (*message.SubscriptionUsage, error) {
+	if c.family() != CodexFamily {
+		return nil, provider.ErrSubscriptionUsageRefreshUnsupported
+	}
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.subscriptionUsageURL(), nil)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range c.ExtraHeaders {
+		httpReq.Header.Set(k, v)
+	}
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	resp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, apiError(resp)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return codexSubscriptionUsageFromUsageBody(body)
+}
+
 // responsesURL joins a base URL and a request path, applying each field's
 // default and normalizing the separator between them to exactly one slash.
 //

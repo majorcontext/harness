@@ -113,7 +113,15 @@ components:
             consumer must still tolerate an empty id on a delta; the name
             says the fields are populated at all, not that every delta is
             identified.
-          example: ["delta_row_identity"]
+
+
+            "subscription_usage_refresh": POST
+            /session/{id}/subscription-usage/refresh exists and answers its
+            own documented "unsupported" outcome for a lane with no
+            on-demand read, rather than a bare 404. A caller uses this to
+            skip a doomed request on an older harness build without a live
+            probe.
+          example: ["delta_row_identity", "subscription_usage_refresh"]
 
     CommandArg:
       type: object
@@ -578,6 +586,29 @@ components:
         resets_at:
           type: integer
           description: Unix seconds.
+
+    SubscriptionUsageRefreshResponse:
+      type: object
+      description: >
+        POST /session/{id}/subscription-usage/refresh's response — see that
+        route's own description.
+      required: [subscription_usage, supported]
+      properties:
+        subscription_usage:
+          $ref: "#/components/schemas/SubscriptionUsage"
+          nullable: true
+          description: >
+            The session's current subscription_usage snapshot (the same
+            field GET /session reports), refreshed by a live provider read
+            when supported is true, or left exactly as it was when supported
+            is false.
+        supported:
+          type: boolean
+          description: >
+            Whether this call reached a live provider read. false means the
+            session's current provider has no on-demand subscription-usage
+            read — a documented outcome, not a failure; subscription_usage
+            still carries whatever snapshot the session already had.
 
     PluginInfo:
       type: object
@@ -4017,6 +4048,46 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /session/{id}/subscription-usage/refresh:
+    post:
+      operationId: refreshSubscriptionUsage
+      summary: Read the session's current provider for fresh subscription usage.
+      description: >
+        Asks the session's current provider for a subscription-usage read
+        outside a turn — no queued prompt, no model call on the "codex"
+        family's own responses wire. Only a "codex"-family native OpenAI
+        Responses provider supports this today, with a plain authenticated
+        GET against the ChatGPT Codex backend's own rate-limit-status
+        endpoint. A supported read applies its result through the same
+        choke point a turn-side capture uses, so it is indistinguishable
+        from a normal turn-captured snapshot to every other reader (GET
+        /session, this session's per-account usage cache). A lane with no
+        on-demand read (the Claude Code delegated backend, an "openai"-
+        family entry, or any custom provider that does not implement the
+        capability) answers 200 with supported false and
+        subscription_usage left exactly as it was — a documented outcome,
+        never an error a caller could mistake for a failure. See GET
+        /health's capabilities ("subscription_usage_refresh") for how a
+        caller can tell this route exists before calling it, since the
+        fleet runs a spread of harness commits at once.
+      parameters:
+        - $ref: "#/components/parameters/sessionID"
+      responses:
+        "200":
+          description: >
+            The session's subscription_usage snapshot, freshly read
+            (supported true) or unchanged (supported false).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SubscriptionUsageRefreshResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "502":
+          description: The provider's on-demand read itself failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /session/{id}/abort:
     post:

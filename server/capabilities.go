@@ -8,8 +8,18 @@ package server
 // identified.
 const CapabilityDeltaRowIdentity = "delta_row_identity"
 
+// CapabilitySubscriptionUsageRefresh: POST
+// /session/{id}/subscription-usage/refresh exists and answers its own
+// documented "unsupported" outcome (see subscriptionUsageRefreshResponseJSON)
+// rather than a bare 404 route-not-found. A caller uses this to skip a
+// doomed request on an older harness build without waiting on a live probe
+// — the fleet runs a spread of commits at once, so "the code merged" does
+// not mean every running box has it yet.
+const CapabilitySubscriptionUsageRefresh = "subscription_usage_refresh"
+
 // capabilities is the sorted list GET /health advertises. A name, once
 // shipped, is never removed or repurposed.
 var capabilities = []string{
 	CapabilityDeltaRowIdentity,
+	CapabilitySubscriptionUsageRefresh,
 }

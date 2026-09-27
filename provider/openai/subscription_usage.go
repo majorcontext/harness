@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -212,5 +213,101 @@ func codexRateLimitEventWindow(key string, w *codexRateLimitsEventWindow) (messa
 		Label:       label,
 		UsedPercent: w.UsedPercent,
 		ResetsAt:    resetsAt,
+	}, true
+}
+
+// backendAPIMarker is the path segment codex-rs/backend-client's own
+// PathStyle::from_base_url checks for: a base URL under chatgpt.com's
+// backend-api answers rate limits at "<prefix through /backend-api>/wham/
+// usage"; anything else (a direct api.openai.com-style deployment) answers
+// at "<base_url>/api/codex/usage". This file mirrors that split rather than
+// hardcoding one shape, since a "codex"-family client's BaseURL can be
+// configured either way.
+const backendAPIMarker = "/backend-api"
+
+// subscriptionUsageURL builds the plain authenticated GET this file issues
+// for an on-demand Codex subscription-usage read, following
+// codex-rs/backend-client/src/client/rate_limit_resets.rs's
+// rate_limit_status_url exactly: a chatgpt.com/backend-api-style BaseURL
+// (any suffix after backend-api, e.g. "/codex", is not part of this path)
+// answers at "/wham/usage"; any other BaseURL answers at "/api/codex/usage".
+func (c *Client) subscriptionUsageURL() string {
+	base := strings.TrimRight(c.BaseURL, "/")
+	if base == "" {
+		base = defaultBaseURL
+	}
+	if i := strings.Index(base, backendAPIMarker); i >= 0 {
+		return base[:i+len(backendAPIMarker)] + "/wham/usage"
+	}
+	return base + "/api/codex/usage"
+}
+
+// codexUsageResponse is the GET .../wham/usage (or .../api/codex/usage)
+// response shape — codex_backend_openapi_models::RateLimitStatusPayload in
+// the Codex CLI source. Fields this file does not read (credits,
+// spend_control, additional_rate_limits, rate_limit_reached_type) are
+// ignored.
+type codexUsageResponse struct {
+	PlanType  string               `json:"plan_type"`
+	RateLimit *codexUsageRateLimit `json:"rate_limit"`
+}
+
+type codexUsageRateLimit struct {
+	PrimaryWindow   *codexUsageWindow `json:"primary_window"`
+	SecondaryWindow *codexUsageWindow `json:"secondary_window"`
+}
+
+// codexUsageWindow is codex_backend_openapi_models::RateLimitWindowSnapshot.
+// Unlike the header and websocket lanes, this wire reports the window's
+// width in seconds (limit_window_seconds), not minutes.
+type codexUsageWindow struct {
+	UsedPercent        float64 `json:"used_percent"`
+	LimitWindowSeconds int64   `json:"limit_window_seconds"`
+	ResetAt            int64   `json:"reset_at"`
+}
+
+// codexSubscriptionUsageFromUsageBody maps a decoded GET .../usage response
+// body into message.SubscriptionUsage — this file's on-demand-read analog
+// of codexSubscriptionUsageFromHeaders and
+// codexSubscriptionUsageFromRateLimitsEvent. Returns nil, nil when the
+// response carries neither a plan nor any window, the same empty-signal
+// convention both turn-side parsers use.
+func codexSubscriptionUsageFromUsageBody(data []byte) (*message.SubscriptionUsage, error) {
+	var resp codexUsageResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
+	}
+	windows := []message.SubscriptionUsageWindow{}
+	if resp.RateLimit != nil {
+		if w, ok := codexUsageWindowToSubscription("primary", resp.RateLimit.PrimaryWindow); ok {
+			windows = append(windows, w)
+		}
+		if w, ok := codexUsageWindowToSubscription("secondary", resp.RateLimit.SecondaryWindow); ok {
+			windows = append(windows, w)
+		}
+	}
+	if resp.PlanType == "" && len(windows) == 0 {
+		return nil, nil
+	}
+	return &message.SubscriptionUsage{
+		Provider: "codex",
+		Plan:     resp.PlanType,
+		Windows:  windows,
+	}, nil
+}
+
+// codexUsageWindowToSubscription maps one present window (ok=false only for
+// a nil w, e.g. an absent secondary_window) to a keyed
+// message.SubscriptionUsageWindow, converting limit_window_seconds to
+// minutes for codexWindowLabel.
+func codexUsageWindowToSubscription(key string, w *codexUsageWindow) (message.SubscriptionUsageWindow, bool) {
+	if w == nil {
+		return message.SubscriptionUsageWindow{}, false
+	}
+	return message.SubscriptionUsageWindow{
+		Key:         key,
+		Label:       codexWindowLabel(w.LimitWindowSeconds / 60),
+		UsedPercent: w.UsedPercent,
+		ResetsAt:    w.ResetAt,
 	}, true
 }
