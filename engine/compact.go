@@ -538,6 +538,10 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.compactCount++
 	s.lastCompactedAt = summary.CreatedAt
+	// The fold just removed the history lastUsage was measured against:
+	// report it unknown until the next completed turn remeasures (see
+	// contextUnknown's own doc comment). lastUsage itself is untouched.
+	s.contextUnknown = true
 	// Journal only the real, persisted boundary IDs (see journaledFirstID/
 	// journaledLastID's doc comment above) — never the live splice IDs,
 	// which can name a synthetic message that will never exist on replay.

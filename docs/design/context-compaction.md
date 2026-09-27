@@ -580,6 +580,29 @@ switch clears it. Until the CLI reports one, `window_tokens` is 0:
 configuration value sets it. `maybeAutoCompact` never runs for a delegated
 turn and reads neither value.
 
+**The reading goes unknown across a fold, on purpose.** A successful native
+compaction removes the very history `LastUsage` was measured against, but
+`LastUsage`/`maybeAutoCompact` must keep comparing against that retained
+measurement — `compactHysteresis` already guards re-compaction separately,
+and re-deriving it from a fold would defeat that guard. So `Session.Compact`
+sets a second, independent flag (`contextUnknown`, exposed as
+`Session.ContextUnknown()`) the moment a fold succeeds, and every
+`used_tokens` projection (`contextJSONForSession`/`contextJSONForInfo`/
+`contextJSONForIndex`, `server/handlers.go`) reports 0 whenever it is set —
+the same "0 means unknown, never a real reading" convention `window_tokens`
+already uses, so the wire shape gains no new representation for the
+condition. The flag clears the moment a turn next completes and
+measures a fresh `LastUsage` (`appendWithUsage`/`applyClaudeCodeUsage`), the
+same event that already updates the gauge. It never marks a skip
+(`not_enough_turns`/`lone_existing_summary`/`summarizer_empty`): none of
+those fold anything, so the retained reading still describes current
+history. It survives a reload: `LoadSession`'s `recCompact` replay sets it
+exactly where live `Compact` does, and the durable sidecar index
+(`SessionIndex.ContextUnknown`, `engine/index.go`) and the journal-scan
+fallback (`SessionInfo.ContextUnknown`, `engine/store.go`) fold the same
+rule from the same records, so a cold read never resurrects the stale
+number a live process would have suppressed.
+
 ## 5. Non-goals
 
 - **No local tokenizer.** Compaction relies entirely on the provider's own

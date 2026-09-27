@@ -637,10 +637,13 @@ components:
             The most recent completed turn's provider-reported input_tokens
             plus cache_read_tokens plus cache_write_tokens — the full prompt
             size, not input_tokens alone (which under prompt caching can be
-            a small fraction of it). 0 until a turn completes, or when the
-            provider reported no usage for it; automatic compaction can
-            still act on its own internal size estimate in that case, so 0
-            here does not mean compaction has nothing to do.
+            a small fraction of it). 0 when there is no known reading: no
+            turn has completed yet, or a compaction folded history since the
+            last measurement and no later turn has remeasured it. Automatic
+            compaction can still act on its own internal size estimate in
+            that case, so a caller must treat 0 as "unknown", never as
+            "empty" — mirroring window_tokens' own 0 meaning "unknown",
+            never "full".
         window_tokens:
           type: integer
           description: >

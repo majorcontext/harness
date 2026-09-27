@@ -45,6 +45,7 @@ var snapshottedSessionFields = map[string]bool{
 	"usage":                      true,
 	"lastUsage":                  true,
 	"haveLastUsage":              true,
+	"contextUnknown":             true,
 	"forceCompactionCheck":       true,
 	"goalActive":                 true,
 	"goalCondition":              true,

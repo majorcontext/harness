@@ -128,6 +128,42 @@ func TestCompactEndpointFoldsHistoryAndReportsResult(t *testing.T) {
 	}
 }
 
+// TestCompactEndpointMarksContextUnknownUntilNextTurn is the red-first test
+// for the stale gauge bug on the wire: GET /session/{id}'s context.used_tokens
+// must read 0 (unknown, per its own "never a stale number" contract) right
+// after a successful /compact, and the real value again once the next turn
+// completes.
+func TestCompactEndpointMarksContextUnknownUntilNextTurn(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 20}),
+		compactAsstTurn("SUMMARY", provider.Usage{InputTokens: 5}),
+		compactAsstTurn("three", provider.Usage{InputTokens: 30}),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+	if before := h.getSessionJSON(id).Context.UsedTokens; before != 20 {
+		t.Fatalf("before compact context.used_tokens = %d, want 20", before)
+	}
+
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
+	}
+
+	if got := h.getSessionJSON(id).Context.UsedTokens; got != 0 {
+		t.Errorf("after compact context.used_tokens = %d, want 0 (unknown)", got)
+	}
+
+	h.promptAndWaitIdle(id, "go3")
+	if got := h.getSessionJSON(id).Context.UsedTokens; got != 30 {
+		t.Errorf("after the next turn context.used_tokens = %d, want 30", got)
+	}
+}
+
 // TestCompactEndpointKeepTurnsFloor is the red-first test for the hard
 // floor on keep_turns: 0 or negative is a 400, never silently clamped.
 func TestCompactEndpointKeepTurnsFloor(t *testing.T) {

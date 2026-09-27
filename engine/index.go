@@ -84,6 +84,11 @@ type SessionIndex struct {
 	// prompt size maybeAutoCompact compares against the window (compact.go).
 	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
 	WindowTokens     int `json:"window_tokens,omitempty"`
+	// ContextUnknown is true when the most recent compact record folded
+	// history after LastPromptTokens's own measurement and no later
+	// message/delegated-usage record has remeasured it since — mirrors
+	// Session.contextUnknown (engine.go), durably, for a cold read.
+	ContextUnknown bool `json:"context_unknown,omitempty"`
 
 	// GoalActive and GoalCondition are the durable goal state LoadSession
 	// restores (store.go's recGoalSet fold): the condition of a goal set
@@ -333,6 +338,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 			f.addUsage(*rec.Usage)
 			f.ix.LastInputTokens = rec.Usage.InputTokens
 			f.ix.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+			f.ix.ContextUnknown = false
 		}
 	case recClaudeCodeUsage:
 		if rec.Usage != nil {
@@ -341,6 +347,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		if last := claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage); last != nil {
 			f.ix.LastInputTokens = last.InputTokens
 			f.ix.LastPromptTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+			f.ix.ContextUnknown = false
 		}
 		if rec.ClaudeCodeWindowTokens > 0 {
 			f.ix.WindowTokens = rec.ClaudeCodeWindowTokens
@@ -388,6 +395,7 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		f.recountRepairs()
 		f.ix.CompactionCount++
 		f.ix.LastCompactedAt = rec.CreatedAt
+		f.ix.ContextUnknown = true
 		if rec.Usage != nil {
 			// Cumulative usage only — never LastInputTokens. See
 			// record.Usage's doc comment (store.go): a reloaded session

@@ -292,9 +292,12 @@ func usageJSONForInfo(info engine.SessionInfo) usageJSON {
 
 // contextJSON is the Session/StatusEntry context sub-object. UsedTokens is
 // the exact sum maybeAutoCompact (engine/compact.go) compares against
-// WindowTokens, so this gauge and auto-compaction never disagree.
-// WindowTokens is 0 when automatic compaction is disarmed — a caller must
-// treat 0 as "unknown", never as "full".
+// WindowTokens, so this gauge and auto-compaction never disagree. UsedTokens
+// is 0 when there is no known reading — no turn has completed yet, or a
+// compaction folded history since the retained measurement and no later
+// turn has remeasured it (engine.Session.ContextUnknown) — a caller must
+// treat 0 as "unknown", never as "empty", mirroring WindowTokens' own 0
+// meaning "unknown", never "full".
 type contextJSON struct {
 	UsedTokens   int `json:"used_tokens"`
 	WindowTokens int `json:"window_tokens"`
@@ -303,7 +306,7 @@ type contextJSON struct {
 // contextJSONForSession mirrors usageJSONForSession.
 func contextJSONForSession(sess *engine.Session) contextJSON {
 	out := contextJSON{WindowTokens: sess.ContextWindowTokens()}
-	if last, ok := sess.LastUsage(); ok {
+	if last, ok := sess.LastUsage(); ok && !sess.ContextUnknown() {
 		out.UsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
 	}
 	return out
@@ -311,12 +314,20 @@ func contextJSONForSession(sess *engine.Session) contextJSON {
 
 // contextJSONForInfo mirrors usageJSONForInfo.
 func contextJSONForInfo(info engine.SessionInfo) contextJSON {
-	return contextJSON{UsedTokens: info.LastPromptTokens, WindowTokens: info.WindowTokens}
+	out := contextJSON{WindowTokens: info.WindowTokens}
+	if !info.ContextUnknown && info.LastPromptTokens != 0 {
+		out.UsedTokens = info.LastPromptTokens
+	}
+	return out
 }
 
 // contextJSONForIndex mirrors buildSessionFromIndex's cold projections.
 func contextJSONForIndex(ix engine.SessionIndex) contextJSON {
-	return contextJSON{UsedTokens: ix.LastPromptTokens, WindowTokens: ix.WindowTokens}
+	out := contextJSON{WindowTokens: ix.WindowTokens}
+	if !ix.ContextUnknown && ix.LastPromptTokens != 0 {
+		out.UsedTokens = ix.LastPromptTokens
+	}
+	return out
 }
 
 // lastTurnJSON is the openapi LastTurn shape.

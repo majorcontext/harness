@@ -211,6 +211,7 @@ func (s *Session) applyClaudeCodeUsage(usage, last provider.Usage, windowTokens 
 	s.usage.CacheWriteTokens += usage.CacheWriteTokens
 	s.lastUsage = last
 	s.haveLastUsage = true
+	s.contextUnknown = false
 	if windowTokens > 0 {
 		s.claudeCodeWindowTokens = windowTokens
 	}

@@ -126,9 +126,10 @@ type sessionSnapshot struct {
 	Effort      message.Effort   `json:"effort,omitempty"`
 	ServiceTier string           `json:"service_tier,omitempty"`
 
-	Usage         provider.Usage `json:"usage,omitzero"`
-	LastUsage     provider.Usage `json:"last_usage,omitzero"`
-	HaveLastUsage bool           `json:"have_last_usage,omitempty"`
+	Usage          provider.Usage `json:"usage,omitzero"`
+	LastUsage      provider.Usage `json:"last_usage,omitzero"`
+	HaveLastUsage  bool           `json:"have_last_usage,omitempty"`
+	ContextUnknown bool           `json:"context_unknown,omitempty"`
 
 	// ForceCompactionCheck mirrors Session.forceCompactionCheck — see its
 	// own doc comment. Set only by a fold (recModel/recMessage, store.go)
@@ -506,6 +507,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		Usage:                s.usage,
 		LastUsage:            s.lastUsage,
 		HaveLastUsage:        s.haveLastUsage,
+		ContextUnknown:       s.contextUnknown,
 		ForceCompactionCheck: s.forceCompactionCheck,
 		GoalActive:           s.goalActive,
 		GoalCondition:        s.goalCondition,
@@ -581,6 +583,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.usage = snap.Usage
 	s.lastUsage = snap.LastUsage
 	s.haveLastUsage = snap.HaveLastUsage
+	s.contextUnknown = snap.ContextUnknown
 	s.forceCompactionCheck = snap.ForceCompactionCheck
 	s.goalActive = snap.GoalActive
 	s.goalCondition = snap.GoalCondition

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -82,6 +83,20 @@ func TestSessionContextUsageSurfacedOnGet(t *testing.T) {
 	}
 	if sess.Context.WindowTokens != 0 {
 		t.Errorf("Context.WindowTokens = %d, want 0 (test/m1 has no known context window)", sess.Context.WindowTokens)
+	}
+}
+
+// TestContextJSONColdProjectionsAgreeOnUnknown proves the two cold
+// projections never disagree with the live one (proven end to end by
+// TestCompactEndpointMarksContextUnknownUntilNextTurn): given the same
+// ContextUnknown=true a fold leaves behind, both must report used_tokens
+// as 0 (unknown) rather than the retained LastPromptTokens as current.
+func TestContextJSONColdProjectionsAgreeOnUnknown(t *testing.T) {
+	if got := contextJSONForInfo(engine.SessionInfo{LastPromptTokens: 30, ContextUnknown: true}); got.UsedTokens != 0 {
+		t.Errorf("contextJSONForInfo.UsedTokens = %d, want 0 (unknown)", got.UsedTokens)
+	}
+	if got := contextJSONForIndex(engine.SessionIndex{LastPromptTokens: 30, ContextUnknown: true}); got.UsedTokens != 0 {
+		t.Errorf("contextJSONForIndex.UsedTokens = %d, want 0 (unknown)", got.UsedTokens)
 	}
 }
 

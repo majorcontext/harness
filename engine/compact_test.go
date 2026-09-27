@@ -761,6 +761,55 @@ func TestCompactUsageAccountingCumulativeOnlyNotLastUsage(t *testing.T) {
 	}
 }
 
+// TestCompactMarksContextUnknownUntilNextTurnRemeasures is the red-first
+// test for the stale-gauge bug across its full lifecycle: a no-progress
+// skip never marks it, a real fold marks it, a reload must not resurrect
+// the stale reading, and the next completed turn clears it again.
+func TestCompactMarksContextUnknownUntilNextTurnRemeasures(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 100, OutputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 200, OutputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 7, OutputTokens: 3}),
+		compactTurn("three", provider.Usage{InputTokens: 300, OutputTokens: 10}),
+	}}
+	dir := t.TempDir()
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+	})
+	runTurns(t, s, 2)
+
+	if res, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 2}); err != nil || res.SkipReason != SkipReasonNotEnoughTurns {
+		t.Fatalf("setup skip: res=%+v err=%v", res, err)
+	}
+	if s.ContextUnknown() {
+		t.Fatal("ContextUnknown after a no-progress skip = true, want false")
+	}
+
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.ContextUnknown() {
+		t.Fatal("ContextUnknown after a real fold = false, want true")
+	}
+
+	loaded, err := LoadSession(s.cfg, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.ContextUnknown() {
+		t.Fatal("reloaded ContextUnknown = false, want true (a reload must not resurrect the stale reading)")
+	}
+
+	if _, err := loaded.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt on reloaded session: %v", err)
+	}
+	if loaded.ContextUnknown() {
+		t.Error("ContextUnknown after the next completed turn = true, want false")
+	}
+}
+
 // TestCompactFailureNoJournalNoMutation is the red-first test for §2's
 // "Failure handling": when the summarization call itself errors, compaction
 // aborts cleanly — no history mutation, no journal write, and an emitted

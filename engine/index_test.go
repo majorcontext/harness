@@ -500,6 +500,32 @@ func TestSessionIndexLastPromptTokensFoldsDelegatedUsage(t *testing.T) {
 	}
 }
 
+// TestSessionIndexContextUnknownAfterCompact is the red-first test for the
+// cold sidecar's half of the stale-gauge fix: a successful compact record
+// must fold into ContextUnknown=true, the same signal the live Session
+// carries.
+func TestSessionIndexContextUnknownAfterCompact(t *testing.T) {
+	dir := t.TempDir()
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 20}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	s := NewSession(persistCfg(dir, prov))
+	runTurns(t, s, 2)
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	ix, err := ReadSessionIndex(dir, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ix.ContextUnknown {
+		t.Error("cold ContextUnknown after a real fold = false, want true")
+	}
+}
+
 // TestReadSessionIndexRefoldsStaleVersionForNewField: a version-1 sidecar must refold.
 func TestReadSessionIndexRefoldsStaleVersionForNewField(t *testing.T) {
 	dir := t.TempDir()
@@ -1307,6 +1333,9 @@ func TestListSessionsFallbackCountsCompactUsage(t *testing.T) {
 	}
 	if got.LastPromptTokens != 19 {
 		t.Errorf("last_prompt_tokens = %d, want 19 (11+6+2, a compact record's 100 cache tokens must not move it)", got.LastPromptTokens)
+	}
+	if !got.ContextUnknown {
+		t.Error("ContextUnknown = false after a compact record in the fallback scan, want true")
 	}
 }
 

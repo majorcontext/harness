@@ -1075,6 +1075,13 @@ type Session struct {
 	// before any turn ever ran against it in any process).
 	lastUsage     provider.Usage
 	haveLastUsage bool
+	// contextUnknown is true from the moment a compaction fold succeeds
+	// (Session.Compact) until the next completed turn measures a fresh
+	// lastUsage (appendWithUsage/applyClaudeCodeUsage): lastUsage itself
+	// still describes the pre-fold history, on purpose (maybeAutoCompact
+	// keeps comparing against it), so this is the only signal a reporter
+	// has that the retained number describes history the fold removed.
+	contextUnknown bool
 
 	// subscriptionUsage is this session's most recently captured
 	// subscription-lane rate-limit/quota snapshot (see
@@ -2340,6 +2347,17 @@ func (s *Session) LastUsage() (usage provider.Usage, ok bool) {
 	return s.lastUsage, s.haveLastUsage
 }
 
+// ContextUnknown reports whether a compaction fold has run since LastUsage's
+// own measurement, with no turn yet completed to remeasure it: the case
+// where that retained reading describes history the fold already removed.
+// It never changes LastUsage's own value or maybeAutoCompact's comparisons
+// — see contextUnknown's own doc comment.
+func (s *Session) ContextUnknown() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.contextUnknown
+}
+
 // ContextWindowTokens returns this session's resolved context window — 0
 // when automatic compaction is disarmed. On the claude-code lane, a window
 // the CLI reported replaces modelmeta's stand-in.
@@ -2528,6 +2546,7 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 		s.usage.CacheWriteTokens += usage.CacheWriteTokens
 		s.lastUsage = *usage
 		s.haveLastUsage = true
+		s.contextUnknown = false
 		// This path is exclusively a native turn's real usage — a
 		// delegated turn's usage folds through applyClaudeCodeUsage
 		// instead (see that method's own doc comment), never here — so

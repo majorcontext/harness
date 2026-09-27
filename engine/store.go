@@ -595,6 +595,8 @@ type SessionInfo struct {
 	// LastPromptTokens mirrors SessionIndex.LastPromptTokens.
 	LastPromptTokens int
 	WindowTokens     int
+	// ContextUnknown mirrors SessionIndex.ContextUnknown.
+	ContextUnknown bool
 }
 
 // addUsage accumulates one record's usage into a listing summary.
@@ -1569,6 +1571,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *rec.Usage
 				s.haveLastUsage = true
+				s.contextUnknown = false
 				// A recMessage record only ever carries Usage for a
 				// native turn (a delegated turn's usage folds through
 				// recClaudeCodeUsage below, never here) — mirrors
@@ -1660,6 +1663,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 				s.usage.CacheWriteTokens += rec.Usage.CacheWriteTokens
 				s.lastUsage = *claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage)
 				s.haveLastUsage = true
+				s.contextUnknown = false
 			}
 			if rec.ClaudeCodeWindowTokens > 0 {
 				s.claudeCodeWindowTokens = rec.ClaudeCodeWindowTokens
@@ -1895,6 +1899,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.history = spliceCompactBounds(s.history, start, end, rec.Compact.Summary)
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt
+			s.contextUnknown = true
 			// Cumulative usage ONLY (see record.Usage's doc comment above
 			// and the "Usage accounting" section of the design doc):
 			// lastUsage/haveLastUsage must never be touched by a compact
@@ -2291,6 +2296,7 @@ func sessionInfoAt(dir, id string) (SessionInfo, error) {
 			LastInputTokens:  ix.LastInputTokens,
 			LastPromptTokens: ix.LastPromptTokens,
 			WindowTokens:     ix.WindowTokens,
+			ContextUnknown:   ix.ContextUnknown,
 		}, nil
 	}
 	// No usable index. Read the journal itself rather than report nothing.
@@ -2365,6 +2371,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				info.addUsage(*rec.Usage)
 				info.LastInputTokens = rec.Usage.InputTokens
 				info.LastPromptTokens = rec.Usage.InputTokens + rec.Usage.CacheReadTokens + rec.Usage.CacheWriteTokens
+				info.ContextUnknown = false
 			}
 		case recClaudeCodeUsage:
 			if rec.Usage != nil {
@@ -2373,6 +2380,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 			if last := claudeCodeLastUsage(rec.Usage, rec.ClaudeCodeLastUsage); last != nil {
 				info.LastInputTokens = last.InputTokens
 				info.LastPromptTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
+				info.ContextUnknown = false
 			}
 			if rec.ClaudeCodeWindowTokens > 0 {
 				info.WindowTokens = rec.ClaudeCodeWindowTokens
@@ -2389,6 +2397,7 @@ func readSessionInfo(path string) (SessionInfo, error) {
 				// summarization call — see record.Usage's doc comment.
 				info.addUsage(*rec.Usage)
 			}
+			info.ContextUnknown = true
 		}
 		return nil
 	})
