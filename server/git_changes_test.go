@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -533,23 +536,13 @@ func TestHandleGitChangesVanishedUntrackedFileNotFatal(t *testing.T) {
 	}
 }
 
-// TestHandleGitChangesTooManyChanges409: a deadline mid-git-call (shrunk timeout + a sleeping hook) is 409, not 500.
+// TestHandleGitChangesTooManyChanges409: an already-expired internal deadline is 409, not 500.
 func TestHandleGitChangesTooManyChanges409(t *testing.T) {
 	dir := newGitRepo(t)
 
 	oldTimeout := gitChangesTimeout
-	gitChangesTimeout = gitChangesResponseMargin + 20*time.Millisecond // internal deadline: 20ms
+	gitChangesTimeout = gitChangesResponseMargin // internal budget: 0
 	t.Cleanup(func() { gitChangesTimeout = oldTimeout })
-
-	slept := false
-	old := gitCmdHook
-	gitCmdHook = func(args []string) {
-		if !slept {
-			slept = true
-			time.Sleep(150 * time.Millisecond)
-		}
-	}
-	t.Cleanup(func() { gitCmdHook = old })
 
 	h := newGitChangesHarness(t, dir)
 	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)
@@ -558,6 +551,83 @@ func TestHandleGitChangesTooManyChanges409(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "too_many_changes") {
 		t.Errorf("body = %s, want error code too_many_changes", body)
+	}
+}
+
+// gitChangesDo calls srv directly with ctx, so a hook-driven cancellation
+// lands deterministically at a chosen subprocess call, with no wall-clock
+// wait.
+func gitChangesDo(t *testing.T, h *harness, ctx context.Context, query string) (*http.Response, []byte) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/git/changes"+query, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	rec := httptest.NewRecorder()
+	h.srv.ServeHTTP(rec, req)
+	resp := rec.Result()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp, body
+}
+
+// argsEndWith reports whether args, after gitCmd's static safety flags, is
+// exactly the given git subcommand and its own arguments.
+func argsEndWith(args []string, suffix ...string) bool {
+	if len(args) < len(suffix) {
+		return false
+	}
+	return slices.Equal(args[len(args)-len(suffix):], suffix)
+}
+
+// TestHandleGitChangesHeadDeadlineIsTooManyChanges409: a deadline exactly at
+// `rev-parse HEAD` must not read as an unborn HEAD; branch scope would
+// otherwise answer 409 no_base instead of 409 too_many_changes.
+func TestHandleGitChangesHeadDeadlineIsTooManyChanges409(t *testing.T) {
+	dir := newGitRepo(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	old := gitCmdHook
+	gitCmdHook = func(args []string) {
+		if argsEndWith(args, "rev-parse", "HEAD") {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { gitCmdHook = old })
+
+	h := newGitChangesHarness(t, dir)
+	resp, body := gitChangesDo(t, h, ctx, "?scope=branch&dir="+dir)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "too_many_changes") {
+		t.Errorf("body = %s, want error code too_many_changes, not no_base", body)
+	}
+}
+
+// TestHandleGitChangesDefaultBranchLookupDeadlineIsTooManyChanges409: a
+// deadline during defaultBranchRef's own git calls must not read as no
+// default branch found; branch scope would otherwise answer 409 no_base
+// instead of 409 too_many_changes.
+func TestHandleGitChangesDefaultBranchLookupDeadlineIsTooManyChanges409(t *testing.T) {
+	dir := newGitRepo(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	old := gitCmdHook
+	gitCmdHook = func(args []string) {
+		if argsEndWith(args, "symbolic-ref", "-q", "refs/remotes/origin/HEAD") {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { gitCmdHook = old })
+
+	h := newGitChangesHarness(t, dir)
+	resp, body := gitChangesDo(t, h, ctx, "?scope=branch&dir="+dir)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "too_many_changes") {
+		t.Errorf("body = %s, want error code too_many_changes, not no_base", body)
 	}
 }
 

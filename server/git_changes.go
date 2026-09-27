@@ -102,6 +102,9 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 	head := "" // empty means an unborn branch (no commit yet)
 	if out, err := gitOut(ctx, repoRoot, nil, "rev-parse", "HEAD"); err == nil {
 		head = strings.TrimSpace(out)
+	} else if ctx.Err() != nil {
+		writeGitErr(w, ctx, err)
+		return
 	}
 
 	branch := ""
@@ -111,21 +114,18 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 
 	resp := gitChangesJSON{Dir: dir, Scope: scope, Branch: branch, Head: head}
 	baseTreeish := "HEAD"
-	if head == "" {
-		emptyTree, err := gitEmptyTree(ctx, repoRoot)
-		if err != nil {
-			writeGitErr(w, ctx, err)
-			return
-		}
-		baseTreeish = emptyTree
-	}
-	if scope == "branch" {
+	switch {
+	case scope == "branch":
 		if head == "" {
 			writeErr(w, http.StatusConflict, "no_base: HEAD has no commit yet")
 			return
 		}
 		display, revision, found := defaultBranchRef(ctx, repoRoot)
 		if !found {
+			if ctx.Err() != nil {
+				writeGitErr(w, ctx, ctx.Err())
+				return
+			}
 			writeErr(w, http.StatusConflict, "no_base: no default branch found (checked origin/HEAD, origin/main, origin/master)")
 			return
 		}
@@ -142,6 +142,17 @@ func (s *Server) handleGitChanges(w http.ResponseWriter, r *http.Request) {
 		sha := strings.TrimSpace(mb)
 		resp.Base = &gitBaseRef{Ref: display, SHA: sha}
 		baseTreeish = sha
+	case head == "":
+		// scope == "uncommitted": no HEAD to diff against, so fall back to
+		// the repository's own empty tree. branch scope never reaches here
+		// (it always returns above), so this never runs a wasted subprocess
+		// for a request that's about to 409 anyway.
+		emptyTree, err := gitEmptyTree(ctx, repoRoot)
+		if err != nil {
+			writeGitErr(w, ctx, err)
+			return
+		}
+		baseTreeish = emptyTree
 	}
 
 	files, patch, truncated, err := gitChangeSet(ctx, repoRoot, baseTreeish, gitChangesPatchCap)

@@ -175,6 +175,14 @@ response's own `dir` field still echoes the originally resolved `dir`.
 - No common ancestor (an orphan branch, or a shallow clone too shallow to
   reach it): `git merge-base` exits 1 with no output; mapped to `409
   no_base` rather than surfaced as a raw subprocess failure.
+- A deadline mid-call during `HEAD` or default-branch resolution: both
+  `rev-parse HEAD` and `defaultBranchRef` check `ctx.Err()` on failure and
+  route a killed subprocess through `writeGitErr` (`409 too_many_changes`),
+  rather than reading the failure as an unborn `HEAD` or a missing default
+  branch (`409 no_base`). `scope=branch` with an unborn `HEAD` returns
+  before ever resolving the empty tree, so that resolution now runs only
+  for `scope=uncommitted`'s own unborn-`HEAD` case — no longer a wasted
+  subprocess call on every branch-scope request against a commit-less repo.
 
 ## A change set too large for the request's own deadline
 
