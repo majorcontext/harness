@@ -32,7 +32,9 @@ total subprocess count stays constant:
    (below) — everything else is left for `add -N` to add.
 3. Stage the private index copy with ONE `git add -N` (`-c
    core.splitIndex=false`, so it never writes a shared-index file into
-   the real repository), fed pathspec `.` plus an exclude per nested repo
+   the real repository; a copied index that is already split still
+   resolves its `link` extension, because git looks for
+   `sharedindex.<hash>` in `$GIT_DIR`, not next to `GIT_INDEX_FILE`), fed pathspec `.` plus an exclude per nested repo
    or large file over `--pathspec-from-file`'s stdin, not argv — tens of
    thousands of excludes would otherwise risk the OS argument-size limit.
    Passing pathspec `.` plus an exclude per nested repo or large file —

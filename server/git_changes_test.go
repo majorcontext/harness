@@ -934,6 +934,30 @@ func TestHandleGitChangesNoSplitIndexFileWritten(t *testing.T) {
 	}
 }
 
+// TestHandleGitChangesExistingSplitIndex: a repository already on a split
+// index (its .git/index links to .git/sharedindex.<hash>) still reports the
+// right changes from the private copy, and gains no new sharedindex file.
+func TestHandleGitChangesExistingSplitIndex(t *testing.T) {
+	dir := newGitRepo(t)
+	runTestGit(t, dir, "config", "core.splitIndex", "true")
+	runTestGit(t, dir, "update-index", "--split-index")
+	before, _ := filepath.Glob(filepath.Join(dir, ".git", "sharedindex.*"))
+	if len(before) == 0 {
+		t.Fatal("setup: no sharedindex file; the index is not split")
+	}
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "seed\nmore\n")
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
+
+	got := filesByPath(gitChangesUncommitted(t, dir).Files)
+	if len(got) != 2 || got["seed.txt"].Status != "modified" || got["new.txt"].Status != "added" {
+		t.Errorf("Files = %+v, want seed.txt modified and new.txt added", got)
+	}
+	after, _ := filepath.Glob(filepath.Join(dir, ".git", "sharedindex.*"))
+	if !slices.Equal(after, before) {
+		t.Errorf("sharedindex files = %v, want unchanged %v", after, before)
+	}
+}
+
 // TestHandleGitChangesSubdirectoryDirStillCoversWholeRepo: a subdirectory dir still reports the whole repo.
 func TestHandleGitChangesSubdirectoryDirStillCoversWholeRepo(t *testing.T) {
 	dir := newGitRepo(t)
