@@ -205,6 +205,13 @@ const (
 	// applyClaudeCodeUsage's doc comment for why that divergence is safe
 	// here.
 	recClaudeCodeUsage = "claude_code.usage"
+	// recClaudeCodeCompact records one delegated compaction consumeClaudeCodeStream
+	// observed the Claude Code CLI itself settle (a "compact_boundary"
+	// envelope). The CLI compacts its own internal context; harness never
+	// folds anything or splices s.history for it, so this is a pure
+	// observational trace, like recClaudeCodeUsage, never replayed into
+	// any Session state.
+	recClaudeCodeCompact = "claude_code.compact"
 	// recCommand is one resolved slash command's record, never a recMessage,
 	// so a command never enters s.history or a provider request.
 	recCommand = "command"
@@ -358,6 +365,19 @@ type record struct {
 	// last usage.
 	ClaudeCodeLastUsage    *provider.Usage `json:"claude_code_last_usage,omitempty"`
 	ClaudeCodeWindowTokens int             `json:"claude_code_window_tokens,omitempty"`
+	// ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
+	// ClaudeCodeCompactPostTokens carry a recClaudeCodeCompact record's own
+	// compact_metadata verbatim, the same fields EventClaudeCodeCompacted
+	// carries live. ClaudeCodeCompactStartedAt is the wall-clock instant
+	// THIS SAME delegated turn's stream observed a preceding "compacting"
+	// status update; zero when none preceded it within that turn — the
+	// CLI's start and settlement can land in different turns, or a build
+	// can omit the "compacting" status entirely — so this is the only
+	// start signal harness can obtain, honestly absent when it wasn't.
+	ClaudeCodeCompactTrigger    string    `json:"claude_code_compact_trigger,omitempty"`
+	ClaudeCodeCompactPreTokens  int       `json:"claude_code_compact_pre_tokens,omitempty"`
+	ClaudeCodeCompactPostTokens int       `json:"claude_code_compact_post_tokens,omitempty"`
+	ClaudeCodeCompactStartedAt  time.Time `json:"claude_code_compact_started_at,omitzero"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -422,6 +442,20 @@ type compactRecord struct {
 	LastID      string          `json:"last_id"`
 	TurnsFolded int             `json:"turns_folded"`
 	Summary     message.Message `json:"summary"`
+	// StartedAt is when Compact committed to attempting a summary — the
+	// same instant EventCompactionStarted fires, immediately before the
+	// blocking summarization call. The record's own top-level CreatedAt
+	// (summary.CreatedAt) is when that call returned, so a reader derives
+	// wall-clock duration from the two without a redundant elapsed field.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	// FoldedTokensEst is estimatePromptTokensFromHistory applied to only
+	// the folded range, not the whole session — the same crude estimator
+	// maybeAutoCompact already uses elsewhere, cheap here because its cost
+	// is bounded by fold size, not history size. It is the one signal that
+	// correlates a compaction's duration with what it actually compacted;
+	// TurnsFolded alone cannot (a two-turn fold can carry one giant tool
+	// result or almost nothing).
+	FoldedTokensEst int `json:"folded_tokens_est,omitempty"`
 }
 
 // goalRecord carries the durable payload of a goal.* record (see goal.go).
@@ -809,6 +843,29 @@ func (s *Session) persistClaudeCodeUsage(usage, last provider.Usage, windowToken
 	}
 }
 
+// persistClaudeCodeCompact appends a claude_code.compact record to the
+// session log. It mirrors persistClaudeCodeUsage exactly: a no-op until
+// the log exists (lazy creation), caller holds s.mu.
+func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt time.Time) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{
+		Type:                        recClaudeCodeCompact,
+		CreatedAt:                   time.Now().UTC(),
+		ClaudeCodeCompactTrigger:    trigger,
+		ClaudeCodeCompactPreTokens:  preTokens,
+		ClaudeCodeCompactPostTokens: postTokens,
+		ClaudeCodeCompactStartedAt:  startedAt,
+	}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
 // persistGoalLocked appends a goal.* record to the session log. It forces the
 // log to exist (a goal.set may be the first thing written to a fresh session).
 // Caller holds s.mu.
@@ -962,7 +1019,7 @@ func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
 // docs/design/context-compaction.md §3 "Crash discipline" — a torn write
 // degrades to "compaction never happened", never a partially-spliced or
 // ambiguous history). Caller holds s.mu and has already spliced s.history.
-func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, summary message.Message, usage provider.Usage) {
+func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, summary message.Message, usage provider.Usage, startedAt time.Time, foldedTokensEst int) {
 	if s.cfg.SessionDir == "" {
 		return
 	}
@@ -975,10 +1032,12 @@ func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, 
 		CreatedAt: summary.CreatedAt,
 		Usage:     &usage,
 		Compact: &compactRecord{
-			FirstID:     firstID,
-			LastID:      lastID,
-			TurnsFolded: turnsFolded,
-			Summary:     summary,
+			FirstID:         firstID,
+			LastID:          lastID,
+			TurnsFolded:     turnsFolded,
+			Summary:         summary,
+			StartedAt:       startedAt,
+			FoldedTokensEst: foldedTokensEst,
 		},
 	}
 	if err := s.writeRecord(rec); err != nil {

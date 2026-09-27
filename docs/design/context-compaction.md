@@ -400,7 +400,9 @@ follow-up on PR #136, Finding B).
     "first_id": "msg_...",
     "last_id": "msg_...",
     "turns_folded": 12,
-    "summary": { "id": "cmpsum_...", "role": "user", "parts": [...], "created_at": "..." }
+    "summary": { "id": "cmpsum_...", "role": "user", "parts": [...], "created_at": "..." },
+    "started_at": "...",
+    "folded_tokens_est": 3200
   }
 }
 ```
@@ -410,6 +412,33 @@ The top-level `usage` reuses the existing `record.Usage` field
 summarization call's spend (see "Usage accounting" above). `turns_folded`
 is the one field name, used identically here, in the `/compact` response,
 and in the `history.compacted` event.
+
+**Observability: duration and size.** Before `started_at`/
+`folded_tokens_est` existed, nothing durable answered how long a
+compaction took or whether duration scales with what it folded — only the
+turn count and the record's own `created_at` (when the summarization call
+*returned*). `started_at` is the wall-clock instant `Compact` commits to
+attempting a summary (the same instant it emits `compaction.started`),
+captured immediately before the blocking call; a reader derives elapsed
+duration as `created_at - started_at` rather than a redundant stored
+field. `folded_tokens_est` is `estimatePromptTokensFromHistory` applied to
+only the folded range, the same crude heuristic `maybeAutoCompact` already
+uses elsewhere for its own threshold check — cheap here because its cost
+is bounded by fold size, not session history size, and it is the one
+signal that correlates duration with scale: `turns_folded` alone cannot,
+since a two-turn fold can carry one giant tool result or almost nothing.
+Both fields are omitted from a record written by a build that predates
+them, which a reader must treat as "unknown", never as zero.
+
+A skipped or failed compaction (`not_enough_turns`, `lone_existing_summary`,
+`summarizer_empty`, or a real summarization error) never journals a
+`compact` record at all — unchanged by this addition. The two free skips
+can recur every over-threshold turn until enough history accumulates,
+so journaling them would be noise on every turn, not a rare event worth a
+durable line; `summarizer_empty` is rarer and billed, but extending
+journaling to it alone would break the existing symmetry that no
+`TurnsFolded == 0` outcome writes a record. `compaction.failed` already
+carries this visibility live, for anything tailing events.
 
 `compactRecord.Summary` is the full `message.Message` to splice in, carried
 *inline* — not a lightweight marker record followed by an ordinary
@@ -558,6 +587,56 @@ and its `trigger`/`pre_tokens`/`post_tokens` fields alongside
 `history.compacted`/`compaction.failed`/`compaction.started`, including the
 absent-vs-zero caveat above — the hand-written API contract a caller reads
 instead of this design doc.
+
+**Durable observability for the delegated lane.** Unlike the native lane,
+a delegated compaction never leaves a `compact` record: `Session.Compact`
+refuses outright on a delegated session, so there is no fold and nothing
+to splice. Before this addition there was also nothing durable at all —
+`compaction.claude_code` (above) is journaled at the SERVER's own
+box-wide event log, not in this session's own store.go journal, so a
+fleet operator reading a session's own log directly saw no trace that a
+delegated compaction ever happened. `consumeClaudeCodeStream`
+(`engine/claude_code_backend.go`) now writes a `claude_code.compact`
+record to this session's own journal every time it observes a
+`compact_boundary` envelope settle:
+
+```json
+{
+  "type": "claude_code.compact",
+  "created_at": "...",
+  "claude_code_compact_trigger": "auto",
+  "claude_code_compact_pre_tokens": 123456,
+  "claude_code_compact_post_tokens": 7039,
+  "claude_code_compact_started_at": "..."
+}
+```
+
+`created_at` is when this stream observed `compact_boundary`.
+`claude_code_compact_started_at` is when this SAME stream previously
+observed a `"compacting"` status update, when it did — harness never
+initiates or times the CLI's own compaction, so a start time is only ever
+knowable when the CLI happens to report one first, in the same turn. It is
+absent (never a guessed value) when no such status preceded the boundary:
+the CLI's start and settlement can land in different turns, or a build
+can omit the "compacting" status entirely. A record still journals in
+that case, with whatever is known — trigger and token counts, at minimum
+— rather than skipping observability altogether for lack of a duration.
+
+Like the native lane, a failed or unsettled delegated compaction (a
+`compact_result` other than `"success"`, or a turn whose stream ends with
+compaction still outstanding) never journals a record — symmetric with
+`compact`'s own "never record a skip" rule, and for the same reason: it
+already has a live signal (`compaction.failed`), and a durable trace only
+of successes keeps this record answering exactly one question, "how long
+did a completed compaction take and how big was it," without also
+becoming a general-purpose failure log.
+
+This record is purely observational: nothing in `LoadSession`'s replay
+switch needs a case for it, since it folds no session state. It also
+carries no console-facing API surface of its own — it does not flow
+through `GET /session/{id}/journal`'s projection, matching the sibling
+`claude_code.usage`/`claude_code.session_id`/`claude_code.history_watermark`
+records, none of which do either.
 
 **The context-window gauge.** `Session.context` (`used_tokens`,
 `window_tokens`) and the mirrored `turn.end` event fields

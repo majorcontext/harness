@@ -429,6 +429,103 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeCompactBoundaryJournalsDurableRecord: a delegated
+// compaction must leave a durable trace — trigger, token counts, and a
+// start time when this same turn observed a preceding "compacting" status.
+func TestClaudeCodeCompactBoundaryJournalsDurableRecord(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "compact_turn")
+
+	if _, err := s.RunCompactCommand(context.Background(), CompactOptions{}); err != nil {
+		t.Fatalf("RunCompactCommand: %v", err)
+	}
+
+	recs := readSessionRecords(t, s.cfg.SessionDir, s.ID)
+	var rec *record
+	for i := range recs {
+		if recs[i].Type == recClaudeCodeCompact {
+			rec = &recs[i]
+		}
+	}
+	if rec == nil {
+		t.Fatal("no claude_code.compact record found in the session log")
+	}
+	if rec.ClaudeCodeCompactTrigger != "manual" {
+		t.Errorf("ClaudeCodeCompactTrigger = %q, want %q", rec.ClaudeCodeCompactTrigger, "manual")
+	}
+	if rec.ClaudeCodeCompactPreTokens != 42010 {
+		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 42010", rec.ClaudeCodeCompactPreTokens)
+	}
+	if rec.ClaudeCodeCompactPostTokens != 7039 {
+		t.Errorf("ClaudeCodeCompactPostTokens = %d, want 7039", rec.ClaudeCodeCompactPostTokens)
+	}
+	if rec.ClaudeCodeCompactStartedAt.IsZero() {
+		t.Error("ClaudeCodeCompactStartedAt is zero, want the instant this stream observed the preceding \"compacting\" status")
+	}
+	if rec.ClaudeCodeCompactStartedAt.After(rec.CreatedAt) {
+		t.Errorf("ClaudeCodeCompactStartedAt %v is after the record's own CreatedAt %v (settlement)", rec.ClaudeCodeCompactStartedAt, rec.CreatedAt)
+	}
+}
+
+// TestClaudeCodeCompactBoundaryWithoutPrecedingStatusOmitsStartedAt: a
+// boundary with no preceding "compacting" status must still journal
+// (trigger/pre_tokens are known) but must leave StartedAt zero rather than
+// invent a start time harness never observed.
+func TestClaudeCodeCompactBoundaryWithoutPrecedingStatusOmitsStartedAt(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+	dir := t.TempDir()
+	s := NewSession(Config{
+		SessionDir: dir,
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+	})
+
+	if _, err := s.Prompt(context.Background(), "keep going"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	recs := readSessionRecords(t, dir, s.ID)
+	var rec *record
+	for i := range recs {
+		if recs[i].Type == recClaudeCodeCompact {
+			rec = &recs[i]
+		}
+	}
+	if rec == nil {
+		t.Fatal("no claude_code.compact record found in the session log")
+	}
+	if rec.ClaudeCodeCompactTrigger != "auto" {
+		t.Errorf("ClaudeCodeCompactTrigger = %q, want %q", rec.ClaudeCodeCompactTrigger, "auto")
+	}
+	if rec.ClaudeCodeCompactPreTokens != 123456 {
+		t.Errorf("ClaudeCodeCompactPreTokens = %d, want 123456", rec.ClaudeCodeCompactPreTokens)
+	}
+	if !rec.ClaudeCodeCompactStartedAt.IsZero() {
+		t.Errorf("ClaudeCodeCompactStartedAt = %v, want zero (no preceding \"compacting\" status was ever observed)", rec.ClaudeCodeCompactStartedAt)
+	}
+}
+
+// TestClaudeCodeCompactFailureNotJournaled pins the skip-case decision: a
+// compact_result status other than "success" never reaches
+// "compact_boundary", so nothing durable is written — symmetric with the
+// native lane, which never journals a recCompact for a failed or skipped
+// attempt either.
+func TestClaudeCodeCompactFailureNotJournaled(t *testing.T) {
+	t.Setenv("FAKECLAUDE_COMPACT_RESULT", "failure")
+	s, _ := claudeCodeTestSession(t, "compact_turn")
+
+	if _, err := s.RunCompactCommand(context.Background(), CompactOptions{}); err == nil {
+		t.Fatal("RunCompactCommand succeeded, want the no-assistant-message error")
+	}
+
+	for _, rec := range readSessionRecords(t, s.cfg.SessionDir, s.ID) {
+		if rec.Type == recClaudeCodeCompact {
+			t.Fatalf("claude_code.compact record journaled for a failed compaction: %+v", rec)
+		}
+	}
+}
+
 func TestRunCompactCommandIssuesEngineOriginOnDelegatedSession(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "compact_turn")
 

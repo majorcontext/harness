@@ -372,8 +372,9 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	foldStart := starts[0]
 	foldEndExclusive := starts[foldTurns] // first KEPT turn's leading RoleUser message
 	foldEnd := foldEndExclusive - 1
+	folded := history[foldStart : foldEnd+1]
 
-	if isLoneExistingSummary(history[foldStart : foldEnd+1]) {
+	if isLoneExistingSummary(folded) {
 		return CompactResult{SkipReason: SkipReasonLoneExistingSummary}, nil
 	}
 
@@ -448,6 +449,10 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	// client can show a "compacting now" indicator — see
 	// EventCompactionStarted's doc comment for why this is always paired
 	// with a following EventHistoryCompacted or EventCompactionFailed.
+	// startedAt is captured at the same instant, for the durable record
+	// below: the one wall-clock signal that answers how long the blocking
+	// call actually took (see compactRecord.StartedAt's own doc comment).
+	startedAt := time.Now().UTC()
 	s.emit(Event{
 		Type:               EventCompactionStarted,
 		CompactFirstID:     journaledFirstID,
@@ -455,7 +460,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 		CompactTurnsFolded: foldTurns,
 	})
 
-	summaryText, usage, err := s.runCompactionSummary(ctx, model, history[foldStart:foldEnd+1])
+	summaryText, usage, err := s.runCompactionSummary(ctx, model, folded)
 	if err != nil {
 		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
 		// errEmptyCompactionSummary is deliberately NOT surfaced as an error
@@ -545,7 +550,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	// Journal only the real, persisted boundary IDs (see journaledFirstID/
 	// journaledLastID's doc comment above) — never the live splice IDs,
 	// which can name a synthetic message that will never exist on replay.
-	s.persistCompactLocked(journaledFirstID, journaledLastID, foldTurns, summary, usage)
+	s.persistCompactLocked(journaledFirstID, journaledLastID, foldTurns, summary, usage, startedAt, estimatePromptTokensFromHistory(folded))
 	s.mu.Unlock()
 
 	// Live event surface (§4): the summary flows through the ordinary

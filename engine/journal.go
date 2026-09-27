@@ -157,6 +157,12 @@ type JournalRecord struct {
 	CompactFirstID     string `json:"compact_first_id,omitempty"`
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
+	// CompactStartedAt/CompactFoldedTokensEst mirror compactRecord's own
+	// fields: when the blocking summarization call began, and an estimate
+	// of the folded range's own size. CreatedAt (the embedded field above)
+	// is when that call returned.
+	CompactStartedAt       time.Time `json:"compact_started_at,omitzero"`
+	CompactFoldedTokensEst int       `json:"compact_folded_tokens_est,omitempty"`
 
 	// Retained tool result pointer (Type == recToolResultRetained).
 	ToolResultHandle string `json:"tool_result_handle,omitempty"`
@@ -276,6 +282,8 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.CompactFirstID = rec.Compact.FirstID
 			out.CompactLastID = rec.Compact.LastID
 			out.CompactTurnsFolded = rec.Compact.TurnsFolded
+			out.CompactStartedAt = rec.Compact.StartedAt
+			out.CompactFoldedTokensEst = rec.Compact.FoldedTokensEst
 		}
 	case recToolResultRetained:
 		if rec.ToolResult != nil {

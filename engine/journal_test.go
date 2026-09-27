@@ -69,7 +69,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 		}},
 		{Type: recChildTurnSettled},
 		{Type: recTaskOutcomeCommitted, TaskNotify: &taskNotifyRecord{ChildID: "ses_child1", Agent: "reviewer", Status: StatusDone, Result: "ok"}},
-		{Type: recCompact, CreatedAt: createdAt, Compact: &compactRecord{FirstID: "msg_1", LastID: "msg_2", TurnsFolded: 4, Summary: message.Message{ID: "msg_summary"}}},
+		{Type: recCompact, CreatedAt: createdAt, Compact: &compactRecord{FirstID: "msg_1", LastID: "msg_2", TurnsFolded: 4, Summary: message.Message{ID: "msg_summary"}, StartedAt: createdAt.Add(-5 * time.Second), FoldedTokensEst: 512}},
 		{Type: recToolResultRetained, ToolResult: &toolResultRecord{Handle: "trh_1", Tool: "bash", Bytes: 4096, Lines: 100}},
 	}
 	writeRawJournal(t, dir, id, recs)
@@ -155,7 +155,8 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 
 	compactRec := got[11]
 	if compactRec.CompactFirstID != "msg_1" || compactRec.CompactLastID != "msg_2" ||
-		compactRec.CompactTurnsFolded != 4 || !compactRec.CreatedAt.Equal(createdAt) {
+		compactRec.CompactTurnsFolded != 4 || !compactRec.CreatedAt.Equal(createdAt) ||
+		!compactRec.CompactStartedAt.Equal(createdAt.Add(-5*time.Second)) || compactRec.CompactFoldedTokensEst != 512 {
 		t.Errorf("compact record = %+v", compactRec)
 	}
 

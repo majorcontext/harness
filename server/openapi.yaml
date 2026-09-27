@@ -2614,6 +2614,19 @@ components:
         compact_turns_folded:
           type: integer
           description: Only on compact.
+        compact_started_at:
+          type: string
+          format: date-time
+          description: >-
+            Only on compact, and only when the writing build captured it:
+            when the blocking summarization call began. created_at on this
+            same record is when that call returned.
+        compact_folded_tokens_est:
+          type: integer
+          description: >-
+            Only on compact, and only when the writing build captured it: a
+            crude token estimate of the folded range alone, not the whole
+            session — the signal that correlates duration with scale.
         tool_result_handle:
           type: string
           description: Only on toolresult.retained.
