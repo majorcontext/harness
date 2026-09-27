@@ -245,6 +245,35 @@ var gitStaticSafetyArgs = []string{
 	"-c", "core.hooksPath=" + os.DevNull,
 }
 
+// gitRepoLocalEnv is `git rev-parse --local-env-vars`: variables that select
+// a repository, index, object store, or config. Inherited from harness's own
+// environment (a git hook exports GIT_DIR and GIT_INDEX_FILE), any of them
+// would override cmd.Dir and read another repository.
+var gitRepoLocalEnv = map[string]bool{
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_CONFIG": true,
+	"GIT_CONFIG_PARAMETERS": true, "GIT_CONFIG_COUNT": true,
+	"GIT_OBJECT_DIRECTORY": true, "GIT_DIR": true, "GIT_WORK_TREE": true,
+	"GIT_IMPLICIT_WORK_TREE": true, "GIT_GRAFT_FILE": true,
+	"GIT_INDEX_FILE": true, "GIT_NO_REPLACE_OBJECTS": true,
+	"GIT_REPLACE_REF_BASE": true, "GIT_PREFIX": true,
+	"GIT_INTERNAL_SUPER_PREFIX": true, "GIT_SHALLOW_FILE": true,
+	"GIT_COMMON_DIR": true,
+}
+
+// gitBaseEnv is os.Environ() without gitRepoLocalEnv; callers add back only
+// the values this endpoint sets itself.
+func gitBaseEnv() []string {
+	env := os.Environ()
+	out := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !gitRepoLocalEnv[name] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // gitCmd builds a git subprocess bounded by ctx. GIT_LITERAL_PATHSPECS=1
 // keeps a pathspec built from a real filename (e.g. "b*.txt") from being
 // reinterpreted as a glob.
@@ -255,7 +284,7 @@ func gitCmd(ctx context.Context, dir string, extraEnv []string, args ...string) 
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(),
+	cmd.Env = append(append(gitBaseEnv(),
 		"GIT_OPTIONAL_LOCKS=0", "GIT_LITERAL_PATHSPECS=1", "GIT_NO_LAZY_FETCH=1"), extraEnv...)
 	cmd.WaitDelay = gitChangesWaitDelay
 	return cmd
@@ -271,7 +300,7 @@ func gitCmdMagicPathspecs(ctx context.Context, dir string, extraEnv []string, ar
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1"), extraEnv...)
+	cmd.Env = append(append(gitBaseEnv(), "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1"), extraEnv...)
 	cmd.WaitDelay = gitChangesWaitDelay
 	return cmd
 }

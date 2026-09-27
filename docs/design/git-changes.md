@@ -161,6 +161,15 @@ invocation, not just the patch diff:
   the fleet's own clones are `--depth 1`, never partial, so this is
   belt-and-suspenders here).
 
+Every subprocess starts from harness's own environment minus git's
+repository-local variables (`git rev-parse --local-env-vars`: `GIT_DIR`,
+`GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_CONFIG_PARAMETERS`, and the
+rest). A git hook exports `GIT_DIR` and `GIT_INDEX_FILE`; inherited, they
+override the command's working directory, so the endpoint would read
+another repository's index while `--show-toplevel` still named the
+requested one. `gitBaseEnv` removes them, and each command adds back only
+the values this endpoint sets itself.
+
 `GIT_LITERAL_PATHSPECS=1` additionally keeps a pathspec built from a real
 file's name (e.g. `b*.txt`) from being reinterpreted as a glob.
 

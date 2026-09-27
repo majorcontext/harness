@@ -223,6 +223,23 @@ func TestHandleGitChangesRepoPathColonDoesNotBreakObjectResolution(t *testing.T)
 	}
 }
 
+// TestHandleGitChangesIgnoresInheritedGitDir: a GIT_DIR in harness's own
+// environment (git hooks export one) must not redirect the endpoint to
+// another repository's index.
+func TestHandleGitChangesIgnoresInheritedGitDir(t *testing.T) {
+	dir := newGitRepo(t)
+	outer := newGitRepo(t)
+	writeTestFile(t, filepath.Join(outer, "outer.txt"), "outer\n")
+	runTestGit(t, outer, "add", "outer.txt")
+	t.Setenv("GIT_DIR", filepath.Join(outer, ".git"))
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(outer, ".git", "index"))
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 0 {
+		t.Errorf("Files = %+v, want none: the requested repository is clean", got.Files)
+	}
+}
+
 func TestHandleGitChangesRequiresAuth(t *testing.T) {
 	dir := newGitRepo(t)
 	h := newGitChangesHarness(t, dir)
