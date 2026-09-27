@@ -53,6 +53,7 @@ func countUserMessagesWithText(history []message.Message, want string) int {
 // TestPursueGoalRetriesTransientWorkerError's shape (this test does not
 // itself assert on elapsed time).
 func TestPursueGoalRetryDoesNotDuplicateDirectiveInHistory(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		prov := &goalProvider{
 			workerErrN: 2, // fails twice, succeeds on the 3rd (final) attempt
@@ -161,6 +162,7 @@ func (h *denyAndEnqueueHooks) Plugins() []plugin.Info { return nil }
 // distinct from the directive — and the denied tool's own result, both
 // survive every retry and the eventual success.
 func TestPursueGoalRetryNeverDropsDeliveredOperatorMessageAfterDeniedTool(t *testing.T) {
+	t.Parallel()
 	testTool := Tool{
 		Def: provider.ToolDef{Name: "test_tool", Description: "test", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		Run: func(ctx context.Context, s *Session, args json.RawMessage) (message.Parts, error) {
@@ -260,6 +262,7 @@ func historyContainsText(history []message.Message, want string) bool {
 // attempt fails and the loop exit-parks, the operator text baked into the
 // final attempt's directive still appears in s.History().
 func TestPursueGoalDeterministicParkKeepsEmbeddedOperatorMessage(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		workerErr := errors.New("worker provider exploded")
 		prov := &goalProvider{failWorker: workerErr}
@@ -326,6 +329,7 @@ func TestPursueGoalRetryableBudgetExhaustedParkKeepsEmbeddedOperatorMessage(t *t
 // leave the exhausting attempt's directive — and any operator mail embedded
 // in it — in live history rather than dropping it.
 func TestPursueGoalStreamTruncatedParkKeepsEmbeddedOperatorMessage(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		prov := &goalProvider{
 			workerErrN: 1000, // never recovers within the test

@@ -303,6 +303,7 @@ func (m *queueModel) Check(t *rapid.T) {
 // this test's reproduction handle, standing in for the seed+op-index
 // handles a hand-rolled loop would need instead.
 func TestQueueReplayModel(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		dir, err := os.MkdirTemp("", "queue-replay-model-*")
 		if err != nil {

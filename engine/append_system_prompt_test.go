@@ -7,6 +7,7 @@ import (
 )
 
 func TestAppendSystemPromptNativeOrder(t *testing.T) {
+	t.Parallel()
 	system := batchingSystem(t, Config{
 		System:             []string{"base"},
 		AppendSystemPrompt: []string{"platform", "project"},

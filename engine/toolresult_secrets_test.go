@@ -20,6 +20,7 @@ import (
 // the loss is bounded to roughly the masked value's own length, never
 // anywhere close to the whole remainder.
 func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
+	t.Parallel()
 	before := "https://example.com/callback?state=xyz&"
 	secret := strings.Repeat("A", 6_000) // no whitespace near it; far above the {8,1000} cap
 	after := "&next=" + strings.Repeat("legituserdata", 50) + "&done=1"
@@ -71,6 +72,7 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 // the class itself: masking must stop at the first structural delimiter,
 // so the parameters AFTER the secret survive byte-for-byte.
 func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
+	t.Parallel()
 	in := `GET "https://bucket.s3.amazonaws.com/obj?access_key=AKIAEXAMPLE12345&Expires=1735689600&Signature=abcdefghijklmnop" -> 200`
 	got := maskSecrets(in)
 
@@ -110,6 +112,7 @@ func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
 // completely unmasked — the two code paths (single-span fallback vs.
 // per-line) disagreed about which bytes are secret.
 func TestMaskSecretsMultilineJSONNotBypassedByLineSplitting(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, in, wantContains, wantValueGone string
 	}{
@@ -146,6 +149,7 @@ func TestMaskSecretsMultilineJSONNotBypassedByLineSplitting(t *testing.T) {
 // quoted-JSON "key": "value" shape, both with and without whitespace
 // around the colon.
 func TestMaskSecretsQuotedJSON(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name, in, wantContains, wantValueGone string
 	}{
@@ -188,6 +192,7 @@ func TestMaskSecretsQuotedJSON(t *testing.T) {
 // TestMaskSecretsSpaceYAML is review finding N3's red test for the
 // space-YAML "key: value" shape.
 func TestMaskSecretsSpaceYAML(t *testing.T) {
+	t.Parallel()
 	in := "database:\n  host: localhost\n  password: hunter2hunter2hunter2\napi_key: sk-ANTAPI03abcdefghijklmnop\n"
 	got := maskSecrets(in)
 	if strings.Contains(got, "hunter2hunter2hunter2") {
@@ -212,6 +217,7 @@ func TestMaskSecretsSpaceYAML(t *testing.T) {
 // secretValueClass), so it never matched; the JSON alternative requires a
 // QUOTED key, which a bare `TOKEN` lacks. Both shapes miss it.
 func TestMaskSecretsQuotedEnvValue(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, in, wantMasked, wantValueGone string }{
 		{"double-quoted-equals", `export TOKEN="secretvalue123456"`, `TOKEN="***"`, "secretvalue123456"},
 		{"single-quoted-equals", `export TOKEN='secretvalue123456'`, `TOKEN='***'`, "secretvalue123456"},
@@ -233,6 +239,7 @@ func TestMaskSecretsQuotedEnvValue(t *testing.T) {
 // TestMaskSecretsAuthorizationBearer is review finding N3's red test for
 // the Authorization: Bearer <token> header shape.
 func TestMaskSecretsAuthorizationBearer(t *testing.T) {
+	t.Parallel()
 	in := "GET /api/v1/widgets HTTP/1.1\nHost: example.com\nAuthorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.somepayload.signaturevalue\nAccept: application/json\n"
 	got := maskSecrets(in)
 	if strings.Contains(got, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.somepayload.signaturevalue") {
@@ -252,6 +259,7 @@ func TestMaskSecretsAuthorizationBearer(t *testing.T) {
 // becoming "token:*** if..."), but the corpus covers the same shape in a
 // few other common forms too.
 func TestMaskSecretsCodeCorpus(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		// The exact named regression (N4): Go short variable declaration.
 		"token := lexer.Next()",
@@ -289,6 +297,7 @@ func TestMaskSecretsCodeCorpus(t *testing.T) {
 // within the first ToolResultInlineBytes reached the model in cleartext
 // regardless of masking existing at all.
 func TestMaskSecretsPreview(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	secretValue := "AKIAABCDEFGHIJKLMNOP"
 	text := "AWS_SECRET_ACCESS_KEY=" + secretValue + "\n" + linesText(3000)
@@ -324,6 +333,7 @@ func TestMaskSecretsPreview(t *testing.T) {
 // left the header/read_tool_result advertising a size the sidecar file
 // did not have.
 func TestToolResultMetaBytesMatchesOnDiskLength(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	secretValue := strings.Repeat("A", 100) // a value substantially longer than "***"
 	text := "TOKEN=" + secretValue + "\n" + linesText(3000)

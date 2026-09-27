@@ -28,6 +28,7 @@ import (
 // the request the model actually sees carries a status block naming the
 // degraded server.
 func TestAmbientMCPStatusPresentWhenDegraded(t *testing.T) {
+	t.Parallel()
 	mgr := NewMCPManager(map[string]MCPServerConfig{
 		"linear": {URL: "http://127.0.0.1:1"}, // nothing listens: connection refused
 	})
@@ -68,6 +69,7 @@ func TestAmbientMCPStatusPresentWhenDegraded(t *testing.T) {
 // CallServerTool called on it has m.state == nil, not "every server
 // failed" — that must render as silence, not degradation.
 func TestMCPStatusSegmentAbsentBeforeConnectTriggered(t *testing.T) {
+	t.Parallel()
 	mgr := NewMCPManager(map[string]MCPServerConfig{
 		"linear": {URL: "http://127.0.0.1:1"},
 	})
@@ -81,6 +83,7 @@ func TestMCPStatusSegmentAbsentBeforeConnectTriggered(t *testing.T) {
 // TestMCPStatusSegmentAbsentForNilRegistry covers the "MCP not configured
 // at all" case: Config.MCP left nil (see MCPRegistry's doc comment).
 func TestMCPStatusSegmentAbsentForNilRegistry(t *testing.T) {
+	t.Parallel()
 	if got := mcpStatusSegment(nil); got != "" {
 		t.Errorf("mcpStatusSegment(nil) = %q, want \"\"", got)
 	}
@@ -103,6 +106,7 @@ func (bareMCPRegistry) CallServerTool(context.Context, string, string, json.RawM
 // panic or misbehave on it, just render nothing (see mcpStatusReader's doc
 // comment on why this is a separate interface).
 func TestMCPStatusSegmentAbsentForRegistryWithoutStatus(t *testing.T) {
+	t.Parallel()
 	if got := mcpStatusSegment(bareMCPRegistry{}); got != "" {
 		t.Errorf("mcpStatusSegment(bareMCPRegistry) = %q, want \"\"", got)
 	}
@@ -111,6 +115,7 @@ func TestMCPStatusSegmentAbsentForRegistryWithoutStatus(t *testing.T) {
 // TestMCPStatusSegmentAbsentWhenHealthy covers the happy path: every
 // configured server connected, no degraded clause to render.
 func TestMCPStatusSegmentAbsentWhenHealthy(t *testing.T) {
+	t.Parallel()
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
 		{name: "ok", content: []map[string]any{textContent("fine")}},
 	}}
@@ -129,6 +134,7 @@ func TestMCPStatusSegmentAbsentWhenHealthy(t *testing.T) {
 // requirement: two simultaneously degraded servers must always render in
 // the same (alphabetical) order, matching MCPManager.Status's own sort.
 func TestMCPStatusSegmentDeterministicOrdering(t *testing.T) {
+	t.Parallel()
 	mgr := NewMCPManager(map[string]MCPServerConfig{
 		"zeta":  {URL: "http://127.0.0.1:1"},
 		"alpha": {URL: "http://127.0.0.1:1"},
@@ -150,6 +156,7 @@ func TestMCPStatusSegmentDeterministicOrdering(t *testing.T) {
 // counterpart to TestAmbientMCPStatusPresentWhenDegraded: a fully healthy
 // MCP server must add no ambient text to the request at all.
 func TestAmbientMCPStatusAbsentWhenHealthy(t *testing.T) {
+	t.Parallel()
 	srv := &fakeMCPHTTPServer{tools: []fakeMCPTool{
 		{name: "ok", content: []map[string]any{textContent("fine")}},
 	}}
@@ -194,6 +201,7 @@ func (f fakeMCPStatusReader) Status() []MCPServerStatus { return f.status }
 // its path or query would land verbatim in model-visible context. The
 // ambient status block must carry only the classified, URL-free reason.
 func TestMCPStatusSegmentClassifiesReasonNeverLeaksURL(t *testing.T) {
+	t.Parallel()
 	const secret = "SUPERSECRET123"
 	leaky := &url.Error{
 		Op:  "Post",
@@ -227,6 +235,7 @@ func TestMCPStatusSegmentClassifiesReasonNeverLeaksURL(t *testing.T) {
 // still-retrying rendering (unchanged by Task 1): a degraded server whose
 // background retry has not yet given up carries the "; retrying" clause.
 func TestFormatMCPServerStatusRetryingClauseBeforeParked(t *testing.T) {
+	t.Parallel()
 	st := MCPServerStatus{Name: "linear", Connected: false, Parked: false, LastErr: context.DeadlineExceeded}
 	got := formatMCPServerStatus(st)
 	want := `linear (initialize timed out; retrying)`
@@ -244,6 +253,7 @@ func TestFormatMCPServerStatusRetryingClauseBeforeParked(t *testing.T) {
 // reason stays classified (never a raw error) exactly like the
 // still-retrying clause.
 func TestFormatMCPServerStatusParkedHint(t *testing.T) {
+	t.Parallel()
 	st := MCPServerStatus{Name: "linear", Connected: false, Parked: true, LastErr: context.DeadlineExceeded}
 	got := formatMCPServerStatus(st)
 	want := `linear (initialize timed out; use the mcp tool action "connect" to retry)`
@@ -327,6 +337,7 @@ func TestAmbientMCPStatusParkedServerCarriesMCPToolHint(t *testing.T) {
 // two turns, a permanently degraded server's block must land only on the
 // newest user message, never an earlier one.
 func TestAmbientMCPStatusOnlyOnNewestUserMessage(t *testing.T) {
+	t.Parallel()
 	mgr := NewMCPManager(map[string]MCPServerConfig{
 		"linear": {URL: "http://127.0.0.1:1"},
 	})
@@ -383,6 +394,7 @@ func TestAmbientMCPStatusOnlyOnNewestUserMessage(t *testing.T) {
 // TestAmbientProcessStatusNeverPersisted: the block must never survive a
 // LoadSession round trip.
 func TestAmbientMCPStatusNeverPersisted(t *testing.T) {
+	t.Parallel()
 	sesDir := t.TempDir()
 	mgr := NewMCPManager(map[string]MCPServerConfig{
 		"linear": {URL: "http://127.0.0.1:1"},

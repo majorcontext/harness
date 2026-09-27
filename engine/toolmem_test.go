@@ -32,6 +32,7 @@ import (
 // goroutines with mixed reservation sizes and checks the one thing that
 // must always hold.
 func TestReadBudgetNeverExceedsItsLimit(t *testing.T) {
+	t.Parallel()
 	const limit = 1 << 20
 	b := newToolReadBudget(limit)
 
@@ -79,6 +80,7 @@ func TestReadBudgetNeverExceedsItsLimit(t *testing.T) {
 // blocks: three reservations of half the limit each cannot all hold at
 // once, so the third waits.
 func TestReadBudgetSerializesOversizedReservations(t *testing.T) {
+	t.Parallel()
 	const limit = 1000
 	b := newToolReadBudget(limit)
 
@@ -126,6 +128,7 @@ func TestReadBudgetSerializesOversizedReservations(t *testing.T) {
 // one that arrives after it — a "retry when there is room" loop would let
 // a stream of small reads starve the large one forever.
 func TestReadBudgetServesWaitersFIFO(t *testing.T) {
+	t.Parallel()
 	const limit = 100
 	b := newToolReadBudget(limit)
 
@@ -189,6 +192,7 @@ func TestReadBudgetServesWaitersFIFO(t *testing.T) {
 // half of FIFO: room for a small new arrival does not let it bypass a large
 // waiter already at the head of the queue.
 func TestReadBudgetNewArrivalCannotJumpQueuedWaiter(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		b := newToolReadBudget(100)
 		hold60, err := b.reserve(context.Background(), 60)
@@ -292,6 +296,7 @@ func waitForWaiters(t *testing.T, b *toolReadBudget, n int) {
 // than the WHOLE budget still runs, alone, rather than deadlocking the
 // batch forever.
 func TestReadBudgetClampsAnOversizedReservation(t *testing.T) {
+	t.Parallel()
 	b := newToolReadBudget(1000)
 	release, err := b.reserve(context.Background(), 1<<30)
 	if err != nil {
@@ -311,6 +316,7 @@ func TestReadBudgetClampsAnOversizedReservation(t *testing.T) {
 // current holder, then takes the whole budget and runs alone. Without the
 // clamp it can never fit, even after used reaches zero.
 func TestReadBudgetQueuedOversizedReservationEventuallyRuns(t *testing.T) {
+	t.Parallel()
 	b := newToolReadBudget(100)
 	hold, err := b.reserve(context.Background(), 1)
 	if err != nil {
@@ -348,6 +354,7 @@ func TestReadBudgetQueuedOversizedReservationEventuallyRuns(t *testing.T) {
 // abandoned because its turn was cancelled neither leaks bytes nor leaves
 // a stale waiter behind.
 func TestReadBudgetCancelWhileQueuedReleasesNothing(t *testing.T) {
+	t.Parallel()
 	b := newToolReadBudget(100)
 	hold, err := b.reserve(context.Background(), 100)
 	if err != nil {
@@ -387,6 +394,7 @@ func TestReadBudgetCancelWhileQueuedReleasesNothing(t *testing.T) {
 // it can reacquire the budget lock. Those bytes have already left the queue;
 // the cancel path is their only possible releaser.
 func TestReadBudgetGrantRacingCancellationReturnsGrantedBytes(t *testing.T) {
+	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
 		b := newToolReadBudget(100)
 		if _, err := b.reserve(context.Background(), 100); err != nil {
@@ -427,6 +435,7 @@ func TestReadBudgetGrantRacingCancellationReturnsGrantedBytes(t *testing.T) {
 
 // TestReadBudgetDisabledAndDefault pins the config resolution.
 func TestReadBudgetDisabledAndDefault(t *testing.T) {
+	t.Parallel()
 	if b := newToolReadBudget(-1); b != nil {
 		t.Error("a negative budget must disable the bound (nil)")
 	}
@@ -452,6 +461,7 @@ func TestReadBudgetDisabledAndDefault(t *testing.T) {
 // kilobyte-sized reservations against the default budget must ALL be held
 // at once, with nothing queued.
 func TestReadBudgetKeepsSmallReadsFullyParallel(t *testing.T) {
+	t.Parallel()
 	b := newToolReadBudget(0) // the default
 	var releases []func()
 	for i := 0; i < 8; i++ {
@@ -479,6 +489,7 @@ func TestReadBudgetKeepsSmallReadsFullyParallel(t *testing.T) {
 // executor and samples the budget while the batch runs, so the bound is
 // observed end to end rather than only at the unit level.
 func TestReadBudgetBoundsARealBatch(t *testing.T) {
+	t.Parallel()
 	const n = 8
 	const size = 1 << 20 // 1MB each
 	const limit = 2 << 20

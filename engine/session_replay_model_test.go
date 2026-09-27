@@ -486,6 +486,7 @@ func (m *sessionModel) Check(t *rapid.T) {
 // TestQueueReplayModel already pays, plus in-process scripted-provider calls
 // with no real network or disk I/O of their own.
 func TestSessionReplayModel(t *testing.T) {
+	t.Parallel()
 	rapid.Check(t, func(t *rapid.T) {
 		dir, err := os.MkdirTemp("", "session-replay-model-*")
 		if err != nil {

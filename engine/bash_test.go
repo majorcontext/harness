@@ -17,6 +17,7 @@ import (
 // Config.BashOutputCap set, the tool must fall back to a sane default
 // (96KB) and truncate, keeping both head and tail with a marker in between.
 func TestBashOutputCappedByDefault(t *testing.T) {
+	t.Parallel()
 	s := NewSession(Config{
 		Providers: provider.Registry{"test": &scriptedProvider{name: "test"}},
 		Model:     message.ModelRef{Provider: "test", Model: "m1"},
@@ -52,6 +53,7 @@ func TestBashOutputCappedByDefault(t *testing.T) {
 // TestBashOutputCapConfigurable pins Config.BashOutputCap as the knob: a
 // custom cap is honored instead of the default.
 func TestBashOutputCapConfigurable(t *testing.T) {
+	t.Parallel()
 	s := NewSession(Config{
 		Providers:     provider.Registry{"test": &scriptedProvider{name: "test"}},
 		Model:         message.ModelRef{Provider: "test", Model: "m1"},
@@ -78,6 +80,7 @@ func TestBashOutputCapConfigurable(t *testing.T) {
 // directly: small inputs pass through untouched, oversized ones keep a head
 // and tail slice around a marker, and the result never exceeds the cap.
 func TestTruncateOutputKeepsHeadAndTail(t *testing.T) {
+	t.Parallel()
 	cw := newCappedWriter(10)
 	if _, err := cw.Write([]byte("0123456789ABCDEFGHIJ")); err != nil {
 		t.Fatal(err)
