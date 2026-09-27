@@ -97,7 +97,8 @@ truncation.
 The cap is ~1 MiB (`gitChangesPatchCap = 1<<20`): large enough for a
 typical PR-sized diff, small enough to keep a single response bounded.
 
-`ls-files`, `--numstat`, and `--name-status` can't be truncated the same
+`ls-files`, `--numstat`, `--name-status`, and filter-driver discovery
+(`git config --get-regexp`) can't be truncated the same
 way — `files` must stay complete — so `gitOutCapped` bounds each of their
 own stdout to `gitChangesMetadataCap` (32 MiB) instead: exceeding it kills
 the subprocess and answers `409 too_many_changes`, the same scale-ceiling
@@ -168,7 +169,11 @@ rest). A git hook exports `GIT_DIR` and `GIT_INDEX_FILE`; inherited, they
 override the command's working directory, so the endpoint would read
 another repository's index while `--show-toplevel` still named the
 requested one. `gitBaseEnv` removes them, and each command adds back only
-the values this endpoint sets itself.
+the values this endpoint sets itself. It also removes the pathspec-mode
+variables (`GIT_LITERAL_PATHSPECS`, `GIT_GLOB_PATHSPECS`,
+`GIT_NOGLOB_PATHSPECS`, `GIT_ICASE_PATHSPECS`): an inherited
+`GIT_LITERAL_PATHSPECS=1` turns `add -N`'s `:(exclude,literal)` magic
+into a literal path that matches nothing, and the request fails.
 
 `GIT_LITERAL_PATHSPECS=1` additionally keeps a pathspec built from a real
 file's name (e.g. `b*.txt`) from being reinterpreted as a glob.

@@ -240,6 +240,41 @@ func TestHandleGitChangesIgnoresInheritedGitDir(t *testing.T) {
 	}
 }
 
+// TestHandleGitChangesIgnoresInheritedPathspecMode: an inherited
+// GIT_LITERAL_PATHSPECS=1 must not turn add -N's ":(exclude,literal)" magic
+// into a literal path that matches nothing.
+func TestHandleGitChangesIgnoresInheritedPathspecMode(t *testing.T) {
+	dir := newGitRepo(t)
+	nested := filepath.Join(dir, "vendor", "dep")
+	mkdirAllTest(t, nested)
+	runTestGit(t, nested, "init", "-q")
+	runTestGit(t, nested, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i")
+	writeTestFile(t, filepath.Join(dir, "new.txt"), "n\n")
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
+
+	got := gitChangesUncommitted(t, dir)
+	if len(got.Files) != 1 || got.Files[0].Path != "new.txt" {
+		t.Errorf("Files = %+v, want one added new.txt", got.Files)
+	}
+}
+
+// TestHandleGitChangesFilterDiscoveryIsCapped: filter-driver discovery's
+// config output counts against gitChangesMetadataCap like the file lists.
+func TestHandleGitChangesFilterDiscoveryIsCapped(t *testing.T) {
+	dir := newGitRepo(t) // clean: ls-files and the diffs print nothing
+	runTestGit(t, dir, "config", "filter.drv.clean", "cat")
+
+	oldCap := gitChangesMetadataCap
+	gitChangesMetadataCap = 4 // shorter than "filter.drv.clean"
+	t.Cleanup(func() { gitChangesMetadataCap = oldCap })
+
+	h := newGitChangesHarness(t, dir)
+	resp, body := h.do(http.MethodGet, "/git/changes?scope=uncommitted&dir="+dir, nil)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(body), "too_many_changes") {
+		t.Errorf("status = %d, body = %s, want 409 too_many_changes", resp.StatusCode, body)
+	}
+}
+
 func TestHandleGitChangesRequiresAuth(t *testing.T) {
 	dir := newGitRepo(t)
 	h := newGitChangesHarness(t, dir)

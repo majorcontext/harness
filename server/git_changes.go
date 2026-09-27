@@ -31,7 +31,7 @@ const gitChangesResponseMargin = 2 * time.Second
 const gitChangesPatchCap = 1 << 20
 
 // gitChangesMetadataCap bounds each of ls-files/--numstat/--name-status's
-// own stdout: unlike the patch, files must stay complete, so a change set
+// (and filter-driver discovery's) own stdout: unlike the patch, files must stay complete, so a change set
 // this large answers 409 too_many_changes instead of truncating it. A var,
 // not a const, so a test can shrink it to reach that path deterministically.
 var gitChangesMetadataCap = 32 << 20
@@ -245,11 +245,13 @@ var gitStaticSafetyArgs = []string{
 	"-c", "core.hooksPath=" + os.DevNull,
 }
 
-// gitRepoLocalEnv is `git rev-parse --local-env-vars`: variables that select
-// a repository, index, object store, or config. Inherited from harness's own
-// environment (a git hook exports GIT_DIR and GIT_INDEX_FILE), any of them
-// would override cmd.Dir and read another repository.
-var gitRepoLocalEnv = map[string]bool{
+// gitStrippedEnv is never inherited from harness's own environment. The
+// first group is `git rev-parse --local-env-vars`: variables that select a
+// repository, index, object store, or config, so that (a git hook exports
+// GIT_DIR and GIT_INDEX_FILE) they would override cmd.Dir and read another
+// repository. The pathspec-mode group would override each command's own
+// pathspec parsing, e.g. make add -N's ":(exclude,literal)" a literal path.
+var gitStrippedEnv = map[string]bool{
 	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_CONFIG": true,
 	"GIT_CONFIG_PARAMETERS": true, "GIT_CONFIG_COUNT": true,
 	"GIT_OBJECT_DIRECTORY": true, "GIT_DIR": true, "GIT_WORK_TREE": true,
@@ -258,16 +260,19 @@ var gitRepoLocalEnv = map[string]bool{
 	"GIT_REPLACE_REF_BASE": true, "GIT_PREFIX": true,
 	"GIT_INTERNAL_SUPER_PREFIX": true, "GIT_SHALLOW_FILE": true,
 	"GIT_COMMON_DIR": true,
+
+	"GIT_LITERAL_PATHSPECS": true, "GIT_GLOB_PATHSPECS": true,
+	"GIT_NOGLOB_PATHSPECS": true, "GIT_ICASE_PATHSPECS": true,
 }
 
-// gitBaseEnv is os.Environ() without gitRepoLocalEnv; callers add back only
+// gitBaseEnv is os.Environ() without gitStrippedEnv; callers add back only
 // the values this endpoint sets itself.
 func gitBaseEnv() []string {
 	env := os.Environ()
 	out := env[:0:0]
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
-		if !gitRepoLocalEnv[name] {
+		if !gitStrippedEnv[name] {
 			out = append(out, kv)
 		}
 	}
@@ -553,7 +558,7 @@ func addUntrackedIntentToAdd(ctx context.Context, repoRoot string, env []string,
 // diffFilterDriverArgs neutralizes every repo-configured clean/process
 // filter driver, discovered once per request, not per file.
 func diffFilterDriverArgs(ctx context.Context, dir string) ([]string, error) {
-	out, err := gitOut(ctx, dir, nil, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
+	out, err := gitOutCapped(ctx, dir, nil, gitChangesMetadataCap, "config", "--null", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if err != nil {
 		if isGitWorkTreeErr(err) {
 			return nil, nil // no configured filter driver matches
