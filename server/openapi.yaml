@@ -106,6 +106,13 @@ components:
             is never removed or repurposed; retiring a guarantee ships a
             new name instead. An older harness that omits this field
             advertises no capabilities, never an error.
+
+
+            "delta_row_identity": text.delta, reasoning.delta and tool.start
+            carry the owning message's id and created_at once known. A
+            consumer must still tolerate an empty id on a delta; the name
+            says the fields are populated at all, not that every delta is
+            identified.
           example: ["delta_row_identity"]
 
     CommandArg:

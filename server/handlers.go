@@ -666,7 +666,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		VCSTime:      t,
 		SessionSync:  effectiveSessionSync(s.opts.SessionSync),
 		StartedAt:    startedAt,
-		Capabilities: Capabilities,
+		Capabilities: capabilities,
 	})
 }
 

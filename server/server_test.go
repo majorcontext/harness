@@ -554,8 +554,8 @@ func TestHealthReportsCapabilities(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Capabilities) != 1 || body.Capabilities[0] != CapabilityDeltaRowIdentity {
-		t.Errorf("capabilities = %v, want [%s]", body.Capabilities, CapabilityDeltaRowIdentity)
+	if len(body.Capabilities) != 1 || body.Capabilities[0] != "delta_row_identity" {
+		t.Errorf("capabilities = %v, want [delta_row_identity]", body.Capabilities)
 	}
 }
 
