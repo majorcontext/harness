@@ -4,8 +4,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestDiscoverRejectsSpecialFiles(t *testing.T) {
+	root := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(root, "review.md"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover([]string{root}); err == nil {
+		t.Fatal("Discover accepted a non-regular command file")
+	}
+}
+
+func TestDiscoverRejectsInvalidFrontmatterUTF8(t *testing.T) {
+	root := t.TempDir()
+	content := append([]byte("---\ndescription: "), 0xff)
+	content = append(content, []byte("\n---\nbody")...)
+	if err := os.WriteFile(filepath.Join(root, "review.md"), content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Discover([]string{root}); err == nil {
+		t.Fatal("Discover advertised a command whose metadata is invalid UTF-8")
+	}
+	if _, err := LookupPrompt([]string{root}, "review"); err == nil {
+		t.Fatal("LookupPrompt accepted invalid UTF-8 metadata")
+	}
+}
 
 func TestPromptCommandRootSymlinkRejected(t *testing.T) {
 	outside := t.TempDir()

@@ -101,6 +101,9 @@ func Discover(dirs []string) ([]*PromptCommand, error) {
 			if filepath.Ext(entry.Name()) != ".md" {
 				return nil
 			}
+			if !entry.Type().IsRegular() {
+				return fmt.Errorf("command file %q is not a regular file", path)
+			}
 			name, err := promptName(root, path)
 			if err != nil {
 				return err
@@ -296,6 +299,9 @@ func loadPromptMetadata(path, name string) (*PromptCommand, error) {
 			return nil, fmt.Errorf("%s: unterminated frontmatter: no closing '---' delimiter found", path)
 		}
 		frontmatter.WriteString(line)
+	}
+	if !utf8.ValidString(frontmatter.String()) {
+		return nil, fmt.Errorf("%s: frontmatter is not valid UTF-8", path)
 	}
 	fields, err := skill.ParseFrontmatterFields(frontmatter.String(), "description", "argument-hint")
 	if err != nil {

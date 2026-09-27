@@ -13,6 +13,37 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
+func TestRepositoryCommandRejectsEmptyExpansion(t *testing.T) {
+	work := t.TempDir()
+	path := filepath.Join(work, ".agents", "commands", "review.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("---\ndescription: Review\n---\n$1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := newCapturingProvider(asstTurn("ok"))
+	dir := t.TempDir()
+	srv := newServer(t, dir, prov, 0, func(o *Options) { o.WorkspaceRoots = []string{work} })
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	id := h.createSessionBody(map[string]string{"model": "test/m1", "workdir": work})
+	for _, route := range []string{"prompt_async", "enqueue"} {
+		body := map[string]any{"parts": []map[string]string{{"type": "text", "text": "/review"}}, "source": "typed"}
+		if route == "enqueue" {
+			body["seq"] = int64(1)
+		}
+		resp, data := h.do("POST", "/session/"+id+"/"+route, body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s empty expansion: %d %s, want 400", route, resp.StatusCode, data)
+		}
+	}
+	if users := h.userMessages(id); len(users) != 0 {
+		t.Fatalf("empty expansion appended user messages: %+v", users)
+	}
+}
+
 func TestRepositoryCommandEnqueueRetrySkipsInvalidFile(t *testing.T) {
 	work := t.TempDir()
 	path := filepath.Join(work, ".agents", "commands", "review.md")

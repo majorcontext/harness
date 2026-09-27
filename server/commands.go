@@ -212,9 +212,14 @@ func (s *Server) resolvePromptCommand(w http.ResponseWriter, route promptRoute, 
 				return "", true
 			}
 			args := strings.TrimSpace(strings.TrimPrefix(text, "/"+unknown.Name))
+			expanded := command.Expand(body, args)
+			if strings.TrimSpace(expanded) == "" {
+				writeErr(w, http.StatusBadRequest, "prompt command expanded to empty text")
+				return "", true
+			}
 			prov.Source = message.PromptSourceCommand
 			prov.SourceLabel = label
-			return command.Expand(body, args), false
+			return expanded, false
 		}
 		var argsErr *command.ArgsError
 		if errors.As(err, &argsErr) {

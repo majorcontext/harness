@@ -650,7 +650,11 @@ func expandRepositoryCommand(cfg *config.Config, workdir, name, line string) (st
 		return "", false, err
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(line, "/"+name))
-	return command.Expand(body, args), true, nil
+	expanded := command.Expand(body, args)
+	if strings.TrimSpace(expanded) == "" {
+		return "", false, fmt.Errorf("command: /%s expanded to empty text", name)
+	}
+	return expanded, true, nil
 }
 
 func runCmd(args []string) error {
