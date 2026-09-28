@@ -533,9 +533,10 @@ for a message it never received. Then a `history.compacted` engine event
 carrying `{first_id, last_id, turns_folded, summary_id,
 compact_started_at}`, where `summary_id` refers to the message the
 tailer just saw and `compact_started_at` is when the blocking
-summarization call began — a consumer derives duration as this event's
-own delivery time minus `compact_started_at`, without holding open the
-live stream that preceded it. A tailer replaying
+summarization call began — a consumer derives duration as this durable
+record's own `recorded_at` minus `compact_started_at`, never a
+client-observed delivery time, since replay and SSE reconnect can deliver
+the record long after `recorded_at` was assigned. A tailer replaying
 from a `from` cursor older than the compaction sees the original messages,
 the summary message, and the compaction event — the event is the
 reconciliation signal telling it which prefix the summary replaced. The

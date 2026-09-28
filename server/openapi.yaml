@@ -2388,13 +2388,15 @@ components:
             When this compaction began, on BOTH durable compaction events —
             history.compacted and compaction.claude_code alike, since
             duration means the same thing in either lane. Derive duration
-            as this event's own delivery time minus this field, without
-            holding open the live stream that preceded it. ABSENT — the
-            key is missing, never an explicit zero-value timestamp — on a
-            legacy record predating this field, and on a compaction.
-            claude_code event whose delegated turn observed no preceding
-            "compacting" status of its own: a real, honest absence, not a
-            bug.
+            as this record's own `recorded_at` minus this field, never a
+            client-observed delivery time: replay and SSE reconnect can
+            deliver the record long after `recorded_at` was assigned, and
+            subtracting a delivery time would give a different duration on
+            replay than on first delivery. ABSENT — the key is missing,
+            never an explicit zero-value timestamp — on a legacy record
+            predating this field, and on a compaction.claude_code event
+            whose delegated turn observed no preceding "compacting" status
+            of its own: a real, honest absence, not a bug.
         trigger:
           type: string
           enum: [auto, manual]
