@@ -179,16 +179,17 @@ type Event struct {
 	PostTokens int    `json:"post_tokens,omitempty"`
 
 	// ContextUsedTokens/ContextWindowTokens are carried by evtTurnEnd,
-	// evtHistoryCompacted, and evtClaudeCodeCompacted, mirroring
-	// contextJSON's two fields. For evtTurnEnd/evtHistoryCompacted, both are
-	// 0 (key absent) when the publishing call had no live *engine.Session to
-	// read. For a live session whose reading a fold invalidated with no
-	// later turn to remeasure it, ContextUsedTokens instead carries engine's
-	// own size estimate (see contextJSON's own doc comment), never a
-	// fold-invalidated measurement; ContextWindowTokens stays populated
-	// throughout. evtClaudeCodeCompacted always sets ContextUsedTokens from
-	// PostTokens, live session or not; only its ContextWindowTokens depends
-	// on one. 0 here means unknown, never empty.
+	// evtHistoryCompacted, and evtClaudeCodeCompacted. evtTurnEnd and
+	// evtHistoryCompacted mirror contextJSON's two fields: both 0 (key
+	// absent) when the publishing call had no live *engine.Session to
+	// read; for a live session whose reading a fold invalidated with no
+	// later turn to remeasure it, ContextUsedTokens instead carries
+	// engine's own size estimate (see contextJSON's own doc comment),
+	// never a fold-invalidated measurement, while ContextWindowTokens
+	// stays populated throughout. evtClaudeCodeCompacted always sets
+	// ContextUsedTokens from PostTokens, live session or not — never this
+	// projection — and only its ContextWindowTokens depends on one. 0
+	// here means unknown, never empty.
 	ContextUsedTokens   int `json:"context_used_tokens,omitempty"`
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
@@ -556,10 +557,12 @@ func (s *Server) publishHistoryCompacted(ev engine.Event, sess *engine.Session) 
 	s.emitDurable(out)
 }
 
-// sessionContextFields mirrors recordTurnEnd's own ContextReading logic;
-// sess nil reports the zero "unknown" pair. evtClaudeCodeCompacted only
-// ever consults the window return here — its ContextUsedTokens comes from
-// PostTokens, live session or not.
+// sessionContextFields is the one ContextReading/ContextWindowTokens
+// implementation recordTurnEnd, publishHistoryCompacted, and
+// evtClaudeCodeCompacted's Publish case all call; sess nil reports the
+// zero "unknown" pair. evtClaudeCodeCompacted only ever consults the
+// window return here — its ContextUsedTokens comes from PostTokens, live
+// session or not.
 func sessionContextFields(sess *engine.Session) (used, window int) {
 	if sess == nil {
 		return 0, 0
@@ -854,10 +857,7 @@ func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome s
 	}
 	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr}
 	if sess != nil {
-		if last, ok := sess.ContextReading(); ok {
-			ev.ContextUsedTokens = last.InputTokens + last.CacheReadTokens + last.CacheWriteTokens
-		}
-		ev.ContextWindowTokens = sess.ContextWindowTokens()
+		ev.ContextUsedTokens, ev.ContextWindowTokens = sessionContextFields(sess)
 	}
 	s.mu.Lock()
 	s.lastTurn[sessionID] = &turnOutcome{outcome: outcome, error: errStr}

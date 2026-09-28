@@ -57,8 +57,10 @@ func buildFakeClaudeForServer(t *testing.T) string {
 // exact provider shape (a claude-code/opus session switched mid-session to
 // codex/gpt-5.6-sol), which neither server_test.go's newServer (one native
 // provider only) nor multiProviderHarnessInDir (no ClaudeCode config seam)
-// can build.
-func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeCode engine.ClaudeCodeConfig, nativeProv provider.Provider) *harness {
+// can build. windowTokens sets engine.Config.ContextWindowTokens, the
+// fallback Session.ContextWindowTokens() returns when the CLI itself
+// reports none.
+func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeCode engine.ClaudeCodeConfig, nativeProv provider.Provider, windowTokens int) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	reg := provider.Registry{nativeProv.Name(): nativeProv}
@@ -82,22 +84,24 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 				m = claudeModel
 			}
 			return engine.NewSession(engine.Config{
-				Providers:     reg,
-				Model:         m,
-				WorkDir:       workDir,
-				ParentSession: parentSession,
-				SessionDir:    dir,
-				ClaudeCode:    claudeCode,
-				OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
+				Providers:           reg,
+				Model:               m,
+				WorkDir:             workDir,
+				ParentSession:       parentSession,
+				SessionDir:          dir,
+				ClaudeCode:          claudeCode,
+				ContextWindowTokens: windowTokens,
+				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
 			}), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
 			return engine.LoadSession(engine.Config{
-				Providers:  reg,
-				Model:      claudeModel,
-				SessionDir: dir,
-				ClaudeCode: claudeCode,
-				OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+				Providers:           reg,
+				Model:               claudeModel,
+				SessionDir:          dir,
+				ClaudeCode:          claudeCode,
+				ContextWindowTokens: windowTokens,
+				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
 			}, id)
 		},
 	}
@@ -141,7 +145,7 @@ func TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle(t *testing.T) {
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "codex", turns: [][]provider.Event{asstTurn("done on codex")}}
 
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv, 0)
 	id := h.createSession("")
 
 	// Several claude-code turns, each its own separate prompt_async call
@@ -241,7 +245,7 @@ func TestClaudeCodeCompactedEventIsDurableAndTyped(t *testing.T) {
 
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "test"}
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv, 0)
 	id := h.createSession("")
 
 	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{

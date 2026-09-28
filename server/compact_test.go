@@ -685,7 +685,7 @@ func TestCompactEndpointDelegatesToClaudeCodeCLI(t *testing.T) {
 
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "test"}
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv, 0)
 	id := h.createSession("")
 	sse := h.openSSE("", "")
 
@@ -845,7 +845,7 @@ func TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T)
 
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "test"}
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv, 0)
 	id := h.createSession("")
 	sse := h.openSSE("", "")
 
@@ -919,14 +919,15 @@ func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
 	}
 }
 
-func TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens(t *testing.T) {
+func TestCompactEndpointClaudeCodeCompactedCarriesContextFields(t *testing.T) {
 	bin := buildFakeClaudeForServer(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
 	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
 
 	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
 	nativeProv := &scriptedProvider{name: "test"}
-	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	const windowTokens = 1000
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv, windowTokens)
 	id := h.createSession("")
 	sse := h.openSSE("", "")
 
@@ -939,5 +940,8 @@ func TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens(t *testing.T
 	ev := sse.waitFor(t, "compaction.claude_code")
 	if ev.ContextUsedTokens != ev.PostTokens {
 		t.Errorf("compaction.claude_code context_used_tokens = %d, want post_tokens %d", ev.ContextUsedTokens, ev.PostTokens)
+	}
+	if ev.ContextWindowTokens != windowTokens {
+		t.Errorf("compaction.claude_code context_window_tokens = %d, want the session's configured window %d", ev.ContextWindowTokens, windowTokens)
 	}
 }

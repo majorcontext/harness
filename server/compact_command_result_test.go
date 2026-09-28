@@ -49,7 +49,7 @@ func TestCompactCommandResultIsSlim(t *testing.T) {
 				t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
 				t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
 				model := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
-				h = claudeCodeSwitchHarness(t, model, engine.ClaudeCodeConfig{BinaryPath: bin}, &scriptedProvider{name: "test"})
+				h = claudeCodeSwitchHarness(t, model, engine.ClaudeCodeConfig{BinaryPath: bin}, &scriptedProvider{name: "test"}, 0)
 				id, line = h.createSession(""), "/compact"
 			} else {
 				prov := &scriptedProvider{name: "test", turns: [][]provider.Event{

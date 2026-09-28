@@ -646,8 +646,11 @@ components:
       description: >
         A session's context-window gauge, surfaced on Session.context and
         each GET /session/status entry's `context`, and mirrored on the
-        turn.end, history.compacted, and compaction.claude_code events
-        (context_used_tokens/context_window_tokens).
+        turn.end and history.compacted events
+        (context_used_tokens/context_window_tokens). compaction.claude_code
+        also carries those two fields, but context_used_tokens there is not
+        this projection: it is the CLI's own post_tokens (see that event's
+        context_used_tokens for the exception).
       required: [used_tokens, window_tokens]
       properties:
         used_tokens:
@@ -662,12 +665,14 @@ components:
             over the post-fold history — the same estimate automatic
             compaction itself already trusts as a fallback trigger signal —
             whenever the answering projection holds the session in memory:
-            the turn.end/history.compacted/compaction.claude_code
-            context_used_tokens mirrors, and GET /session, GET /session/{id}
-            and GET /session/status. A caller cannot tell a
-            measurement from an estimate by inspecting this field alone,
-            and does not need to: both answer the same question, "how full
-            is context now," to the precision each has available. When any
+            the turn.end/history.compacted context_used_tokens mirrors, and
+            GET /session, GET /session/{id} and GET /session/status —
+            compaction.claude_code's context_used_tokens instead mirrors
+            the CLI's own post_tokens, never this estimate. A caller cannot
+            tell a measurement from an estimate by inspecting this field
+            alone, and does not need to: both answer the same question,
+            "how full is context now," to the precision each has
+            available. When any
             of those three endpoints answers a non-resident session from its
             durable sidecar index, that index carries no message history to
             estimate over, so this reports plain 0 in that case. 0 always
