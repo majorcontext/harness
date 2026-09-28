@@ -580,6 +580,77 @@ func TestRunCompactCommandRejectsOptionsOnDelegatedSession(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeCompactTurnDoesNotInjectMidTurnQueuedPrompt is the named-
+// failure test for a delegated /compact turn stranding a prompt queued
+// while it runs: the pump's mid-turn wake registration treats a compact
+// turn like any other delegated turn, dequeues the prompt with reason
+// "injected", and writes it to a child whose own history-replacing result
+// never answers it — a permanent loss, not a delay. This proves the fix:
+// the prompt stays in s.promptQueue, never dequeued as "injected", for the
+// server's own tail dispatch (maybeDispatchQueued) to deliver once
+// compaction ends.
+func TestClaudeCodeCompactTurnDoesNotInjectMidTurnQueuedPrompt(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "compact_queue_injection")
+
+	var mu sync.Mutex
+	var events []Event
+	waiting := make(chan struct{})
+	var waitingOnce sync.Once
+	s.cfg.OnEvent = func(ev Event) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+			waitingOnce.Do(func() { close(waiting) })
+		}
+	}
+
+	type outcome struct {
+		res CompactResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := s.RunCompactCommand(context.Background(), CompactOptions{})
+		done <- outcome{res, err}
+	}()
+
+	select {
+	case res := <-done:
+		t.Fatalf("RunCompactCommand returned %+v before fakeclaude ever emitted WAITING_FOR_QUEUE", res)
+	case <-waiting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+	}
+
+	queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: must stay queued", "", PromptProvenance{})
+	if err != nil {
+		t.Fatalf("EnqueuePrompt: %v", err)
+	}
+
+	var res outcome
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunCompactCommand did not return within 10s")
+	}
+	if res.err != nil {
+		t.Fatalf("RunCompactCommand: %v", res.err)
+	}
+
+	if q := s.QueuedPrompts(); len(q) != 1 || q[0].ID != queueID {
+		t.Fatalf("QueuedPrompts() after the compact turn = %+v, want the one enqueued prompt still queued", q)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, ev := range events {
+		if ev.Type == EventPromptDequeued && ev.QueueReason == "injected" {
+			t.Fatalf("prompt.dequeued reason=%q fired during a /compact turn, want it to stay queued instead", ev.QueueReason)
+		}
+	}
+}
+
 // TestClaudeCodeDelegatedTurnDeliversAndCommitsTaskNotification is the
 // regression test for the claude-code delegated lane's own bypass of the
 // task-notification delivery/commit machinery — root-caused live as an

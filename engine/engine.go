@@ -1621,6 +1621,10 @@ type Session struct {
 	// change, by the server's ordinary tail dispatch (maybeDispatchQueued).
 	claudeCodeQueueWake atomic.Pointer[chan struct{}]
 
+	// claudeCodeCompactTurn marks the delegated /compact turn RunCompactCommand
+	// is dispatching, which runClaudeCodeTurn reads to decide mid-turn injection.
+	claudeCodeCompactTurn atomic.Bool
+
 	// enqueueSeq is the durable-enqueue idempotency high-water mark (see
 	// EnqueuePromptDurable in queue.go and promptRecord.Seq in store.go):
 	// the largest caller-issued seq durably accepted. Monotonic; a seq at or

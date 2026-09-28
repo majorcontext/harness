@@ -50,7 +50,10 @@
 // "queue_injection" (blocks for a SECOND stdin line mid-turn, proving the
 // driver's stdin-writer pump keeps stdin open and delivers a mid-turn
 // queued prompt to THIS running child instead of a fresh one — see its own
-// comment below), "queue_injection_broken_pipe" (closes its own stdin read
+// comment below), "compact_queue_injection" (the same marker, but waits
+// only a bounded time for a second line instead of blocking forever —
+// proves a delegated /compact turn's own driver never delivers one),
+// "queue_injection_broken_pipe" (closes its own stdin read
 // end before the driver ever gets a chance to write a mid-turn injection,
 // so that write fails — proves a failed injection's watermark accounting
 // does not silently strand it, see its own comment below), and
@@ -423,6 +426,49 @@ func main() {
 					},
 				})
 			}
+		}
+		emit(map[string]any{
+			"type":     "result",
+			"subtype":  "success",
+			"is_error": false,
+			"result":   resultText,
+			"usage": map[string]any{
+				"input_tokens":  5,
+				"output_tokens": 5,
+			},
+		})
+		return
+	case "compact_queue_injection":
+		// A delegated /compact turn registers no wake channel, so no
+		// second line ever arrives and an unbounded read would hang. The
+		// bound must stay well above the test's own enqueue latency, or a
+		// driver that still injects could finish the turn first and read
+		// as a pass.
+		emit(map[string]any{
+			"type": "assistant",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": []map[string]any{{"type": "text", "text": "WAITING_FOR_QUEUE"}},
+			},
+		})
+		second := make(chan string, 1)
+		go func() {
+			if line, ok := readStdinLine(); ok {
+				second <- line
+			}
+		}()
+		resultText := "no second message received"
+		select {
+		case line := <-second:
+			var m struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+			}
+			if json.Unmarshal([]byte(line), &m) == nil {
+				resultText = "received queued: " + m.Message.Content
+			}
+		case <-time.After(3 * time.Second):
 		}
 		emit(map[string]any{
 			"type":     "result",

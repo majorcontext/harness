@@ -133,6 +133,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"readBudget":                "resolved once in newSession from Config.ToolReadBudgetBytes; not fold state",
 	"deferredQueueRecords":      "in-flight deferred-durable-write buffer; snapshotSafeLocked refuses to capture while it is non-empty, so it is always empty at any actual anchor",
 	"claudeCodeQueueWake":       "atomic.Pointer wake channel for a currently-running turn's stdin pump; nil after any load, never persisted",
+	"claudeCodeCompactTurn":     "runtime-only marker for the in-flight delegated /compact turn; set and cleared inside one RunCompactCommand call, never persisted",
 	"readHashes":                "explicitly documented \"Deliberately in-memory and per-live-Session only: never persisted, never folded by LoadSession\"",
 	"taskNotificationsInFlight": "in-turn checkout state; nil after ANY load (a full replay never populates it either, since checkout only happens during a live turn) — the snapshot's own TaskNotifications field already carries these entries back into the plain taskNotifications queue on restore",
 	"retainedTaskResults":       "in-turn retention memo (child id -> trh_N) for oversized done notifications; memory-only, re-retained under a fresh handle on the next checkout after a load",
