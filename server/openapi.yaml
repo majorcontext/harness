@@ -645,8 +645,9 @@ components:
       type: object
       description: >
         A session's context-window gauge, surfaced on Session.context and
-        each GET /session/status entry's `context`, and mirrored per turn
-        on the turn.end event (context_used_tokens/context_window_tokens).
+        each GET /session/status entry's `context`, and mirrored on the
+        turn.end, history.compacted, and compaction.claude_code events
+        (context_used_tokens/context_window_tokens).
       required: [used_tokens, window_tokens]
       properties:
         used_tokens:
@@ -661,8 +662,9 @@ components:
             over the post-fold history — the same estimate automatic
             compaction itself already trusts as a fallback trigger signal —
             whenever the answering projection holds the session in memory:
-            the turn.end context_used_tokens mirror, and GET /session, GET
-            /session/{id} and GET /session/status. A caller cannot tell a
+            the turn.end/history.compacted/compaction.claude_code
+            context_used_tokens mirrors, and GET /session, GET /session/{id}
+            and GET /session/status. A caller cannot tell a
             measurement from an estimate by inspecting this field alone,
             and does not need to: both answer the same question, "how full
             is context now," to the precision each has available. When any

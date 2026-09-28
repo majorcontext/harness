@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -860,13 +861,45 @@ func TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T)
 	}
 }
 
+// contextWindowHarness builds a server whose sessions run with an explicit
+// engine.Config.ContextWindowTokens (mirroring requireWindowHarness's own
+// NewSession override in server/context_window_required_test.go), so a test
+// can assert the durable ContextWindowTokens field against a KNOWN value
+// instead of "test/m1"'s unconfigured 0.
+func contextWindowHarness(t *testing.T, prov provider.Provider, windowTokens int) *harness {
+	t.Helper()
+	const token = "secret-run-token"
+	dir := t.TempDir()
+	var srv *Server
+	srv = newServer(t, dir, prov, 0, func(o *Options) {
+		o.NewSession = func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
+			if m.IsZero() {
+				m = message.ModelRef{Provider: prov.Name(), Model: "m1"}
+			}
+			return engine.NewSession(engine.Config{
+				Providers:           provider.Registry{prov.Name(): prov},
+				Model:               m,
+				SessionDir:          dir,
+				WorkDir:             workDir,
+				ParentSession:       parentSession,
+				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
+				ContextWindowTokens: windowTokens,
+			}), nil
+		}
+	})
+	ts := httptest.NewServer(srv)
+	t.Cleanup(ts.Close)
+	return &harness{t: t, dir: dir, token: token, srv: srv, ts: ts}
+}
+
 func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
 		compactAsstTurn("two", provider.Usage{InputTokens: 10}),
 		compactAsstTurn("gist", provider.Usage{InputTokens: 5}),
 	}}
-	h := newHarness(t, prov)
+	const windowTokens = 1000
+	h := contextWindowHarness(t, prov, windowTokens)
 	id := h.createSession("test/m1")
 	h.promptAndWaitIdle(id, "go1")
 	h.promptAndWaitIdle(id, "go2")
@@ -880,6 +913,9 @@ func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
 	ev := sse.waitFor(t, "history.compacted")
 	if ev.ContextUsedTokens <= 0 {
 		t.Errorf("history.compacted context_used_tokens = %d, want a positive post-fold estimate", ev.ContextUsedTokens)
+	}
+	if ev.ContextWindowTokens != windowTokens {
+		t.Errorf("history.compacted context_window_tokens = %d, want the session's configured window %d", ev.ContextWindowTokens, windowTokens)
 	}
 }
 
