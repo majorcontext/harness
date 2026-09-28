@@ -639,7 +639,15 @@ and would otherwise pay that walk on every request for as long as
 `LoadSession` replay counterpart (`recCompact`, `engine/store.go`) compute
 `contextFoldEstimate` once, immediately after splicing the post-fold
 history, so a reload reconstructs the identical value a live process would
-have cached. A snapshot taken while `contextUnknown` holds carries
+have cached. Replay estimates over `message.ResolveOrphanToolCalls(s.history)`
+rather than the accumulated `s.history` at that point in the tail scan,
+without assigning the repaired copy back: the load-time orphan repair itself
+runs only once, after the whole scan, so an orphaned tool_call retained past
+a fold would otherwise be uncounted at cache time even though the same
+repair later fixes `s.history` itself — a live fold never faces this, since
+its in-memory history is always already repaired by construction (see
+`message.ResolveOrphanToolCalls`'s own doc comment). A snapshot taken while
+`contextUnknown` holds carries
 `contextFoldEstimate` as its own field (`engine/snapshot.go`) rather than
 recomputing it from the snapshot's `History` at restore — `History` there
 can already include turn-in-progress messages appended after the fold,

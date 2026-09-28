@@ -1900,7 +1900,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.compactCount++
 			s.lastCompactedAt = rec.CreatedAt
 			s.contextUnknown = true
-			s.contextFoldEstimate = estimatePromptTokensFromHistory(s.history)
+			// s.history here predates the once-only orphan repair below;
+			// estimate over a repaired copy without reassigning it, so a
+			// live fold (already repaired by construction) and this
+			// replay cache the same value for the same fold.
+			s.contextFoldEstimate = estimatePromptTokensFromHistory(message.ResolveOrphanToolCalls(s.history))
 			// Cumulative usage ONLY (see record.Usage's doc comment above
 			// and the "Usage accounting" section of the design doc):
 			// lastUsage/haveLastUsage must never be touched by a compact

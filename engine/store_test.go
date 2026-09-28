@@ -790,6 +790,47 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 	}
 }
 
+// TestLoadSessionCachesFoldEstimateOverRepairedHistory: a journal from an
+// older or external binary can retain an orphaned tool_call across a fold
+// boundary. LoadSession's tail scan caches contextFoldEstimate from
+// s.history as accumulated so far when it replays the compact record, but
+// the final message.ResolveOrphanToolCalls repair runs only once, after
+// the whole scan finishes — so the cached estimate is computed over the
+// still-unrepaired history and disagrees with
+// estimatePromptTokensFromHistory over the session's own, fully-repaired
+// History(). Incident shape: a live session compacting the same fold would
+// never see an unrepaired orphan (engine.go resolves one before it ever
+// reaches history), so live and reloaded sessions would report two
+// different context-used numbers for the identical fold.
+func TestLoadSessionCachesFoldEstimateOverRepairedHistory(t *testing.T) {
+	dir := t.TempDir()
+	id := "ses_7777777777777777"
+	data := `{"type":"session","id":"ses_7777777777777777","created_at":"2025-01-02T03:04:05Z"}
+{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"hello"}]}}
+{"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu_dead","name":"bash","arguments":{"command":"ls"}}]}}
+{"type":"compact","compact":{"first_id":"msg_1","last_id":"msg_1","turns_folded":1,"summary":{"id":"sum_1","role":"user","parts":[{"type":"text","text":"SUMMARY"}]}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := LoadSession(Config{SessionDir: dir, Model: message.ModelRef{Provider: "p", Model: "m"}}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.ContextUnknown() {
+		t.Fatal("ContextUnknown after replaying a fold with no later turn = false, want true")
+	}
+	got, ok := s.ContextReading()
+	if !ok {
+		t.Fatal("ContextReading ok = false after replaying a fold, want true (an estimate stands)")
+	}
+	want := estimatePromptTokensFromHistory(s.History())
+	if got.InputTokens != want {
+		t.Errorf("ContextReading().InputTokens = %d, want %d (estimatePromptTokensFromHistory over LoadSession's own final, orphan-repaired History())", got.InputTokens, want)
+	}
+}
+
 // TestScanLogRawAbsorbsOnlyItsOwnSentinel: scanLogRaw ends a scan cleanly
 // at errTruncatedFinalRecord, which its decoder raises for a corrupt final
 // line. It must not do that for a callback's own failure that merely wraps

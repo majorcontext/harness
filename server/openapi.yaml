@@ -2412,11 +2412,12 @@ components:
             (see that schema, including the measurement-vs-estimate split),
             read from the session at the moment the turn settled — so an
             SSE consumer's gauge updates every turn without a separate
-            GET /session poll. Absent (0) only when the server had no live
-            session to read at settle time; a compaction fold with no
-            later remeasurement instead carries the same post-fold size
-            estimate Context.used_tokens does. A consumer must treat an
-            absent value as "unknown", never as "empty".
+            GET /session poll. Absent (0) both when the server had no live
+            session to read at settle time and when a live session exists
+            but has completed no turn yet and never folded; a compaction
+            fold with no later remeasurement instead carries the same
+            post-fold size estimate Context.used_tokens does. A consumer
+            must treat an absent value as "unknown", never as "empty".
         context_window_tokens:
           type: integer
           description: >
