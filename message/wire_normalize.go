@@ -172,8 +172,7 @@ type partKey struct{ msgIdx, partIdx int }
 // transcodeToolMessages is role-strict and hard-errors on any non-ToolResult
 // part in a "tool"-role message, so the exact orphan-tool_result wedge this
 // function exists to fix turned into a total request-BUILD failure on that
-// provider (see PR #108's finding 1, and
-// provider/openaicompat/transcode_test.go's
+// provider (see provider/openaicompat/transcode_test.go's
 // TestTranscodeOrphanToolResultBuildsSuccessfully, which drives the REAL
 // transcoder — a canonical-slice-only check, like this package's own
 // property tests, cannot see a provider's own role-strictness at all).
@@ -193,10 +192,10 @@ type partKey struct{ msgIdx, partIdx int }
 // transcodeAssistantMessage rejects any Blob outright, and even where a
 // transcoder's own code has no such check (anthropic's transcodeBlob is
 // role-agnostic), the Anthropic Messages API itself rejects an image block
-// in an assistant turn — images are user-turn only (PR #108 round 5's
-// finding on this line). demoteToolResult's own doc comment and
-// buildSafeBlob cover the split in full; see demoteWireInvalidToolResults'
-// own rebuild loop below for where a surviving Blob is hoisted to instead.
+// in an assistant turn — images are user-turn only. demoteToolResult's own
+// doc comment and buildSafeBlob cover the split in full; see
+// demoteWireInvalidToolResults' own rebuild loop below for where a
+// surviving Blob is hoisted to instead.
 //
 // # Why the hoisted message lands after the whole RUN, not after one message
 //
@@ -537,17 +536,17 @@ func buildSafeBlob(b *Blob) bool {
 //
 // # Why a non-build-safe Blob is note-flattened, not kept as a real Part
 //
-// An earlier version of this function kept EVERY Blob as a real Part
-// (PR #108's `02a0fa6`, fixing an anthropic-only fidelity loss where a
-// bare "[N image attachment(s) omitted]" note replaced a tool_result
-// Blob that anthropic transcodes to a genuine wire "image" block). That
-// went too far the other way: a demoted Blob is always hoisted into (or
-// left in) a RoleUser message, and provider/openai and
-// provider/openaicompat both hard-error building ANY request containing a
-// non-image/*, or data-less/URL-less, Blob there (see buildSafeBlob's own
-// doc comment) — turning the orphan/surplus-tool_result wedge this whole
-// file exists to fix back into a total request-BUILD failure for exactly
-// the blob-bearing shape (PR #108 round 5). A Blob that is NOT
+// An earlier version of this function kept EVERY Blob as a real Part,
+// fixing an anthropic-only fidelity loss where a bare "[N image
+// attachment(s) omitted]" note replaced a tool_result Blob that anthropic
+// transcodes to a genuine wire "image" block. That went too far the other
+// way: a demoted Blob is always hoisted into (or left in) a RoleUser
+// message, and provider/openai and provider/openaicompat both hard-error
+// building ANY request containing a non-image/*, or data-less/URL-less,
+// Blob there (see buildSafeBlob's own doc comment) — turning the
+// orphan/surplus-tool_result wedge this whole file exists to fix back into
+// a total request-BUILD failure for exactly the blob-bearing shape. A Blob
+// that is NOT
 // buildSafeBlob is therefore folded into the label's own note instead,
 // naming its media type, exactly the trade provider/openai's and
 // provider/openaicompat's own toolResultOutput helpers already make for
@@ -769,12 +768,12 @@ func NormalizeForWire(messages []Message) []Message {
 	// a prepend slot with a claimed one never risks a reorder either.
 	prepend := make([][]Part, len(runs)+1)
 
-	// claimFromPool scans the WHOLE pool, not just its head: an earlier
-	// version tested only pool[0], so one unclaimable head entry (a surplus
-	// id nothing ever demands) permanently blocked every matching real
-	// result queued behind it, forcing a fabricated is_error synthesis for
-	// a call whose real answer was sitting right there (see PR #108's
-	// finding 2). Scanning past a non-matching or barrier-blocked head entry
+	// claimFromPool scans the WHOLE pool, not just its head: scanning only
+	// pool[0] lets one unclaimable head entry (a surplus id nothing ever
+	// demands) permanently block every matching real result queued behind
+	// it, forcing a fabricated is_error synthesis for a call whose real
+	// answer was sitting right there. Scanning past a non-matching or
+	// barrier-blocked head entry
 	// is safe: computeRelocationBarrier's per-INDEX guard is what actually
 	// keeps relative order intact (see its own doc comment), and that check
 	// is applied to whichever entry this function returns, independent of

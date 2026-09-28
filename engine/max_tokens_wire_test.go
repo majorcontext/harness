@@ -14,36 +14,33 @@ import (
 	"github.com/majorcontext/harness/provider/anthropic"
 )
 
-// TestMaxTokensPartialJSONMarshalsThroughRealTranscoder pins the rebuttal of
-// adversarial review finding 1 on the PR that introduced max_tokens
-// auto-continue. The finding claimed a StopMaxTokens turn's trailing
-// ToolCall -- carrying raw, truncated partial_json Arguments like `{"comm`,
-// the shape Anthropic's own protocol leaves behind when max_tokens lands
-// before a tool_use block's content_block_stop -- gets replayed into the
-// continuation request and fails json.Marshal before it ever reaches the
-// provider.
+// TestMaxTokensPartialJSONMarshalsThroughRealTranscoder proves a
+// StopMaxTokens turn's trailing ToolCall -- carrying raw, truncated
+// partial_json Arguments like `{"comm`, the shape Anthropic's own protocol
+// leaves behind when max_tokens lands before a tool_use block's
+// content_block_stop -- does not fail json.Marshal when replayed into the
+// continuation request.
 //
-// That does not hold: message.Message.Normalize (Session.append's
-// appendWithUsage, run on every append) already coerces the identical
-// invalid-Arguments shape to nil in place -- the deliberate fix for a real
-// production defect (see TestPersistTruncatedToolCallArguments,
-// engine/tool_call_poison_test.go) -- before the
-// continuation request is ever built. This test proves that end to end
-// through the REAL production entry point rather than a hand-rolled check:
-// a genuine `*anthropic.Client` (provider/anthropic), talking to an httptest
-// server over real HTTP, drives an actual Session.Prompt call through a
-// truncated-partial_json max_tokens stop and its auto-continuation. If the
-// wire request failed to marshal, Client.Stream would return an error before
-// the second HTTP request is ever sent, and this test would see Prompt fail
-// and the server receive only one request -- neither happens.
+// message.Message.Normalize (Session.append's appendWithUsage, run on every
+// append) already coerces the identical invalid-Arguments shape to nil in
+// place (see TestPersistTruncatedToolCallArguments,
+// engine/tool_call_poison_test.go) before the continuation request is ever
+// built. This test proves that end to end through the REAL production entry
+// point rather than a hand-rolled check: a genuine `*anthropic.Client`
+// (provider/anthropic), talking to an httptest server over real HTTP,
+// drives an actual Session.Prompt call through a truncated-partial_json
+// max_tokens stop and its auto-continuation. If the wire request failed to
+// marshal, Client.Stream would return an error before the second HTTP
+// request is ever sent, and this test would see Prompt fail and the server
+// receive only one request -- neither happens.
 //
-// This is the test that pins the rebuttal: red-verify it by reintroducing
-// any change that drops the partial call instead of clearing its Arguments
-// (the case this test's own tool_use/tool_result assertions below would
-// then fail, since the dropped shape carries no tool_use block at all) or
-// that bypasses message.Message.Normalize on the append path (which would
-// resurface the original marshal failure and fail this test's Stream/Prompt
-// calls directly).
+// Red-verify by reintroducing any change that drops the partial call
+// instead of clearing its Arguments (the case this test's own
+// tool_use/tool_result assertions below would then fail, since the dropped
+// shape carries no tool_use block at all) or that bypasses
+// message.Message.Normalize on the append path (which would resurface the
+// original marshal failure and fail this test's Stream/Prompt calls
+// directly).
 func TestMaxTokensPartialJSONMarshalsThroughRealTranscoder(t *testing.T) {
 	var mu sync.Mutex
 	var reqCount int
@@ -59,10 +56,9 @@ func TestMaxTokensPartialJSONMarshalsThroughRealTranscoder(t *testing.T) {
 		if n == 1 {
 			// The real Anthropic wire shape for a tool_use block cut off
 			// mid-emission by max_tokens: content_block_stop still fires
-			// normally (see provider/anthropic/anthropic.go's doc comments
-			// on this exact incident), but the accumulated partial_json is
-			// truncated mid-token -- `{"comm`, never a complete
-			// `{"command":"echo hi"}`.
+			// normally (see provider/anthropic/anthropic.go's doc comments),
+			// but the accumulated partial_json is truncated mid-token --
+			// `{"comm`, never a complete `{"command":"echo hi"}`.
 			io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10}}}\n\n")                                         //nolint:errcheck
 			io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"bash\"}}\n\n") //nolint:errcheck
 			io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"comm\"}}\n\n")       //nolint:errcheck
@@ -119,9 +115,9 @@ func TestMaxTokensPartialJSONMarshalsThroughRealTranscoder(t *testing.T) {
 
 	// The truncated call's identity (id, name) survives the round trip
 	// through the real transcoder, with its Arguments cleared to an empty
-	// object -- the incident-tested behavior TestPersistTruncatedToolCallArguments
-	// protects -- and a paired is_error tool_result immediately follows it,
-	// so the wire request is fully valid, not merely non-crashing.
+	// object -- the behavior TestPersistTruncatedToolCallArguments protects
+	// -- and a paired is_error tool_result immediately follows it, so the
+	// wire request is fully valid, not merely non-crashing.
 	var foundToolUse, foundToolResult bool
 	for _, m := range msgs {
 		mm, ok := m.(map[string]any)

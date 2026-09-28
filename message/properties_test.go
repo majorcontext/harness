@@ -43,21 +43,19 @@ import (
 //     is a state no documented constructor in this package produces, so
 //     round-tripping it is out of scope here.
 //
-// # A finding, fixed before these properties could pass
+// # A fixture-shaped bug the marshal-stability property surfaced
 //
 // TestMessageNormalizedMarshalStable and TestNormalizeIdempotent originally
 // shared one test (checking marshal-stability directly on a raw, non-
-// Normalized generated Message) and immediately found a real bug:
+// Normalized generated Message), which surfaced a real bug:
 // Reasoning.ProviderData carrying a non-empty-but-syntactically-invalid
 // entry (e.g. a single 0x00 byte) made json.Marshal fail outright — the
-// exact "json: error calling MarshalJSON for type json.RawMessage: ..."
-// incident this package has already hit once for ToolCall.Arguments (see
-// Normalize's doc comment) — because neither Normalize nor
-// ProviderData.MarshalJSON checked json.Valid, only len(raw)==0. Both now
-// do (message.go); see Normalize's doc comment, "A ProviderData entry has
-// the exact same invalid-but-non-empty footgun", for the full fix. This is
-// the fuzz-property workflow's second bug find (after PR #85's two), and it
-// is fixed in a commit preceding this one.
+// same "json: error calling MarshalJSON for type json.RawMessage: ..."
+// failure ToolCall.Arguments guards against (see Normalize's doc comment)
+// — because neither Normalize nor ProviderData.MarshalJSON checked
+// json.Valid, only len(raw)==0. Both now do (message.go); see Normalize's
+// doc comment, "A ProviderData entry has the exact same invalid-but-non-
+// empty footgun", for the full fix.
 //
 // With that fixed, a second, narrower issue surfaced: a raw (never-
 // Normalized) Message is NOT promised to marshal stably across a reload —
@@ -108,10 +106,9 @@ import (
 //     (RoleAssistant-gated, checks only messages[i+1], set-membership
 //     presence). That predicate is DELETED, not merely renamed: an oracle
 //     that shares its implementation's definition of correctness cannot
-//     fail on a wrong definition, and that is exactly what happened in
-//     production — a rewrite of ResolveOrphanToolCalls that deleted genuine
-//     tool output shipped and was reverted, because hasOrphanToolCall could
-//     never have caught it. See message/wire_oracle_test.go (an
+//     catch a rewrite of ResolveOrphanToolCalls that deletes genuine tool
+//     output while preserving that same wrong definition — hasOrphanToolCall
+//     could never catch that shape. See message/wire_oracle_test.go (an
 //     independent oracle built only from the provider wire contract, never
 //     from this function's own scan) and
 //     TestResolveOrphanToolCallsPropertyNoDataLoss below, and the
@@ -410,8 +407,8 @@ func TestMessageMarshalNeverErrors(t *testing.T) {
 }
 
 // TestMessageNormalizedMarshalStable is property 2 — see the file doc
-// comment ("A finding, fixed before these properties could pass") for why
-// this Normalizes before checking stability rather than on the raw
+// comment ("A fixture-shaped bug the marshal-stability property surfaced")
+// for why this Normalizes before checking stability rather than on the raw
 // generated Message.
 func TestMessageNormalizedMarshalStable(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {

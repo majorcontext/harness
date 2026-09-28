@@ -590,11 +590,11 @@ func toolNames(s *Session) []string {
 // becomes reapable itself on a later call — a live review flagged
 // m.nodes growing unbounded on a long-lived process fanning out many
 // `task` children.
-// TestReapCancelsNodeContextBeforeRemoving is the regression test for a
-// review finding: a naturally completed child (finalizeTurn sets
-// Done/Failed — the only path a Reap-eligible leaf reaches without going
-// through Cancel/cancelSubtreeLocked, which is the ONLY place that calls
-// n.cancel()) never has its own context.CancelFunc invoked. Since every
+// TestReapCancelsNodeContextBeforeRemoving guards against a naturally
+// completed child (finalizeTurn sets Done/Failed — the only path a
+// Reap-eligible leaf reaches without going through
+// Cancel/cancelSubtreeLocked, which is the ONLY place that calls
+// n.cancel()) never having its own context.CancelFunc invoked. Since every
 // child ctx is context.WithCancel(parent.ctx), it registers itself in
 // the parent cancelCtx's internal children map; Reap deleting the node
 // without calling n.cancel() first drops the last Go-level reference to
@@ -789,10 +789,10 @@ func TestReloadedChildWithUnresolvableAgentDefFailsClosed(t *testing.T) {
 	}
 }
 
-// TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty is the
-// regression test for a live review finding on store.go's TaskToolNames
-// persistence: `omitempty` on that field collapsed BOTH "no restriction
-// recorded" (nil) AND a real, deliberate ZERO-tool restriction (a
+// TestReloadedChildWithEmptyIntersectionRestrictionStaysEmpty guards
+// against store.go's TaskToolNames persistence: `omitempty` on that
+// field collapses BOTH "no restriction recorded" (nil) AND a real,
+// deliberate ZERO-tool restriction (a
 // non-nil, len-0 slice — reachable via Spawn's parent-effective-set
 // INTERSECTION whenever a restricted parent's tools and a child
 // definition's tools are disjoint) to the identical omitted-field wire
@@ -1182,16 +1182,15 @@ func TestTaskDepthHeaderRoundTrip(t *testing.T) {
 		t.Errorf("header with task_depth:2 restored TaskDepth() = %d, want 2", got)
 	}
 
-	// Review finding: a legacy child (no task_depth key) loaded under a
-	// Config whose OWN TaskDepth is already non-zero must still restore
-	// to 0, not silently inherit that value. This is exactly the shape
-	// recoverCrashedChildrenLocked produces in production —
-	// configSnapshot() copies Config BY VALUE from the parent node
-	// currently being adopted, TaskDepth included, before calling
-	// LoadSession for each of that parent's own candidate children — so
-	// a genuinely legacy child would otherwise inherit its PARENT's depth
-	// instead of correctly falling back to adoptReloadedLocked's own
-	// m.maxDepth refusal sentinel.
+	// A legacy child (no task_depth key) loaded under a Config whose OWN
+	// TaskDepth is already non-zero must still restore to 0, not
+	// silently inherit that value. recoverCrashedChildrenLocked produces
+	// exactly this shape: configSnapshot() copies Config BY VALUE from
+	// the parent node currently being adopted, TaskDepth included,
+	// before calling LoadSession for each of that parent's own candidate
+	// children — so a genuinely legacy child would otherwise inherit its
+	// PARENT's depth rather than fall back correctly to
+	// adoptReloadedLocked's own m.maxDepth refusal sentinel.
 	inheritedCfg := cfg
 	inheritedCfg.TaskDepth = 5 // simulates a live parent's own configSnapshot
 	legacyUnderInheritedCfg, err := LoadSession(inheritedCfg, legacyID)
@@ -1203,18 +1202,17 @@ func TestTaskDepthHeaderRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic is the regression
-// test for a review finding: finalizeTurn's default (done) branch
-// unconditionally dereferenced msg (n.result = msg.Parts.Text()).
-// server's runGoal and cmd/harness's own runGoal both call
-// ReportTurnEnd(id, nil, err) unconditionally, documented as safe only
-// because "a child is never resident, so runGoal never runs for one" —
-// an invariant TestReapThenReloadRestoresTrueDepthNotAFreshRoot's own
-// adoptReloadedLocked broke: a reloaded former child whose true parent
-// is STILL tracked is re-attached as a genuine depth>0 node (not a
-// root), so POST /session/{reapedChildID}/goal cold-loading it and
-// calling ReportTurnEnd(id, nil, nil) reaches this exact branch with
-// msg == nil, reproduced here directly.
+// TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic guards against
+// finalizeTurn's default (done) branch unconditionally dereferencing
+// msg (n.result = msg.Parts.Text()). server's runGoal and cmd/harness's
+// own runGoal both call ReportTurnEnd(id, nil, err) unconditionally,
+// documented as safe only because "a child is never resident, so
+// runGoal never runs for one" — an invariant that adoptReloadedLocked
+// breaks: a reloaded former child whose true parent is STILL tracked is
+// re-attached as a genuine depth>0 node (not a root), so POST
+// /session/{reapedChildID}/goal cold-loading it and calling
+// ReportTurnEnd(id, nil, nil) reaches this exact branch with msg ==
+// nil, reproduced here directly.
 func TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 3, 0)
 	root := mgr.NewRoot(managedConfig("root",
@@ -1266,11 +1264,11 @@ func TestReportTurnEndNilMsgOnReloadedChildDoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestReportTurnStartBalancesRunningByRootForReloadedChild is the
-// regression test for a review finding: ReportTurnStart marks a
-// depth>0 node StatusRunning without incrementing runningByRoot, but
-// finalizeTurn's decrementRunningLocked decrements it unconditionally
-// for any depth>0 node on completion — an unbalanced decrement that
+// TestReportTurnStartBalancesRunningByRootForReloadedChild guards
+// against ReportTurnStart marking a depth>0 node StatusRunning without
+// incrementing runningByRoot, while finalizeTurn's
+// decrementRunningLocked decrements it unconditionally for any depth>0
+// node on completion — an unbalanced decrement that
 // corrupts the tree-wide concurrency count below the true in-flight
 // total, eventually letting Spawn/Send overrun maxConcurrent. Proven via
 // the concurrency cap itself: with maxConcurrent 1, a reloaded child
@@ -1418,9 +1416,9 @@ func (p *twoTurnSlowCancelProvider) Stream(ctx context.Context, req *provider.Re
 	return p.slow.Stream(ctx, req)
 }
 
-// TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort is the
-// regression test for a review finding: sessionNode.finalized is set
-// true once a child's first turn completes, but nothing ever clears it
+// TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort guards against
+// sessionNode.finalized being set true once a child's first turn
+// completes, while nothing ever clears it
 // back to false when that SAME child is legitimately restarted for a
 // SECOND turn (Send — a done/failed child is eligible for a follow-up
 // message, per session.send's own contract). cancelOneNodeLocked only
@@ -1492,9 +1490,9 @@ func TestReapDoesNotLeakConcurrencySlotAcrossSendThenAbort(t *testing.T) {
 	waitForStatus(t, mgr, otherID, StatusDone, time.Second)
 }
 
-// TestReapNeverRemovesACanceledNodeStillUnwinding is the regression test
-// for a review finding: cancelSubtreeLocked sets a RUNNING child
-// StatusCanceled directly but deliberately does NOT decrement
+// TestReapNeverRemovesACanceledNodeStillUnwinding guards against
+// cancelSubtreeLocked setting a RUNNING child StatusCanceled directly
+// while deliberately not decrementing
 // runningByRoot — finalizeTurn is the sole decrementer, and that
 // child's Prompt goroutine is still unwinding its now-canceled provider
 // call and will call finalizeTurn itself once that call actually
@@ -1629,9 +1627,9 @@ func TestForgetRootRemovesIdleRootWithNoChildren(t *testing.T) {
 	}
 }
 
-// TestForgetRootAlsoCleansUsageAndRunningMaps is the regression test for
-// a live review finding: ForgetRoot deleted only m.nodes[id], leaving a
-// stale m.usageByRoot[id]/m.runningByRoot[id] entry behind — both keyed
+// TestForgetRootAlsoCleansUsageAndRunningMaps guards against ForgetRoot
+// deleting only m.nodes[id], leaving a stale
+// m.usageByRoot[id]/m.runningByRoot[id] entry behind — both keyed
 // by root id and written to by every turn anywhere in the tree — for
 // the rest of the process's life, one pair per forgotten root on a
 // long-lived server that creates and deletes many.
@@ -1652,13 +1650,13 @@ func TestForgetRootAlsoCleansUsageAndRunningMaps(t *testing.T) {
 	}
 }
 
-// TestForgetRootThenChildrenReapedEventuallyCollectsRoot is the
-// regression test for a live review finding: a root DELETEd while it
-// still had live children (cascade-canceled by endSubagentLineage, but
-// not yet removed — Reap collects them bottom-up, one generation per
-// call) was refused by ForgetRoot and then NEVER revisited — Reap
-// unconditionally skips every root, so the now-childless root leaked
-// for the rest of the process's life. ForgetRoot's pendingForget flag
+// TestForgetRootThenChildrenReapedEventuallyCollectsRoot guards against
+// a root DELETEd while it still has live children (cascade-canceled by
+// endSubagentLineage, but not yet removed — Reap collects them
+// bottom-up, one generation per call) being refused by ForgetRoot and
+// then never revisited — Reap unconditionally skips every root, so the
+// now-childless root would leak for the rest of the process's life.
+// ForgetRoot's pendingForget flag
 // closes this: once the child is reaped away, a LATER Reap call also
 // collects the root itself.
 func TestForgetRootThenChildrenReapedEventuallyCollectsRoot(t *testing.T) {
@@ -1891,9 +1889,9 @@ func TestSpawnBudgetExceeded(t *testing.T) {
 	}
 }
 
-// TestSpawnBudgetCountsCacheTokensToo is the regression test for a live
-// review finding: the ErrBudgetExceeded gate used to compare only
-// InputTokens+OutputTokens against SetMaxTreeTokens, while usageByRoot
+// TestSpawnBudgetCountsCacheTokensToo guards against the
+// ErrBudgetExceeded gate comparing only InputTokens+OutputTokens
+// against SetMaxTreeTokens, while usageByRoot
 // itself already accumulated all four provider.Usage fields — a
 // cache-heavy child (a large prompt resent every turn, reading mostly
 // from cache, the shape docs/models-and-providers.md describes for the
@@ -1991,9 +1989,9 @@ func TestSpawnBudgetDeltaAccountingAcrossFollowupSend(t *testing.T) {
 	}
 }
 
-// TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt is the regression
-// test for a live review finding distinct from the one above: THAT test
-// covers two finalizeTurn calls against the SAME sessionNode (a plain
+// TestSpawnBudgetDeltaAccountingSurvivesReapAndReadopt covers a case
+// distinct from the test above: that one covers two finalizeTurn calls
+// against the SAME sessionNode (a plain
 // Send follow-up, node never destroyed). This one covers a child that is
 // REAPED between its two turns — Reap deletes its sessionNode entirely
 // (usageByRoot survives; only a root-shaped node's usageByRoot entry is
@@ -2168,12 +2166,12 @@ func waitForFinalized(t *testing.T, mgr *SessionManager, id string, timeout time
 	}
 }
 
-// TestUnlockAndFlushPersistRunsThunksAfterReleasingLock is the regression
-// test for a live review finding: session-log disk writes (task-
-// notification queued/delivered records, the task-spawn audit record)
-// used to run WHILE m.mu — the single lock guarding every session in the
-// tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, on
-// finalizeTurn/Spawn/recoverInterruptedTurnLocked's own hot paths. A slow
+// TestUnlockAndFlushPersistRunsThunksAfterReleasingLock guards against
+// session-log disk writes (task-notification queued/delivered records,
+// the task-spawn audit record) running WHILE m.mu — the single lock
+// guarding every session in the tree, taken by Info/Reap/Spawn/Send/
+// finalize alike — is held, on finalizeTurn/Spawn/
+// recoverInterruptedTurnLocked's own hot paths. A slow
 // or contended disk on one session's notification could stall every
 // OTHER session's own Info/Reap/Spawn/finalize call in the same process.
 // deferPersist/unlockAndFlushPersist close this by queuing durable-write

@@ -221,11 +221,10 @@ func TestModelRef(t *testing.T) {
 }
 
 // TestToolCallEmptyArgumentsMarshal is the regression guard for the
-// json.RawMessage footgun that produced the goal-supervised session
-// incident (session ses_01hntn4vmryer5nq9apyjvzk2h.jsonl): a worker turn's
-// json.Marshal failed with "json: error calling MarshalJSON for type
-// json.RawMessage: unexpected end of JSON input" because a ToolCall's
-// Arguments field was an empty-but-non-nil json.RawMessage.
+// json.RawMessage footgun where a worker turn's json.Marshal fails with
+// "json: error calling MarshalJSON for type json.RawMessage: unexpected
+// end of JSON input" because a ToolCall's Arguments field is an
+// empty-but-non-nil json.RawMessage.
 // json.RawMessage.MarshalJSON only special-cases nil (-> "null"); any other
 // zero-length value is handed to the encoder unvalidated, and zero bytes is
 // not valid JSON. `omitempty` does not help: it tests the Go zero value
@@ -258,7 +257,8 @@ func TestToolCallEmptyArgumentsMarshal(t *testing.T) {
 
 			// Bare ToolCall value, as any direct struct field would encode
 			// it (e.g. an event's ToolCall pointer) — this is exactly the
-			// json.Marshal(ToolCall{...}) call that failed in production.
+			// json.Marshal(ToolCall{...}) call that fails without this
+			// guard.
 			bareRaw, err := json.Marshal(*tc)
 			if err != nil {
 				t.Fatalf("marshal bare ToolCall: %v", err)
@@ -424,7 +424,7 @@ func jsonFieldKeys(t *testing.T, typ reflect.Type) map[string]bool {
 	return keys
 }
 
-// TestMessageWithEmptyToolCallArgumentsMarshal proves the full incident
+// TestMessageWithEmptyToolCallArgumentsMarshal proves the full failure
 // shape: an assistant Message carrying a ToolCall with an empty-non-nil
 // Arguments — the shape engine.Session.append persists to the session log
 // and the server journals and serves from GET /session/{id}/message —
@@ -445,16 +445,16 @@ func TestMessageWithEmptyToolCallArgumentsMarshal(t *testing.T) {
 	}
 }
 
-// TestReasoningProviderDataEmptyMarshal is the round-2 forensic regression
-// guard: #42 normalized ToolCall.Arguments (a bare json.RawMessage field)
-// but left Reasoning.ProviderData — a map[string]json.RawMessage carrying
-// the exact same footgun one layer of indirection away — completely
-// unguarded. This reproduces the incident shape directly: a Reasoning part
-// whose provider_data entry is present but zero-length (non-nil), the same
-// "no data yet" shape a partially-assembled provider stream item can leave
+// TestReasoningProviderDataEmptyMarshal is the regression guard for
+// Reasoning.ProviderData: a map[string]json.RawMessage carrying the exact
+// same footgun as ToolCall.Arguments, one layer of indirection away, and
+// left unguarded by a guard scoped only to ToolCall.Arguments. This
+// reproduces the failure shape directly: a Reasoning part whose
+// provider_data entry is present but zero-length (non-nil), the same "no
+// data yet" shape a partially-assembled provider stream item can leave
 // behind. Before the ProviderData.MarshalJSON guard this failed with
 // exactly "json: error calling MarshalJSON for type json.RawMessage:
-// unexpected end of JSON input" — the production error.
+// unexpected end of JSON input".
 func TestReasoningProviderDataEmptyMarshal(t *testing.T) {
 	cases := []struct {
 		name string
@@ -507,7 +507,7 @@ func TestReasoningProviderDataEmptyMarshal(t *testing.T) {
 	}
 }
 
-// TestMessageWithEmptyReasoningProviderDataMarshal proves the full incident
+// TestMessageWithEmptyReasoningProviderDataMarshal proves the full failure
 // shape end to end: an assistant Message carrying a Reasoning part whose
 // provider_data entry is empty-non-nil — the shape engine.Session.append
 // persists to the session log and the server journals — marshals
@@ -533,16 +533,16 @@ func TestMessageWithEmptyReasoningProviderDataMarshal(t *testing.T) {
 	}
 }
 
-// TestProviderDataGetOversizedEntryIsAbsent is the round-3 forensic
-// regression guard: ProviderData.Get treated only an empty entry as
-// "absent" (round 2's fix), leaving an oversized one — a thinking
-// signature or redacted_thinking payload with no upper bound at all — to
-// be replayed verbatim on every subsequent request for the rest of the
-// session (see the package doc, "Unbounded replay is a request-size/time
-// bomb"). This is a synthetic fixture shaped like the incident (a
-// production session carried one ~30KB signature against seven ~500-byte
-// siblings in the same run), not session-log content: a byte slice one
-// byte over maxProviderDataEntry, and one exactly at the boundary.
+// TestProviderDataGetOversizedEntryIsAbsent is the regression guard for
+// ProviderData.Get's size bound: treating only an empty entry as "absent"
+// leaves an oversized one — a thinking signature or redacted_thinking
+// payload with no upper bound at all — to be replayed verbatim on every
+// subsequent request for the rest of the session (see the package doc,
+// "Unbounded replay is a request-size/time bomb"). This is a synthetic
+// fixture shaped like the failure case observed in practice (one ~30KB
+// signature alongside several ~500-byte siblings in the same run), not
+// session-log content: a byte slice one byte over maxProviderDataEntry,
+// and one exactly at the boundary.
 func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 	small := json.RawMessage(`{"signature":"c2hvcnQ="}`) // ~24 bytes, ordinary size
 	atCap := append(append(json.RawMessage(`"`), bytes.Repeat([]byte("a"), maxProviderDataEntry-2)...), '"')
@@ -572,29 +572,26 @@ func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 }
 
 // TestToolCallInvalidTruncatedArgumentsMarshal is the defense-in-depth
-// regression guard from the incident behind two production goal sessions,
-// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and ses_01hpf4eexb31v0ecyvesf75g5s: both
-// died at the start of a worker turn with "json: error calling MarshalJSON
-// for type json.RawMessage: unexpected end of JSON input", and
-// GET /session/{id}/message on them then 500'd with the message.Parts
-// wrapper of the same error.
+// regression guard for a worker turn that dies at the start with "json:
+// error calling MarshalJSON for type json.RawMessage: unexpected end of
+// JSON input", after which GET /session/{id}/message on that session 500s
+// with the message.Parts wrapper of the same error.
 //
-// Every guard here at the time (TestToolCallEmptyArgumentsMarshal,
-// TestReasoningProviderDataEmptyMarshal) special-cased len(Arguments) == 0
-// only. A provider stream that dies mid tool_use block — a dropped
-// connection during input_json_delta accumulation, or (as audited in
-// provider/anthropic/anthropic.go) a max_tokens cutoff mid tool-call, which
-// the Anthropic wire protocol still closes out with a normal
-// content_block_stop/message_delta/message_stop sequence — can leave
-// Arguments non-empty but syntactically invalid (truncated) JSON. That
-// value sails straight past the len==0 guard, and
+// TestToolCallEmptyArgumentsMarshal and TestReasoningProviderDataEmptyMarshal
+// special-case len(Arguments) == 0 only. A provider stream that dies mid
+// tool_use block — a dropped connection during input_json_delta
+// accumulation, or (as audited in provider/anthropic/anthropic.go) a
+// max_tokens cutoff mid tool-call, which the Anthropic wire protocol still
+// closes out with a normal content_block_stop/message_delta/message_stop
+// sequence — can leave Arguments non-empty but syntactically invalid
+// (truncated) JSON. That value sails straight past the len==0 guard, and
 // json.RawMessage.MarshalJSON does not validate its bytes at all: the
 // failure only appears once the value is embedded in a larger document and
-// encoding/json compacts it to validate, which is exactly why it looked
-// like two different bugs (a bare marshal "succeeds", the same value one
-// layer deeper fails) before this test pinned both call sites at once.
+// encoding/json compacts it to validate, so a bare marshal "succeeds" while
+// the same value one layer deeper fails unless both call sites are pinned
+// together.
 //
-// This is the second, independent half of the incident's fix (see
+// This is the second, independent half of the fix (see
 // TestNormalizeDropsInvalidToolCallArguments for the primary, ingest-time
 // half in Message.Normalize): even if a future producer bypasses Normalize
 // entirely — a plugin's chat.message hook building a Message by hand, a
@@ -651,14 +648,13 @@ func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
 }
 
 // TestNormalizeDropsInvalidToolCallArguments is the primary-fix regression
-// guard for the incident behind two production goal sessions,
-// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and ses_01hpf4eexb31v0ecyvesf75g5s: both
-// died at the start of a worker turn with "json: error calling MarshalJSON
-// for type json.RawMessage: unexpected end of JSON input" — three identical
-// attempts, because every retry re-transcoded the same poisoned history —
-// and GET /session/{id}/message on them then 500'd with the message.Parts
-// wrapper of the same error, while the on-disk log stayed clean (the
-// poisoned message failed to persist and was never journaled).
+// guard for a worker turn that dies at the start with "json: error calling
+// MarshalJSON for type json.RawMessage: unexpected end of JSON input" — an
+// error every retry reproduces identically, because each retry
+// re-transcodes the same poisoned history — after which GET
+// /session/{id}/message on that session 500s with the message.Parts
+// wrapper of the same error, while the on-disk log stays clean (the
+// poisoned message fails to persist and is never journaled).
 //
 // Message.Normalize is the one ingest choke point every message passes
 // through before entering a session's history (engine.Session.append), so
@@ -743,10 +739,10 @@ func TestResolveOrphanToolCallsNoOrphans(t *testing.T) {
 	}
 }
 
-// TestResolveOrphanToolCallsMidHistory reproduces the shape behind incident
-// ses_01hvcs96pq1cf7x3kw0fz4a1yh with the orphan buried mid-transcript: an
-// assistant tool_use with no result at all (the very next message skips
-// straight to a fresh user turn), followed by ordinary, well-formed turns.
+// TestResolveOrphanToolCallsMidHistory reproduces an orphaned tool_use
+// buried mid-transcript: an assistant tool_use with no result at all (the
+// very next message skips straight to a fresh user turn), followed by
+// ordinary, well-formed turns.
 // ResolveOrphanToolCalls must inject a synthetic RoleTool message
 // immediately after the orphaned assistant turn without disturbing
 // anything else in history.
@@ -794,11 +790,10 @@ func TestResolveOrphanToolCallsMidHistory(t *testing.T) {
 	}
 }
 
-// TestResolveOrphanToolCallsFinalMessage covers the other shape incident
-// ses_01hvcs96pq1cf7x3kw0fz4a1yh's mechanism can leave behind: the orphaned
-// tool_use is the very last message in history (the turn died and nothing
-// else was ever appended after it) — there is no "next" message at all to
-// look at, let alone merge into.
+// TestResolveOrphanToolCallsFinalMessage covers the other shape an orphaned
+// tool_use can take: it is the very last message in history (the turn died
+// and nothing else was ever appended after it) — there is no "next" message
+// at all to look at, let alone merge into.
 func TestResolveOrphanToolCallsFinalMessage(t *testing.T) {
 	in := []Message{
 		{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},

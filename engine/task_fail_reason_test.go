@@ -3,10 +3,11 @@
 // error to its classified prefix, so a parent learns WHY a child died, not
 // only that it did.
 //
-// Incident this guards: a child died on "[permanent] anthropic: You have
-// reached your specified API usage limits...", the parent's notification
-// read only "turn failed and did not recover", and the parent respawned a
-// sibling straight into the same fleet-wide wall.
+// Without the cause, a child that dies on a permanent provider error such as
+// "[permanent] anthropic: You have reached your specified API usage
+// limits..." leaves the parent's notification reading only "turn failed and
+// did not recover", so the parent can respawn a sibling straight into the
+// same wall.
 package engine
 
 import (
@@ -19,8 +20,8 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// usageLimitDetail is the live incident's own provider message, used
-// verbatim as the distinctive string every assertion below looks for.
+// usageLimitDetail is a permanent-provider-error message, used verbatim as
+// the distinctive string every assertion below looks for.
 const usageLimitDetail = "You have reached your specified API usage limits. You will regain access on 2026-09-01"
 
 // failingProvider fails every Stream call with err — the shape a child

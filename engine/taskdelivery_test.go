@@ -154,13 +154,13 @@ func TestTruncateTaskResultMarksCut(t *testing.T) {
 
 // TestEnqueueTaskNotificationPersistsQueuedRecord and
 // TestCommitTaskNotificationsPersistsDeliveredRecord are the regression
-// tests for two follow-ups from PR #145's architecture review: "child
-// journal records" (a structured, independently-queryable trace of a
-// task's spawn/delivery lifecycle, distinct from the rendered "[tasks:
-// ...]" conversation text) and "notification persistence" (the SAME
-// records double as the durable source LoadSession folds an outstanding,
-// undelivered notification back from — see TestEnqueueTaskNotification-
-// SurvivesReloadUndelivered below for that half).
+// tests for "child journal records" (a structured, independently-queryable
+// trace of a task's spawn/delivery lifecycle, distinct from the rendered
+// "[tasks: ...]" conversation text) and "notification persistence" (the
+// SAME records double as the durable source LoadSession folds an
+// outstanding, undelivered notification back from — see
+// TestEnqueueTaskNotification-SurvivesReloadUndelivered below for that
+// half).
 func TestEnqueueTaskNotificationPersistsQueuedRecord(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{WorkDir: dir, SessionDir: dir})

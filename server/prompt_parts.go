@@ -33,11 +33,10 @@ import (
 // appended to an append-only durable log before any provider ever sees it
 // (engine.Session.PromptWithOrigin). A blob no provider can accept would
 // therefore be persisted first and rejected on every turn afterwards — the
-// exact wedge imageclamp exists to heal (see imageclamp's package doc:
-// three boxes, oversized screenshots, a 400 that survived respawn).
-// imageclamp handles the sizes it can repair by downscaling; this gate
-// handles the ones nothing can repair — a type no provider decodes, bytes
-// that are not the image they claim to be, an attachment with no payload.
+// exact wedge imageclamp exists to heal. imageclamp handles the sizes it
+// can repair by downscaling; this gate handles the ones nothing can
+// repair — a type no provider decodes, bytes that are not the image they
+// claim to be, an attachment with no payload.
 
 // promptAttachmentTypes is the set of attachment media types a prompt may
 // carry, each paired with the check that proves the bytes really are that

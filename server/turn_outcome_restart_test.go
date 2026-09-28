@@ -15,14 +15,15 @@ func mustUnmarshal(t *testing.T, data []byte, v any) {
 	}
 }
 
-// TestLastTurnSurvivesRestart is the red-first regression test for PR #55
-// review finding (2): reconcile()/loadJournal() already replays events.jsonl
-// on boot to rebuild the seen-message index, but did nothing with turn.end
-// records — so last_turn, a field whose entire purpose is to answer "did the
-// last turn finish cleanly" for an orchestrator that reconnects after this
-// process restarts, was silently lost across exactly the restart it needs to
-// survive. A second Server built over the same session dir must still
-// report the prior process's last_turn.
+// TestLastTurnSurvivesRestart is the red-first regression test proving
+// last_turn survives a process restart: reconcile()/loadJournal() replays
+// events.jsonl on boot to rebuild the seen-message index, and must also
+// fold turn.end records into it — otherwise last_turn, a field whose
+// entire purpose is to answer "did the last turn finish cleanly" for an
+// orchestrator that reconnects after this process restarts, would be
+// silently lost across exactly the restart it needs to survive. A second
+// Server built over the same session dir must still report the prior
+// process's last_turn.
 func TestLastTurnSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("first process")}}

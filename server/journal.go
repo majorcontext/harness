@@ -93,8 +93,9 @@ type Event struct {
 	GoalTurns     int    `json:"goal_turns,omitempty"`
 	GoalAttempt   int    `json:"goal_attempt,omitempty"`
 	// GoalEvalFailures is carried by goal.eval_failed only (see
-	// engine/goal.go's "Round 6" doc section): the number of
-	// CONSECUTIVE failed evaluator boundaries as of this record, inclusive.
+	// engine/goal.go's doc comment on advisory evaluator-boundary
+	// failures): the number of CONSECUTIVE failed evaluator boundaries as
+	// of this record, inclusive.
 	// goal.cleared itself never carries a count (even the terminal clear
 	// that fires once this reaches goalEvalFailureLimit — its dedicated
 	// GoalReason text names the limit instead); the tracker's folded
@@ -276,13 +277,14 @@ const (
 	evtGoalAchieved = "goal.achieved"
 	evtGoalCleared  = "goal.cleared"
 	// evtGoalEvalFailed mirrors engine.EventGoalEvalFailed (see
-	// engine/goal.go's "Round 6" doc section): journaled once per
-	// failed evaluator boundary — a provider error the retryable-class
-	// in-boundary retry couldn't ride out, or two consecutive unparseable
-	// replies. Below goalEvalFailureLimit consecutive failures this is
-	// advisory only (the goal stays active); at the limit a goal.cleared
-	// with a dedicated reason follows instead, and the server maps the
-	// terminal error to the turn.end outcome outcomeEvaluatorExhausted.
+	// engine/goal.go's doc comment on advisory evaluator-boundary
+	// failures): journaled once per failed evaluator boundary — a provider
+	// error the retryable-class in-boundary retry couldn't ride out, or
+	// two consecutive unparseable replies. Below goalEvalFailureLimit
+	// consecutive failures this is advisory only (the goal stays active);
+	// at the limit a goal.cleared with a dedicated reason follows instead,
+	// and the server maps the terminal error to the turn.end outcome
+	// outcomeEvaluatorExhausted.
 	evtGoalEvalFailed = "goal.eval_failed"
 	// evtGoalPaused is journaled once per boot for every session whose
 	// journal shows an active goal but which has no running loop attached
@@ -292,18 +294,18 @@ const (
 	// boot-time observation). Always carries GoalPauseReason "restart".
 	evtGoalPaused = "goal.paused"
 	// evtGoalParked mirrors engine.EventGoalParked (see engine/goal.go's
-	// "Round 7" doc section): journaled once per exit-parked
-	// worker turn — either exhaustion tier (deterministic goalWorkerRetries
-	// or retryable-class goalRetryableMaxAttempts) — WITHOUT a following
-	// goal.cleared: the goal stays active. Unlike evtGoalPaused above (a
-	// boot-time OBSERVATION that no loop is attached), this is a LIVE event:
-	// the loop that just parked emitted it on its own way out. The server
-	// maps it onto the third "paused" arm (pause_reason "worker_failure",
-	// see pauseReasonWorkerFailure) and, at runGoal's tail, onto the
-	// turn.end outcome outcomeWorkerParked — the loop resumes on the next
-	// ordinary activity via the existing activity-driven auto-arm
-	// (maybeAutoArmGoal), exactly like a restart pause resumes via an
-	// operator's re-POST.
+	// doc comment on goal-worker failure handling): journaled once per
+	// exit-parked worker turn — either exhaustion tier (deterministic
+	// goalWorkerRetries or retryable-class goalRetryableMaxAttempts) —
+	// WITHOUT a following goal.cleared: the goal stays active. Unlike
+	// evtGoalPaused above (a boot-time OBSERVATION that no loop is
+	// attached), this is a LIVE event: the loop that just parked emitted
+	// it on its own way out. The server maps it onto the third "paused"
+	// arm (pause_reason "worker_failure", see pauseReasonWorkerFailure)
+	// and, at runGoal's tail, onto the turn.end outcome
+	// outcomeWorkerParked — the loop resumes on the next ordinary activity
+	// via the existing activity-driven auto-arm (maybeAutoArmGoal),
+	// exactly like a restart pause resumes via an operator's re-POST.
 	evtGoalParked = "goal.parked"
 
 	// evtPromptDequeued mirrors engine.EventPromptDequeued (see
@@ -385,10 +387,11 @@ const outcomeContextExhausted = "context_exhausted"
 
 // outcomeEvaluatorExhausted is the turn.end outcome recorded when a goal
 // loop's evaluator has failed at goalEvalFailureLimit consecutive turn
-// boundaries (engine/goal.go's "Round 6" doc section): a durable,
-// probably-permanent evaluator outage. Distinct from the generic "error" for
-// the same reason outcomeContextExhausted and outcomeMaxTurnsExceeded are —
-// a poller reacting to "the evaluator itself is broken" (e.g. surfacing an
+// boundaries (engine/goal.go's doc comment on advisory evaluator-boundary
+// failures): a durable, probably-permanent evaluator outage. Distinct
+// from the generic "error" for the same reason outcomeContextExhausted
+// and outcomeMaxTurnsExceeded are — a poller reacting to "the evaluator
+// itself is broken" (e.g. surfacing an
 // operator alert rather than just retrying the goal) needs to tell this
 // apart from an ordinary worker-turn failure without string-matching
 // last_turn.error or GoalReason. Unlike every failed boundary below the
@@ -399,10 +402,11 @@ const outcomeEvaluatorExhausted = "evaluator_exhausted"
 
 // outcomeWorkerParked is the turn.end outcome recorded when a goal loop
 // exit-parks a worker turn instead of clearing the goal (engine/goal.go's
-// "Round 7" doc section): either exhaustion tier — deterministic
-// (goalWorkerRetries) or retryable-class (goalRetryableMaxAttempts) —
-// without the evaluator ever running. Distinct from the generic "error" for
-// the same reason outcomeContextExhausted/outcomeMaxTurnsExceeded/
+// doc comment on goal-worker failure handling): either exhaustion tier —
+// deterministic (goalWorkerRetries) or retryable-class
+// (goalRetryableMaxAttempts) — without the evaluator ever running.
+// Distinct from the generic "error" for the same reason
+// outcomeContextExhausted/outcomeMaxTurnsExceeded/
 // outcomeEvaluatorExhausted are: a poller needs to tell "this goal is
 // merely paused, waiting for the next ordinary activity to resume it" apart
 // from an operator-facing dead terminal. UNLIKE outcomeEvaluatorExhausted,

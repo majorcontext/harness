@@ -92,13 +92,13 @@ func TestOnCreatePhaseStartFiresBeforeCompletion(t *testing.T) {
 	}
 }
 
-// TestOnCreatePhaseReportsPersistEndOnFailure is a regression test for the
-// bug flagged in PR #89 review: handleCreate used to call
-// reportCreatePhaseStart(sess.ID, "persist") and then, on a Persist error,
-// return WITHOUT the matching reportCreatePhase — leaving a watchdog's
-// in-flight table (see cmd/harness/main.go) with a "persist" entry nothing
-// would ever clear, a permanent false "still stuck" warning for a phase
-// that had, in fact, already failed and returned. Reuses
+// TestOnCreatePhaseReportsPersistEndOnFailure is a regression test proving
+// handleCreate always pairs reportCreatePhaseStart(sess.ID, "persist")
+// with a matching reportCreatePhase, even on a Persist error: returning
+// WITHOUT it would leave a watchdog's in-flight table (see
+// cmd/harness/main.go) with a "persist" entry nothing would ever clear, a
+// permanent false "still stuck" warning for a phase that had, in fact,
+// already failed and returned. Reuses
 // TestOnCreatePhaseReportsTotalOnFailedCreate's arrangement (create_phase_
 // test.go): a session whose own log directory is unwritable, so Persist
 // fails deterministically while the server's own SessionDir (and so
@@ -165,14 +165,15 @@ func TestOnCreatePhaseReportsPersistEndOnFailure(t *testing.T) {
 }
 
 // TestFailedCreateDoesNotLeakSessionManagerRootNode is the regression test
-// for a live review finding: handleCreate used to call sessMgr.AdoptRoot
-// BEFORE the fallible Persist step, so a create that failed at Persist (the
-// exact scenario TestOnCreatePhaseReportsPersistEndOnFailure above sets up)
-// still left a root sessionNode registered in the SessionManager — and
-// Reap() never removes a root (see its own doc comment: a root is the
-// tree's own address), so that node, and the *Session it pins, leaked for
-// the life of the process. AdoptRoot now runs AFTER Persist succeeds, so a
-// Persist failure must leave the id completely untracked.
+// proving handleCreate calls sessMgr.AdoptRoot AFTER the fallible Persist
+// step, not before: adopting first would leave a root sessionNode
+// registered in the SessionManager for a create that failed at Persist
+// (the exact scenario TestOnCreatePhaseReportsPersistEndOnFailure above
+// sets up) — and Reap() never removes a root (see its own doc comment: a
+// root is the tree's own address), so that node, and the *Session it
+// pins, would leak for the life of the process. AdoptRoot runs AFTER
+// Persist succeeds, so a Persist failure must leave the id completely
+// untracked.
 func TestFailedCreateDoesNotLeakSessionManagerRootNode(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test"}

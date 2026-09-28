@@ -676,8 +676,7 @@ type Provider struct {
 	//
 	// It exists because the ChatGPT Codex backend's tool-schema validator
 	// is STRICTER than the OpenAI platform API: it 400s on a regex
-	// `pattern` using lookaround (confirmed on a live box; harness#213
-	// flagged this exact gap), and harness forwards tool schemas
+	// `pattern` using lookaround, and harness forwards tool schemas
 	// unsanitized. The default (false) sends every schema unchanged, so a
 	// normal openai/anthropic/bifrost provider — which accepts richer
 	// schemas and would only lose expressiveness from the rewrite — is

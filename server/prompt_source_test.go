@@ -217,11 +217,11 @@ func TestSanitizeSourceLabelBoundsAndStripsControlChars(t *testing.T) {
 }
 
 // TestSanitizeSourceLabelStripsBidiAndZeroWidth is the named-failure test
-// for a review finding: sanitizeSourceLabel's C0/C1 strip left a bidi
+// proving sanitizeSourceLabel's strip covers more than C0/C1: a bidi
 // override (U+202E RIGHT-TO-LEFT OVERRIDE) or a zero-width character
-// (U+200B ZERO WIDTH SPACE) untouched — both pass through unstripped
-// today, letting a caller-supplied label visually reorder or hide text in
-// a rendered console bubble despite carrying no C0/C1 byte at all.
+// (U+200B ZERO WIDTH SPACE) must not pass through unstripped, since either
+// would let a caller-supplied label visually reorder or hide text in a
+// rendered console bubble despite carrying no C0/C1 byte at all.
 func TestSanitizeSourceLabelStripsBidiAndZeroWidth(t *testing.T) {
 	got, err := sanitizeSourceLabel("a‮b​c")
 	if err != nil {

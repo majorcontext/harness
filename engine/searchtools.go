@@ -143,21 +143,20 @@ func globTool() Tool {
 			if err != nil {
 				return nil, fmt.Errorf("glob: invalid pattern %q: %w", in.Pattern, err)
 			}
-			// Stat base up front, mirroring grep's identical check below —
-			// a live review finding: without this, WalkDir's callback
-			// swallows the ROOT path's own lstat error via its blanket
-			// "err != nil: skip it, don't fail the whole search" (correct
-			// for a descendant entry, wrong for the root itself), so a
-			// non-existent base silently reported "(no matches)" instead
-			// of surfacing the caller's bad path. This alone does NOT
-			// catch every unreadable-base case: a directory stat-able (the
-			// process has execute on its PARENT) but not readable (no read
-			// bit on base itself) passes os.Stat here — WalkDir's own
-			// internal ReadDir(base) is what actually fails for that case,
-			// surfacing as p == base with a non-nil err in the callback
-			// below, which is why that callback special-cases p == base
-			// rather than skipping every error uniformly — a second live
-			// review finding on this same fix.
+			// Stat base up front, mirroring grep's identical check below:
+			// without this, WalkDir's callback swallows the ROOT path's
+			// own lstat error via its blanket "err != nil: skip it, don't
+			// fail the whole search" (correct for a descendant entry,
+			// wrong for the root itself), so a non-existent base silently
+			// reports "(no matches)" rather than surfacing the caller's
+			// bad path. This alone does NOT catch every unreadable-base
+			// case: a directory stat-able (the process has execute on its
+			// PARENT) but not readable (no read bit on base itself)
+			// passes os.Stat here — WalkDir's own internal ReadDir(base)
+			// is what actually fails for that case, surfacing as p ==
+			// base with a non-nil err in the callback below, which is why
+			// that callback special-cases p == base rather than skipping
+			// every error uniformly.
 			if _, err := os.Stat(base); err != nil {
 				return nil, fmt.Errorf("glob: %w", err)
 			}
@@ -390,15 +389,15 @@ var errStopWalk = fmt.Errorf("grep: result cap reached")
 
 // grepBinarySniffLen is how many leading bytes grep's own binary guard
 // scans — deliberately much larger than imageSniffLen (512, tuned for
-// cheap magic-byte media detection elsewhere in this package): a live
-// review finding noted that a 512-byte sniff promises more than it can
-// deliver here specifically, since grep then line-searches the WHOLE file
-// (up to maxGrepFileBytes, 20 MiB) regardless — a file whose first 512
-// bytes are ASCII text but whose body is binary with no early NUL passed
-// the old, narrower check and leaked raw binary bytes into matching
-// "lines". 64 KiB is still cheap against a file already fully read into
-// memory, and catches the realistic case (a text header followed by a
-// binary body) the 512-byte sniff was blind to.
+// cheap magic-byte media detection elsewhere in this package). A
+// 512-byte sniff promises more than it can deliver here specifically,
+// since grep then line-searches the WHOLE file (up to maxGrepFileBytes,
+// 20 MiB) regardless — a file whose first 512 bytes are ASCII text but
+// whose body is binary with no early NUL passes a narrower check and
+// leaks raw binary bytes into matching "lines". 64 KiB is still cheap
+// against a file already fully read into memory, and catches the
+// realistic case (a text header followed by a binary body) a 512-byte
+// sniff is blind to.
 const grepBinarySniffLen = 64 * 1024
 
 // looksBinary reports whether data appears to be non-text content within
@@ -466,11 +465,11 @@ func lsTool() Tool {
 			if len(all) == 0 {
 				return message.Parts{&message.Text{Text: "(empty directory)"}}, nil
 			}
-			// Cap output at maxSearchResults like glob/grep both already do
-			// — a live review finding: unlike those two, ls had no bound at
-			// all, so a read-only explore/plan subagent listing a huge
-			// directory (node_modules, a data dir, a build-output tree)
-			// flooded the tool result / session context with every entry.
+			// Cap output at maxSearchResults like glob/grep both already
+			// do: unlike those two, ls had no bound at all, so a
+			// read-only explore/plan subagent listing a huge directory
+			// (node_modules, a data dir, a build-output tree) floods the
+			// tool result / session context with every entry.
 			truncated := len(all) > maxSearchResults
 			if truncated {
 				all = all[:maxSearchResults]

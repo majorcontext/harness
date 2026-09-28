@@ -103,9 +103,9 @@ func TestOnStorePhaseStartFiresBeforeCompletion(t *testing.T) {
 	}
 }
 
-// TestOnStorePhaseStartPairsOnErrorPath is a regression test for the bug
-// flagged in PR #89 review: a phase whose own operation FAILS (e.g. EIO,
-// ENOSPC — modeled here by an unwritable SessionDir) used to skip its
+// TestOnStorePhaseStartPairsOnErrorPath is a regression test for the case
+// where a phase whose own operation FAILS (e.g. EIO, ENOSPC — modeled here
+// by an unwritable SessionDir) used to skip its
 // matching OnStorePhase call entirely, since the old code returned from
 // ensureLog before reaching it. That left a watchdog's in-flight table (see
 // cmd/harness/main.go) with a permanently stale entry — a false "still

@@ -8,18 +8,19 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// TestReportTurnEndDoesNotReDriveQueuedPrompt is the regression test for a
-// review finding: finalizeTurn's queued-message re-drive gated on
-// n.parentID != "", which cannot tell an IN-PACKAGE child turn (Spawn's or
-// Send's own goroutine, where the returned resume is the only thing that
-// will ever continue the session) from an EXTERNALLY scheduled one
-// (ReportTurnEnd, where the server holds the run slot and its own
+// TestReportTurnEndDoesNotReDriveQueuedPrompt is the regression test
+// proving finalizeTurn's queued-message re-drive does not gate on
+// n.parentID != "" alone, which cannot tell an IN-PACKAGE child turn
+// (Spawn's or Send's own goroutine, where the returned resume is the only
+// thing that will ever continue the session) from an EXTERNALLY scheduled
+// one (ReportTurnEnd, where the server holds the run slot and its own
 // maybeDispatchQueued tail drains the queue).
 //
 // A depth>0 node CAN be resident and externally driven: claimForPrompt
 // (server/handlers.go) LoadSessions any id with no depth guard, so a
 // former child reached through POST /session/{id}/prompt_async or /goal
-// runs that way. On that path the re-drive did one of two wrong things:
+// runs that way. On that path, gating the re-drive on n.parentID != ""
+// alone does one of two wrong things:
 //
 //   - queue [A]: it popped A, journaled it dequeued("delivered"), and
 //     returned a resume that runs s.Prompt with NO run slot held, so a

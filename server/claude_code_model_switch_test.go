@@ -53,8 +53,8 @@ func buildFakeClaudeForServer(t *testing.T) string {
 // twin: a session's default model routes to the delegated claude-code
 // backend (claudeCode.BinaryPath, the fakeclaude stand-in), while nativeProv
 // is registered as an ordinary native provider a later POST
-// /session/{id}/model call can switch to — reproducing the live incident's
-// exact provider shape (a claude-code/opus session switched mid-session to
+// /session/{id}/model call can switch to — the provider shape this test
+// needs (a claude-code/opus session switched mid-session to
 // codex/gpt-5.6-sol), which neither server_test.go's newServer (one native
 // provider only) nor multiProviderHarnessInDir (no ClaudeCode config seam)
 // can build. windowTokens sets engine.Config.ContextWindowTokens, the
@@ -128,15 +128,14 @@ func waitIdleClaudeCode(t *testing.T, h *harness, id string) {
 	}
 }
 
-// TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle reproduces the
-// literal shape of the live incident on session
-// ses_01hac3jqn64npr07q9rxbmtb9z: several claude-code/opus turns end in a
-// retryable overloaded error (turn end outcome:error), an operator then
-// switches the session's model to a native provider (POST
+// TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle covers a
+// claude-code-to-native model switch mid-session: several claude-code/opus
+// turns end in a retryable overloaded error (turn end outcome:error), an
+// operator then switches the session's model to a native provider (POST
 // /session/{id}/model, mirroring "reason=model_switch" in the harness log),
 // and a turn on the new model completes cleanly. The session must end
-// status idle, state idle, lineage.status not "running", and queued 0 — not
-// stranded busy/running the way the live session was.
+// status idle, state idle, lineage.status not "running", and queued 0 —
+// never stranded busy/running from the earlier retryable errors.
 func TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle(t *testing.T) {
 	bin := buildFakeClaudeForServer(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "rate_limit_error")

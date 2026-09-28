@@ -9,8 +9,8 @@ import (
 )
 
 // contextOverflowErr builds the classified error a provider adapter returns
-// for issue #62's incident (reused here rather than depending on the
-// engine/provider test packages).
+// when a request's prompt token count exceeds the model's context window
+// (reused here rather than depending on the engine/provider test packages).
 func contextOverflowErr() *provider.Error {
 	return &provider.Error{
 		Kind:         provider.ErrKindContextOverflow,

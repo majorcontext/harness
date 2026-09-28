@@ -492,9 +492,9 @@ type Server struct {
 	// non-empty, blocked trying to acquire s.mu to record the update — at
 	// the exact instant freeRunSlotAndEmitIdle reads it here, so the
 	// cache can read stale-empty while a real enqueue is genuinely
-	// in-flight right behind it: a live review finding, the same false-idle
-	// class this whole fix exists to close, just triggered by an enqueue
-	// racing turn-end instead of a queue that was already non-empty. Since
+	// in-flight right behind it: the same false-idle class this whole fix
+	// exists to close, just triggered by an enqueue racing turn-end
+	// instead of a queue that was already non-empty. Since
 	// maybeDispatchQueued's own clearQueueDrainPending resolves this
 	// unconditionally moments later regardless (a genuinely empty queue
 	// just clears it again immediately, waking any waiter to re-observe
@@ -748,9 +748,10 @@ type goalTracker struct {
 	// resets are needed here specifically.
 	pausedWorker bool
 	// evalFailures is the most recent goal.eval_failed record's CONSECUTIVE
-	// failure count (see engine/goal.go's "Round 6" doc section) —
-	// folded straight from the record, so it is idempotent for replay just
-	// like every other field here. Reset to 0 by goal.set/goal.eval/
+	// failure count (see engine/goal.go's doc comment on advisory
+	// evaluator-boundary failures) — folded straight from the record, so
+	// it is idempotent for replay just like every other field here. Reset
+	// to 0 by goal.set/goal.eval/
 	// goal.achieved/goal.cleared/goal.updated, mirroring attempt's own reset
 	// set except that goal.updated resets it too (see publishGoal's
 	// evtGoalUpdated case): the streak is measured against a condition, and

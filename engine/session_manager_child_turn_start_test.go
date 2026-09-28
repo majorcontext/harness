@@ -359,25 +359,24 @@ func TestChildTurnStartAndEndObserversConcurrentAcrossManyChildren(t *testing.T)
 }
 
 // TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize is the regression
-// test for a live review finding: a WARM ORPHAN — a child reloaded and
-// adopted while its true parent is untracked (adoptReloadedLocked's
-// "true depth is unrecoverable" branch: depth is restored from the
-// child's own durable TaskDepth, but its live parentID is left empty —
-// see TestReloadedChildWithUnknownParentUsesDurableTaskDepth) — is
-// depth > 0 but parentID == "". Both routing endpoints
-// (server/handlers.go, server/session_tree.go) already route such a
-// session down the CHILD path on the durable TaskParentID() signal, so
-// this shape is reachable in practice, not merely theoretical.
+// test for a WARM ORPHAN — a child reloaded and adopted while its true
+// parent is untracked (adoptReloadedLocked's "true depth is
+// unrecoverable" branch: depth is restored from the child's own durable
+// TaskDepth, but its live parentID is left empty — see
+// TestReloadedChildWithUnknownParentUsesDurableTaskDepth) — is depth > 0
+// but parentID == "". Both routing endpoints (server/handlers.go,
+// server/session_tree.go) already route such a session down the CHILD
+// path on the durable TaskParentID() signal, so this shape is reachable
+// in practice, not merely theoretical.
 //
-// Before the fix, ChildTurnObserver and finalizeTurnFrom's own
-// queued-message re-drive both gated on the LIVE n.parentID != "" —
-// disagreeing with ChildTurnStartObserver's own n.depth > 0 gate (the
-// same predicate reserveSendLocked's start-side check already used). A
-// warm orphan's relaunch fired a start (busy) but never a matching end
-// (idle/turn.end) — permanently stuck "busy" from a consumer's point of
-// view — and a message enqueued against it in the finalize window was
-// silently stranded rather than delivered. Both gates now key on
-// n.depth > 0, exactly matching the start side.
+// ChildTurnObserver and finalizeTurnFrom's own queued-message re-drive
+// must gate on n.depth > 0, matching ChildTurnStartObserver's own
+// start-side gate (the same predicate reserveSendLocked's start-side
+// check already uses) rather than the LIVE n.parentID != "": a warm
+// orphan's relaunch would otherwise fire a start (busy) but never a
+// matching end (idle/turn.end) — permanently stuck "busy" from a
+// consumer's point of view — and a message enqueued against it in the
+// finalize window would be silently stranded rather than delivered.
 func TestWarmOrphanChildBusyIdleAndQueueSurviveFinalize(t *testing.T) {
 	dir := t.TempDir()
 

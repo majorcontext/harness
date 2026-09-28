@@ -65,8 +65,8 @@ func TestTranscriptLiveFrom_AtLeastMessageWatermark(t *testing.T) {
 // `messages`. It journals directly via emitDurableLocked (bypassing the
 // harness's own Publish wiring, exactly like server/message_page_test.go's
 // coldMessages bypasses it for a different reason) because reproducing the
-// real claude-code-backend subagent-turn mechanism (harness#217) end to end
-// would need a full nested-task-tool integration test; the mechanism this
+// real claude-code-backend subagent-turn mechanism end to end would need
+// a full nested-task-tool integration test; the mechanism this
 // test actually exercises — a durable evtMessage for `sessionID` absent
 // from `history` — is the exact, and only, shape transcriptWatermarkLocked
 // discriminates on, regardless of why a record is absent.

@@ -204,11 +204,10 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // caller: a resident session answers from its own running flag and the
 // manager half is read only for an id residency does not know at all.
 // Gating on residency is load-bearing, not a belt-and-suspenders extra
-// check — a live review finding caught a real regression from an earlier
-// revision that fell back whenever !running, resident or not.
-// freeRunSlotAndEmitIdle (handlers.go) sets st.running = false and wakes
-// waiters BEFORE ReportTurnEnd flips the SessionManager node off
-// StatusRunning (the two calls are deliberately ordered that way — see
+// check: falling back whenever !running, resident or not, is a real
+// regression. freeRunSlotAndEmitIdle (handlers.go) sets st.running =
+// false and wakes waiters BEFORE ReportTurnEnd flips the SessionManager
+// node off StatusRunning (the two calls are deliberately ordered that way — see
 // runPrompt's own doc comment). A waiter woken in that gap used to read
 // st.running == false correctly, then see this fallback (ungated) still
 // find sessMgr's node StatusRunning and report busy — a genuinely wrong
@@ -222,7 +221,7 @@ func (waitTimeoutError) Error() string { return "timeout_s must be a positive in
 // no established order exists between server.mu and SessionManager.mu to
 // rely on.
 //
-// Known residual, accepted for this fix's scope (a live review finding):
+// Known residual, accepted for this fix's scope:
 // a GET /session/{childID}/wait?until=idle waiter can still block until
 // timeout rather than returning promptly the instant a Spawn-driven
 // child's turn actually settles. The child's last EventMessage wakes the
@@ -253,7 +252,7 @@ func (s *Server) waitSnapshot(id string) (string, *goalJSON) {
 	s.mu.Unlock()
 	// withManagerIfUnresolved, not withManager: a resident session answers
 	// from its own running flag, so the manager read would be a discarded
-	// global-lock acquisition on every poll (a live review finding).
+	// global-lock acquisition on every poll.
 	lv = lv.withManagerIfUnresolved(s.sessMgr)
 	running := drainPending || lv.status() == "busy"
 	return compositeState(running, goal != nil && goal.Active, forcesIdlePause(goal)), goal

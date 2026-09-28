@@ -25,10 +25,10 @@ import (
 // evaluator call that never stops truncating must fail its boundary fast,
 // not burn up to ~30 minutes on it.
 //
-// A single failed boundary is advisory, not fatal (Round 6): PursueGoal
-// journals goal.eval_failed and continues rather than clearing the goal, so
-// this test scripts a second worker turn/evaluation that succeeds with MET
-// to let the loop terminate deterministically instead of relying on
+// A single failed boundary is advisory, not fatal: PursueGoal journals
+// goal.eval_failed and continues rather than clearing the goal, so this
+// test scripts a second worker turn/evaluation that succeeds with MET to
+// let the loop terminate deterministically instead of relying on
 // MaxTurns.
 func TestPursueGoalEvaluatorTruncatedShortBackoffNotWeather(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

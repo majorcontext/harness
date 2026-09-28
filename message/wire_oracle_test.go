@@ -8,14 +8,13 @@ import (
 
 // This file is an INDEPENDENT oracle for "does this canonical history
 // transcode to a protocol-valid provider request." It exists because of a
-// bug class this package already shipped once: message/properties_test.go
-// used to define hasOrphanToolCall by re-deriving ResolveOrphanToolCalls's
-// own documented scan line-for-line (RoleAssistant-gated, "check only
-// messages[i+1]", set-membership presence) — an oracle that shares its
-// implementation's definition of correctness cannot fail on a wrong
-// definition. A rewrite of ResolveOrphanToolCalls that deleted genuine tool
-// output shipped and was reverted for exactly that reason (see the
-// "fix(message,engine): narrow to the verified incident fix" commit).
+// structural bug class: message/properties_test.go used to define
+// hasOrphanToolCall by re-deriving ResolveOrphanToolCalls's own documented
+// scan line-for-line (RoleAssistant-gated, "check only messages[i+1]",
+// set-membership presence) — an oracle that shares its implementation's
+// definition of correctness cannot catch a rewrite of
+// ResolveOrphanToolCalls that deletes genuine tool output while
+// preserving that same wrong definition.
 //
 // Every type and function below is built ONLY from two things: this
 // package's own doc comments (Message.Role, ToolCall, ToolResult,
@@ -26,8 +25,8 @@ import (
 // provider/openaicompat/transcode.go): specifically, that every transcoder
 // maps message.RoleAssistant to a wire "assistant" turn and every other
 // Role to a non-assistant turn, and that Anthropic (the strictest — see
-// ResolveOrphanToolCalls's own doc comment, "Incident
-// ses_01hvcs96pq1cf7x3kw0fz4a1yh") merges adjacent same-side canonical
+// ResolveOrphanToolCalls's own doc comment, "An orphaned tool_use id
+// wedges every retry") merges adjacent same-side canonical
 // messages into one wire turn and requires every tool_use in an assistant
 // turn to be answered, id for id, by a tool_result in the IMMEDIATELY
 // FOLLOWING turn. This file never calls, imports, or copies

@@ -10,19 +10,17 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestPersistTruncatedToolCallArguments reproduces the incident behind two
-// goal sessions observed in production, ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and
-// ses_01hpf4eexb31v0ecyvesf75g5s: both died at the start of a worker turn
-// with "json: error calling MarshalJSON for type json.RawMessage:
-// unexpected end of JSON input", three identical attempts, and
-// GET /session/{id}/message on them returned 500 with "MarshalJSON for
-// type message.Parts" — while the on-disk log stayed clean, because the
-// poisoned assistant message failed to persist and was never journaled.
+// TestPersistTruncatedToolCallArguments reproduces the shape behind a
+// worker turn that dies with "json: error calling MarshalJSON for type
+// json.RawMessage: unexpected end of JSON input" on three identical
+// attempts, where GET /session/{id}/message on the same session returns
+// 500 with "MarshalJSON for type message.Parts" — while the on-disk log
+// stays clean, because the poisoned assistant message fails to persist
+// and is never journaled.
 //
-// Every existing guard at the time (ToolCall.safeArguments,
-// ProviderData.Get/MarshalJSON) special-cased len(Arguments) == 0 only.
-// The actual trigger is a provider stream that dies mid tool_use block —
-// a connection drop during input_json_delta accumulation, or (as audited in
+// A guard that special-cases len(Arguments) == 0 only is not enough. The
+// actual trigger is a provider stream that dies mid tool_use block — a
+// connection drop during input_json_delta accumulation, or (as audited in
 // provider/anthropic/anthropic.go) Anthropic's own protocol emitting
 // content_block_stop/message_delta(stop_reason: max_tokens)/message_stop
 // for a tool_use block truncated by the token budget — leaving
@@ -30,42 +28,39 @@ import (
 // value sails past every len==0 guard, and json.RawMessage.MarshalJSON does
 // not validate its bytes: the failure only surfaces once the value is
 // embedded in a larger document and encoding/json compacts it to validate,
-// at the two sites the incident hit — engine.Session.append's
-// persistMessage (the "worker turn died" symptom) and server's
-// GET /session/{id}/message, which simply re-marshals the same resident
-// s.history (the "message.Parts 500" symptom).
+// at the two sites this hits — engine.Session.append's persistMessage (the
+// "worker turn died" symptom) and server's GET /session/{id}/message, which
+// simply re-marshals the same resident s.history (the "message.Parts 500"
+// symptom).
 //
-// This scripted provider models the assembled shape a real stream would
-// hand back rather than replaying raw SSE bytes (the fake/stub stream the
-// fix description asks for): the assistant message it emits already
-// carries a ToolCall whose Arguments is the truncated tail of a JSON object
-// that generation stopped mid-way through, tagged with StopMaxTokens
-// (not StopToolUse) to match the real Anthropic wire shape for exactly this
-// case — the model never got to finish emitting the tool call, so the API
-// never reports tool_use, and the engine never attempts to execute it.
+// This scripted provider models the assembled shape a real stream hands
+// back rather than replaying raw SSE bytes: the assistant message it emits
+// already carries a ToolCall whose Arguments is the truncated tail of a
+// JSON object that generation stopped mid-way through, tagged with
+// StopMaxTokens (not StopToolUse) to match the real Anthropic wire shape
+// for exactly this case — the model never got to finish emitting the tool
+// call, so the API never reports tool_use, and the engine never attempts
+// to execute it.
 //
-// Before the fix (message.Message.Normalize dropping invalid
-// ToolCall.Arguments at the engine's one append/ingest choke point, plus
-// safeArguments' own defense-in-depth): PersistErr is non-nil with exactly
-// the production error text, and json.Marshal(s.History()) — what
-// GET /message does — fails mentioning message.Parts. After the fix: the
-// turn persists cleanly, the tool name and call ID survive (only the
-// unusable truncated arguments are dropped, replaced with an empty object —
-// the same normalization already applied to a legitimately empty
-// Arguments), the reloaded log matches in-memory history exactly, and a
-// following worker turn — which now transcodes a clean history — succeeds
-// instead of dying identically on every retry.
+// message.Message.Normalize drops invalid ToolCall.Arguments at the
+// engine's one append/ingest choke point, with safeArguments as
+// defense-in-depth: the turn persists cleanly, the tool name and call ID
+// survive (only the unusable truncated arguments are dropped, replaced
+// with an empty object — the same normalization already applied to a
+// legitimately empty Arguments), the reloaded log matches in-memory
+// history exactly, and a following worker turn, transcoding a clean
+// history, succeeds instead of dying identically on every retry.
 //
-// # This exact stop reason is now paired, not left orphaned
+// # This exact stop reason is paired, not left orphaned
 //
 // StopMaxTokens-with-a-ToolCall is precisely the shape
 // appendUnexecutedToolCallResults exists for (see its doc comment and
-// unexecutedToolCallStopReasonTextFmt's incident writeup): the engine still
-// never executes truncated arguments, but Session.Prompt now appends a
+// unexecutedToolCallStopReasonTextFmt's own doc comment): the engine still
+// never executes truncated arguments, but Session.Prompt appends a
 // synthetic is_error tool-role result for tc1 immediately after the
 // assistant message, so the ToolCall this test cares about is the
-// second-to-last history entry, not the last — history no longer ends
-// with a dangling tool_use at all.
+// second-to-last history entry, not the last — history never ends with a
+// dangling tool_use.
 func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	dir := t.TempDir()
 	truncated := toolCall("tc1", "bash", `{"command":"echo hel`) // cut off mid-argument, non-empty, invalid JSON
@@ -152,10 +147,9 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 		t.Errorf("loaded history = %s\nwant %s", got, want)
 	}
 
-	// The session is not wedged: unlike the incident (three identical
-	// failures because every retry re-transcoded the same poisoned
-	// history), the next worker turn — which now builds its request from a
-	// clean history — succeeds.
+	// The session is not wedged: rather than three identical failures
+	// because every retry re-transcodes the same poisoned history, the next
+	// worker turn, building its request from a clean history, succeeds.
 	final, err := s.Prompt(context.Background(), "continue")
 	if err != nil {
 		t.Fatalf("second Prompt (subsequent worker turn) = %v, want success", err)
@@ -166,9 +160,9 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	// The request the second turn actually built — s.History() as of that
 	// call, the exact value a real transcoder marshals into the wire body
 	// (see provider/anthropic/transcode.go, provider/openaicompat/transcode.go)
-	// — must itself be marshalable: this is the "request build" half of the
-	// incident, reproduced without depending on any one provider's wire
-	// shape.
+	// — must itself be marshalable: this is the "request build" half of
+	// this failure shape, reproduced without depending on any one
+	// provider's wire shape.
 	if len(prov.requests) < 2 {
 		t.Fatalf("provider recorded %d requests, want at least 2", len(prov.requests))
 	}

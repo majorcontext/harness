@@ -225,9 +225,9 @@ func TestGoalAchievedJournaled(t *testing.T) {
 }
 
 // TestGoalStalledJournaledAndActive scripts one transient worker-turn
-// failure (retried, then succeeding) and asserts the wire contract the
-// review finding says was missing: a durable goal.stalled record (non-zero
-// seq) carrying the retry attempt number is journaled, and the
+// failure (retried, then succeeding) and asserts the wire contract: a
+// durable goal.stalled record (non-zero seq) carrying the retry attempt
+// number is journaled, and the
 // goal remains active throughout — goal.stalled is non-terminal, so Session
 // JSON must still report active:true (and achieved:false) right after it,
 // only flipping once the retried turn is actually evaluated MET.

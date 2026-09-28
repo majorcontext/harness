@@ -882,11 +882,11 @@ func TestSessionMCPCallNoManagerConfigured(t *testing.T) {
 // server would otherwise hang, since each underlying mcp.Client.Close
 // already self-bounds (see mcp.Client.Close's doc comment); Close on the
 // manager must not add its own unbounded wait on top.
-// TestDecodeMCPBase64MalformedLogsWarning covers finding 3 from PR #51's
-// review: malformed base64 in an MCP content block used to yield a nil
-// Blob.Data completely silently. It must now log a slog warning naming
-// the offending server and tool — but never the payload bytes themselves,
-// which could be arbitrarily large and are not diagnostic.
+// TestDecodeMCPBase64MalformedLogsWarning verifies that malformed base64
+// in an MCP content block, which used to yield a nil Blob.Data
+// completely silently, logs a slog warning naming the offending server
+// and tool — but never the payload bytes themselves, which could be
+// arbitrarily large and are not diagnostic.
 func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
@@ -911,9 +911,9 @@ func TestDecodeMCPBase64MalformedLogsWarning(t *testing.T) {
 	}
 }
 
-// TestMCPManagerCloseWaitsForInFlightConnect is the regression test for
-// finding 2 from PR #51's review: Close used to read m.clients directly,
-// without any interaction with connectOnce, so a Close racing a caller's
+// TestMCPManagerCloseWaitsForInFlightConnect is the regression test for a
+// Close that used to read m.clients directly, without any interaction
+// with connectOnce, so a Close racing a caller's
 // very first Tools()/CallTool() (still connecting) would see the
 // zero-value nil clients map — connectMCPServer populates m.clients only
 // at the very end of the one-time connect step — return immediately having
@@ -1015,8 +1015,7 @@ func TestMCPManagerCloseWaitsForInFlightConnect(t *testing.T) {
 }
 
 // TestMCPManagerCloseOfNeverPromptedManagerNeverConnects is the regression
-// test for the follow-up finding on PR #51's Close-vs-first-connect race
-// fix: Close interlocked with an in-flight connect by calling
+// test for a Close that interlocked with an in-flight connect by calling
 // ensureConnected itself, unconditionally — so a harness serve process
 // configured with MCP servers that never received a single prompt before
 // shutdown would still CONNECT every configured server just to

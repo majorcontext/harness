@@ -17,8 +17,8 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// exhaustionError builds the live incident's own error, as the anthropic
-// adapter classifies it: a permanent-marked provider.Error of kind
+// exhaustionError builds an account-wall error, as the anthropic adapter
+// classifies it: a permanent-marked provider.Error of kind
 // ErrKindProviderExhausted carrying the recover-at hint.
 func exhaustionError(hint string) error {
 	return provider.MarkPermanent(&provider.Error{
@@ -244,11 +244,11 @@ func TestProviderExhaustedChildResumesOnSend(t *testing.T) {
 }
 
 // TestExhaustionReasonStatesTheTimeOnce proves the rendered notification
-// names the recover time in ONE engine-authored place. A review finding:
-// the reason prefix, the provider message it is extracted from, and the
-// guidance clause each stated it, so one line repeated the same date three
-// times. The provider's own sentence stays verbatim — that is its text,
-// not ours — so exactly one engine-authored statement remains.
+// names the recover time in ONE engine-authored place: the reason prefix,
+// the provider message it is extracted from, and the guidance clause must
+// not each restate it, or one line would repeat the same date three times.
+// The provider's own sentence stays verbatim — that is its text, not ours
+// — so exactly one engine-authored statement remains.
 func TestExhaustionReasonStatesTheTimeOnce(t *testing.T) {
 	fail := classifySpawnFailure(exhaustionError("2026-09-01"))
 	if strings.Contains(exhaustionReason, "2026-09-01") || strings.Contains(exhaustionReason, "access returns") {
@@ -322,9 +322,9 @@ func TestProviderExhaustedOutcomeSurvivesReload(t *testing.T) {
 }
 
 // TestExhaustionHintIsMaskedAndCapped proves the recover-at hint obeys the
-// same one rule the cause half obeys — mask, then cap. A review finding:
-// the hint used to ride into a durable fail reason raw, so the surface had
-// one masked field and one unmasked field side by side.
+// same one rule the cause half obeys — mask, then cap: the hint must not
+// ride into a durable fail reason raw, leaving one masked field and one
+// unmasked field side by side.
 func TestExhaustionHintIsMaskedAndCapped(t *testing.T) {
 	long := strings.Repeat("y", spawnErrorHintCap*2)
 	got := classifySpawnFailure(provider.MarkPermanent(&provider.Error{
@@ -350,12 +350,12 @@ func TestExhaustionHintIsMaskedAndCapped(t *testing.T) {
 }
 
 // TestCanceledResumeDropsPriorExhaustionBookkeeping proves a canceled node
-// never keeps a previous turn's failure fields. A review finding: only a
-// SUCCESSFUL turn cleared them, so canceling the re-run of a
-// provider-exhausted child left a StatusCanceled node still snapshotting
-// "provider_exhausted" — a value no live cancellation sets, and one
-// restoreKnownStatusLocked's canceled arm restores as empty, so the live
-// and reloaded views disagreed.
+// never keeps a previous turn's failure fields: clearing them only on a
+// SUCCESSFUL turn would let canceling the re-run of a provider-exhausted
+// child leave a StatusCanceled node still snapshotting "provider_exhausted"
+// — a value no live cancellation sets — while restoreKnownStatusLocked's
+// canceled arm restores it as empty, so the live and reloaded views would
+// disagree.
 func TestCanceledResumeDropsPriorExhaustionBookkeeping(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	release := make(chan struct{})

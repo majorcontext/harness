@@ -354,8 +354,8 @@ func TestSessionCreateWithParentIDUnknownAgentIs400(t *testing.T) {
 // and agent_type without requiring any write (a prompt/send call) to
 // force a reload first.
 //
-// Also covers two later review findings on the same cold-fallback branch,
-// both concluding "no durable source" for Depth and Children when there
+// Also covers the same cold-fallback branch's Depth and Children fields,
+// both wrongly treated as having "no durable source" when there
 // actually IS one — Config.TaskDepth and Session.SpawnedChildIDs(),
 // exactly as durable and unconditional as TaskParentID/TaskAgentType
 // above, both restored by LoadSession without any SessionManager adoption
@@ -467,9 +467,9 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 }
 
 // TestColdChildlessLineageChildrenIsUnknownNotZero is the regression test
-// for a review finding: the cold-fallback branch used to run Children
-// through childIDsUnion just like the warm branch, normalizing an empty
-// sess.SpawnedChildIDs() to a confirmed "children":[]. But
+// proving the cold-fallback branch must NOT run Children through
+// childIDsUnion the way the warm branch does: that would normalize an
+// empty sess.SpawnedChildIDs() to a confirmed "children":[], but
 // SpawnedChildIDs() is a complete answer only for a log written after
 // recTaskSpawned records shipped — a legacy log that genuinely spawned
 // children before that record existed has an empty SpawnedChildIDs()
@@ -542,8 +542,8 @@ func TestColdChildlessLineageChildrenIsUnknownNotZero(t *testing.T) {
 }
 
 // TestWarmOrphanChildLineageKeepsDurableParentID covers the WARM
-// orphaned-parent shape (a review finding on the TaskDepth fix): a child
-// adopted by adoptReloadedLocked while its parent is untracked gets its
+// orphaned-parent shape: a child adopted by adoptReloadedLocked while its
+// parent is untracked gets its
 // depth from durable TaskDepth, but the node's parentID stays empty (only
 // the live-parent branch sets attachTo). lineageJSONFor's warm branch must
 // then fall back to the durable TaskParentID. Without the fallback, the
@@ -614,10 +614,10 @@ func TestWarmOrphanChildLineageKeepsDurableParentID(t *testing.T) {
 	}
 }
 
-// TestSentinelPoisonedChainWireDepthMatchesEnforcement is the adjudicated
-// fix for a review finding: an earlier revision of lineageJSONFor
-// independently re-preferred sess.TaskDepth() over info.Depth on the wire
-// — a SECOND derivation of "this session's depth" that could disagree
+// TestSentinelPoisonedChainWireDepthMatchesEnforcement proves
+// lineageJSONFor must not independently re-prefer sess.TaskDepth() over
+// info.Depth on the wire — a SECOND derivation of "this session's depth"
+// that could disagree
 // with the ENFORCEMENT depth (info.Depth, the exact value TaskToolAllowed
 // gates this session's own `task` tool against) whenever a poisoned
 // ancestor's refusal-sentinel depth propagates forward into a legacy
@@ -712,13 +712,13 @@ func TestWarmChildlessLineageHasExplicitEmptyChildren(t *testing.T) {
 	}
 }
 
-// TestSessionCreateWithParentIDUnconfiguredModelIs400 is the regression
-// test for a live review finding: handleSpawnChild parsed a model override
-// but never validated its provider was configured, unlike the `task` tool's
-// identical check (runTaskTool) — an override naming a provider nothing
-// registers used to sail through Spawn, consuming a concurrency slot and a
-// session log, only to fail later at the child's own first turn. Proves it
-// is now rejected synchronously, before anything is spawned.
+// TestSessionCreateWithParentIDUnconfiguredModelIs400 proves
+// handleSpawnChild validates a parsed model override's provider is
+// configured, like the `task` tool's identical check (runTaskTool): an
+// override naming a provider nothing registers must be rejected
+// synchronously, before anything is spawned, not sail through Spawn
+// consuming a concurrency slot and a session log only to fail later at
+// the child's own first turn.
 func TestSessionCreateWithParentIDUnconfiguredModelIs400(t *testing.T) {
 	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil, &scriptedProvider{name: "root"})
 	resp, data := h.do("POST", "/session", map[string]string{"model": "root/m1"})
@@ -759,12 +759,12 @@ func TestSessionCreateWithParentIDUnconfiguredModelIs400(t *testing.T) {
 	}
 }
 
-// TestSessionCreateWithParentIDUnconfiguredDefinitionModelIs400 is the
-// regression test for a second live review finding on the same fix: the
-// first pass at handleSpawnChild's provider validation only covered the
-// REQUEST BODY's model override, missing that def.Model — a custom
-// .agents/*.md definition's own "model:" frontmatter — sails through
-// exactly the same way when the request supplies no override at all.
+// TestSessionCreateWithParentIDUnconfiguredDefinitionModelIs400 proves
+// handleSpawnChild's provider validation covers more than the REQUEST
+// BODY's model override: def.Model — a custom .agents/*.md definition's
+// own "model:" frontmatter — can name an unconfigured provider exactly
+// the same way when the request supplies no override at all, and must be
+// validated too.
 func TestSessionCreateWithParentIDUnconfiguredDefinitionModelIs400(t *testing.T) {
 	root := t.TempDir()
 	agentsDir := filepath.Join(root, ".agents")
@@ -864,13 +864,13 @@ func TestSessionSendDeliversToRoot(t *testing.T) {
 }
 
 // TestSessionSendToRootWithStrandedQueueIsNotLost is the regression test
-// for a review finding: runOrQueueText's idle-with-non-empty-queue branch
-// used to dispatch the queue's existing head without ever enqueuing THIS
-// call's own text, silently dropping a session.send message any time the
-// root's durable queue was already non-empty (a restart refold or a
+// proving runOrQueueText's idle-with-non-empty-queue branch enqueues
+// THIS call's own text, not just the queue's existing head: dispatching
+// the head alone would silently drop a session.send message any time the
+// root's durable queue is already non-empty (a restart refold or a
 // drain-gap strand — see TestQueueRestartRefoldNoAutoDispatch, whose
 // direct-EnqueuePrompt technique this test reuses to arrange that state)
-// while the response still claimed 202 "sent". Both turns — the
+// while the response still claims 202 "sent". Both turns — the
 // pre-existing head, then this call's own text — must run, in FIFO order,
 // with nothing dropped.
 func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
@@ -919,17 +919,16 @@ func TestSessionSendToRootWithStrandedQueueIsNotLost(t *testing.T) {
 	}
 }
 
-// TestSessionSendToBusyRootIsQueuedNotLost is the regression test for a
-// review finding distinct from TestSessionSendToRootWithStrandedQueueIsNotLost:
-// runOrQueueText's early `return code != http.StatusNotFound` dropped
-// session.send's text unconditionally whenever the root was simply BUSY
-// (an ordinary claimForPrompt 409 — no pre-existing queue involved at
-// all), not just in the already-fixed idle-with-non-empty-queue shape.
-// sendTextToRoot's dedicated busy-path handling (mirroring
-// enqueueOrDispatch) must durably enqueue instead. Also proves
-// session.send's response is now honest about "queued" vs "sent",
-// matching prompt_async's own status vocabulary, rather than always
-// claiming "sent".
+// TestSessionSendToBusyRootIsQueuedNotLost is the regression test covering
+// a distinct hazard from TestSessionSendToRootWithStrandedQueueIsNotLost:
+// runOrQueueText's early `return code != http.StatusNotFound` must not
+// drop session.send's text whenever the root is simply BUSY (an ordinary
+// claimForPrompt 409 — no pre-existing queue involved at all), not just
+// in the idle-with-non-empty-queue shape. sendTextToRoot's dedicated
+// busy-path handling (mirroring enqueueOrDispatch) durably enqueues
+// instead. Also proves session.send's response is honest about "queued"
+// vs "sent", matching prompt_async's own status vocabulary, rather than
+// always claiming "sent".
 func TestSessionSendToBusyRootIsQueuedNotLost(t *testing.T) {
 	blocker := newBlockingProvider("root")
 	t.Cleanup(blocker.releaseAll)
@@ -969,15 +968,15 @@ func TestSessionSendToBusyRootIsQueuedNotLost(t *testing.T) {
 	}
 }
 
-// TestSessionSendToBusyRootEvictedInGapIsRetryable409 is the regression
-// test for a review finding: sendTextToRoot's busy branch, when the busy
-// occupant is evicted from residency in the gap between claimForPrompt's
-// failed claim and residentSession's own lookup, returned "queued"
-// (success) without ever having durably enqueued text — permanently
-// losing it while telling the caller it was accepted (a 202 the caller
-// has no reason to retry). enqueueOrDispatch's own identical race
+// TestSessionSendToBusyRootEvictedInGapIsRetryable409 covers
+// sendTextToRoot's busy branch when the busy occupant is evicted from
+// residency in the gap between claimForPrompt's failed claim and
+// residentSession's own lookup: it must not return "queued" (success)
+// without ever having durably enqueued text — that would permanently
+// lose it while telling the caller it was accepted (a 202 the caller has
+// no reason to retry). enqueueOrDispatch's own identical race
 // (handlers.go) returns a retryable 409 for exactly this reason; this
-// proves sendTextToRoot now does too.
+// proves sendTextToRoot does too.
 func TestSessionSendToBusyRootEvictedInGapIsRetryable409(t *testing.T) {
 	blocker := newBlockingProvider("root")
 	t.Cleanup(blocker.releaseAll)
@@ -1053,12 +1052,12 @@ func TestAbortStopsRunningManagedChild(t *testing.T) {
 	waitForLineageStatus(t, h, child.ID, "canceled", 2*time.Second)
 }
 
-// TestSpawnResponseReportsBusyNotIdle is the regression test for a
-// review finding: the 201 body from session.create's parent_id form
-// hard-coded top-level status/state "idle" even though Spawn always
-// sets the new child StatusRunning before returning (a spawned child is
-// handed work immediately) — self-inconsistent with the SAME response's
-// own lineage block, which correctly reported "running" beside it.
+// TestSpawnResponseReportsBusyNotIdle proves the 201 body from
+// session.create's parent_id form must not hard-code top-level
+// status/state "idle": Spawn always sets the new child StatusRunning
+// before returning (a spawned child is handed work immediately), so a
+// hard-coded "idle" would be self-inconsistent with the SAME response's
+// own lineage block, which correctly reports "running" beside it.
 func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 	blocker := newBlockingProvider("blocker")
 	// Released explicitly at the end of the test body below, NOT relied
@@ -1108,13 +1107,13 @@ func TestSpawnResponseReportsBusyNotIdle(t *testing.T) {
 	waitForLineageStatus(t, h, child.ID, "done", 2*time.Second)
 }
 
-// TestAbortDiffersFromCancelTreeOnGrandchildOutcome is the regression
-// test for a review finding: an earlier revision of handleAbort's child
-// fallback called sessMgr.Cancel — the SAME full-subtree cascade
-// cancel_tree uses — making abort indistinguishable from cancel_tree for
-// a child with its own running descendants: every one of them got
-// explicitly marked StatusCanceled. abort is now sessMgr.AbortTurn,
-// which only ever explicitly cancels id itself; an actually-running
+// TestAbortDiffersFromCancelTreeOnGrandchildOutcome proves handleAbort's
+// child fallback stays distinguishable from cancel_tree: calling
+// sessMgr.Cancel there — the SAME full-subtree cascade cancel_tree uses —
+// would make abort indistinguishable from cancel_tree for a child with
+// its own running descendants, explicitly marking every one of them
+// StatusCanceled. abort is instead sessMgr.AbortTurn, which only ever
+// explicitly cancels id itself; an actually-running
 // descendant's turn is STILL interrupted (context derivation makes that
 // unavoidable — a grandchild's ctx is context.WithCancel(child.ctx)) but
 // reaches a DIFFERENT terminal state through the ordinary finalizeTurn
@@ -1174,18 +1173,17 @@ func TestAbortDiffersFromCancelTreeOnGrandchildOutcome(t *testing.T) {
 	waitForLineageStatus(t, h, grand.ID, "failed", 2*time.Second)
 }
 
-// TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched is the
-// regression test for a review finding: handleAbort routed to
-// sessMgr.AbortTurn for ANY managed child regardless of its own status.
-// AbortTurn cancels the node's context unconditionally, which (a) is
-// pure collateral damage for a child that has ALREADY finished (its own
-// context has nothing left to interrupt) — the review reproduced this
-// exactly: aborting a done child killed its own still-running grandchild
+// TestAbortOfTerminalChildLeavesGrandchildAndSendUntouched proves
+// handleAbort must not route to sessMgr.AbortTurn for ANY managed child
+// regardless of its own status: AbortTurn cancels the node's context
+// unconditionally, which (a) is pure collateral damage for a child that
+// has ALREADY finished (its own context has nothing left to interrupt) —
+// aborting a done child would kill its own still-running grandchild
 // (spawned during an earlier, already-finished turn) — and (b)
 // permanently breaks the done child's own later reachability, since a
 // context.CancelFunc never re-arms: a legitimate follow-up session.send
 // to it would instantly fail with a canceled context via mergeCancel.
-// AbortTurn is now a no-op unless the target is CURRENTLY StatusRunning.
+// AbortTurn is a no-op unless the target is CURRENTLY StatusRunning.
 // This proves both halves: aborting an already-done child leaves its
 // still-running grandchild alone, and the done child itself remains
 // sendable afterward.
@@ -1290,18 +1288,17 @@ func TestSessionSendUnknownSessionIs404(t *testing.T) {
 	}
 }
 
-// TestWorkdirHeldResumeRefusalDoesNotPinRootRunning is the regression
-// test for a review finding: triggerResumeLocked flips a root to
-// StatusRunning BEFORE calling its ExternalRunner
-// (resumeSessionForTaskNotification -> runOrQueueText ->
-// claimForPrompt). An earlier revision of runOrQueueText treated ANY
-// non-404 claim failure as handled=true, including a workdir-held 409 —
-// where NO turn is running on the root at all (a DIFFERENT session
-// entirely holds the shared workdir), so nothing would ever call
-// ReportTurnEnd to release that speculative commitment. The root got
-// permanently stuck StatusRunning: queue-or-resume dead for it, its
-// pending notification never delivered, until an unrelated human prompt
-// happened to drain it.
+// TestWorkdirHeldResumeRefusalDoesNotPinRootRunning proves runOrQueueText
+// must not treat ANY non-404 claim failure as handled=true:
+// triggerResumeLocked flips a root to StatusRunning BEFORE calling its
+// ExternalRunner (resumeSessionForTaskNotification -> runOrQueueText ->
+// claimForPrompt), so treating a workdir-held 409 the same as an
+// ordinary busy claim — where NO turn is running on the root at all (a
+// DIFFERENT session entirely holds the shared workdir) — would leave
+// nothing to ever call ReportTurnEnd and release that speculative
+// commitment. The root would get permanently stuck StatusRunning:
+// queue-or-resume dead for it, its pending notification never delivered,
+// until an unrelated human prompt happened to drain it.
 //
 // Proven end-to-end at the wire level: root A holds the shared (default)
 // workdir busy; a child spawned under idle root B completes and tries to
@@ -1527,14 +1524,13 @@ func TestSessionEndForgetsRootFromSessionManager(t *testing.T) {
 	}
 }
 
-// TestSessionSendToBusyChildIs409NotLost is the regression test for a
-// review finding: handleSessionSend's child branch fired
-// SessionManager.Send in a background goroutine and discarded its error
-// unconditionally. A child has no prompt queue (unlike a root), so a Send
-// against an already-running child returned ErrSessionBusy with nowhere
-// to defer to — silently dropping the message while the caller still got
-// 202 "sent". This proves session.send now refuses up front with 409
-// instead.
+// TestSessionSendToBusyChildIs409NotLost proves handleSessionSend's child
+// branch must not fire SessionManager.Send in a background goroutine and
+// discard its error unconditionally: a child has no prompt queue (unlike
+// a root), so a Send against an already-running child returns
+// ErrSessionBusy with nowhere to defer to — discarding that error would
+// silently drop the message while the caller still got 202 "sent".
+// session.send refuses up front with 409 instead.
 // TestGenericTurnRoutesRejectManagedChild is the regression test for a
 // BLOCKER: SessionManager is documented as a child's SOLE scheduler, but
 // the generic per-{id} routes (prompt_async, goal, enqueue, compact,
@@ -1683,18 +1679,18 @@ func TestGenericTurnRoutesUnifiedSendAllowsManagedChild(t *testing.T) {
 	}
 }
 
-// TestGenericTurnRoutesRejectWarmOrphanChild is the regression test for a
-// review finding: rejectManagedChildTurn used to key "is this a managed
-// child" on info.ParentID != "", the LIVE tree pointer — but
-// adoptReloadedLocked leaves info.ParentID EMPTY for a warm orphan (a
-// genuine child adopted while its own parent was untracked at adopt time
-// — see that method's own doc comment and
+// TestGenericTurnRoutesRejectWarmOrphanChild proves rejectManagedChildTurn
+// must not key "is this a managed child" on info.ParentID != "", the
+// LIVE tree pointer: adoptReloadedLocked leaves info.ParentID EMPTY for
+// a warm orphan (a genuine child adopted while its own parent was
+// untracked at adopt time — see that method's own doc comment and
 // TestWarmOrphanChildLineageKeepsDurableParentID). A warm orphan's
 // durable TaskParentID is still set, and it is still very much a managed
-// child SessionManager is the SOLE scheduler for, but the old check let
-// it slip through this guard entirely — the exact concurrent-Session
-// corruption (a SECOND *engine.Session cold-loaded over the same
-// on-disk log, driven concurrently with the child's own object) this
+// child SessionManager is the SOLE scheduler for, so keying on
+// info.ParentID alone would let it slip through this guard entirely — the
+// exact concurrent-Session corruption (a SECOND *engine.Session
+// cold-loaded over the same on-disk log, driven concurrently with the
+// child's own object) this
 // guard exists to prevent, reachable through precisely the child shape
 // least equipped to survive it.
 //
@@ -2172,15 +2168,14 @@ func TestSessionSendToBusyChildIsQueuedNotLost(t *testing.T) {
 	}
 }
 
-// TestSessionSendToDoneChildAtConcurrencyCapIs409NotLost is the
-// regression test for a review finding distinct from
-// TestSessionSendToBusyChildIs409NotLost: an earlier fix pre-checked
-// ONLY info.Status == StatusRunning before firing SessionManager.Send,
-// missing the equally real, equally deterministic ErrConcurrencyLimit
+// TestSessionSendToDoneChildAtConcurrencyCapIs409NotLost covers a hazard
+// distinct from TestSessionSendToBusyChildIs409NotLost: pre-checking
+// ONLY info.Status == StatusRunning before firing SessionManager.Send
+// would miss the equally real, equally deterministic ErrConcurrencyLimit
 // case entirely — a DONE child (session.send's own contract explicitly
 // permits messaging one) whose tree has since filled its concurrency cap
 // with OTHER running siblings. That is not a race (info.Status ==
-// StatusRunning would never have caught it, since the target itself
+// StatusRunning would never catch it, since the target itself
 // isn't running at all): it is Send's ordinary, expected admission
 // failure whenever the tree is already busy elsewhere.
 func TestSessionSendToDoneChildAtConcurrencyCapIs409NotLost(t *testing.T) {
@@ -2435,9 +2430,8 @@ func TestEngineResumeTriggerMessageCarriesNoSource(t *testing.T) {
 
 // TestCancelTreeAbortsRootInFlightTurn proves cancel_tree stops a ROOT's
 // in-flight turn, not merely marks it canceled while the turn keeps
-// running underneath — a live review finding: SessionManager.Cancel only
-// ever cancels node.ctx, which a server-driven root turn (claimForPrompt/
-// runPrompt) does not use.
+// running underneath: SessionManager.Cancel only ever cancels node.ctx,
+// which a server-driven root turn (claimForPrompt/runPrompt) does not use.
 func TestCancelTreeAbortsRootInFlightTurn(t *testing.T) {
 	rootBlocker := newBlockingProvider("rootblock")
 	t.Cleanup(rootBlocker.releaseAll)

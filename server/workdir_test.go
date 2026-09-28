@@ -109,8 +109,8 @@ func TestCreateSessionExplicitWorkdirTraversalRejected(t *testing.T) {
 // TestCreateSessionRelativeWorkspaceRootAccepted verifies that a configured
 // workspace root given as a relative path (e.g. `-workspace-root ./work`) is
 // absolutized before the containment check, so a workdir nested under it is
-// accepted rather than rejected by every request (review finding: only the
-// candidate path was made absolute, never the configured roots).
+// accepted rather than rejected by every request: both the candidate path
+// and the configured roots must be made absolute before comparison.
 func TestCreateSessionRelativeWorkspaceRootAccepted(t *testing.T) {
 	base := t.TempDir()
 	t.Chdir(base)

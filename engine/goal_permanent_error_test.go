@@ -26,14 +26,14 @@ func permanentProviderErr() error {
 // TestPursueGoalPermanentWorkerErrorParksAfterOneAttempt is the red-first
 // regression test for the permanent-error early-park case: a worker-turn
 // error the adapter classifies provider.AsPermanent (an HTTP 400
-// invalid_request_error naming
-// a structurally malformed request — the orphaned tool_use, in the
-// production incident) must fail fast after exactly ONE attempt, no backoff
-// wait, instead of burning the full goalWorkerRetries deterministic budget
-// (3 identical, guaranteed-to-fail model calls, as production observed:
-// "engine: goal worker turn parked after 3 deterministic-tier attempt(s)").
-// Mirrors TestPursueGoalContextOverflowFailsFastAndPermanently's shape
-// (elapsed == 0 inside a synctest bubble, exactly one worker call) but PARKS
+// invalid_request_error naming a structurally malformed request, such as
+// an orphaned tool_use) must fail fast after exactly ONE attempt, no
+// backoff wait, instead of burning the full goalWorkerRetries
+// deterministic budget (3 identical, guaranteed-to-fail model calls,
+// e.g. "engine: goal worker turn parked after 3 deterministic-tier
+// attempt(s)"). Mirrors
+// TestPursueGoalContextOverflowFailsFastAndPermanently's shape (elapsed
+// == 0 inside a synctest bubble, exactly one worker call) but PARKS
 // instead of clearing: unlike context overflow, a malformed-request shape
 // might be fixed by something else entirely (e.g. the orphan-tool-call
 // repair) between now and a later resume, so the goal must

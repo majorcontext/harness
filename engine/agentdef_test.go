@@ -211,18 +211,17 @@ body
 }
 
 // TestLoadAgentDefsSemanticErrorTakesPrecedenceOverUnknownKey is the
-// regression test for a live review finding on parseAgentDef's own
-// ordering: an earlier version of its frontmatter-parsing loop returned
+// regression test proving parseAgentDef's ordering does not let
 // errUnknownFrontmatterKey (the ONE lenient error class — see its own doc
-// comment) the INSTANT it hit an unknown key, before ever reaching the
-// tools:/model: semantic validation that only runs once the full
-// frontmatter block has been collected. A file with BOTH a stray unknown
-// key AND a genuine semantic mistake (here, an unknown tool name) — with
-// the unknown key's line coming first in the file — reported only the
-// lenient error, silently discarding the hard one LoadAgentDefs actually
-// needed to fail the whole directory's load for: leniency is for unknown
-// KEYS only, and must never suppress the report of a co-occurring
-// semantic mistake.
+// comment) short-circuit the INSTANT it hits an unknown key, before ever
+// reaching the tools:/model: semantic validation that only runs once the
+// full frontmatter block has been collected. A file with BOTH a stray
+// unknown key AND a genuine semantic mistake (here, an unknown tool
+// name) — with the unknown key's line coming first in the file — must
+// not report only the lenient error, silently discarding the hard one
+// LoadAgentDefs actually needs to fail the whole directory's load for:
+// leniency is for unknown KEYS only, and must never suppress the report
+// of a co-occurring semantic mistake.
 func TestLoadAgentDefsSemanticErrorTakesPrecedenceOverUnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "bad.md", `---
@@ -451,17 +450,16 @@ body
 }
 
 // TestResolveAgentDefsDuplicateDirIsNotACollision is the regression test
-// for a live review finding: the SAME directory listed twice in dirs
-// (Config.AgentDefsDirs built up from more than one source, or simply a
-// caller-supplied duplicate) used to get loaded twice, and every name it
-// defined then collided with ITSELF on the second pass — the
-// duplicate-name-across-dirs check exists to catch a genuine conflict
-// between two DIFFERENT directories, not a directory tripping over its
-// own earlier pass. That false positive is a hard load error, killing
-// every custom agent type for the whole session. dirs is deduped on
-// filepath.Clean before the loop now, so a literal repeat, and the
-// trivial "./" / trailing-slash variants Clean already normalizes, no
-// longer trigger it.
+// proving the SAME directory listed twice in dirs (Config.AgentDefsDirs
+// built up from more than one source, or simply a caller-supplied
+// duplicate) does not get loaded twice with every name it defines then
+// colliding with ITSELF on the second pass — the duplicate-name-across-dirs
+// check exists to catch a genuine conflict between two DIFFERENT
+// directories, not a directory tripping over its own earlier pass. That
+// false positive would be a hard load error, killing every custom agent
+// type for the whole session. dirs is deduped on filepath.Clean before
+// the loop, so a literal repeat, and the trivial "./" / trailing-slash
+// variants Clean already normalizes, never trigger it.
 func TestResolveAgentDefsDuplicateDirIsNotACollision(t *testing.T) {
 	dir := t.TempDir()
 	writeAgentDef(t, dir, "solo.md", `---

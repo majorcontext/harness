@@ -70,11 +70,10 @@ func TestEvaluateGoalStrictReaskOnUnparseable(t *testing.T) {
 	}
 }
 
-// TestPursueGoalEvaluatorUnparseableTwiceIsAdvisory is invariant 2's headline
-// test (red-verified against the pre-Round-6 fatal path — see the commit
-// message): two consecutive unparseable evaluator replies must NOT clear the
-// goal or emit session.error, must journal goal.eval_failed with count 1, and
-// the NEXT turn's directive must carry the evaluation-unavailable notice —
+// TestPursueGoalEvaluatorUnparseableTwiceIsAdvisory: two consecutive
+// unparseable evaluator replies must NOT clear the goal or emit
+// session.error, must journal goal.eval_failed with count 1, and the
+// NEXT turn's directive must carry the evaluation-unavailable notice —
 // never the raw error text, never a stale NOT-MET reason from an earlier
 // turn.
 //

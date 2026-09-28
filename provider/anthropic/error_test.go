@@ -11,9 +11,9 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestContextOverflowClassified reproduces the production incident from
-// issue #62 verbatim: Anthropic rejects an oversized prompt with a plain
-// HTTP 400 invalid_request_error whose message names the token limit
+// TestContextOverflowClassified verifies classification of an oversized
+// prompt: Anthropic rejects it with a plain HTTP 400 invalid_request_error
+// whose message names the token limit
 // ("prompt is too long: 205102 tokens > 200000 maximum") — there is no
 // distinct error code for this on the wire, so the adapter must recognize
 // it by message shape (tolerated here, inside the adapter, never in the
@@ -122,10 +122,9 @@ func TestOverloadedErrorNotClassifiedAsContextOverflow(t *testing.T) {
 // covers not misclassifying it as overflow) must come back marked
 // provider.AsPermanent so the goal loop (engine/goal.go's
 // promptTurnWithRetry) fails fast instead of burning a full retry budget on
-// a request shape that can never succeed. This is exactly the incident's
-// fingerprint: "tool_use ids were found without tool_result blocks
-// immediately after" is a structurally malformed message array, not
-// transient provider weather.
+// a request shape that can never succeed. "tool_use ids were found without
+// tool_result blocks immediately after" is a structurally malformed message
+// array, not transient provider weather.
 func TestOrdinaryInvalidRequestClassifiedPermanent(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

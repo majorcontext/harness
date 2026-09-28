@@ -1,4 +1,4 @@
-// Tests for Task 2 of the goal worker-failure park work (Round 7): the
+// Tests for Task 2 of the goal worker-failure park work: the
 // server-side outcome mapping, pause-presentation fold, and resume-on-
 // activity behavior for engine/goal.go's exit-parked worker turns.
 package server
@@ -32,8 +32,8 @@ import (
 const goalWorkerRetriesForTest = 2
 
 // permanentWorkerErr is a plain, non-retryable error standing in for a
-// deterministic-tier failure (e.g. the production incident's OpenRouter
-// 404s) — never provider.MarkRetryable, which would route into the
+// deterministic-tier failure (e.g. a permanent 404 from a provider) —
+// never provider.MarkRetryable, which would route into the
 // separately-budgeted retryable tier instead (goalRetryableMaxAttempts,
 // far too many attempts for an ordinary test).
 func permanentWorkerErr() error { return errors.New("permanent failure: 404 not found") }
@@ -79,7 +79,7 @@ func TestTurnEndOutcomeWorkerParked(t *testing.T) {
 
 // TestForcesIdlePauseIncludesWorkerFailure is a focused unit test on the
 // renamed/extended helper (formerly isRestartPaused): "restart" and
-// "worker_failure" (Round 7) must both force compositeState to idle;
+// "worker_failure" must both force compositeState to idle;
 // "provider-backoff" must not (its loop is genuinely alive, merely waiting
 // — see TestGoalStalledProviderBackoffSurfacesPaused).
 func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
@@ -389,11 +389,12 @@ func TestGoalWorkerParkSurfacesPausedWorkerFailure(t *testing.T) {
 
 // TestGoalWorkerParkFreesRunSlotForQueuedPrompt is invariant 2's server
 // half: unlike the OLD in-loop park (GitHub issue #61's continue, which
-// pinned the run slot for the whole outage — see engine/goal.go's Round 7
-// supersession doc), an exit-parked goal loop frees the run slot, so a
-// prompt queued while it was retrying dispatches as a NORMAL turn once the
-// park happens — "delivered", not "injected" — mirroring
-// TestQueuedDispatchAfterGoalLoopEnds's shape for the achieved-goal case.
+// pinned the run slot for the whole outage — see engine/goal.go's doc
+// comment on goal-worker failure handling), an exit-parked goal loop frees
+// the run slot, so a prompt queued while it was retrying dispatches as a
+// NORMAL turn once the park happens — "delivered", not "injected" —
+// mirroring TestQueuedDispatchAfterGoalLoopEnds's shape for the
+// achieved-goal case.
 func TestGoalWorkerParkFreesRunSlotForQueuedPrompt(t *testing.T) {
 	// Runs under synctest so the deterministic worker retry backoff
 	// (goalRetryDelay: 1s+4s) costs no real wall-clock time; drives the server
@@ -810,7 +811,7 @@ func TestGoalWorkerParkPauseSurvivesRestartAsRestartReason(t *testing.T) {
 	})
 }
 
-// TestAutoArmAfterRestartResetsPausePresentation is the review-finding red
+// TestAutoArmAfterRestartResetsPausePresentation is the red
 // test for the latent gap maybeAutoArmGoal's worker-park reset block left
 // behind: it resets ONLY pausedWorker, while handleGoal's re-arm branch
 // resets all five pause-fold fields (pausedRestart, pausedWorker, retryable,

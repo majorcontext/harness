@@ -7,21 +7,21 @@ import (
 )
 
 // TestFinalizeTurnCtxOnlyCancelDrainsQueueAsOrphaned is the regression
-// test for a review finding: finalizeTurn's queued-message re-drive
-// gated only on n.status != StatusCanceled, and StatusCanceled is set
-// ONLY by cancelOneNodeLocked/cancelSubtreeLocked (task cancel,
-// AbortTurn). A cascade cancel of the manager's own base ctx — process
-// shutdown — cancels n.ctx and leaves n.status at StatusRunning.
+// test proving finalizeTurn's queued-message re-drive does not gate only
+// on n.status != StatusCanceled, since StatusCanceled is set ONLY by
+// cancelOneNodeLocked/cancelSubtreeLocked (task cancel, AbortTurn). A
+// cascade cancel of the manager's own base ctx — process shutdown —
+// cancels n.ctx and leaves n.status at StatusRunning.
 //
-// On that path the re-drive used to pop a queued prompt and journal it
-// prompt.dequeued("delivered") while drainQueueAndPrompt's own ctx guard
-// made sure nothing ran, and the resume's own finalizeTurn call
-// re-entered the gate and popped the next one — draining the whole
+// Gating only on status on that path would pop a queued prompt and
+// journal it prompt.dequeued("delivered") while drainQueueAndPrompt's own
+// ctx guard makes sure nothing runs, and the resume's own finalizeTurn
+// call would re-enter the gate and pop the next one — draining the whole
 // queue as delivered even though neither message ever ran. finalizeTurn
-// now skips the re-drive on this path (ctx.Err() != nil) and instead
-// drains the queue itself, once, at the terminal switch — journaled
-// dequeued("orphaned"), never "delivered": the messages did not run,
-// and nothing records that they did.
+// instead skips the re-drive on this path (ctx.Err() != nil) and drains
+// the queue itself, once, at the terminal switch — journaled
+// dequeued("orphaned"), never "delivered": the messages did not run, and
+// nothing records that they did.
 func TestFinalizeTurnCtxOnlyCancelDrainsQueueAsOrphaned(t *testing.T) {
 	baseCtx, cancelBase := context.WithCancel(context.Background())
 	t.Cleanup(cancelBase)

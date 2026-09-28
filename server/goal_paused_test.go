@@ -463,12 +463,13 @@ type fakeOverloadErr struct{}
 
 func (fakeOverloadErr) Error() string { return "test: fake overloaded_error" }
 
-// TestGoalReArmAfterRetryableStallRestartNotBackoffPaused encodes the PR#70
-// review finding: a goal whose LAST journal record before the box died was
-// goal.stalled(retryable=true, waiting=true) restores those fold fields at
-// boot, with pausedRestart layered on top. Re-arm cleared only
-// pausedRestart, so pauseView's provider-backoff case fired and a client
-// polling right after the 202 saw paused=true/"provider-backoff" on a
+// TestGoalReArmAfterRetryableStallRestartNotBackoffPaused covers a goal
+// whose LAST journal record before the box died was
+// goal.stalled(retryable=true, waiting=true): that restores those fold
+// fields at boot, with pausedRestart layered on top. Re-arm must reset the
+// stall fields too, not just pausedRestart — clearing only pausedRestart
+// would let pauseView's provider-backoff case fire, so a client polling
+// right after the 202 would see paused=true/"provider-backoff" on a
 // freshly re-armed, genuinely-running goal. The re-arm path must reset the
 // stall fields exactly like the fresh-goal (evtGoalSet) fold does.
 func TestGoalReArmAfterRetryableStallRestartNotBackoffPaused(t *testing.T) {

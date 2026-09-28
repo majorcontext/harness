@@ -44,13 +44,13 @@ type providerWireEntry struct {
 	Billing string `json:"billing"`
 }
 
-// TestModelToolListLabelsProviderBilling names the gap PR #778's boxes
-// system-prompt sentence ("prefer a subscription-backed model over an
-// API-billed model") exposed: the model tool's list/status output named
-// providers as bare strings ("claude-code", "codex", "anthropic", ...)
-// with no field telling the agent which of those strings is
-// subscription-backed and which is API-billed, so the sentence gave the
-// agent an instruction it had no way to act on from its own tool surface.
+// TestModelToolListLabelsProviderBilling names the gap in acting on a
+// system-prompt instruction to prefer a subscription-backed model over an
+// API-billed model: the model tool's list/status output named providers
+// as bare strings ("claude-code", "codex", "anthropic", ...) with no
+// field telling the agent which of those strings is subscription-backed
+// and which is API-billed, so the instruction gave the agent no way to
+// act on it from its own tool surface.
 //
 // Input: a session with three configured providers — "claude-code" (the
 // delegated Claude Code CLI backend, ClaudeCodeProviderFamily, always

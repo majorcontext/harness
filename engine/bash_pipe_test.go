@@ -337,13 +337,12 @@ func TestBashFastExitBackgroundedChildReturnsPromptly(t *testing.T) {
 	t.Cleanup(func() { syscall.Kill(-pgid, syscall.SIGKILL) })
 }
 
-// TestBashAbortUnblocksInFlightTurn is the red-first test for the abort half
-// of the issue: engine-level context cancellation (POST /session/{id}/abort
-// in production) during a pipe-held bash call must unblock the in-flight
-// turn promptly. Before the fix, cancellation kills only the direct `sh`
-// child; the backgrounded grandchild keeps the pipe open and Wait() (with no
-// WaitDelay) blocks forever — so abort would be powerless, exactly the
-// production incident in the issue.
+// TestBashAbortUnblocksInFlightTurn is the red-first test proving
+// engine-level context cancellation (POST /session/{id}/abort in
+// production) during a pipe-held bash call unblocks the in-flight turn
+// promptly. Cancellation alone kills only the direct `sh` child; the
+// backgrounded grandchild keeps the pipe open and Wait() (with no
+// WaitDelay) blocks forever — so abort would otherwise be powerless.
 func TestBashAbortUnblocksInFlightTurn(t *testing.T) {
 	setBashWaitDelay(t, 150*time.Millisecond)
 

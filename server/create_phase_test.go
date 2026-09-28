@@ -104,24 +104,23 @@ func unwritableDir(t *testing.T) string {
 	return dir
 }
 
-// TestOnCreatePhaseReportsTotalOnFailedCreate is a regression test for the
-// phase-accumulator leak found in PR #87 review: handleCreate originally
-// reported "total" only on its success tail, so a failure after
-// "new_session" (e.g. Persist erroring on a saturated storage volume) never
-// reported "total" at all, permanently orphaning
-// that session ID's entry in the cmd-layer accumulator (see
-// cmd/harness/main.go's createPhaseLogger, keyed by session ID). handleCreate
-// now reports "total" via a defer installed right after "new_session"
-// succeeds, so it fires on every return path — this pins that: Persist is
-// made to fail deterministically (the session's own log directory is
-// unwritable, independent of the server's own SessionDir), and the create
-// must still report "new_session" and "total". It must ALSO report "persist"
-// itself (a PR #89 review fix: timedCreatePhase, see handlers.go, guarantees
-// a started phase's own OnCreatePhase fires on error too, not just success —
-// see TestOnCreatePhaseReportsPersistEndOnFailure in create_phase_start_
-// test.go for the dedicated regression test of that fix). "register" and
-// "emit_created" still never fire, since the handler returns before ever
-// reaching them.
+// TestOnCreatePhaseReportsTotalOnFailedCreate is a regression test proving
+// handleCreate reports "total" on every return path, not just its success
+// tail: a failure after "new_session" (e.g. Persist erroring on a
+// saturated storage volume) that never reported "total" would permanently
+// orphan that session ID's entry in the cmd-layer accumulator (see
+// cmd/harness/main.go's createPhaseLogger, keyed by session ID).
+// handleCreate reports "total" via a defer installed right after
+// "new_session" succeeds, so it fires on every return path — this pins
+// that: Persist is made to fail deterministically (the session's own log
+// directory is unwritable, independent of the server's own SessionDir),
+// and the create must still report "new_session" and "total". It must
+// ALSO report "persist" itself: timedCreatePhase (see handlers.go)
+// guarantees a started phase's own OnCreatePhase fires on error too, not
+// just success — see TestOnCreatePhaseReportsPersistEndOnFailure in
+// create_phase_start_test.go for the dedicated regression test of that
+// guarantee. "register" and "emit_created" still never fire, since the
+// handler returns before ever reaching them.
 func TestOnCreatePhaseReportsTotalOnFailedCreate(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test"}

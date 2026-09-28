@@ -26,7 +26,7 @@ import "github.com/majorcontext/harness/engine"
 //     SessionManager.SessionAndInfo call, so the pair always describes the
 //     same node. Two separate Session + Info calls could straddle a Reap
 //     and pair one node's *Session with another's status — see
-//     SessionAndInfo's own doc comment for the finding that introduced it.
+//     SessionAndInfo's own doc comment for why.
 //  2. The residency half (session AND running flag) comes from ONE s.mu
 //     hold, for the same reason.
 //  3. The snapshot is immutable once taken. Every projection below reads
@@ -135,7 +135,7 @@ func (lv liveSession) withManager(sessMgr *engine.SessionManager) liveSession {
 // session() and status() both prefer residency outright, so for a resident
 // id the manager half changes neither answer — and reading it costs the
 // box-global SessionManager.mu plus a discarded SessionNode copy, on paths
-// that run per journaled message and per wait poll (a live review finding).
+// that run per journaled message and per wait poll.
 //
 // NEVER build a snapshot this way for a response that renders lineage:
 // lineageJSONFor reads the manager half even for a resident session, and a
@@ -206,8 +206,8 @@ func (lv liveSession) session() *engine.Session {
 // never second-guessed against the manager: freeRunSlotAndEmitIdle clears
 // running and wakes waiters BEFORE ReportTurnEnd flips the manager node off
 // StatusRunning, so a manager read taken in that window reports a turn that
-// this server already finished (a live review finding — see waitSnapshot's
-// own doc comment). The manager answers only for an id residency does not
+// this server already finished (see waitSnapshot's own doc comment). The
+// manager answers only for an id residency does not
 // know at all, which is the one case residency has no answer for: a
 // Spawn-driven child mid-turn.
 func (lv liveSession) status() string {

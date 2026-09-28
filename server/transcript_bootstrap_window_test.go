@@ -469,9 +469,9 @@ func TestColdWindowedBootstrap_AfterCompaction(t *testing.T) {
 func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
 
 // TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal is the
-// regression test for a correctness bug an Opus review of PR #265 found:
-// coldWindowedBootstrap fed its tail window straight to
-// transcriptWatermarkLocked, which scans s.journal -- the SERVER's own
+// regression test for a correctness bug: coldWindowedBootstrap fed its
+// tail window straight to transcriptWatermarkLocked, which scans
+// s.journal -- the SERVER's own
 // in-memory event log, process-wide and cumulative, independent of
 // residency -- for a compaction summary absent from the passed-in
 // history and, on finding one, capped the returned watermark toward it.
@@ -898,14 +898,13 @@ func TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip(t *testing.T) 
 }
 
 // TestTranscriptBootstrap_ResidentSessionHonorsLimit is the regression test
-// for a Copilot review finding on PR #265: handleTranscriptBootstrap
-// honored limit only on coldWindowedBootstrap's own success path, silently
-// ignoring it on every fallback (a resident session, an unreadable index/
-// page, or a lost residency race) and returning the WHOLE history instead
-// — contradicting both the PR description and openapi.yaml's own
-// "stream_from+limit narrows messages to the latest window" claim for a
-// resident session, the single most common case (a console's own session
-// is resident for as long as it stays actively open).
+// proving handleTranscriptBootstrap honors limit on every path, not just
+// coldWindowedBootstrap's own success path: silently ignoring it on any
+// fallback (a resident session, an unreadable index/page, or a lost
+// residency race) would return the WHOLE history instead — contradicting
+// openapi.yaml's own "stream_from+limit narrows messages to the latest
+// window" claim for a resident session, the single most common case (a
+// console's own session is resident for as long as it stays actively open).
 //
 // windowTranscriptTail narrows transcriptSyncedThrough's own Messages/Seqs
 // to their tail AFTER the cursor is computed from the complete history, so

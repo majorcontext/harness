@@ -21,21 +21,20 @@ import (
 // are hardened.
 //
 // An earlier version of this poison instead set a non-empty-but-invalid
-// Reasoning.ProviderData entry, reproducing the exact mechanism behind
-// production incident ses_01hxqvbr9q7cw1ejp1bpj7fbf8 /
-// ses_01hpf4eexb31v0ecyvesf75g5s — "passes every len()==0 guard (Normalize,
-// ProviderData.MarshalJSON, ProviderData.Get) and only fails once
-// encoding/json tries to compact it inside a larger document." That whole
-// class of failure was closed by extending ProviderData.MarshalJSON and
-// Normalize to also reject a non-empty-but-syntactically-invalid entry,
-// exactly mirroring the ToolCall.Arguments guard they were already modeled
-// on (see message.Message.Normalize's doc comment, "A ProviderData entry
-// has the exact same invalid-but-non-empty footgun") — so that mechanism no
-// longer produces a marshal failure and can no longer serve as poison here;
-// this test's OWN purpose (GET /session/{id}/message degrades a
-// marshal-failing resident message instead of 500ing the whole response)
-// is orthogonal to that fix and still needs some reliable way to force a
-// failure, hence the switch to an out-of-range CreatedAt.
+// Reasoning.ProviderData entry, reproducing a message that "passes every
+// len()==0 guard (Normalize, ProviderData.MarshalJSON, ProviderData.Get) and
+// only fails once encoding/json tries to compact it inside a larger
+// document." That whole class of failure was closed by extending
+// ProviderData.MarshalJSON and Normalize to also reject a
+// non-empty-but-syntactically-invalid entry, exactly mirroring the
+// ToolCall.Arguments guard they were already modeled on (see
+// message.Message.Normalize's doc comment, "A ProviderData entry has the
+// exact same invalid-but-non-empty footgun") — so that mechanism no longer
+// produces a marshal failure and can no longer serve as poison here; this
+// test's OWN purpose (GET /session/{id}/message degrades a marshal-failing
+// resident message instead of 500ing the whole response) is orthogonal to
+// that fix and still needs some reliable way to force a failure, hence the
+// switch to an out-of-range CreatedAt.
 func poisonMessageTurn(id string) []provider.Event {
 	msg := &message.Message{
 		ID:   id,
@@ -58,10 +57,10 @@ type messagePlaceholderForTest struct {
 }
 
 // TestGetMessagesDegradesPoisonMessageInsteadOf500 is the red-first
-// regression test for the incident: GET /session/{id}/message 500'd
-// WHOLESALE today because one resident message (a poisoned message)
-// failed json.Marshal, taking down the entire transcript view exactly when
-// it was most needed to diagnose the death. The handler must marshal
+// regression test proving GET /session/{id}/message must not fail
+// WHOLESALE when one resident message (a poisoned message) fails
+// json.Marshal, taking down the entire transcript view exactly when it is
+// most needed to diagnose the death. The handler must marshal
 // per-message, substituting a {id, role, marshal_error} placeholder for any
 // message that fails, and still return 200 with every healthy message intact.
 func TestGetMessagesDegradesPoisonMessageInsteadOf500(t *testing.T) {

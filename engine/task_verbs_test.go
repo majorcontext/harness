@@ -375,13 +375,13 @@ func (s *ctxOnlyBlockingStream) Next() (provider.Event, error) {
 
 func (s *ctxOnlyBlockingStream) Close() error { return nil }
 
-// TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain is the
-// regression test for a live review finding: drainQueueAndPrompt's loop
-// never checked ctx cancellation, so canceling a running child mid-drain
-// (task cancel arriving between two of its re-driven turns) kept
-// dequeuing and re-running every remaining queued prompt on an
-// already-dead ctx — journaling each as "delivered" even though none of
-// them actually ran. Two messages are enqueued while the child's FIRST
+// TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain pins the
+// constraint that drainQueueAndPrompt's loop must check ctx cancellation:
+// otherwise, canceling a running child mid-drain (task cancel arriving
+// between two of its re-driven turns) keeps dequeuing and re-running
+// every remaining queued prompt on an already-dead ctx — journaling each
+// as "delivered" even though none of them actually ran. Two messages are
+// enqueued while the child's FIRST
 // turn is still blocked; the first turn completes, drainQueueAndPrompt
 // dequeues "message A" and starts a second turn (which blocks on ctx
 // only); the child is canceled while that second turn is genuinely in
@@ -506,14 +506,13 @@ func (p *countingProvider) calls() int {
 	return p.n
 }
 
-// TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx is the regression
-// test for a review finding on the ctx-guard fix: only the LOOP body was
-// guarded, so the FIRST s.Prompt call ran unconditionally. On the
-// finalizeTurn re-drive and settled-relaunch paths a cancel landing
-// between the closure's creation and its `go resume()` therefore issued
-// one wasted provider request and appended one user message to a session
-// whose ctx was already dead. The guard must skip that call entirely and
-// return the ctx error, leaving history untouched.
+// TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx pins the
+// constraint that the ctx guard must cover the FIRST s.Prompt call, not
+// only the LOOP body: on the finalizeTurn re-drive and settled-relaunch
+// paths, a cancel landing between the closure's creation and its `go
+// resume()` must not issue a wasted provider request or append a user
+// message to a session whose ctx is already dead. The guard must skip
+// that call entirely and return the ctx error, leaving history untouched.
 func TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx(t *testing.T) {
 	prov := &countingProvider{name: "never"}
 	s := NewSession(managedConfig("never", prov))
@@ -535,14 +534,14 @@ func TestDrainQueueAndPromptSkipsFirstPromptOnCanceledCtx(t *testing.T) {
 	}
 }
 
-// TestSendToDescendantRunningWithoutToolBoundaryStillDelivers is the
-// regression test for a live review finding on this fix's first pass: a
-// message enqueued to a running child whose CURRENT (and only remaining)
-// provider call ends the turn with no further tool-call boundary — the
-// common shape of "the model is mid-generation of its final answer, no
-// tool call in flight" — used to strand forever in the child's own
-// promptQueue, since a child, unlike a root, has no external residency
-// layer to pick the queue back up once Prompt returns. drainQueueAndPrompt
+// TestSendToDescendantRunningWithoutToolBoundaryStillDelivers pins the
+// constraint that a message enqueued to a running child must not strand
+// in the child's own promptQueue when the child's CURRENT (and only
+// remaining) provider call ends the turn with no further tool-call
+// boundary — the common shape of "the model is mid-generation of its
+// final answer, no tool call in flight". A child, unlike a root, has no
+// external residency layer to pick the queue back up once Prompt returns.
+// drainQueueAndPrompt
 // (session_manager.go) closes this: the child's turn-driving goroutine
 // notices the queue is still non-empty after its first Prompt call
 // returns and launches a SECOND turn with the queued text, before ever
@@ -614,8 +613,7 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
 
 	// No wall-clock deadline assertion here (AGENTS.md's "no guessed
-	// deadlines" testing rule — a live review finding on an earlier
-	// version of this test, which asserted elapsed <= 500ms): the
+	// deadlines" testing rule rules out asserting elapsed <= 500ms): the
 	// non-blocking property is proven STRUCTURALLY instead.
 	// childProv's second call blocks on release, which stays open until
 	// AFTER this point — if SendToDescendant actually blocked for the
@@ -637,14 +635,13 @@ func TestSendToDescendantSettledRelaunchesAsynchronously(t *testing.T) {
 	waitForStatus(t, mgr, childID, StatusDone, time.Second)
 }
 
-// TestSendToDescendantRunningPersistsQueueRecordAfterUnlock guards the
-// durability half of a live review finding's fix: SendToDescendant's
-// running-target branch used to call the full EnqueuePrompt (memory
-// mutation plus a synchronous ensureLog+writeRecord disk write) while
-// holding m.mu, the tree-wide lock every other session's Info/Reap/
-// Spawn/finalize call also needs. It now mutates memory under m.mu and
-// queues the durable write via deferPersist, which
-// unlockAndFlushPersist runs after m.mu releases.
+// TestSendToDescendantRunningPersistsQueueRecordAfterUnlock guards a
+// durability constraint: SendToDescendant's running-target branch must
+// not call the full EnqueuePrompt (memory mutation plus a synchronous
+// ensureLog+writeRecord disk write) while holding m.mu, the tree-wide
+// lock every other session's Info/Reap/Spawn/finalize call also needs.
+// It mutates memory under m.mu and queues the durable write via
+// deferPersist, which unlockAndFlushPersist runs after m.mu releases.
 //
 // The risk that split creates is a silently DROPPED write — memory-only
 // enqueue, no journal record, a queued prompt no reload could ever see.
@@ -700,18 +697,18 @@ func TestSendToDescendantRunningPersistsQueueRecordAfterUnlock(t *testing.T) {
 	}
 }
 
-// TestSendToDescendantSettledReservesTurnBeforeReturning is the
-// regression test for a live review finding: SendToDescendant's
-// settled-target branch used to release m.mu and let a freshly launched
-// goroutine call Send, which re-acquired m.mu from scratch and only THEN
-// reserved the turn. A Reap() sweep landing in that gap collected the
-// still-terminal leaf, Send returned ErrUnknownSession, and the launched
-// goroutine discarded it — the caller kept a queued:false, err:nil
-// answer whose "dispatched as a fresh turn" promise silently never
-// happened. reserveSendLocked now runs inside SendToDescendant's OWN
-// still-held m.mu critical section, so the node is already StatusRunning
-// when the call returns and Reap (which only ever collects a finalized,
-// terminal node) can never collect it.
+// TestSendToDescendantSettledReservesTurnBeforeReturning pins the
+// constraint that SendToDescendant's settled-target branch must reserve
+// the turn before releasing m.mu: releasing m.mu and letting a freshly
+// launched goroutine call Send, which re-acquires m.mu from scratch and
+// only THEN reserves the turn, opens a gap where a Reap() sweep can
+// collect the still-terminal leaf, Send returns ErrUnknownSession, and
+// the launched goroutine discards it — leaving the caller with a
+// queued:false, err:nil answer whose "dispatched as a fresh turn" promise
+// silently never happens. reserveSendLocked runs inside SendToDescendant's
+// OWN still-held m.mu critical section, so the node is already
+// StatusRunning when the call returns and Reap (which only ever collects
+// a finalized, terminal node) can never collect it.
 //
 // The assertions are made with NO wait in between: they run on the
 // caller's own goroutine, immediately after the call returns, so they
@@ -928,16 +925,16 @@ func TestRunTaskToolSendActionMissingArgumentsAreErrors(t *testing.T) {
 	}
 }
 
-// TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected is the
-// regression test for a live review finding: runTaskSend guarded only
-// `in.Prompt == ""`, so a whitespace-only prompt behaved OPPOSITELY by
-// target state. A RUNNING target reached SendToDescendant's own enqueue
-// validation and returned a raw, non-sentinel error that
-// classifyTaskVerbError leaked to the model verbatim (the raw "engine:"
-// layer, before ErrEmptyPromptText existed); a SETTLED target accepted the
-// blank text and burned a real turn on it. Both targets must now get the
-// same model-facing rejection from runTaskSend itself, before either
-// path runs.
+// TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected pins the
+// constraint that runTaskSend must guard a whitespace-only prompt, not
+// only `in.Prompt == ""`: otherwise a whitespace-only prompt behaves
+// OPPOSITELY by target state. A RUNNING target reaches SendToDescendant's
+// own enqueue validation and returns a raw, non-sentinel error that
+// classifyTaskVerbError leaks to the model verbatim instead of
+// ErrEmptyPromptText's classified rejection; a SETTLED target accepts the
+// blank text and burns a real turn on it. Both targets must get the same
+// model-facing rejection from runTaskSend itself, before either path
+// runs.
 func TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
@@ -985,11 +982,12 @@ func TestRunTaskToolSendActionWhitespaceOnlyPromptIsRejected(t *testing.T) {
 	}
 }
 
-// TestSendToDescendantBlankTextIsClassifiableSentinel guards the shared
-// sentinel a review finding asked for: SendToDescendant's running-target
-// branch used a fresh errors.New for the blank-text rule, which
-// classifyTaskVerbError could not match with errors.Is, so it fell through
-// to the default arm and leaked the internal "engine:" layer to the model.
+// TestSendToDescendantBlankTextIsClassifiableSentinel pins the
+// constraint that SendToDescendant's running-target branch must use a
+// shared, classifiable sentinel for the blank-text rule, not a fresh
+// errors.New: otherwise classifyTaskVerbError cannot match it with
+// errors.Is, falls through to the default arm, and leaks the internal
+// "engine:" layer to the model.
 func TestSendToDescendantBlankTextIsClassifiableSentinel(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
@@ -1057,11 +1055,12 @@ func TestRunTaskToolOmittedActionDefaultsToSpawn(t *testing.T) {
 	}
 }
 
-// TestSendToDescendantSettledRejectsBlankText guards the symmetry a review
-// finding asked for: SendToDescendant validated blank text only on the
-// running-target path, so a settled target accepted " " and burned a whole
-// re-run turn on it. runTaskSend masks that for the `task` tool, but this
-// is an exported API — both paths must answer the same way.
+// TestSendToDescendantSettledRejectsBlankText guards the symmetry
+// SendToDescendant must keep between its two paths: validating blank text
+// only on the running-target path leaves a settled target accepting " "
+// and burning a whole re-run turn on it. runTaskSend masks that for the
+// `task` tool, but this is an exported API — both paths must answer the
+// same way.
 func TestSendToDescendantSettledRejectsBlankText(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root", scriptedTurns("root", nil), scriptedTurns("child", doneTurn("done"))))
@@ -1084,12 +1083,12 @@ func TestSendToDescendantSettledRejectsBlankText(t *testing.T) {
 	}
 }
 
-// TestDescendantInfoReportsReapedChildren guards the lineage consistency a
-// review finding asked for: DescendantInfo reported only the LIVE children
-// list, and Reap removes a terminal leaf from its parent's live list, so
-// `task status` on a mid-tree descendant answered children:[] for
-// grandchildren it really did spawn — while the wire's GET
-// /session/{id}/lineage still named them from the durable spawn record.
+// TestDescendantInfoReportsReapedChildren guards a lineage consistency
+// constraint: DescendantInfo must not report only the LIVE children list,
+// since Reap removes a terminal leaf from its parent's live list.
+// Otherwise `task status` on a mid-tree descendant answers children:[] for
+// grandchildren it really did spawn, while the wire's GET
+// /session/{id}/lineage still names them from the durable spawn record.
 func TestDescendantInfoReportsReapedChildren(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 3, 0)
 	root := mgr.NewRoot(managedConfig("root",

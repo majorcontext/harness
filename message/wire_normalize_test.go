@@ -151,11 +151,10 @@ func TestNormalizeForWireRepairsIntervalAssistantMessageSplit(t *testing.T) {
 	}
 }
 
-// TestNormalizeForWireRepairsResultsSplitAcrossToolMessages is the second
-// legitimate shape named in the revert commit and repeated in this issue:
-// results answering two tool_use blocks split across two consecutive
-// RoleTool messages. Run-level matching must see both without adding a
-// spurious synthetic for the second.
+// TestNormalizeForWireRepairsResultsSplitAcrossToolMessages covers the
+// second legitimate shape: results answering two tool_use blocks split
+// across two consecutive RoleTool messages. Run-level matching must see
+// both without adding a spurious synthetic for the second.
 func TestNormalizeForWireRepairsResultsSplitAcrossToolMessages(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{
@@ -236,7 +235,7 @@ func TestNormalizeForWireNoOpOnValidHistory(t *testing.T) {
 
 // TestNormalizeForWireOrdinaryOrphanAtEndOfHistory pins that the ordinary,
 // already-repaired-by-ResolveOrphanToolCalls case (a trailing unanswered
-// tool_use, incident ses_01hvcs96pq1cf7x3kw0fz4a1yh) is still handled.
+// tool_use) is still handled.
 func TestNormalizeForWireOrdinaryOrphanAtEndOfHistory(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -365,8 +364,8 @@ func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
 	}
 }
 
-// TestNormalizeForWireDemotionPreservesImageBlob is the regression test for
-// PR #108's finding 1: demoteToolResult used to replace an unanswerable
+// TestNormalizeForWireDemotionPreservesImageBlob is the regression test
+// for a demoteToolResult defect: it used to replace an unanswerable
 // ToolResult's image Blob with a bare "[N image attachment(s) omitted]"
 // note, discarding the actual bytes. On anthropic a tool_result Blob
 // transcodes to a real image block (provider/anthropic/transcode.go's
@@ -410,14 +409,13 @@ func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
 }
 
 // TestNormalizeForWireDemotionNoteFlattensNonImageBlob is the regression
-// test for PR #108 round 5's findings on lines 496/370: `02a0fa6` kept
-// EVERY demoted Blob as a real Part, including a non-image or
-// data-less/URL-less one, which provider/openai and provider/openaicompat
-// hard-error building (see buildSafeBlob's own doc comment,
-// message/wire_normalize.go) -- turning the orphan-tool_result wedge this
-// file exists to fix back into a total request-BUILD failure for that
-// shape. A build-safe image Blob must still survive byte-for-byte (the
-// anthropic fidelity win `02a0fa6` intended to keep); a non-build-safe one
+// test for demoteToolResult keeping EVERY demoted Blob as a real Part,
+// including a non-image or data-less/URL-less one, which provider/openai
+// and provider/openaicompat hard-error building (see buildSafeBlob's own
+// doc comment, message/wire_normalize.go) -- turning the orphan-tool_result
+// wedge this file exists to fix back into a total request-BUILD failure
+// for that shape. A build-safe image Blob must still survive byte-for-byte
+// (the anthropic fidelity win this file preserves); a non-build-safe one
 // must be note-flattened instead -- present in the label's text as a
 // count and media type, never shipped as a raw Blob part.
 func TestNormalizeForWireDemotionNoteFlattensNonImageBlob(t *testing.T) {
@@ -471,9 +469,9 @@ func TestNormalizeForWireDemotionNoteFlattensNonImageBlob(t *testing.T) {
 }
 
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage is the
-// regression test for PR #108 round 5's finding on line 370: a demoted
-// result's build-safe Blob must NEVER be left inside a RoleAssistant wire
-// block. provider/openaicompat's transcodeAssistantMessage rejects any
+// regression test pinning that a demoted result's build-safe Blob must
+// NEVER be left inside a RoleAssistant wire block.
+// provider/openaicompat's transcodeAssistantMessage rejects any
 // Blob outright, and even where a transcoder's own code has no such check
 // (anthropic's transcodeBlob is role-agnostic), the Anthropic Messages API
 // itself rejects an image block in an assistant turn. A ToolResult sitting
@@ -533,16 +531,15 @@ func TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage(t *testing
 }
 
 // TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo is the
-// regression test for PR #108 round 6's finding: the assistant-run blob
-// hoist (added in round 5 to fix the finding above) placed the hoisted
-// RoleUser blob message immediately after the assistant run's OWN last
-// message -- which is BEFORE the following non-assistant run that answers
-// that assistant's own live tool_calls. On provider/openaicompat (distinct
-// "user" and "tool" wire roles, no folding), that interposed "user" message
-// breaks the tool_calls' required contiguity with their "tool" answers,
-// the same wedge class round 3's fix (hoist after the whole RUN, not one
-// message) already closed for the non-assistant branch -- this is the
-// assistant branch's own version of that same rule.
+// regression test pinning that the assistant-run blob hoist must not place
+// the hoisted RoleUser blob message immediately after the assistant run's
+// OWN last message -- which is BEFORE the following non-assistant run that
+// answers that assistant's own live tool_calls. On provider/openaicompat
+// (distinct "user" and "tool" wire roles, no folding), that interposed
+// "user" message breaks the tool_calls' required contiguity with their
+// "tool" answers -- the same wedge class the non-assistant branch's own
+// hoist-after-the-whole-RUN rule (not one message) already closes; this is
+// the assistant branch's own version of that same rule.
 //
 // TWO ToolResults are needed in the assistant message to reach the
 // assistant branch at all (see the sibling test above for why one alone
@@ -619,9 +616,9 @@ func TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo(t *testi
 	}
 }
 
-// TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression test
-// for PR #108's finding 2: claimFromPool used to inspect only pool[0], so an
-// unclaimable head entry (a surplus id nothing ever demands) permanently
+// TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool is the regression
+// test for claimFromPool inspecting only pool[0]: an unclaimable head
+// entry (a surplus id nothing ever demands) permanently
 // blocked a real, matching answer queued behind it in the pool. Here "B" is
 // deposited before "A" in the same non-assistant run, and nothing anywhere
 // ever demands "B" -- while "A" is later demanded by a ToolCall. Both land
@@ -632,8 +629,7 @@ func TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo(t *testi
 // unclaimed (later demoted to plain text by demoteWireInvalidToolResults,
 // since it has no legitimate placement once relocation gave up on it).
 // Wire-valid and lossless either way, which is why this needs its own
-// targeted test rather than relying on the property tests (see the PR
-// review finding for the full trace).
+// targeted test rather than relying on the property tests alone.
 func TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool(t *testing.T) {
 	in := []Message{
 		{Role: RoleTool, Parts: Parts{
@@ -701,10 +697,9 @@ func TestNormalizeForWireClaimSkipsUnclaimableHeadOfPool(t *testing.T) {
 // somewhere in the output, using the INPUT's own raw data, never
 // NormalizeForWire's internal formatting choice for the replacement — and
 // its Blob parts, if any, are required to survive as real Blob parts, not
-// merely be mentioned (see looseBlobCounts below and PR #108's finding 1: a
-// Blob-only Content has an empty Text() body, which used to make bodyFound
-// unconditionally true regardless of whether the Blob's bytes survived
-// anywhere at all).
+// merely be mentioned (see looseBlobCounts below: a Blob-only Content has
+// an empty Text() body, which used to make bodyFound unconditionally true
+// regardless of whether the Blob's bytes survived anywhere at all).
 func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 	before := toolResultRecords(input, false)
 	rawBefore := rawToolResults(input)
@@ -748,9 +743,9 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 		// buildSafeBlob (image/* with Data or URL) must survive
 		// byte-identical as a real, loose Blob part -- unrelaxed from the
 		// check this replaces. Anything else is deliberately note-flattened
-		// (PR #108 round 5: a raw, non-build-safe Blob left as a real part
-		// failed the whole request to BUILD on openai/openaicompat), so
-		// THIS CLASS ONLY is narrowed to require its dropped COUNT be
+		// (a raw, non-build-safe Blob left as a real part fails the whole
+		// request to BUILD on openai/openaicompat), so THIS CLASS ONLY is
+		// narrowed to require its dropped COUNT be
 		// findable in the rendered note text, never its bytes -- it was
 		// never a candidate to survive as a real part in the first place.
 		blobsFound := true

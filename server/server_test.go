@@ -502,11 +502,11 @@ func TestHealthNoAuth(t *testing.T) {
 	}
 }
 
-// TestHealthReportsVCSInfo guards against the incident where an engineer
-// burned 30 minutes suspecting a stale box binary because /health only ever
-// echoed the config version (0.1.0-dev) with no way to tell which commit was
-// actually running. /health must additionally surface vcs_revision and
-// vcs_time from runtime/debug.ReadBuildInfo — present as empty strings
+// TestHealthReportsVCSInfo guards against /health being unable to tell which
+// commit is actually running: echoing only the config version (0.1.0-dev)
+// leaves no way to distinguish a stale binary from a fresh one. /health must
+// additionally surface vcs_revision and vcs_time from
+// runtime/debug.ReadBuildInfo — present as empty strings
 // (never omitted) when build info carries no VCS settings, e.g. a go test
 // binary, which is exactly what this test runs as.
 func TestHealthReportsVCSInfo(t *testing.T) {

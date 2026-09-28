@@ -9,12 +9,11 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// TestMaskSecretsDoesNotDeleteAdjacentContent is review finding N2's red
-// test. The original value pattern (\S+, unbounded) deleted everything
-// from a key-shaped match to the next whitespace — measured 2,097,164
-// bytes lost on a 4 MiB single line, 99.999% on a "token=<huge blob>"
-// line, because \S+ does not stop at "&", "?", ",", or any other
-// structural delimiter, only at whitespace. This constructs the same
+// TestMaskSecretsDoesNotDeleteAdjacentContent proves an unbounded value
+// pattern (\S+) does not delete everything from a key-shaped match to
+// the next whitespace: \S+ does not stop at "&", "?", ",", or any other
+// structural delimiter, only at whitespace, which on a "token=<huge
+// blob>" line can lose nearly the entire line. This constructs the same
 // shape (a URL-like single line with a token mid-string followed by
 // unrelated, legitimate data with no separating whitespace) and asserts
 // the loss is bounded to roughly the masked value's own length, never
@@ -32,12 +31,12 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 		t.Fatalf("prefix up to and including the key/separator was altered:\n got: %s\nwant prefix: %s", got[:min(80, len(got))], before+"token=")
 	}
 	if !strings.HasSuffix(got, after) {
-		t.Fatalf("adjacent, unrelated content after the secret was NOT preserved (this is the N2 data-loss bug): got suffix %q, want it to end with %q",
+		t.Fatalf("adjacent, unrelated content after the secret was NOT preserved: got suffix %q, want it to end with %q",
 			got[max(0, len(got)-len(after)-20):], after)
 	}
-	// The masked SPAN itself must be small (per the {8,1000} cap — round-3
-	// raised it from 200 so a long SECRET masks more completely; the
-	// character class alone is what protects adjacent content): the vast
+	// The masked SPAN itself must be small (per the {8,1000} cap, which
+	// exists so a long SECRET masks more completely; the character class
+	// alone is what protects adjacent content): the vast
 	// majority of the "A" run must still be present, UNMASKED, in the
 	// output — only the first (up to) 1000 of them are inside the match.
 	// (Direct length subtraction is not a safe measure: with the bulk of
@@ -62,9 +61,9 @@ func TestMaskSecretsDoesNotDeleteAdjacentContent(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsValueClassStopsAtDelimiters is the round-3 regression
-// guard for the N2 fix's OTHER half: the bounded CHARACTER CLASS, not the
-// length cap. A mutant that reverts secretValueClass to `\S` (keeping the
+// TestMaskSecretsValueClassStopsAtDelimiters is the regression guard for
+// the bounded CHARACTER CLASS, not the length cap. A mutant that reverts
+// secretValueClass to `\S` (keeping the
 // {8,1000} cap) still bleeds across `&`-delimited URL parameters — it eats
 // "SECRETVALUE&Expires=...&Signature=..." as one "value" — while the whole
 // rest of the suite stays green (the adjacent-content test above measures
@@ -83,9 +82,9 @@ func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
 		t.Errorf("masking bled past the value's closing delimiter and destroyed adjacent URL parameters (the \\S-class regression):\n got: %q", got)
 	}
 	// A long secret must be masked IN FULL up to the cap: the env/YAML value
-	// bound is {8,1000} (round-3: raised from 200 so the cap limits how much
-	// of a LONG SECRET is masked far less often, while the character class
-	// alone is what protects adjacent content).
+	// bound is {8,1000}, high enough that the cap rarely limits how much of
+	// a LONG SECRET is masked, while the character class alone is what
+	// protects adjacent content.
 	longSecret := strings.Repeat("s", 400)
 	gotLong := maskSecrets("token=" + longSecret + " trailing-context")
 	if strings.Contains(gotLong, "ssssssss") {
@@ -96,10 +95,10 @@ func TestMaskSecretsValueClassStopsAtDelimiters(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsMultilineJSONNotBypassedByLineSplitting is a round-5
-// review finding's red test. The per-line optimization (N6) is NOT
-// equivalent to a whole-text pass: in RE2, `[^"]`, `[^']`, and `\s` all
-// match `\n`, so the quoted-JSON separator (`\s*:\s*`) and the Bearer
+// TestMaskSecretsMultilineJSONNotBypassedByLineSplitting proves the
+// per-line optimization is NOT equivalent to a whole-text pass: in RE2,
+// `[^"]`, `[^']`, and `\s` all match `\n`, so the quoted-JSON separator
+// (`\s*:\s*`) and the Bearer
 // prefix's whitespace CAN span a newline — a pretty-printed
 //
 //	"api_key":
@@ -145,7 +144,7 @@ func TestMaskSecretsMultilineJSONNotBypassedByLineSplitting(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsQuotedJSON is review finding N3's red test for the
+// TestMaskSecretsQuotedJSON is the red test for the
 // quoted-JSON "key": "value" shape, both with and without whitespace
 // around the colon.
 func TestMaskSecretsQuotedJSON(t *testing.T) {
@@ -189,7 +188,7 @@ func TestMaskSecretsQuotedJSON(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsSpaceYAML is review finding N3's red test for the
+// TestMaskSecretsSpaceYAML is the red test for the
 // space-YAML "key: value" shape.
 func TestMaskSecretsSpaceYAML(t *testing.T) {
 	t.Parallel()
@@ -209,13 +208,14 @@ func TestMaskSecretsSpaceYAML(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsQuotedEnvValue is a round-3 review finding's red test:
-// `export TOKEN="secretvalue123"` — an unquoted key with a QUOTED value —
-// is an extremely common shell/env-dump shape, and it slipped through
-// entirely unmasked. The env/YAML alternative required its value class
+// TestMaskSecretsQuotedEnvValue is the red test proving
+// `export TOKEN="secretvalue123"` — an unquoted key with a QUOTED value,
+// an extremely common shell/env-dump shape — does not slip through
+// entirely unmasked. The env/YAML alternative requires its value class
 // immediately after the separator, but the next byte there is `"` (not in
-// secretValueClass), so it never matched; the JSON alternative requires a
-// QUOTED key, which a bare `TOKEN` lacks. Both shapes miss it.
+// secretValueClass), so it never matches; the JSON alternative requires a
+// QUOTED key, which a bare `TOKEN` lacks. Both shapes miss it on their
+// own.
 func TestMaskSecretsQuotedEnvValue(t *testing.T) {
 	t.Parallel()
 	cases := []struct{ name, in, wantMasked, wantValueGone string }{
@@ -236,7 +236,7 @@ func TestMaskSecretsQuotedEnvValue(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsAuthorizationBearer is review finding N3's red test for
+// TestMaskSecretsAuthorizationBearer is the red test for
 // the Authorization: Bearer <token> header shape.
 func TestMaskSecretsAuthorizationBearer(t *testing.T) {
 	t.Parallel()
@@ -253,17 +253,17 @@ func TestMaskSecretsAuthorizationBearer(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsCodeCorpus is review finding N4's red test: realistic
-// source snippets across a few languages that must survive masking BYTE
-// IDENTICAL. The named regression is Go's `:=` (token:=lexer.Next()
+// TestMaskSecretsCodeCorpus is the red test proving realistic
+// source snippets across a few languages survive masking BYTE
+// IDENTICAL. The named risk is Go's `:=` (token:=lexer.Next()
 // becoming "token:*** if..."), but the corpus covers the same shape in a
 // few other common forms too.
 func TestMaskSecretsCodeCorpus(t *testing.T) {
 	t.Parallel()
 	cases := []string{
-		// The exact named regression (N4): Go short variable declaration.
+		// The named risk: Go short variable declaration.
 		"token := lexer.Next()",
-		"token:=lexer.Next()", // the EXACT shape review finding N4 named (no spaces around :=)
+		"token:=lexer.Next()", // the same shape with no spaces around :=
 		"secret, err := loadSecret(path)",
 		"password, ok := lookupPassword(ctx, userID)",
 		"apiKey := os.Getenv(\"API_KEY\")",
@@ -290,12 +290,12 @@ func TestMaskSecretsCodeCorpus(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsPreview is review finding N5's integration red test: the
+// TestMaskSecretsPreview is the integration red test proving the
 // PREVIEW half of a retained result (the bytes that go straight into the
-// provider request, inline) must be masked exactly like the sidecar file
-// — the first cut of F4 masked only what reached disk, so a secret sitting
-// within the first ToolResultInlineBytes reached the model in cleartext
-// regardless of masking existing at all.
+// provider request, inline) is masked exactly like the sidecar file:
+// masking only what reaches disk would let a secret sitting within the
+// first ToolResultInlineBytes reach the model in cleartext regardless of
+// masking existing at all.
 func TestMaskSecretsPreview(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -317,21 +317,20 @@ func TestMaskSecretsPreview(t *testing.T) {
 		t.Errorf("secret value leaked into the header:\n%s", header)
 	}
 	if strings.Contains(preview, secretValue) {
-		t.Errorf("secret value went inline to the model UNMASKED in the preview (review finding N5):\n%s", preview)
+		t.Errorf("secret value went inline to the model UNMASKED in the preview:\n%s", preview)
 	}
 	if !strings.Contains(preview, "AWS_SECRET_ACCESS_KEY=***") {
 		t.Errorf("preview does not carry the masked form:\n%s", preview)
 	}
 }
 
-// TestToolResultMetaBytesMatchesOnDiskLength is review finding N2's
-// accounting red test: meta.Bytes (and the header's/read_tool_result's
-// "bytes=%d") must describe the length of what is ACTUALLY on disk —
-// post-mask — not the original pre-mask length. The first cut of F4
-// reported the original length, so a masked value that shrank the text
-// (every secret does: "***" is shorter than almost anything it replaces)
-// left the header/read_tool_result advertising a size the sidecar file
-// did not have.
+// TestToolResultMetaBytesMatchesOnDiskLength is the accounting red test
+// proving meta.Bytes (and the header's/read_tool_result's "bytes=%d")
+// describes the length of what is ACTUALLY on disk — post-mask — not the
+// original pre-mask length. Reporting the original length would leave
+// the header/read_tool_result advertising a size the sidecar file does
+// not have, since a masked value shrinks the text (every secret does:
+// "***" is shorter than almost anything it replaces).
 func TestToolResultMetaBytesMatchesOnDiskLength(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -360,8 +359,8 @@ func TestToolResultMetaBytesMatchesOnDiskLength(t *testing.T) {
 	}
 }
 
-// TestMaskSecretsPerformance is review finding N6's measurement, run
-// against three shapes of 4.4 MB input:
+// TestMaskSecretsPerformance measures masking cost against three shapes
+// of 4.4 MB input:
 //
 //   - "no_candidates": ordinary multi-line output with no secret-shaped
 //     keyword anywhere — the common case. Must be near-instant: this is
@@ -369,17 +368,18 @@ func TestToolResultMetaBytesMatchesOnDiskLength(t *testing.T) {
 //   - "sparse_realistic": ordinary multi-line output with a FEW
 //     secret-shaped lines scattered through it (roughly one per 20 KB) —
 //     representative of a real env dump or build log. This is the case
-//     the N6 100ms/4MB target is actually about, and the one the
+//     the 100ms/4MB target is actually about, and the one the
 //     line-level pre-filter (see maskSecrets's doc comment) is built for.
-//   - "single_huge_line": the F1 pathological case — one multi-megabyte
+//   - "single_huge_line": the pathological case — one multi-megabyte
 //     line (no newlines at all) that DOES contain a secret. The line
 //     pre-filter cannot help here (there is only one "line"), so this
 //     falls back to a single full-text regex scan — documented as a
 //     known-slower residual, not a target for the 100ms ceiling.
 //
-// The original (\S+-based) masker measured 352ms over 4.4 MB (one
-// unbounded pattern, one pass). See the PR body for what was actually
-// measured on this branch for each shape below.
+// An unbounded (\S+-based) masker has been observed to take several
+// hundred milliseconds over 4.4 MB (one unbounded pattern, one pass);
+// the line-level pre-filter exists to keep the common cases far below
+// that.
 // maskSecretsPerfInput builds one performance test corpus: ~4.4MB of
 // ordinary log lines with a "secret" line inserted every secretEvery lines
 // (0 disables insertion entirely — the no-candidate-lines fast-reject

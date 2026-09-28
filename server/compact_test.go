@@ -252,18 +252,18 @@ func TestCompactEndpointNoopReturns200WithZeroTurnsFolded(t *testing.T) {
 		t.Errorf("turns_folded = %d, want 0 (only 1 turn exists, default keep_turns is 2)", out.TurnsFolded)
 	}
 	if out.SkipReason != "not_enough_turns" {
-		t.Errorf("skip_reason = %q, want %q (review follow-up on PR #136, Finding C)", out.SkipReason, "not_enough_turns")
+		t.Errorf("skip_reason = %q, want %q", out.SkipReason, "not_enough_turns")
 	}
 }
 
-// TestCompactEndpointReportsSkipReason is the red-first test for the review
-// follow-up on PR #136, Finding C: POST /session/{id}/compact's response
-// used to collapse three distinct turns_folded==0 situations (nothing to
-// fold, a lone prior summary, and the summarizer running and returning
-// empty) into the identical wire shape, hiding from an operator which one
-// happened — only the last of those actually cost a billed provider call.
-// skip_reason must distinguish them, and must be entirely absent
-// (omitempty) on a real fold.
+// TestCompactEndpointReportsSkipReason is the red-first test proving
+// POST /session/{id}/compact's response cannot collapse three distinct
+// turns_folded==0 situations (nothing to fold, a lone prior summary, and
+// the summarizer running and returning empty) into the identical wire
+// shape, hiding from an operator which one happened — only the last of
+// those actually cost a billed provider call. skip_reason must
+// distinguish them, and must be entirely absent (omitempty) on a real
+// fold.
 func TestCompactEndpointReportsSkipReason(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
@@ -293,7 +293,7 @@ func TestCompactEndpointReportsSkipReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, present := raw["skip_reason"]; present {
-		t.Errorf("skip_reason present in response for a real fold: %s (review follow-up on PR #136, Finding C)", data)
+		t.Errorf("skip_reason present in response for a real fold: %s", data)
 	}
 }
 
@@ -413,20 +413,19 @@ func (s *blockAtCallStream) Next() (provider.Event, error) {
 
 func (s *blockAtCallStream) Close() error { return nil }
 
-// TestCompactBracketsRunSlotWithSessionManager is the regression test for
-// a review finding: handleCompact claimed the server's own run slot
-// (claimForPrompt) but never reported it to SessionManager at all —
-// unlike runPrompt/runGoal's identical ReportTurnStart/ReportTurnEnd
-// bracket. triggerResumeLocked flips a root to StatusRunning BEFORE
-// calling its ExternalRunner, and runOrQueueText treats a workdir-held
-// or draining refusal as requiring a revert of that commitment — but a
-// task notification arriving while a compact call held the REAL slot,
-// with SessionManager never told about it at all, would see the root
-// StatusIdle (compact's claim was invisible to SessionManager) and try
-// to resume it directly, racing compact's own Session.Compact call on
-// the same session. Proves the bracket is in place: SessionManager's own
-// view of the root is StatusRunning for the WHOLE duration of a compact
-// call, exactly like an ordinary prompt turn.
+// TestCompactBracketsRunSlotWithSessionManager is the regression test
+// proving handleCompact reports its run-slot claim (claimForPrompt) to
+// SessionManager, not just holds it — just like runPrompt/runGoal's
+// identical ReportTurnStart/ReportTurnEnd bracket. triggerResumeLocked
+// flips a root to StatusRunning BEFORE calling its ExternalRunner, and
+// runOrQueueText treats a workdir-held or draining refusal as requiring a
+// revert of that commitment — but a task notification arriving while a
+// compact call held the REAL slot, with SessionManager never told about it
+// at all, would see the root StatusIdle (compact's claim was invisible to
+// SessionManager) and try to resume it directly, racing compact's own
+// Session.Compact call on the same session. Proves the bracket is in place:
+// SessionManager's own view of the root is StatusRunning for the WHOLE
+// duration of a compact call, exactly like an ordinary prompt turn.
 func TestCompactBracketsRunSlotWithSessionManager(t *testing.T) {
 	prov := &blockAtCallProv{
 		name: "test",
@@ -554,14 +553,13 @@ func TestCompactPanicReleasesClaim(t *testing.T) {
 // (net/http.(*conn).serve's own recover), not per PROCESS, so a panic
 // inside Compact (or anything it calls, e.g. a native provider's
 // transcoder choking on claude-code-produced history after an operator
-// switches a delegated session's model mid-incident and then compacts) logs
+// switches a delegated session's model and then compacts) logs
 // "http: panic serving ..." and closes that one connection, but the harness
 // process stays up -- while this session's residency (st.running) and
 // SessionManager node (status) are NEVER released, because the release
 // statements were never reached. The session is left reporting status
 // "busy", state "busy", and lineage.status "running" forever, with no
-// runner process alive to ever finish it -- the exact shape of the live
-// incident on session ses_01hac3jqn64npr07q9rxbmtb9z.
+// runner process alive to ever finish it.
 //
 // Red-verified: against the pre-fix handleCompact, this test times out
 // waiting for lineage.status to leave "running" (waitForLineageStatus's own
@@ -583,9 +581,8 @@ func TestCompactPanicDoesNotStrandSessionBusy(t *testing.T) {
 	// time inside the async runPrompt goroutine handlePrompt spawns, which
 	// nothing recovers, crashing the whole test binary rather than just
 	// this one connection. A later prompt against a DIFFERENT provider
-	// (mirroring an operator switching away after the failure, exactly
-	// like the live incident's own model switch) proves the claim without
-	// that trap.
+	// (mirroring an operator switching away after the failure) proves the
+	// claim without that trap.
 	recoveryProv := &scriptedProvider{name: "recovery", turns: [][]provider.Event{asstTurn("still alive")}}
 	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
 	h := multiProviderHarness(t, model, nil, prov, recoveryProv)

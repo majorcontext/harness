@@ -243,23 +243,21 @@ func TestMaxTokensBudgetSpansToolUseRounds(t *testing.T) {
 	}
 }
 
-// TestMaxTokensBudgetDoesNotResetOnToolUse is the red-first guard for
-// adversarial review finding 3: an earlier version of this counter
-// (maxTokensStreak) reset to zero on ANY StopToolUse, including a denied,
-// unknown, or failing tool call that never touches toolExecCount -- which
-// let a model alternate max_tokens and tool_use indefinitely inside one
-// Prompt call, spending an unbounded number of continuations without ever
-// tripping Config.MaxTokensContinuations. With a bound of 1, this proves
-// the SECOND max_tokens stop -- separated from the first by a genuine
-// tool_use round -- does NOT get a fresh continuation: the budget was
-// already spent by the first one and must stay spent for the rest of this
-// Prompt call.
+// TestMaxTokensBudgetDoesNotResetOnToolUse guards against a counter
+// (maxTokensStreak) that resets to zero on any StopToolUse, including a
+// denied, unknown, or failing tool call that never touches toolExecCount.
+// That reset would let a model alternate max_tokens and tool_use
+// indefinitely inside one Prompt call, spending an unbounded number of
+// continuations without ever tripping Config.MaxTokensContinuations. With a
+// bound of 1, this proves the SECOND max_tokens stop -- separated from the
+// first by a genuine tool_use round -- does NOT get a fresh continuation:
+// the budget was already spent by the first one and must stay spent for the
+// rest of this Prompt call.
 //
-// Red-verify: against the pre-fix runAgenticLoop (maxTokensStreak reset to
-// 0 on the StopToolUse branch), this exact sequence succeeds with 4
-// requests and no error -- see TestMaxTokensBudgetSpansToolUseRounds above,
-// which is that old behavior preserved at a bound wide enough to still
-// legitimately allow both stops.
+// Red-verify: with maxTokensStreak reset to 0 on the StopToolUse branch,
+// this exact sequence succeeds with 4 requests and no error -- see
+// TestMaxTokensBudgetSpansToolUseRounds above, which is that behavior
+// preserved at a bound wide enough to still legitimately allow both stops.
 func TestMaxTokensBudgetDoesNotResetOnToolUse(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopMaxTokens, &message.Text{Text: "a"}),
@@ -335,9 +333,9 @@ func TestMaxTokensContinuationDisabledPreservesOldBehavior(t *testing.T) {
 	}
 }
 
-// TestTaskChildAutoContinuesMaxTokens confirms the fix applies equally to a
-// task child's own turn loop, not only a root session's -- the incident's
-// own emphasis. A child Session runs through the identical runAgenticLoop
+// TestTaskChildAutoContinuesMaxTokens confirms max_tokens continuation
+// applies equally to a task child's own turn loop, not only a root
+// session's. A child Session runs through the identical runAgenticLoop
 // (SessionManager.configSnapshot copies the whole parent engine.Config,
 // including MaxTokensContinuations, into childCfg -- see Spawn), so this
 // asserts against the CHILD's own provider request count and history,
@@ -410,15 +408,14 @@ func (p *sequencedProvider) Stream(_ context.Context, req *provider.Request) (pr
 	return &scriptedStream{events: o.events}, nil
 }
 
-// TestMaxTokensContinuationAppendsGenuineNewUserMessage is the red-first
-// guard for adversarial review finding 2: the continuation nudge must
-// arrive as a genuine NEW user-role message appended AFTER the truncated
-// assistant turn (and its synthetic tool result, if any) -- ending the
-// canonical request with RoleUser -- never glued onto an earlier existing
-// user message. That shape left the request
-// ending in RoleAssistant/RoleTool: Anthropic serializes that as assistant
-// PREFILL, which some models reject outright with a permanent 400, and even
-// an accepting model saw a "continue" instruction that chronologically
+// TestMaxTokensContinuationAppendsGenuineNewUserMessage guards a shape
+// constraint: the continuation nudge must arrive as a genuine NEW user-role
+// message appended AFTER the truncated assistant turn (and its synthetic
+// tool result, if any) -- ending the canonical request with RoleUser --
+// never glued onto an earlier existing user message. Ending the request in
+// RoleAssistant/RoleTool serializes as assistant PREFILL on Anthropic,
+// which some models reject outright with a permanent 400, and even an
+// accepting model would see a "continue" instruction that chronologically
 // precedes the very output it refers to.
 //
 // Red-verify: with the nudge glued onto the newest EXISTING RoleUser
@@ -460,19 +457,18 @@ func TestMaxTokensContinuationAppendsGenuineNewUserMessage(t *testing.T) {
 	}
 }
 
-// TestMaxTokensContinuationDrainsQueuedPrompt is the red-first guard for
-// adversarial review finding 4: an operator prompt queued while a
-// max_tokens turn is in flight must be delivered on the very next
-// continuation request -- the same mid-turn steering granularity the
-// tool-call-boundary drain already gives a StopToolUse round -- rather than
-// waiting undelivered for the whole continuation chain (or the whole Prompt
-// call) to finish.
+// TestMaxTokensContinuationDrainsQueuedPrompt guards the drain contract: an
+// operator prompt queued while a max_tokens turn is in flight must be
+// delivered on the very next continuation request -- the same mid-turn
+// steering granularity the tool-call-boundary drain already gives a
+// StopToolUse round -- rather than waiting undelivered for the whole
+// continuation chain (or the whole Prompt call) to finish.
 //
-// Red-verify: against the pre-fix continuation branch (which loops back to
-// streamTurnWithRetry with no drain call at all), the queued prompt is
-// still sitting in the queue when the continuation request is built, so the
-// "OPERATOR MESSAGES" assertion below fails and QueuedPrompts is non-empty
-// after Prompt returns.
+// Red-verify: a continuation branch that loops back to streamTurnWithRetry
+// with no drain call leaves the queued prompt still sitting in the queue
+// when the continuation request is built, so the "OPERATOR MESSAGES"
+// assertion below fails and QueuedPrompts is non-empty after Prompt
+// returns.
 func TestMaxTokensContinuationDrainsQueuedPrompt(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopMaxTokens, &message.Text{Text: "partial"}),
@@ -525,11 +521,10 @@ func TestMaxTokensContinuationDrainsQueuedPrompt(t *testing.T) {
 // TestMaxTokensWithToolCallAutoContinues (which only ever issues two
 // requests, so it cannot show the nudge disappearing again) to a THIRD
 // request within the same Prompt call -- a genuine tool_use round that
-// follows the continuation. Closes adversarial review finding 6's first
-// test gap: the nudge must be present on request 2 (the continuation) and
-// absent again on request 3, proving pendingContinuationNudge is actually
-// cleared once its one streamTurnWithRetry call returns, not merely never
-// re-armed.
+// follows the continuation. The nudge must be present on request 2 (the
+// continuation) and absent again on request 3, proving
+// pendingContinuationNudge is actually cleared once its one
+// streamTurnWithRetry call returns, not merely never re-armed.
 func TestMaxTokensNudgeAbsentOnThirdRequest(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn(provider.StopMaxTokens, &message.Text{Text: "partial"}),
@@ -598,8 +593,7 @@ func TestMaxTokensNudgeNotPersistedAcrossReload(t *testing.T) {
 	}
 }
 
-// TestMaxTokensNudgeSurvivesTransientRetryButNotFutureTurn closes
-// adversarial review finding 6's third test gap. It forces a genuine
+// TestMaxTokensNudgeSurvivesTransientRetryButNotFutureTurn forces a genuine
 // transient-error retry INSIDE the continuation's own streamTurnWithRetry
 // call (attempt 1 fails with a classified retryable server_error, attempt 2
 // succeeds), proving the nudge rides both attempts of that one call, then
@@ -653,14 +647,13 @@ func TestMaxTokensNudgeSurvivesTransientRetryButNotFutureTurn(t *testing.T) {
 	})
 }
 
-// TestPursueGoalMaxTokensExhaustionFailsFastForGoalRetry is the red-first
-// guard for adversarial review finding 5, exercised at the goal-loop layer
-// (not just engine.AsPermanent in isolation): with the default-shaped bound
-// of 3, one worker attempt that exhausts Config.MaxTokensContinuations
-// already makes bound+1 = 4 completed, fully billed max_tokens calls.
-// Before maxTokensContinuationExhaustedError was classified
-// provider.MarkPermanent, promptTurnWithRetry's deterministic
-// goalWorkerRetries budget (2 additional attempts) retried the whole
+// TestPursueGoalMaxTokensExhaustionFailsFastForGoalRetry guards the
+// goal-loop layer (not just engine.AsPermanent in isolation): with the
+// default-shaped bound of 3, one worker attempt that exhausts
+// Config.MaxTokensContinuations already makes bound+1 = 4 completed, fully
+// billed max_tokens calls. Without maxTokensContinuationExhaustedError
+// classified provider.MarkPermanent, promptTurnWithRetry's deterministic
+// goalWorkerRetries budget (2 additional attempts) would retry the whole
 // exhausted chain from scratch, multiplying 4 calls into
 // (goalWorkerRetries+1)*4 = 12 for one goal boundary. This proves exactly 4
 // worker calls are made, not 12, and that the goal PARKS (stays resumable)

@@ -15,7 +15,7 @@ import (
 // classified provider.ErrKindProviderExhausted, as if an adapter had
 // regex-matched an account-level usage-limit rejection (see
 // provider/anthropic/anthropic.go's parseUsageExhaustion and apiError).
-// Reproduces the live incident fingerprint verbatim (box bx-01m0x8996):
+// Reproduces the shape of an account-level usage-limit rejection:
 // "[permanent] anthropic: You have reached your specified API usage
 // limits. You will regain access on <date>."
 func providerExhaustedErr() error {
@@ -26,17 +26,17 @@ func providerExhaustedErr() error {
 	})
 }
 
-// TestPursueGoalProviderExhaustedRetriesThenRecovers is the red-first
-// regression test for the second live-evidence defect on box bx-01m0x8996:
-// "engine: goal worker turn parked after 1 permanent-tier attempt(s):
-// [permanent] anthropic: You have reached your specified API usage
-// limits...". Before this fix, provider.AsProviderExhausted(err) was never
-// consulted — an exhausted error is wrapped provider.MarkPermanent (see
+// TestPursueGoalProviderExhaustedRetriesThenRecovers guards against a
+// goal worker turn parking after exactly 1 permanent-tier attempt with no
+// resume path short of an operator DELETE + re-register: "engine: goal
+// worker turn parked after 1 permanent-tier attempt(s): [permanent]
+// anthropic: You have reached your specified API usage limits...". An
+// exhausted error is wrapped provider.MarkPermanent (see
 // provider.ErrKindProviderExhausted's doc comment: adapters mark it
 // permanent for ordinary HTTP-retry purposes, since no short backoff
 // schedule outlives a monthly quota), so promptTurnWithRetry's permanent
-// fail-fast branch caught it and parked after exactly ONE attempt, with no
-// resume path short of an operator DELETE + re-register.
+// fail-fast branch must not treat it like an ordinary permanent error;
+// provider.AsProviderExhausted(err) has to be consulted first.
 //
 // This proves the fix: an account wall that CLEARS within the
 // goalProviderExhaustedMaxAttempts budget lets the worker turn — and the
@@ -90,13 +90,13 @@ func TestPursueGoalProviderExhaustedRetriesThenRecovers(t *testing.T) {
 				if !ev.GoalWaiting {
 					t.Errorf("goal.stalled event %d: GoalWaiting = false, want true (budget not exhausted)", stalled)
 				}
-				// Review finding: err.Error() for a provider-exhausted
-				// error is "[permanent] anthropic: ..." (see
-				// providerExhaustedErr), which would self-contradict this
-				// SAME record's GoalRetryable:true/GoalRetryableClass:
-				// "provider_exhausted" fields above. The reason must
-				// instead read like classifyGoalWorkerError's honest
-				// classified text, exactly like goal.parked already does.
+				// err.Error() for a provider-exhausted error is
+				// "[permanent] anthropic: ..." (see providerExhaustedErr),
+				// which would self-contradict this SAME record's
+				// GoalRetryable:true/GoalRetryableClass:
+				// "provider_exhausted" fields above. The reason must read
+				// like classifyGoalWorkerError's honest classified text,
+				// exactly like goal.parked already does.
 				if strings.Contains(ev.GoalReason, "[permanent]") {
 					t.Errorf("goal.stalled event %d: GoalReason = %q, must not carry the raw [permanent]-tagged provider text — self-contradicts GoalRetryable=true", stalled, ev.GoalReason)
 				}

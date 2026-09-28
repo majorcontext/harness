@@ -68,8 +68,8 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 
 // TestStreamInlineErrorClassification covers Anthropic's mid-stream "error"
 // SSE event (no HTTP status to key off of — only the wire error "type"),
-// which is exactly the shape the GitHub issue #61 incidents hit ("engine:
-// goal loop stalled: anthropic: Overloaded (overloaded_error)").
+// which an unclassified overloaded_error surfaces as a stalled goal loop
+// ("engine: goal loop stalled: anthropic: Overloaded (overloaded_error)").
 func TestStreamInlineErrorClassification(t *testing.T) {
 	cases := []struct {
 		errType   string
@@ -128,8 +128,8 @@ func TestStreamTruncationClassification(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		// Everything up to and including a COMPLETE tool_use block, then
-		// the body ends with no message_stop — the incident fingerprint
-		// (EOF exactly as a write_file call finished streaming).
+		// the body ends with no message_stop: EOF exactly as a write_file
+		// call finished streaming.
 		io.WriteString(w, sse("message_start", `{"type":"message_start","message":{"id":"msg_01","usage":{"input_tokens":100}}}`))                                             //nolint:errcheck
 		io.WriteString(w, sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_77","name":"bash","input":{}}}`)) //nolint:errcheck
 		io.WriteString(w, sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}`))    //nolint:errcheck

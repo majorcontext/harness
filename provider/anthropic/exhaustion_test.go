@@ -35,8 +35,8 @@ func errBody(errType, msg string) string {
 	return `{"type":"error","error":{"type":"` + errType + `","message":"` + msg + `"}}`
 }
 
-// TestUsageLimitIsProviderExhausted is the red-first test for the live
-// incident: the account-level usage limit arrives as an ordinary HTTP 400
+// TestUsageLimitIsProviderExhausted verifies that the account-level usage
+// limit is classified correctly: it arrives as an ordinary HTTP 400
 // invalid_request_error, indistinguishable from a malformed request unless
 // this adapter classifies it.
 func TestUsageLimitIsProviderExhausted(t *testing.T) {

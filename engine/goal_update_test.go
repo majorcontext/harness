@@ -222,8 +222,8 @@ func (p *scriptedGoalUpdateProvider) Stream(ctx context.Context, req *provider.R
 // s.goalActiveWith(condition) — an exact string match against the ORIGINAL
 // condition parameter, never reassigned — so the moment UpdateGoal rewrites
 // s.goalCondition, that check reads as "cleared" (condition changed = goal
-// gone, the round-3 conflation this task retires) and the loop exits with
-// Reason "goal cleared" instead of running turn 2 at all.
+// gone) and the loop exits with Reason "goal cleared" rather than running
+// turn 2 at all.
 func TestPursueGoalPicksUpUpdatedConditionNextTurn(t *testing.T) {
 	dir := t.TempDir()
 	prov := &scriptedGoalUpdateProvider{
@@ -414,16 +414,15 @@ func TestClearGoalStillStopsUpdatedLoop(t *testing.T) {
 	}
 }
 
-// TestStaleDiscardReplacesReasonWithAdjustmentNotice is the regression test
-// for a live end-to-end repro: turn 1 completes with a genuine NOT MET
-// reason (R1); during turn 2, an UpdateGoal lands (self-adjust or an
-// operator's POST /goal on a running loop) that moves the goal to a new
-// generation before turn 2's evaluator verdict is recorded, so that verdict
-// is discarded as stale. Turn 3's directive must NOT repeat R1 verbatim (it
-// describes state that may no longer be true — the live incident this
-// guards had the evaluator saying "the file does not exist" one turn after
-// the file had in fact been created) and must instead carry an explicit
-// adjustment notice plus the CURRENT (turn 3's) condition.
+// TestStaleDiscardReplacesReasonWithAdjustmentNotice: turn 1 completes
+// with a genuine NOT MET reason (R1); during turn 2, an UpdateGoal lands
+// (self-adjust or an operator's POST /goal on a running loop) that moves
+// the goal to a new generation before turn 2's evaluator verdict is
+// recorded, so that verdict is discarded as stale. Turn 3's directive
+// must NOT repeat R1 verbatim — it can describe stale state, such as the
+// evaluator saying "the file does not exist" one turn after the file has
+// in fact been created — and must instead carry an explicit adjustment
+// notice plus the CURRENT (turn 3's) condition.
 //
 // Uses different condition text for the update (rather than an identical
 // string) to also pin the pairing rule: `reason` is only ever valid paired
@@ -536,18 +535,17 @@ func (p *blockingWorkerProvider) Stream(ctx context.Context, req *provider.Reque
 
 // TestPursueGoalStaleWorkerFailureDiscarded covers PursueGoal's worker-turn
 // stale-discard branch (engine/goal.go, the `if stale { continue }` right
-// after promptTurnWithRetry returns an error): a worker turn that fails while
-// an UpdateGoal has concurrently moved the goal to a new generation must not
-// be attributed to the (no-longer-current) condition it ran against — no
+// after promptTurnWithRetry returns an error): a worker turn that fails
+// while an UpdateGoal has concurrently moved the goal to a new generation
+// must not be attributed to the stale condition it ran against — no
 // goal.stalled record (recordGoalStalled itself already discards a
 // stale-generation attempt, so this exercises that path too), no
-// goal.cleared record, no goal.parked record either (Round 7: a
-// worker-turn exhaustion now parks instead of clearing — recordGoalParked
+// goal.cleared record, no goal.parked record either: recordGoalParked
 // carries the exact same generation gate as recordGoalStalled/
-// recordGoalEval/recordGoalEvalFailed, so this is invariant 3 of that plan:
-// a park racing UpdateGoal is a silent stale-discard, never journaled),
-// and the loop must continue rather than exit, with the very next turn's
-// directive carrying the NEW condition.
+// recordGoalEval/recordGoalEvalFailed, so a worker-turn exhaustion that
+// parks races UpdateGoal exactly like a stalled or cleared one — a silent
+// stale-discard, never journaled — and the loop must continue rather than
+// exit, with the very next turn's directive carrying the NEW condition.
 //
 // The worker call is genuinely in flight (parked on blockingWorkerProvider's
 // release channel) when the test calls UpdateGoal, so the generation bump is

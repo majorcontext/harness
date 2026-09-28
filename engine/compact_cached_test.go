@@ -7,17 +7,16 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestMaybeAutoCompactCountsCachedPromptTokens encodes the PR#74 review
-// finding, shaped like the original 205,102-token incident UNDER PROMPT
-// CACHING: harness injects cache_control by default, so on a warm session
-// the Anthropic adapter reports the bulk of the prompt in CacheReadTokens
-// (and new prefix growth in CacheWriteTokens) while InputTokens stays
-// small. A threshold check reading InputTokens alone never fires in
-// exactly the production shape auto-compaction exists for. The prompt
+// TestMaybeAutoCompactCountsCachedPromptTokens proves auto-compaction
+// still fires UNDER PROMPT CACHING: harness injects cache_control by
+// default, so on a warm session the Anthropic adapter reports the bulk of
+// the prompt in CacheReadTokens (and new prefix growth in
+// CacheWriteTokens) while InputTokens stays small. A threshold check
+// reading InputTokens alone never fires in exactly this shape. The prompt
 // size is the SUM of the three input components.
 func TestMaybeAutoCompactCountsCachedPromptTokens(t *testing.T) {
-	// The incident, cached: ~197k of prompt in cache reads/writes, a few
-	// thousand uncached. Window 200k, default threshold — must trigger.
+	// ~197k of prompt in cache reads/writes, a few thousand uncached.
+	// Window 200k, default threshold — must trigger.
 	warmOver := provider.Usage{InputTokens: 3_102, CacheReadTokens: 190_000, CacheWriteTokens: 12_000}
 	small := provider.Usage{InputTokens: 100}
 

@@ -272,18 +272,17 @@ func TestRunTaskToolUnknownAgentIsError(t *testing.T) {
 }
 
 // TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError is the
-// regression test for a live review finding: a `task` call's model
-// override was parsed (ParseModelRef, well-formedness only) but never
-// checked against the configured providers, unlike the `model` session
-// tool's own identical override (runModelTool, ModelSupported). An
-// override naming a provider nothing registers used to sail straight
-// through Spawn — burning a concurrency slot and a session log — and only
-// fail later, at the child's own first turn, surfacing to the caller as a
-// delayed "[tasks: ... failed: ...]" notification instead of an
-// immediate, synchronous tool error — proven here by asserting the error
-// return itself (pre-fix, this call returned nil: Spawn has no provider
-// check of its own, so it always succeeded and only failed much later,
-// asynchronously, inside the child's own first turn).
+// regression test proving a `task` call's model override, parsed
+// (ParseModelRef, well-formedness only) but not yet checked against the
+// configured providers, IS checked against them, matching the `model`
+// session tool's own identical override (runModelTool, ModelSupported).
+// An override naming a provider nothing registers must fail synchronously
+// here rather than sailing through Spawn — burning a concurrency slot and
+// a session log — to fail only later, at the child's own first turn,
+// surfacing to the caller as a delayed "[tasks: ... failed: ...]"
+// notification. Spawn itself has no provider check of its own, so
+// without this check the call succeeds and fails only much later,
+// asynchronously, inside the child's own first turn.
 func TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError(t *testing.T) {
 	mgr := NewSessionManager(context.Background(), 0, 0)
 	root := mgr.NewRoot(managedConfig("root",
@@ -304,11 +303,11 @@ func TestRunTaskToolUnconfiguredModelOverrideIsSynchronousError(t *testing.T) {
 }
 
 // TestRunTaskToolUnconfiguredDefinitionModelIsSynchronousError is the
-// regression test for a second live review finding on the same fix: the
-// first pass only validated in.Model (the caller's OVERRIDE), missing that
-// def.Model — the agent DEFINITION's own configured model, from a
-// .agents/*.md file's "model:" frontmatter — sails through exactly the
-// same way when the caller supplies no override at all.
+// regression test proving def.Model — the agent DEFINITION's own
+// configured model, from a .agents/*.md file's "model:" frontmatter — is
+// validated too, not only in.Model (the caller's OVERRIDE): without this,
+// an unconfigured definition model sails through exactly the same way
+// when the caller supplies no override at all.
 func TestRunTaskToolUnconfiguredDefinitionModelIsSynchronousError(t *testing.T) {
 	dir := t.TempDir()
 	writeAgentDef(t, filepath.Join(dir, ".agents"), "custom.md", `---

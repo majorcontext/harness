@@ -24,8 +24,9 @@ const goalEvaluatorPromptCeilingBytes = 100_000
 
 // hugeSyntheticHistory builds n messages of roughly size bytes each,
 // alternating user/assistant, reproducing the shape of a real long-running
-// session's transcript (see box bx-01m0x8996's live incident: "prompt
-// 245332 tokens > limit") without needing an actual multi-hundred-turn run.
+// session's transcript large enough to exceed the evaluator's context
+// limit ("prompt 245332 tokens > limit") without needing an actual
+// multi-hundred-turn run.
 func hugeSyntheticHistory(n, size int) []message.Message {
 	history := make([]message.Message, 0, n)
 	filler := strings.Repeat("x", size)
@@ -43,14 +44,13 @@ func hugeSyntheticHistory(n, size int) []message.Message {
 	return history
 }
 
-// TestPursueGoalEvaluatorPromptBoundedForHugeTranscript is the red-first
-// regression test for the first live-evidence defect on box bx-01m0x8996:
-// "engine: goal evaluator failed at 5 consecutive turn boundaries: context
-// exhausted: prompt 245332 tokens > limit ...". Before this fix,
-// runEvaluator built its CONVERSATION TRANSCRIPT field from
-// renderConversation(s.History()) with no bound at all — it grows with the
-// entire session transcript forever, unlike the main session, which
-// automatic compaction protects.
+// TestPursueGoalEvaluatorPromptBoundedForHugeTranscript reproduces a case
+// where the goal evaluator fails at consecutive turn boundaries with
+// "context exhausted: prompt 245332 tokens > limit" on a long-running
+// session. runEvaluator must not build its CONVERSATION TRANSCRIPT field
+// from renderConversation(s.History()) with no bound — an unbounded field
+// grows with the entire session transcript forever, unlike the main
+// session, which automatic compaction protects.
 //
 // This seeds a synthetic history far larger (300 messages * 3000 bytes ==
 // ~900KB, comfortably north of what any bounded evaluator budget should
@@ -167,26 +167,25 @@ func TestRenderConversationBoundedKeepsNewestMessageEvenOverBudget(t *testing.T)
 	}
 }
 
-// TestGoalEvaluatorTranscriptBudgetBytesUsesRealWindowBelowFloor is the
-// red-first regression test for a review finding on this fix:
-// goalEvaluatorTranscriptBudgetBytes originally called resolveContextWindow,
-// which conflates two different things behind the same (0, disabled)
-// result — a model with NO modelmeta entry at all, and a model with a REAL,
-// KNOWN entry that merely sits below minAutoContextWindowTokens (gpt-4's
-// documented 8_192-token window is modelmeta's own example of the latter).
-// resolveContextWindow's floor exists to answer "should automatic
-// compaction ARM for this window," which is the right question for THAT
-// caller but the wrong one here: folding a real 8_192-token evaluator model
-// into the SAME goalEvaluatorFallbackContextWindowTokens (16k) fallback a
-// genuinely unrecognized model gets would hand it a budget roughly DOUBLE
-// its actual context window — the exact overflow class this whole fix
-// exists to close.
+// TestGoalEvaluatorTranscriptBudgetBytesUsesRealWindowBelowFloor pins a
+// constraint on goalEvaluatorTranscriptBudgetBytes: it must not derive its
+// budget from resolveContextWindow, which conflates two different things
+// behind the same (0, disabled) result — a model with NO modelmeta entry
+// at all, and a model with a REAL, KNOWN entry that merely sits below
+// minAutoContextWindowTokens (gpt-4's documented 8_192-token window is
+// modelmeta's own example of the latter). resolveContextWindow's floor
+// exists to answer "should automatic compaction ARM for this window,"
+// which is the right question for THAT caller but the wrong one here:
+// folding a real 8_192-token evaluator model into the SAME
+// goalEvaluatorFallbackContextWindowTokens (16k) fallback a genuinely
+// unrecognized model gets would hand it a budget roughly DOUBLE its
+// actual context window.
 //
 // Uses the modelContextWindowLookup test seam (engine/context_window.go)
 // to register one small-but-real window and leave a second model
 // genuinely unregistered, then asserts the two get DIFFERENT budgets: the
-// known-small one derived from its real 8_192 window, the unknown one from
-// the 16k floor — proving the fix no longer treats them as the same case.
+// known-small one derived from its real 8_192 window, the unknown one
+// from the 16k floor — the two cases must stay distinct.
 func TestGoalEvaluatorTranscriptBudgetBytesUsesRealWindowBelowFloor(t *testing.T) {
 	orig := modelContextWindowLookup
 	t.Cleanup(func() { modelContextWindowLookup = orig })

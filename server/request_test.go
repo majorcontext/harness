@@ -317,8 +317,8 @@ func (h *varyingHooks) Tools() []plugin.ToolDef { return nil }
 func (h *varyingHooks) Plugins() []plugin.Info  { return nil }
 
 func TestRequestSnapshotEvictedWithSession(t *testing.T) {
-	// Snapshots hold full system copies; eviction must release them
-	// (review finding on #22). The hash entry survives deliberately so
+	// Snapshots hold full system copies; eviction must release them.
+	// The hash entry survives deliberately so
 	// hash-on-change journaling stays correct across eviction cycles.
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn("a"), asstTurn("b"),

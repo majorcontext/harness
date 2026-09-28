@@ -57,13 +57,12 @@ const (
 // this tree's usage count as" for SetMaxTreeTokens purposes — all four
 // provider.Usage fields (input, output, cache read, cache write) summed,
 // never just a subset. Used by Spawn's own ErrBudgetExceeded gate (see
-// that error's own doc comment for the live review finding this closes:
-// an earlier gate compared only input+output, silently exempting a
-// cache-heavy tree's largest cost component from its own budget), and
-// exists specifically so the gate and usageByRoot's own accumulation
-// (which already folded all four fields, correctly, before the gate was
-// fixed to match) can never drift apart into two different ideas of
-// "spend" again.
+// that error's own doc comment: an earlier gate compared only
+// input+output, silently exempting a cache-heavy tree's largest cost
+// component from its own budget), and exists specifically so the gate
+// and usageByRoot's own accumulation (which already folded all four
+// fields, correctly, before the gate was fixed to match) can never
+// drift apart into two different ideas of "spend" again.
 func treeTokenTotal(u provider.Usage) int {
 	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
 }
@@ -93,16 +92,15 @@ var (
 	// opt-in limit, unlike depth/concurrency, which always have a
 	// product default (DefaultMaxTaskDepth/DefaultMaxConcurrentTasks).
 	//
-	// A live review finding: an earlier version of this gate compared
-	// only input+output against the budget, while usageByRoot itself
-	// already accumulated all four fields — a cache-heavy tree (the
-	// openaicompat/Fireworks and anthropic routes described in
-	// docs/models-and-providers.md,
-	// where a large prompt resent every turn reads mostly from cache)
-	// could keep spawning children well past the operator's real
-	// intended ceiling, because the largest component of its actual
-	// spend was never measured by the gate that is supposed to enforce
-	// it. Bill what costs money: cache read/write tokens are billed too
+	// An earlier version of this gate compared only input+output against
+	// the budget, while usageByRoot itself already accumulated all four
+	// fields — a cache-heavy tree (the openaicompat/Fireworks and
+	// anthropic routes described in docs/models-and-providers.md, where
+	// a large prompt resent every turn reads mostly from cache) could
+	// keep spawning children well past the operator's real intended
+	// ceiling, because the largest component of its actual spend was
+	// never measured by the gate that is supposed to enforce it. Bill
+	// what costs money: cache read/write tokens are billed too
 	// (typically at a discount versus a fresh input token, never free),
 	// so they count toward the same budget the raw input/output tokens
 	// do.
@@ -388,10 +386,10 @@ type SessionManager struct {
 	// credited, or its next finalizeTurn would re-add the full amount on
 	// top of what usageByRoot already carries across the reap.
 	//
-	// A live review finding caught this the hard way: an earlier version
-	// seeded sessionNode.budgetedUsage from n.session.Usage() directly at
-	// adoptLocked time instead of tracking credit here — which fixed the
-	// same-manager reap+re-adopt case but broke the DIFFERENT case
+	// An earlier version seeded sessionNode.budgetedUsage from
+	// n.session.Usage() directly at adoptLocked time instead of tracking
+	// credit here — which fixed the same-manager reap+re-adopt case but
+	// broke the DIFFERENT case
 	// TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget covers: a
 	// process restart's brand-new SessionManager (a fresh, empty
 	// usageByRoot) reloading a child whose session.Usage() already
@@ -422,9 +420,9 @@ type SessionManager struct {
 	// pendingPersist queues durable-write thunks registered via
 	// deferPersist while m.mu is held, drained and run by
 	// unlockAndFlushPersist once m.mu is released — see that method's
-	// own doc comment for the full mechanism and the live review finding
-	// it closes. Guarded by m.mu itself (only ever appended to or
-	// drained while m.mu is held); never read or written any other way.
+	// own doc comment for the full mechanism. Guarded by m.mu itself
+	// (only ever appended to or drained while m.mu is held); never read
+	// or written any other way.
 	pendingPersist []func()
 
 	// testSweepUnlockedHook, if non-nil, is called by
@@ -562,11 +560,11 @@ func (m *SessionManager) deferPersist(fn func()) {
 // mutation (queueRecordDeferredLocked, queue.go), then calls this so the
 // write lands after m.mu releases.
 //
-// One helper, not two hand-maintained copies — a review finding. The
-// ordering this sequence protects is the whole point of parking a record
-// on the session (see queueRecordDeferredLocked's own doc comment for the
-// double-delivery defect a closure-held record caused), so the flush must
-// not be re-derived per call site. Caller holds m.mu.
+// One helper, not two hand-maintained copies. The ordering this sequence
+// protects is the whole point of parking a record on the session (see
+// queueRecordDeferredLocked's own doc comment for the double-delivery
+// defect a closure-held record caused), so the flush must not be
+// re-derived per call site. Caller holds m.mu.
 func (m *SessionManager) deferQueueRecordFlush(s *Session) {
 	m.deferPersist(func() {
 		s.mu.Lock()
@@ -617,14 +615,14 @@ func logOrphanedQueueDrain(sessionID string, drained []QueuedPrompt) {
 
 // unlockAndFlushPersist is the m.mu.Unlock() every SessionManager entry
 // point that might have queued a durable write via deferPersist must use
-// instead of a plain m.mu.Unlock() — a live review finding: session-log
-// disk writes (task-notification queued/delivered records, the
-// task-spawn audit record) used to run WHILE m.mu — the single lock
-// guarding every session in the tree, taken by Info/Reap/Spawn/Send/
-// finalize alike — was held, on finalizeTurn/Spawn/recoverInterruptedTurnLocked's
-// own hot paths. A slow or contended disk on ONE session's notification
-// could stall every OTHER session's own Info/Reap/Spawn/finalize call in
-// the same process, in tension with AGENTS.md's "a hung component can't
+// instead of a plain m.mu.Unlock(). Session-log disk writes
+// (task-notification queued/delivered records, the task-spawn audit
+// record) used to run WHILE m.mu — the single lock guarding every
+// session in the tree, taken by Info/Reap/Spawn/Send/finalize alike —
+// was held, on finalizeTurn/Spawn/recoverInterruptedTurnLocked's own hot
+// paths. A slow or contended disk on ONE session's notification could
+// stall every OTHER session's own Info/Reap/Spawn/finalize call in the
+// same process, in tension with AGENTS.md's "a hung component can't
 // wedge other sessions."
 //
 // Drains m.pendingPersist into a local slice while STILL holding m.mu
@@ -803,9 +801,9 @@ type sessionNode struct {
 	// match.
 	//
 	// adoptLocked seeds this to n.session.Usage() at construction, NOT
-	// its zero value — a live review finding: usageByRoot[rootID]
-	// SURVIVES a child being reaped (Reap only clears usageByRoot for a
-	// root-shaped node, session_manager.go's own Reap doc comment), but
+	// its zero value — usageByRoot[rootID] SURVIVES a child being reaped
+	// (Reap only clears usageByRoot for a root-shaped node,
+	// session_manager.go's own Reap doc comment), but
 	// a reaped-then-re-adopted child (Send-ing a follow-up to a
 	// done/failed child Reap already collected, or a cold LoadSession
 	// reload) always gets a BRAND NEW sessionNode via adoptLocked. If
@@ -824,9 +822,7 @@ type sessionNode struct {
 	// pendingForget marks a "root-shaped" node (parentID == "") that is
 	// NOT actually a protected root in the sense Reap's own doc comment
 	// means — "the tree's own address" a caller may still want to
-	// reload. It is set in exactly two places, both live review
-	// findings on the first version of ForgetRoot/recoverInterrupted-
-	// TurnLocked:
+	// reload. It is set in exactly two places:
 	//
 	//  1. ForgetRoot, when called on a genuine root that still has live
 	//     children: Cancel (already run by the caller — see
@@ -1097,9 +1093,9 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 //     unverifiable case is always safer than guessing permissively.
 //
 // recover gates whether recoverInterruptedTurnLocked runs for a non-root
-// adopt (see that method's own doc comment for what it does). A live
-// review finding: ReportTurnStart's adopt-on-first-sight call is
-// UNCONDITIONALLY followed, a few lines later in that same function, by
+// adopt (see that method's own doc comment for what it does).
+// ReportTurnStart's adopt-on-first-sight call is UNCONDITIONALLY
+// followed, a few lines later in that same function, by
 // setting n.status = StatusRunning and n.finalized = false to actually
 // drive a fresh turn — so firing recovery here first is self-
 // contradicting within one call: it would mark the node StatusFailed,
@@ -1136,15 +1132,15 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 //     (nothing here claims the parent's OWN turn is being resumed) — it
 //     is, however, a little confusing in combination with the healthy
 //     new child Spawn attaches moments later under that "reported dead"
-//     parent. Left as-is, deliberately out of scope for this pass (see
-//     PR #146 review discussion): fixing it needs a design decision
+//     parent. Left as-is, deliberately out of scope for this pass:
+//     fixing it needs a design decision
 //     (should Spawn refuse a StatusFailed parent the way it already
 //     refuses StatusCanceled?) this fix does not make.
 func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionNode {
 	// s.hasTaskParent() — the SAME predicate finalizeTurn's own
 	// settled-marker/commit-outcome gate uses (session_manager.go's
-	// finalizeTurn, and see hasTaskParent's own doc comment) — a live
-	// review finding: an earlier version of finalizeTurn re-derived this
+	// finalizeTurn, and see hasTaskParent's own doc comment). An earlier
+	// version of finalizeTurn re-derived this
 	// "is s a non-root tree member" question from the in-memory
 	// sessionNode.parentID instead, which disagrees with THIS check for
 	// exactly the "true depth is unrecoverable" case below (a node
@@ -1167,9 +1163,9 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	//      Config.TaskDepth's own doc comment). This is s's OWN true
 	//      depth. It is authoritative regardless of whether the live
 	//      parent chain is trustworthy right now, so this check runs
-	//      FIRST — even when the parent IS currently tracked. A live
-	//      review finding: an earlier revision preferred the live
-	//      parent.depth+1 whenever the parent was tracked. That silently
+	//      FIRST — even when the parent IS currently tracked. An earlier
+	//      revision preferred the live parent.depth+1 whenever the
+	//      parent was tracked. That silently
 	//      propagates the PARENT's own wrong depth forward whenever THAT
 	//      parent was itself adopted via case 3 below (its own parent
 	//      untracked, no durable TaskDepth of its own — a legacy
@@ -1264,9 +1260,9 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 // outcome at all" used to be a second no-op case too, on the assumption
 // that meant either "predates this whole mechanism" or "a genuinely
 // fresh node with no terminal turn yet" — both left honestly at
-// adoptLocked's StatusIdle default. A live review finding: those two
-// cases are NOT actually indistinguishable, and conflating them was a
-// real bug. A node with at least one entry in its own SpawnedChildIDs
+// adoptLocked's StatusIdle default. Those two cases are not actually
+// indistinguishable, and conflating them is a real bug. A node with at
+// least one entry in its own SpawnedChildIDs
 // PROVES it already ran a turn (Spawn/the task tool is only ever
 // callable from WITHIN one) — so a settled-but-committed-outcome-less
 // node that HAS spawned children can only be the legacy case, never the
@@ -1331,8 +1327,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		// No committed outcome, but s has definitely already run a turn
 		// — the legacy case, not the genuinely-fresh one. Proven by
 		// EITHER signal: a non-empty SpawnedChildIDs (Spawn/the task
-		// tool is only ever callable from WITHIN a turn), or — a live
-		// review finding this OR-clause itself closes — non-empty
+		// tool is only ever callable from WITHIN a turn), or non-empty
 		// History, needed because the FIRST signal alone only proves
 		// "definitely not fresh" for a node that happened to spawn
 		// something; a legacy CHILDLESS node that ran a real turn and
@@ -1358,7 +1353,7 @@ func (m *SessionManager) restoreKnownStatusLocked(n *sessionNode, s *Session) {
 		// (engine.go), the SAME step-2 fallback
 		// recoverInterruptedTurnLocked's own crash-window table already
 		// uses for the identical "nothing was ever committed for this
-		// turn" gap. A live review finding: a legacy node that plainly
+		// turn" gap. A legacy node that plainly
 		// succeeded (its own last message is a real assistant answer, no
 		// dangling tool call) must never be rewritten to StatusFailed
 		// just because the newer committedOutcome mechanism postdates
@@ -1565,8 +1560,8 @@ func durableSnapshot(id, parentID string, depth int, sess *Session) SessionNode 
 //
 // # Not actually held throughout, despite the name
 //
-// A live review finding: an earlier version of this method ran every
-// LoadSession call (real disk reads — open, stat, read, JSON-decode a
+// An earlier version of this method ran every LoadSession call (real
+// disk reads — open, stat, read, JSON-decode a
 // whole log) while m.mu — the single lock guarding every session in the
 // tree, taken by Info/Reap/Spawn/Send/finalize alike — was held, exactly
 // the class of problem deferPersist/unlockAndFlushPersist already closed
@@ -1589,8 +1584,8 @@ func durableSnapshot(id, parentID string, depth int, sess *Session) SessionNode 
 //     one shape that is possible for an already-terminal, already-
 //     finalized node a concurrent Reap() call could legitimately collect
 //     while unlocked). Checked at the top of EVERY loop iteration below,
-//     not merely once up front — a live review finding: this method's
-//     own recursion (adoptReloadedLocked, called per candidate, calls
+//     not merely once up front: this method's own recursion
+//     (adoptReloadedLocked, called per candidate, calls
 //     this same method again for the child it just adopted) can release
 //     and reacquire m.mu again, mid-loop, so a check only before the
 //     loop covers candidate #1 but misses n going stale during THAT
@@ -1689,10 +1684,10 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 	// exact race semantics decided here.
 	//
 	// The n-itself-still-live check is re-run at the TOP OF EVERY
-	// iteration below, not just once before the loop starts — a live
-	// review finding: adoptReloadedLocked's own call (last line of this
-	// loop body) recurses into THIS SAME method for the child it just
-	// adopted, which can release and reacquire m.mu AGAIN, mid-loop. A
+	// iteration below, not just once before the loop starts.
+	// adoptReloadedLocked's own call (last line of this loop body)
+	// recurses into THIS SAME method for the child it just adopted,
+	// which can release and reacquire m.mu AGAIN, mid-loop. A
 	// single check before the loop only covers candidate #1; n can go
 	// stale (reaped — the one shape this method's own doc comment already
 	// documents as reachable) during THAT nested call, and a check only
@@ -1863,9 +1858,9 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// here rather than shared because the two call sites' surrounding
 	// control flow differs enough (this one returns early above on the
 	// common "nothing to recover" case) that factoring out a shared
-	// helper would cost more clarity than it saves for four lines. A
-	// live review finding: an interrupted child's spend used to escape
-	// the tree budget entirely, since only finalizeTurn (never this
+	// helper would cost more clarity than it saves for four lines. An
+	// interrupted child's spend used to escape the tree budget
+	// entirely, since only finalizeTurn (never this
 	// method) touched usageByRoot — a child that spent real tokens
 	// before crashing was fully reconstructed here with no accounting
 	// for it, letting a later Spawn silently exceed SetMaxTreeTokens.
@@ -1930,7 +1925,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// report to the parent: the parent-facing notification is meant to
 	// say how much this child spent in TOTAL, the same number
 	// finalizeTurn would report for any other terminally failed child. A
-	// live review finding: a Send-restarted child interrupted on its
+	// Send-restarted child interrupted on its
 	// follow-up turn would otherwise under-report its total usage in the
 	// parent's [tasks:] line relative to an ordinarily-failed child.
 	// Recomputing here rather than trusting a committed record's own
@@ -1982,7 +1977,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 	// are stranded on a node that will never read its queue again —
 	// mirrors finalizeTurn's own identical "forward a terminal child's
 	// pending notifications to the same target its own notify uses"
-	// block exactly. A live review finding: an earlier version of this
+	// block exactly. An earlier version of this
 	// method delivered only notify, silently dropping any grandchild
 	// results n itself had not yet forwarded.
 	// Gated on s.hasTaskParent(): a genuine root (false) keeps its own
@@ -2003,8 +1998,8 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		forwarded = s.drainAllTaskNotifications() // memory-only — see its own doc comment
 	}
 
-	// DELIVER FIRST, mark the turn settled LAST — a live review finding
-	// on an earlier version of this method, which did the opposite: the
+	// DELIVER FIRST, mark the turn settled LAST. An earlier version of
+	// this method did the opposite: the
 	// idempotency mechanism at the time (appending a closing message to
 	// history, before turnUnsettled/markTurnSettled existed) ran BEFORE
 	// delivering notify/forwarded to target. That earlier idempotency
@@ -2046,8 +2041,8 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 		// forwarded is only genuinely "delivered" when there was a live
 		// target to hand it to — see the else branch below, mirroring
 		// finalizeTurn's own identical target!=nil gating around its
-		// sibling persistDeliveredTaskNotifications call exactly. A live
-		// review finding on an earlier version of this method: it called
+		// sibling persistDeliveredTaskNotifications call exactly. An
+		// earlier version of this method called
 		// persistDeliveredTaskNotifications(forwarded) unconditionally,
 		// so a target==nil crash-window run (see below) durably marked a
 		// GRANDCHILD's notification as recTaskNotifyDelivered even though
@@ -2096,7 +2091,7 @@ func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session
 
 	// Queue the actual durable writes to run AFTER m.mu is released (see
 	// SessionManager.deferPersist/unlockAndFlushPersist's own doc
-	// comment) — a live review finding: this method runs entirely under
+	// comment). This method runs entirely under
 	// m.mu (the single lock guarding every session in the tree), and used
 	// to call target.session.enqueueTaskNotification (which persists
 	// inline) directly, running disk I/O while that global lock was
@@ -2206,9 +2201,9 @@ const lostToRestartText = "[harness: this turn was interrupted by a process rest
 // bookkeeping that records that — commitOutcomeLocked's own durable
 // write, delivery to the ancestor, markTurnSettled — was what the
 // process restart actually interrupted; the turn itself was not
-// "interrupted by a process restart," it was deliberately stopped. A
-// live review finding: lostToRestartText's wording, applied
-// unconditionally, durably recorded a false cause in the transcript for
+// "interrupted by a process restart," it was deliberately stopped.
+// lostToRestartText's wording, applied unconditionally, durably
+// recorded a false cause in the transcript for
 // this one case — cancellation demoted to a mere side-effect of a
 // restart that had nothing to do with why the turn actually ended.
 const canceledInterruptedText = "[harness: this turn was canceled; the process restarted before that could be fully recorded]"
@@ -2582,7 +2577,7 @@ func (m *SessionManager) Info(id string) (info SessionNode, ok bool) {
 // SessionAndInfo is Session and Info's combined form: both the managed
 // *Session and its lifecycle snapshot, under ONE m.mu hold. A caller that
 // needs both would otherwise call Session then Info separately — two m.mu
-// acquisitions, and (a live review finding on Server.lookup, the first
+// acquisitions, and (on Server.lookup, the first
 // caller) a correct-today-by-coincidence TOCTOU. Nothing currently reaps a
 // node between two such calls: Reap only removes terminal leaves, so a
 // RUNNING child's status can never flip to "gone" in that gap. But that
@@ -2606,8 +2601,8 @@ func (m *SessionManager) SessionAndInfo(id string) (sess *Session, info SessionN
 // *Session it was pinning in memory, message history included.
 //
 // This package never reaps automatically: m.nodes otherwise grows
-// unbounded on a long-lived process that fans out many `task` children
-// (a live review finding), each one pinned forever even once its result
+// unbounded on a long-lived process that fans out many `task` children,
+// each one pinned forever even once its result
 // has long since been delivered and read — but this package has no way
 // to know how long a caller wants a settled child's result to stay
 // reachable via Info/session.info, so it leaves that retention policy
@@ -2646,8 +2641,8 @@ func (m *SessionManager) Reap() int {
 		// recoverInterruptedTurnLocked (an interrupted child whose own
 		// parent could not be found tracked, provably with no live
 		// ancestor left to ever deliver to) — see pendingForget's own
-		// doc comment for both cases in full. A live review finding:
-		// without this exception, either case leaked the node forever.
+		// doc comment for both cases in full. Without this exception,
+		// either case leaked the node forever.
 		if n.parentID == "" && !n.pendingForget {
 			// A WARM ORPHAN (adoptReloadedLocked's "true depth is
 			// unrecoverable" branch: depth > 0, but the true parent
@@ -2781,9 +2776,9 @@ func (m *SessionManager) ForgetRoot(id string) error {
 		// canceled, per endSubagentLineage's own cascade-then-forget
 		// ordering) children one generation at a time — also collects
 		// THIS root, once it finally goes childless, instead of leaking
-		// it forever the moment this call returns. A live review finding:
-		// without this, nothing ever revisited a root ForgetRoot refused
-		// for exactly this reason.
+		// it forever the moment this call returns. Without this, nothing
+		// ever revisited a root ForgetRoot refused for exactly this
+		// reason.
 		//
 		// Also make n itself terminal + finalized HERE, rather than
 		// depending on the caller having ALSO called Cancel first —
@@ -2806,7 +2801,7 @@ func (m *SessionManager) ForgetRoot(id string) error {
 	n.cancel() // see Reap's identical call for why this is required, not optional
 	delete(m.nodes, id)
 	m.markChangedLocked()
-	// A live review finding: usageByRoot/runningByRoot are keyed by root
+	// usageByRoot/runningByRoot are keyed by root
 	// id and written to by every turn anywhere in this root's tree (see
 	// their own doc comments) — deleting only m.nodes left one stale
 	// entry in each behind per forgotten root, forever, on a long-lived
@@ -3054,9 +3049,9 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	// the SAME log later, for a single-log audit trail of everything
 	// this session's `task` tool did.
 	//
-	// Deferred via m.deferPersist, not written inline here — a live
-	// review finding: this whole method runs under m.mu (the single lock
-	// guarding every session in the tree), and persistTaskSpawnLocked
+	// Deferred via m.deferPersist, not written inline here. This whole
+	// method runs under m.mu (the single lock guarding every session in
+	// the tree), and persistTaskSpawnLocked
 	// does real disk I/O (ensureLog's MkdirAll/OpenFile/Stat on a cold
 	// log, then writeRecord's append) — see SessionManager.deferPersist/
 	// unlockAndFlushPersist's own doc comment for the full mechanism and
@@ -3153,9 +3148,8 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // descendant's next turn boundary") would be broken exactly whenever a
 // message lands after the child's last mid-turn drain point: the child
 // settles done/failed with the message still sitting, undelivered, in
-// its own promptQueue, and nothing would ever look at it again — a live
-// review finding on this fix's first pass (the original version relied
-// on the mid-turn drain alone).
+// its own promptQueue, and nothing would ever look at it again. An
+// earlier version of this fix relied on the mid-turn drain alone.
 //
 // Runs regardless of the prior call's own outcome — including a failed
 // one — mirroring maybeDispatchQueued's own unconditional tail-dispatch
@@ -3168,8 +3162,8 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // the top of every loop iteration, before the next dequeue. Without this, a child canceled (task cancel) WHILE
 // this loop is between Prompt calls would keep calling s.DequeuePrompt
 // (journaling each item as "delivered") and s.Prompt(ctx, ...) — on an
-// already-dead ctx — for every remaining queued entry: a live review
-// finding. Any prompt still in the queue at that point is left there,
+// already-dead ctx — for every remaining queued entry.
+// Any prompt still in the queue at that point is left there,
 // UNTOUCHED — never explicitly drained or cleared by this loop — which
 // is the right answer, not merely the simplest one: it matches
 // cancellation's existing "stop, full stop" semantics elsewhere in this
@@ -3205,8 +3199,8 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 // msgID/blobs above: a queued prompt's own provenance must reach its own
 // eventual turn, not silently borrow the turn that happened to drain it.
 func drainQueueAndPrompt(ctx context.Context, s *Session, text, msgID string, prov PromptProvenance, blobs []*message.Blob) (*message.Message, error) {
-	// The FIRST call is guarded too, not just the loop — a review
-	// finding: on the finalizeTurn re-drive and settled-relaunch paths a
+	// The FIRST call is guarded too, not just the loop: on the
+	// finalizeTurn re-drive and settled-relaunch paths a
 	// cancel landing between the closure's creation and its `go resume()`
 	// left this call issuing one wasted Prompt (appending one user
 	// message) on an already-dead ctx. Returning ctx.Err() matches what
@@ -3291,9 +3285,8 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	m.mu.Lock()
 	s, nodeCtx, isChild, err := m.reserveSendLocked(id)
 	// unlockAndFlushPersist, matching SendToDescendant's settled branch,
-	// which reserves through this same reserveSendLocked call — a review
-	// finding on the one plain unlock left after that branch was
-	// hardened. reserveSendLocked defers nothing today, so this is
+	// which reserves through this same reserveSendLocked call.
+	// reserveSendLocked defers nothing today, so this is
 	// uniformity rather than a live fix: the helper is the standard
 	// unlock for every SessionManager method (an empty-slice no-op when
 	// nothing is queued), so a future deferred write on this path cannot
@@ -3318,8 +3311,8 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 }
 
 // SendOrQueue is Send extended with SendToDescendant's own busy-target
-// queuing (see that method's own doc comment for the full mechanism and
-// the two live-review findings that produced it) — but reachable for ANY
+// queuing (see that method's own doc comment for the full mechanism) —
+// reachable for ANY
 // id this manager tracks, with no ancestor/caller id and no lineage
 // gate. It is the single-owner send path server/session_tree.go's
 // unified session.send endpoint uses for a managed CHILD: a busy child
@@ -3459,7 +3452,7 @@ func (m *SessionManager) SendOrQueue(ctx context.Context, id, text, msgID string
 // re-validated id's existence/ancestry/status under this SAME m.mu hold,
 // moments earlier) can reserve the turn in that SAME critical section
 // instead of releasing m.mu and having a freshly launched goroutine call
-// Send, which re-acquires m.mu from scratch — a live review finding: a
+// Send, which re-acquires m.mu from scratch. A
 // caller's own periodic Reap() sweep could collect an already-terminal
 // leaf in the gap between SendToDescendant's own admission decision and
 // that goroutine's Send call actually re-acquiring m.mu, silently
@@ -3612,7 +3605,7 @@ func durableAncestorChainHas(cfg Config, startParentID, callerID string, maxHops
 		// Header-only read, not LoadSession: this walk needs exactly one
 		// field per hop (the next TaskParentID), and LoadSession replays
 		// the WHOLE log — O(chain depth) full-transcript parses in the
-		// unlocked window for deep chains (a review finding). The header
+		// unlocked window for deep chains. The header
 		// record is the first line of every log (ensureLog writes it
 		// first, in the same atomic buffer as the model record), so one
 		// bounded line read per hop suffices.
@@ -3785,8 +3778,7 @@ func (m *SessionManager) resolveOrReviveDescendantLocked(callerID, targetID stri
 // already-done/failed descendant was a no-op — see cancelOneNodeLocked's
 // own doc comment) read back BEFORE releasing m.mu, in the SAME locked
 // operation that performed the cancellation — not via a separate later
-// Info(targetID) call. A live review finding on this fix's first pass:
-// a done/failed/canceled LEAF is Reap-eligible the instant it is
+// Info(targetID) call. A done/failed/canceled LEAF is Reap-eligible the instant it is
 // finalized (Reap's own doc comment), so a caller's periodic Reap sweep
 // could collect targetID in the gap between this method returning and a
 // separate follow-up read, turning "no such session" into an incorrect
@@ -3883,8 +3875,8 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 		return SessionNode{}, provider.Usage{}, fmt.Errorf("%w: %s", ErrNotDescendant, targetID)
 	}
 	snap := n.snapshot()
-	// Children is the DURABLE-plus-live union, not the live list alone —
-	// a review finding: Reap removes a terminal leaf from its parent's
+	// Children is the DURABLE-plus-live union, not the live list alone.
+	// Reap removes a terminal leaf from its parent's
 	// live children, so once a descendant's own children finish and are
 	// swept, n.children is empty while the session's durable spawn record
 	// still names them. The wire's GET /session/{id}/lineage already
@@ -3902,8 +3894,8 @@ func (m *SessionManager) DescendantInfo(callerID, targetID string) (SessionNode,
 	// snap.Children, not n.children: snapshot already made a private copy,
 	// and mergeChildIDs takes ownership of its live argument, so the
 	// common case (no durable ids to merge) reuses that one copy instead
-	// of allocating a second — a review finding on the first version of
-	// this call, which discarded snapshot's copy and built another.
+	// of allocating a second, rather than discarding snapshot's copy and
+	// building another.
 	snap.Children = mergeChildIDs(n.session.SpawnedChildIDs(), snap.Children)
 	return snap, n.session.Usage(), nil
 }
@@ -4022,10 +4014,9 @@ func mergeChildIDs(durable, live []string) []string {
 // it one instead, per the design doc's own explicit choice for the
 // `task` tool's send verb ("reuse the existing prompt-queue machinery
 // rather than rejecting busy children, mirroring how roots queue
-// prompts") — a live review finding on an earlier revision of this
-// comment, which claimed this "mirrors" the wire unconditionally,
-// overlooking that the two surfaces now behave OPPOSITELY for exactly
-// this case:
+// prompts"). An earlier revision of this comment claimed this
+// "mirrors" the wire unconditionally, overlooking that the two
+// surfaces now behave OPPOSITELY for exactly this case:
 //
 //   - A RUNNING target gets text appended to its own durable prompt
 //     queue (in memory synchronously, the durable record deferred — see
@@ -4037,9 +4028,8 @@ func mergeChildIDs(durable, live []string) []string {
 //     root) has no external residency layer to pick the queue back up
 //     once Prompt returns — drainQueueAndPrompt (below), called from
 //     both of the places that drive a child's own turn (Spawn's launched
-//     goroutine, and Send itself for a child target). A live review
-//     finding on this fix's first pass: relying on the mid-turn drain
-//     ALONE stranded a message enqueued after a target's last tool-call
+//     goroutine, and Send itself for a child target). Relying on the
+//     mid-turn drain ALONE stranded a message enqueued after a target's last tool-call
 //     boundary — its turn would simply end, taking the child straight to
 //     done/failed with the message still sitting, undelivered, in its
 //     own promptQueue forever. drainQueueAndPrompt closes that gap.
@@ -4065,12 +4055,11 @@ func mergeChildIDs(durable, live []string) []string {
 //     (reserveSendLocked) inside the SAME m.mu critical section that
 //     just re-validated targetID, rather than releasing m.mu and having
 //     a freshly launched goroutine call Send, which would re-acquire
-//     m.mu from scratch — closing a live review finding (a caller's own
-//     periodic Reap() sweep could collect an already-terminal leaf in
-//     that gap, silently discarding the resulting ErrUnknownSession and
-//     leaving the "dispatched as a fresh turn" promise unfulfilled) by
-//     eliminating the window entirely rather than merely narrowing or
-//     documenting it.
+//     m.mu from scratch. This closes the window entirely rather than
+//     merely narrowing it: a caller's own periodic Reap() sweep could
+//     otherwise collect an already-terminal leaf in that gap, silently
+//     discarding the resulting ErrUnknownSession and leaving the
+//     "dispatched as a fresh turn" promise unfulfilled.
 //
 // A target Reap has already collected is REVIVED, not refused: resolved
 // from disk and re-adopted into the tree via adoptReloadedLocked — the
@@ -4100,8 +4089,8 @@ func mergeChildIDs(durable, live []string) []string {
 // (settled-target restart path only — a running target's enqueue never
 // touches this budget).
 func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queued bool, err error) {
-	// Validate and trim ONCE, before either delivery path — a review
-	// finding: the running-target branch rejected blank text while the
+	// Validate and trim ONCE, before either delivery path: the
+	// running-target branch used to reject blank text while the
 	// settled-target branch passed it straight to Prompt and burned a
 	// whole re-run turn on a space. runTaskSend masks that for the `task`
 	// tool, but this is an exported API and the asymmetry is exactly the
@@ -4139,7 +4128,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// nested m.mu (outer) -> s.mu (inner, taken inside
 		// enqueueMemoryOnlyLocked itself), the same lock order Spawn's
 		// own parentSess.mu access already establishes elsewhere in this
-		// file — not released first. A live review finding: an earlier
+		// file — not released first. An earlier
 		// version of this branch released m.mu before enqueueing,
 		// leaving a window where a concurrent finalizeTurn call (also
 		// serialized on m.mu) could observe n.status still Running (the
@@ -4161,8 +4150,8 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 		// doc comment for the other half of this fix.
 		//
 		// The durable persist (persistPromptQueueLocked's own
-		// ensureLog+writeRecord) is deliberately NOT run inline here —
-		// a SEPARATE live review finding: doing so would hold m.mu, the
+		// ensureLog+writeRecord) is deliberately NOT run inline here:
+		// doing so would hold m.mu, the
 		// tree-wide lock every OTHER session's Info/Reap/Spawn/finalize
 		// call also needs, across a synchronous disk write for the
 		// WHOLE duration of this ONE session's fsync. Deferred via
@@ -4221,8 +4210,8 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 	// reserveSendLocked defers nothing today — that method's own doc
 	// comment makes it the standard unlock for every SessionManager
 	// method (cheap, an empty-slice no-op when nothing is queued), so a
-	// future deferred write on this path cannot be dropped silently. A
-	// review finding on the lone plain unlock this method had left.
+	// future deferred write on this path cannot be dropped silently: the
+	// lone plain unlock this method had left.
 	m.unlockAndFlushPersist()
 	if rerr != nil {
 		// ErrSessionCanceled/ErrConcurrencyLimit: reachable — mirror the
@@ -4260,7 +4249,7 @@ func (m *SessionManager) SendToDescendant(callerID, targetID, text string) (queu
 // exactly once per turn that actually happened, regardless of whether
 // finalizeTurn goes on to settle n terminal, re-drive it (the queued-
 // message race fix — see finalizeTurn's own doc comment), or leave a
-// root idle — a live review finding on this fix's first pass, which ran
+// root idle. An earlier version of this fix ran
 // this accumulation much later, AFTER the re-drive branch's own early
 // return, silently skipping it for however long the re-driven turn
 // takes and letting a concurrent Spawn under-count the tree budget in
@@ -4311,7 +4300,7 @@ func (m *SessionManager) finalizeTurn(id string, msg *message.Message, perr erro
 // recursive re-drive).
 //
 // It exists because the queued-message re-drive below is only correct for
-// an in-package turn, a review finding. The re-drive assumes the resume it
+// an in-package turn. The re-drive assumes the resume it
 // returns is the SOLE continuation of the session and that no run slot is
 // held by anyone else. For an externally scheduled turn both assumptions
 // are false: the server holds its own run slot across the ReportTurnEnd
@@ -4333,8 +4322,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		return nil
 	}
 
-	// Accumulate n's newly-spent usage BEFORE the re-drive check below —
-	// a live review finding: an earlier version of this call ran only
+	// Accumulate n's newly-spent usage BEFORE the re-drive check below.
+	// An earlier version of this call ran only
 	// once, much later (right before the settled-marker persist), which
 	// the re-drive branch's early return skipped entirely. That left
 	// usageByRoot under-counting the just-finished turn's tokens for the
@@ -4358,7 +4347,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// it cannot see anything enqueued after that point. Re-check here,
 	// atomically with the terminal-status decision the rest of this
 	// method is about to make, and dequeue-and-re-drive instead of
-	// settling if anything is waiting: a live review finding, and the
+	// settling if anything is waiting — the
 	// other half of the fix described in SendToDescendant's own doc
 	// comment (nesting the enqueue under m.mu is necessary but not
 	// sufficient without this matching re-check on the finalize side).
@@ -4383,7 +4372,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// flushed by unlockAndFlushPersist below, same as SendToDescendant's
 	// own enqueue and this package's existing task-notification writes.
 	//
-	// Gated on n.ctx as well as n.status — a review finding.
+	// Gated on n.ctx as well as n.status.
 	// StatusCanceled is set ONLY by cancelOneNodeLocked/
 	// cancelSubtreeLocked (task cancel, AbortTurn), so a cascade cancel
 	// of the manager's own base ctx — process shutdown — cancels n.ctx
@@ -4411,7 +4400,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// 7, server/handlers.go). Every item still IN the queue is untouched,
 	// exactly as documented.
 	//
-	// n.depth > 0, not n.parentID != "" — a live review finding, the
+	// n.depth > 0, not n.parentID != "": the
 	// SAME fix and the SAME reason as ChildTurnObserver's own gate
 	// below: a WARM ORPHAN (depth > 0, restored from its durable
 	// TaskDepth, but live n.parentID left empty — see
@@ -4474,8 +4463,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	var notify *taskNotification
 	switch {
 	case n.depth == 0:
-		// n.depth == 0, not n.parentID == "" — a live review finding,
-		// the SAME class of fix as ChildTurnObserver's and the
+		// n.depth == 0, not n.parentID == "": the
+		// SAME class of fix as ChildTurnObserver's and the
 		// queued-message re-drive's own gates above: a WARM ORPHAN
 		// (depth > 0, restored from its durable TaskDepth, but live
 		// n.parentID left empty — see adoptReloadedLocked's "true depth
@@ -4553,7 +4542,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 		// re-adoption of this same child (restoreKnownStatusLocked)
 		// distinguish this from an ordinary failure and correctly restore
 		// StatusCanceled rather than silently rewriting history to
-		// StatusFailed — a live review finding.
+		// StatusFailed.
 		//
 		// Clear any PRIOR turn's failure bookkeeping while we are here. A
 		// node reaching this branch was RUNNING, and a running node can
@@ -4614,8 +4603,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	}
 	// ChildTurnObserver fires for exactly the same node ChildTurnStart
 	// Observer already fired for — n.depth > 0, the SAME predicate
-	// reserveSendLocked's own start-side gate uses, NOT n.parentID != ""
-	// — a live review finding: a WARM ORPHAN (a child reloaded and
+	// reserveSendLocked's own start-side gate uses, NOT n.parentID != "".
+	// A WARM ORPHAN (a child reloaded and
 	// adopted while its true parent is untracked — adoptReloadedLocked's
 	// "true depth is unrecoverable" branch — has depth > 0, restored
 	// from its own durable TaskDepth, but its LIVE n.parentID is left
@@ -4688,8 +4677,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// Commit notify BEFORE attempting delivery — see
 	// SessionManager.commitOutcomeLocked's own doc comment and the
 	// crash-window table on recoverInterruptedTurnLocked's own doc
-	// comment for the full mechanism this closes: a live review finding
-	// that a crash landing INSIDE this method's own deliver-then-settle
+	// comment for the full mechanism this closes: a crash landing INSIDE
+	// this method's own deliver-then-settle
 	// sequence below (the notify already durably queued on target's log,
 	// but this turn not yet marked settled) let a later recovery attempt
 	// reconstruct a DIFFERENT payload than the one already delivered —
@@ -4708,8 +4697,8 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	if notify != nil || len(forwarded) > 0 {
 		if target := m.nearestLiveAncestorLocked(n); target != nil {
 			// Memory-only append here, durable write deferred via
-			// m.deferPersist to run AFTER m.mu is released — a live
-			// review finding: this method runs under m.mu (the single
+			// m.deferPersist to run AFTER m.mu is released. This
+			// method runs under m.mu (the single
 			// lock guarding every session in the tree), and
 			// enqueueTaskNotification persists inline, running disk I/O
 			// while that global lock was held. See
@@ -4881,8 +4870,8 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 				return
 			case RunnerRefused:
 				// The scheduler recognizes id but is refusing this
-				// attempt right now (a live review finding this
-				// centralizes: an earlier revision left every
+				// attempt right now. This centralizes handling it: an
+				// earlier revision left every
 				// ExternalRunner implementation responsible for
 				// remembering this call itself — see RunnerOutcome's own
 				// doc comment). No bracketed turn will ever settle the
@@ -4927,8 +4916,8 @@ func (m *SessionManager) triggerResumeLocked(node *sessionNode) func() {
 // Called from exactly one place now: triggerResumeLocked's own closure,
 // centrally, whenever an ExternalRunner reports RunnerRefused — see
 // RunnerOutcome's own doc comment for why this moved here instead of
-// staying each ExternalRunner implementation's own responsibility (a
-// live review finding: the bool-returning predecessor of RunnerOutcome
+// staying each ExternalRunner implementation's own responsibility: the
+// bool-returning predecessor of RunnerOutcome
 // left that call easy to forget in any FUTURE implementation, with
 // nothing but a doc comment enforcing it). Still exported: an
 // ExternalRunner implementation with its own reason to revert speculatively
@@ -5208,11 +5197,11 @@ type spawnFailure struct {
 // classified prefix, then the underlying error itself as the cause, plus
 // the structured kind a parent branches on.
 //
-// The prefix alone was the whole reason until a live incident proved it
-// unusable. A child died on "[permanent] anthropic: You have reached your
-// specified API usage limits. You will regain access on <date>"; its
-// parent read "turn failed and did not recover", guessed the child had hit
-// a bug, and respawned a sibling straight into the same fleet-wide wall.
+// The prefix alone is not enough. A child that dies on "[permanent]
+// anthropic: You have reached your specified API usage limits. You will
+// regain access on <date>" would leave its parent reading only "turn
+// failed and did not recover" — indistinguishable from a bug — and risk
+// respawning a sibling straight into the same fleet-wide wall.
 // Every classified prefix here covers a whole family of causes — a
 // permanent 400 is a malformed request AND a quota rejection AND a
 // content-policy refusal — so the prefix can never tell a parent which
@@ -5225,8 +5214,8 @@ type spawnFailure struct {
 // spawnErrorDetailCap runes. This is best-effort masking, exactly as it is
 // for a tool result — a provider error is free-form text and no pattern
 // set catches every secret shape — so the trade is deliberate: a parent
-// that cannot see the cause makes the wrong call every time, which the
-// incident measured, against a bounded, masked leak risk on an error path.
+// that cannot see the cause makes the wrong call every time, weighed
+// against a bounded, masked leak risk on an error path.
 //
 // context.Canceled and context.DeadlineExceeded keep their short fixed
 // strings with no cause appended: "context canceled" names nothing a
@@ -5278,7 +5267,7 @@ func classifySpawnFailure(err error) spawnFailure {
 		// Config.PromptRetries (a couple of quick attempts), not the goal
 		// loop's ~30-minute weather schedule, so a throttle lasting a few
 		// seconds can land here. The two answers cost differently: a
-		// missed wall makes the parent respawn into it (the incident),
+		// missed wall makes the parent respawn into it,
 		// while a false wall costs the parent one deferred resume of a
 		// child that is fully intact — and the guidance for a hintless
 		// case names no waiting period, so the parent may resume at once.
@@ -5303,8 +5292,8 @@ func classifySpawnFailure(err error) spawnFailure {
 }
 
 // exhaustionReason is the classified prefix for an account wall. It states
-// the classification ONLY, never the recover-at hint — a review finding:
-// the hint is extracted FROM the provider message that spawnErrorDetail
+// the classification ONLY, never the recover-at hint. The hint is
+// extracted FROM the provider message that spawnErrorDetail
 // renders right after it, and taskFailureGuidance states it a third time,
 // so naming it here made one rendered line repeat the same time up to
 // three times. The guidance's "after <hint>" is the single canonical

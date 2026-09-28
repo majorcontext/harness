@@ -84,11 +84,10 @@ func TestGoalToolSetArms(t *testing.T) {
 	}
 }
 
-// TestGoalToolSetEchoesTrimmedCondition is the PR #77 review's Finding 2: set
-// must echo back the goal's STORED (trimmed) condition, not the raw argument
-// verbatim — RegisterGoal itself trims via strings.TrimSpace (see
-// engine/goal.go), so a padded argument and Session.ActiveGoal()'s read-back
-// must agree.
+// TestGoalToolSetEchoesTrimmedCondition: set must echo back the goal's
+// STORED (trimmed) condition, not the raw argument verbatim —
+// RegisterGoal itself trims via strings.TrimSpace (see engine/goal.go),
+// so a padded argument and Session.ActiveGoal()'s read-back must agree.
 func TestGoalToolSetEchoesTrimmedCondition(t *testing.T) {
 	s := newGoalToolSession(t)
 

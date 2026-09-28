@@ -12,12 +12,12 @@ import (
 )
 
 // TestTurnEndOnGoalMaxTurnsIsNotCompleted is the red-first regression test
-// for PR #55 review finding (1): runGoal used to key turn.end purely on
-// PursueGoal's error being nil, but PursueGoal returns a NIL error with
-// Achieved:false when MaxTurns is exhausted (engine/goal.go's terminal
-// "return &GoalResult{Achieved: false, ..., Reason: "max turns"}, nil") —
-// so a goal that gave up after burning its turn budget was journaled as
-// turn.end{outcome:"completed"} and surfaced as last_turn={completed},
+// proving runGoal cannot key turn.end purely on PursueGoal's error being
+// nil: PursueGoal returns a NIL error with Achieved:false when MaxTurns is
+// exhausted (engine/goal.go's terminal "return &GoalResult{Achieved:
+// false, ..., Reason: "max turns"}, nil"), so keying on err == nil alone
+// would journal a goal that gave up after burning its turn budget as
+// turn.end{outcome:"completed"} and surface it as last_turn={completed},
 // telling a poller "idle because done" for a goal that was never met. That
 // is exactly the ambiguity this primitive exists to remove.
 //
@@ -128,8 +128,8 @@ func (s *clearRaceEvalStream) Next() (provider.Event, error) {
 func (s *clearRaceEvalStream) Close() error { return nil }
 
 // TestTurnEndSuppressedOnGoalClearedInFlight is the red-first regression
-// test for the second half of review finding (1): when ClearGoal wins a
-// race against an in-flight evaluator call, PursueGoal returns a nil error
+// test proving turn.end stays suppressed when ClearGoal wins a race
+// against an in-flight evaluator call: PursueGoal returns a nil error
 // with Achieved:false, Reason:"goal cleared" — indistinguishable, by error
 // value alone, from the max-turns case, but semantically a cancellation:
 // the goal was cleared, not completed and not exhausted. No turn.end record

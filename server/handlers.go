@@ -167,7 +167,7 @@ type lineageJSON struct {
 	// field shipped), THIS is the value reported — cold or warm alike,
 	// never the live-tree-derived m.maxDepth refusal sentinel a reload
 	// with no currently-tracked parent used to substitute (see
-	// lineageJSONFor's Depth paragraph for the incident this closes).
+	// lineageJSONFor's Depth paragraph).
 	Depth int `json:"depth,omitempty"`
 	// Status is the SessionManager lifecycle state (running/idle/done/
 	// failed/canceled — engine.SessionStatus) — DISTINCT from
@@ -181,17 +181,16 @@ type lineageJSON struct {
 	// engine.SessionStatus value, so omitting is unambiguous.
 	Status string `json:"status,omitempty"`
 	// Children deliberately has NO omitempty, unlike Depth/Status/
-	// AgentType/Result/FailReason just above and below — a live review
-	// finding on an earlier revision's fix: giving it omitempty (to stop
-	// the cold-fallback branch's old []string{} from lying "zero
-	// children") went one step too far, since a Go slice's omitempty
-	// collapses nil AND a genuinely empty non-nil slice to the exact
-	// same "field absent" wire shape. That made a WARM, truly childless
-	// node ALSO omit the field, indistinguishable from "unknown" — the
-	// very ambiguity omitempty was supposed to close. A caller polling
-	// the same session as it transitions between these states would see
-	// the field flicker between present and absent with no way to tell
-	// "known: zero" from "don't know" from the flicker alone.
+	// AgentType/Result/FailReason just above and below: giving it omitempty (to
+	// stop the cold-fallback branch's old []string{} from lying "zero
+	// children") went one step too far, since a Go slice's omitempty collapses
+	// nil AND a genuinely empty non-nil slice to the exact same "field absent"
+	// wire shape. That made a WARM, truly childless node ALSO omit the field,
+	// indistinguishable from "unknown" — the very ambiguity omitempty was
+	// supposed to close. A caller polling the same session as it transitions
+	// between these states would see the field flicker between present and
+	// absent with no way to tell "known: zero" from "don't know" from the
+	// flicker alone.
 	//
 	// The fix: no omitempty, and lineageJSONFor's childIDsUnion helper
 	// guarantees a non-nil (possibly empty) slice on the WARM branch — see
@@ -206,11 +205,10 @@ type lineageJSON struct {
 	// ("unknown") even though SpawnedChildIDs had the real answer sitting
 	// right there in sess's own already-loaded Config.
 	//
-	// The cold-fallback branch is a narrower story: a live review finding
-	// on THAT earlier fix caught that SpawnedChildIDs() is a complete
-	// answer only for a log written after recTaskSpawned records shipped
-	// — a legacy log that genuinely did spawn children before that record
-	// existed has an empty SpawnedChildIDs() indistinguishable from a
+	// The cold-fallback branch is a narrower story: SpawnedChildIDs() is a
+	// complete answer only for a log written after recTaskSpawned records
+	// shipped — a legacy log that genuinely did spawn children before that
+	// record existed has an empty SpawnedChildIDs() indistinguishable from a
 	// parent that truly never spawned anything, and the cold branch has
 	// no live tree to cross-check against the way the warm branch does.
 	// So an empty result there IS reported as genuinely unknown (nil,
@@ -373,8 +371,8 @@ type lastTurnJSON struct {
 // the GOAL, not that no TURN is running — an ordinary prompt (or the plain
 // resume prompt that eventually re-arms the goal) can be actively streaming
 // while the goal itself sits parked, and "idle" would be a lie in that
-// window (incident: an operator watching the monitor concluded a box was
-// dead while it was mid-turn). So forceIdle&&running reads "busy", never
+// window — an operator watching the monitor could read the box as dead
+// while it was mid-turn. So forceIdle&&running reads "busy", never
 // "goal-running" — goalActive must not win here either, that's exactly the
 // zombie-goal trap forceIdle exists to close — and only forceIdle&&!running
 // reads "idle" (see TestCompositeStateForceIdleNeverMasksRunningTurn and
@@ -440,11 +438,12 @@ type goalJSON struct {
 	Paused      bool   `json:"paused,omitempty"`
 	PauseReason string `json:"pause_reason,omitempty"`
 	// EvalFailures is the most recent goal.eval_failed record's consecutive
-	// failure count (see engine/goal.go's "Round 6" doc section
-	// and goalTracker.evalFailures): rises with each failed evaluator
-	// boundary below goalEvalFailureLimit and resets to 0 on goal.set,
-	// goal.eval, goal.achieved, goal.cleared, or goal.updated. Omitted
-	// (zero) whenever no boundary has failed since the last reset.
+	// failure count (see engine/goal.go's doc comment on advisory
+	// evaluator-boundary failures and goalTracker.evalFailures): rises with
+	// each failed evaluator boundary below goalEvalFailureLimit and resets
+	// to 0 on goal.set, goal.eval, goal.achieved, goal.cleared, or
+	// goal.updated. Omitted (zero) whenever no boundary has failed since the
+	// last reset.
 	EvalFailures int `json:"eval_failures,omitempty"`
 }
 
@@ -530,12 +529,11 @@ func (s *Server) sessionIDOrNotFound(w http.ResponseWriter, r *http.Request) (st
 //
 // "Is a managed CHILD" is decided on sess.TaskParentID() != "" — the
 // DURABLE signal, restored by LoadSession unconditionally — never
-// info.ParentID, the LIVE tree pointer. A live review finding: an earlier
-// revision of this guard checked info.ParentID, which adoptReloadedLocked
-// leaves EMPTY for a warm orphan (a genuine managed child adopted while
-// its own parent was untracked — see that method's own doc comment and
-// lineageJSONFor's identical ParentID fallback just above in this file).
-// A warm orphan slipped through the old check entirely, letting exactly
+// info.ParentID, the LIVE tree pointer. info.ParentID is unsafe here:
+// adoptReloadedLocked leaves it EMPTY for a warm orphan (a genuine managed
+// child adopted while its own parent was untracked — see that method's own
+// doc comment and lineageJSONFor's identical ParentID fallback just above
+// in this file), so a check against info.ParentID alone would let exactly
 // the concurrent-Session corruption this guard exists to prevent happen
 // to precisely the child shape it was least equipped to protect. Every
 // call site that resolves a managed child WITHOUT this guard now (see
@@ -876,7 +874,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// Reap NEVER removes (a root is the tree's own address — see Reap's
 	// doc comment), so adopting before the fallible recordWorktreeOwner/
 	// Persist steps above leaked one root node plus its full *Session per
-	// failed create, forever — a live review finding. By the time this
+	// failed create, forever. By the time this
 	// line runs, both fallible steps have already succeeded, so there is
 	// no error path left past this point that could strand it. Errors
 	// only on an ID collision (astronomically unlikely — see
@@ -1209,11 +1207,10 @@ type messagePlaceholder struct {
 // message.Message.Normalize does not catch (see its doc comment) because it
 // only scrubs zero-length entries — used to take the entire endpoint down
 // with a 500 ("json: error calling MarshalJSON for type message.Parts"),
-// exactly when the transcript view was most needed to diagnose the death
-// (observed in production on ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and
-// ses_01hpf4eexb31v0ecyvesf75g5s). Now a message that fails to marshal is
-// replaced with a messagePlaceholder carrying its ID, role, and the marshal
-// error, and every other message in the response is unaffected: the
+// exactly when the transcript view was most needed to diagnose the death.
+// A message that fails to marshal is replaced with a messagePlaceholder
+// carrying its ID, role, and the marshal error, and every other message
+// in the response is unaffected: the
 // endpoint always returns 200 with as much of the transcript as is actually
 // renderable.
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
@@ -1432,8 +1429,8 @@ type transcriptJSON struct {
 
 // marshalMessages renders messages for the wire, one at a time, replacing
 // any that fails to marshal with a messagePlaceholder — see handleMessages'
-// own doc comment for the production incident that rule exists for. It
-// always returns a non-nil slice, so an empty history serializes as [].
+// own doc comment for why. It always returns a non-nil slice, so an empty
+// history serializes as [].
 func marshalMessages(msgs []message.Message) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(msgs))
 	for i := range msgs {
@@ -2518,14 +2515,10 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 //
 // remaining is st.sess.QueuedPrompts()'s length, snapshotted HERE —
 // synchronously, immediately after the dequeue above, still before
-// runPrompt's own goroutine is spawned — for every caller's own response
-// to use directly, INSTEAD OF re-reading QueuedPrompts() itself after this
-// call returns. A live review finding, root-caused from an intermittent
-// CI failure (TestIdlePromptWithQueueGoesFIFO, reproduced 200+ times
-// locally before finally catching it under real scheduling pressure — see
-// that test's own doc comment): every caller used to compute its response's
-// queued depth by re-reading QueuedPrompts() AFTER this call returned,
-// racing the just-spawned runPrompt goroutine below. That goroutine is
+// runPrompt's own goroutine is spawned — for every caller's own response to
+// use directly: re-reading QueuedPrompts() itself after this call returns
+// races the just-spawned runPrompt goroutine below (see
+// TestIdlePromptWithQueueGoesFIFO's own doc comment). That goroutine is
 // handed the run slot and nothing else waits for it — with a fast provider
 // (a scripted test double, or simply an unlucky real one), it can run
 // head's ENTIRE turn to completion and, via its own tail's
@@ -2540,10 +2533,9 @@ func (s *Server) freeRunSlotAndEmitIdle(id string, st *sessionState) {
 // remaining comes straight from DequeuePrompt's own return value —
 // engine.Session's answer to "how many are left," computed under the
 // SAME s.mu hold as the dequeue itself (engine/queue.go) — never a
-// separate, follow-up QueuedPrompts() call here. A live review finding
-// on an earlier version of this fix: a second, separately-locked read
-// reintroduced a NARROWER version of the exact race this method exists
-// to close — a different dequeue (a concurrent DELETE
+// separate, follow-up QueuedPrompts() call here. A second, separately-
+// locked read here would reintroduce a NARROWER version of the exact race
+// this method exists to close — a different dequeue (a concurrent DELETE
 // /session/{id}/queue, another dispatch) can interleave in the gap
 // between the two separately-locked calls, same class of gap as the
 // goroutine-spawn race above, just smaller. Taking the count directly
@@ -3110,10 +3102,10 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 //
 //   - MaxTurns exhausted without the evaluator ever returning MET (Reason
 //     "max turns"): the goal gave up, it did not finish. That is recorded as
-//     its own outcomeMaxTurnsExceeded, never "completed" — see PR #55 review
-//     finding: keying turn.end on err == nil alone told a poller "idle
-//     because done" for a goal that was never met, exactly the ambiguity
-//     this primitive exists to remove.
+//     its own outcomeMaxTurnsExceeded, never "completed": keying turn.end
+//     on err == nil alone would tell a poller "idle because done" for a
+//     goal that was never met, exactly the ambiguity this primitive
+//     exists to remove.
 //   - ClearGoal won a race against an in-flight worker retry or evaluator
 //     call (Reason "goal cleared"), without the loop's own context ever
 //     being cancelled. This is a clear, same as the context.Canceled path
@@ -3676,9 +3668,9 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	// either) — a misleading 204 while the child ran to completion
 	// untouched.
 	//
-	// Keyed on sess.TaskParentID() (durable), not info.ParentID (live) — a
-	// live review finding: adoptReloadedLocked leaves info.ParentID EMPTY
-	// for a warm orphan (a genuine managed child adopted while its own
+	// Keyed on sess.TaskParentID() (durable), not info.ParentID (live):
+	// info.ParentID is unsafe here since adoptReloadedLocked leaves it
+	// EMPTY for a warm orphan (a genuine managed child adopted while its own
 	// parent was untracked — see that method's own doc comment and
 	// rejectManagedChildTurn's identical fix above), which used to skip
 	// this branch entirely for exactly that child, falling through to the
@@ -3842,8 +3834,7 @@ func (s *Server) handleQueueDelete(w http.ResponseWriter, r *http.Request) {
 // SkipReason names exactly why (never set on a real fold): the three
 // TurnsFolded==0 shapes are otherwise wire-identical, indistinguishable to
 // an operator polling this endpoint even though only one of them
-// (summarizer_empty) actually cost a billed provider call (review
-// follow-up on PR #136, Finding C).
+// (summarizer_empty) actually cost a billed provider call.
 type compactResponseJSON struct {
 	TurnsFolded int              `json:"turns_folded"`
 	FirstID     string           `json:"first_id,omitempty"`
@@ -3954,8 +3945,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	// CONNECTION (net/http.(*conn).serve's own recover), not per PROCESS —
 	// a real, live panic inside Compact (e.g. a native provider's
 	// transcoder choking on claude-code-produced history right after an
-	// operator switches a delegated session's model and then compacts, the
-	// exact incident this fixes: ses_01hac3jqn64npr07q9rxbmtb9z) logs
+	// operator switches a delegated session's model and then compacts) logs
 	// "http: panic serving ..." and closes that one connection, but the
 	// harness process stays up — while this session was left claimed
 	// forever: status "busy", state "busy", lineage.status "running", no
@@ -4111,8 +4101,8 @@ func (s *Server) sessionOnDisk(id string) bool {
 // already answers. handleMessages, handleQueueGet, handleJournal, and the
 // plugin client API all discard the rest of the snapshot, and two of them
 // are polled, so paying the box-global SessionManager.mu and a discarded
-// SessionNode copy per poll is waste (a live review finding — the same
-// class already fixed on syncMessages and waitSnapshot).
+// SessionNode copy per poll is waste (the same class already fixed on
+// syncMessages and waitSnapshot).
 //
 // A caller that renders lineage must use lookup instead: lineageJSONFor
 // reads the manager half even for a resident session.
@@ -4280,11 +4270,11 @@ func (s *Server) workdirHolderLocked(id string, st *sessionState) string {
 //
 // If id has live subagent-sessions children, they are cascade-canceled
 // (sessMgr.Cancel, the same cascade DELETE .../cancel_tree already uses)
-// before id itself is removed — a live review finding: this used to only
-// ever touch server residency (s.sessions), never sessMgr, so ending a
-// parent with a still-running child silently orphaned it: the child kept
-// running to completion with no one left to ever check out its result
-// (its parent's own row was already gone from s.sessions). Guarded on
+// before id itself is removed: touching only server residency (s.sessions)
+// here, never sessMgr, would silently orphan a still-running child when
+// ending its parent — the child would keep running to completion with no
+// one left to ever check out its result (its parent's own row already
+// gone from s.sessions). Guarded on
 // having children at all, mirroring cancel_tree's own scope, so an
 // ordinary childless DELETE never recolors a session's SessionManager
 // status to "canceled" it wasn't already heading toward.
@@ -4335,9 +4325,8 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 }
 
 // endSubagentLineage settles id's sessMgr-side bookkeeping as part of
-// ending it — two live review findings on handleEnd, both stemming from
-// the same root cause: ending a session used to only ever touch server
-// residency (s.sessions), never sessMgr.
+// ending it: ending a session must go beyond server residency
+// (s.sessions) alone to keep sessMgr's own view of the tree consistent.
 //
 //  1. Cascade-cancels live children (the same sessMgr.Cancel cascade
 //     DELETE .../cancel_tree already uses): a still-running child of a
@@ -4360,9 +4349,9 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 //     collects them). That last case is NOT a dead end: ForgetRoot arms
 //     the node's pendingForget flag on refusal specifically so Reap's
 //     own sweep also collects THIS now-childless root once it gets
-//     there — see pendingForget's own doc comment (session_manager.go)
-//     for the full mechanism; a live review caught the gap where
-//     nothing ever revisited a root refused for exactly this reason.
+//     there, so a root refused for exactly this reason is always
+//     eventually revisited — see pendingForget's own doc comment
+//     (session_manager.go) for the full mechanism.
 //     None of these are caller-visible failures: DELETE already
 //     succeeds either way.
 //
@@ -4545,10 +4534,10 @@ func (s *Server) pluginInfo(sessionID string) []plugin.Info {
 //  2. A durable cold fallback, built directly from sess's own persisted
 //     Config.TaskParentID()/TaskAgentType()/TaskDepth()/SpawnedChildIDs()
 //     (engine/store.go restores these on every LoadSession, unconditionally
-//     — no SessionManager adoption needed) — a live review finding:
-//     without this, a child Reaped or never touched since a process
-//     restart reported NO lineage at all on GET /session/{id}, even though
-//     its lineage is fully durable on disk; a caller had no way to learn
+//     — no SessionManager adoption needed): without this fallback, a
+//     child Reaped or never touched since a process restart would report
+//     NO lineage at all on GET /session/{id}, even though its lineage is
+//     fully durable on disk; a caller would have no way to learn
 //     "this session has a parent" without first forcing a reload via an
 //     unrelated write (a prompt/send call). Status/Result/FailReason still
 //     have no durable source and are omitted rather than guessed — see
@@ -4569,11 +4558,11 @@ func (s *Server) pluginInfo(sessionID string) []plugin.Info {
 // re-preferred sess.TaskDepth() independently here, which happened to
 // agree with info.Depth in every case that revision's own tests covered,
 // but was two sources of truth for one fact by construction, free to
-// drift the moment either side's derivation changed — a live review
-// finding. Durable TaskDepth still matters, just not as a SECOND wire-side
-// override: adoptReloadedLocked already folds it into info.Depth as
-// enforcement's own PRIMARY source, and it remains the direct answer on
-// the cold branch below, which has no live info.Depth to defer to at all.
+// drift the moment either side's derivation changed. Durable TaskDepth still
+// matters, just not as a SECOND wire-side override: adoptReloadedLocked
+// already folds it into info.Depth as enforcement's own PRIMARY source, and
+// it remains the direct answer on the cold branch below, which has no live
+// info.Depth to defer to at all.
 //
 // Sentinel semantics live where depth is actually computed
 // (adoptReloadedLocked, engine/session_manager.go) — a REFUSAL SENTINEL
@@ -4646,9 +4635,9 @@ func lineageJSONFor(lv liveSession) *lineageJSON {
 	}
 	// Children is sess.SpawnedChildIDs() verbatim here — NOT run through
 	// childIDsUnion, which always normalizes an empty result to a non-nil
-	// []string{} ("known: zero"). A live review finding: SpawnedChildIDs()
-	// is complete only for a log written AFTER recTaskSpawned records
-	// shipped — a parent whose log predates that record, but genuinely did
+	// []string{} ("known: zero"). SpawnedChildIDs() is complete only for a
+	// log written AFTER recTaskSpawned records shipped — a parent whose log
+	// predates that record, but genuinely did
 	// spawn children before this process ever adopted it, has an empty
 	// SpawnedChildIDs() with no way to tell that apart from a parent that
 	// truly never spawned anything. This cold branch has no live tree to
@@ -4699,8 +4688,8 @@ func coldLineageJSON(parentID, agentType string, depth int, children []string) *
 // Live-first would reorder siblings the moment an elder child settles and
 // is Reaped while a younger one still runs ([B, A] instead of [A, B]).
 //
-// A live review finding: this guarantee does NOT extend to a mixed
-// legacy/non-legacy tree — a parent that spawned an elder child A before
+// This guarantee does NOT extend to a mixed legacy/non-legacy tree — a
+// parent that spawned an elder child A before
 // task.spawned records existed (A lives only in the live tree, never in
 // durable SpawnedChildIDs) and a younger child B after the field shipped
 // (durable) yields childIDsUnion(live=[A,B], durable=[B]) = [B, A]: B
@@ -4721,9 +4710,9 @@ func childIDsUnion(live, durable []string) []string {
 	// live verbatim, on the argument that live can hold no duplicate
 	// (adoptLocked appends a child id at most once). That reasoning was
 	// true but it made the two sides answer differently: a repeated id in
-	// live survived when durable was empty and collapsed when it was not
-	// (a live review finding). This merge states the union's OWN contract
-	// instead of borrowing each producer's invariant — one id appears
+	// live survived when durable was empty and collapsed when it was not.
+	// This merge states the union's OWN contract instead of borrowing each
+	// producer's invariant — one id appears
 	// once, whichever side carried it — so a future change to either
 	// producer cannot silently split the two answers apart again. The
 	// dropped fast path saved one small map allocation per childless

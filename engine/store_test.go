@@ -69,7 +69,7 @@ func TestPersistRoundTrip(t *testing.T) {
 
 // TestPersistReasoningEmptyProviderData is the round-2 forensic regression
 // guard reconstructed at the full worker-turn level: a scripted provider
-// producing the exact incident shape — an assistant message whose Reasoning
+// producing this exact shape — an assistant message whose Reasoning
 // part carries a present-but-zero-length (non-nil) provider_data entry, the
 // map-indirected twin of the ToolCall.Arguments footgun #42 fixed (see
 // message.ProviderData's doc comment) — must not break the turn. Before
@@ -80,8 +80,8 @@ func TestPersistRoundTrip(t *testing.T) {
 // provider-transcode failure) that particular call site swallows its error
 // into PersistErr rather than returning it from Prompt — which is why this
 // test also asserts PersistErr and a clean reload, not just that Prompt
-// itself succeeds. This exercises the exact path the incident logs show:
-// worker turn -> assemble message -> persist to the session log, no
+// itself succeeds. This exercises the exact path a worker turn takes:
+// assemble message -> persist to the session log, no
 // provider or transcoder involved, proving the fix lives at the message
 // layer and protects every producer, not just the shipped providers'
 // currently-safe ones.
@@ -616,9 +616,8 @@ func TestLoadLegacySessionFixture(t *testing.T) {
 }
 
 // TestGoalStalledRecordRoundTrip is the forensic regression guard for the
-// goal-supervised session incident (ses_01hntn4vmryer5nq9apyjvzk2h.jsonl): a
-// worker turn failed with "json: error calling MarshalJSON for type
-// json.RawMessage: unexpected end of JSON input" (see
+// case where a goal-supervised worker turn fails with "json: error calling
+// MarshalJSON for type json.RawMessage: unexpected end of JSON input" (see
 // TestToolCallEmptyArgumentsMarshal in the message package for the exact
 // reproduction), which promptTurnWithRetry records as a goal.stalled record
 // via recordGoalStalled -> persistGoalLocked. That record's payload
@@ -659,8 +658,8 @@ func TestGoalStalledRecordRoundTrip(t *testing.T) {
 		var sawStalled bool
 		for i, line := range lines {
 			// Every line, including the goal.stalled record, must be
-			// complete and independently valid JSON — the incident's log
-			// was not actually corrupt at this point (a truncated final
+			// complete and independently valid JSON — the log is not
+			// corrupt at this point (a truncated final
 			// line is a distinct, already-covered case; see
 			// TestLoadSessionTruncatedFinalLine), but this is the
 			// assertion that would catch it if persistGoalLocked ever
@@ -693,8 +692,8 @@ func TestGoalStalledRecordRoundTrip(t *testing.T) {
 
 // TestLoadSessionTruncatedGoalStalledFinalLine proves scanLog's corruption
 // discipline applies identically to a goal.stalled record: a truncated
-// final line (the shape a crash mid-append would leave, per the incident's
-// premise) is tolerated exactly like a truncated message record, and the
+// final line (the shape a crash mid-append would leave) is tolerated
+// exactly like a truncated message record, and the
 // resumed goal state reflects only the last complete record — it never lets
 // a partial goal.stalled poison the session.
 func TestLoadSessionTruncatedGoalStalledFinalLine(t *testing.T) {
@@ -745,9 +744,9 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 	// turn died between emitting the call and executing it. LoadSession
 	// must repair the history at ingest so every downstream consumer (the
 	// next prompt's request, GET /message, goal replay) sees a
-	// protocol-valid history, durably — not just at transcode time.
-	// Incident: ses_01hvcs96pq1cf7x3kw0fz4a1yh (goal killed by Anthropic
-	// 400 "tool_use ids were found without tool_result blocks").
+	// protocol-valid history, durably — not just at transcode time. An
+	// unrepaired orphan reaching a provider draws a 400 "tool_use ids
+	// were found without tool_result blocks".
 	dir := t.TempDir()
 	id := "ses_6666666666666666"
 	data := `{"type":"session","id":"ses_6666666666666666","created_at":"2025-01-02T03:04:05Z"}
@@ -798,9 +797,9 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 // the whole scan finishes — so the cached estimate is computed over the
 // still-unrepaired history and disagrees with
 // estimatePromptTokensFromHistory over the session's own, fully-repaired
-// History(). Incident shape: a live session compacting the same fold would
-// never see an unrepaired orphan (engine.go resolves one before it ever
-// reaches history), so live and reloaded sessions would report two
+// History(). A session compacting the same fold live never sees an
+// unrepaired orphan (engine.go resolves one before it ever reaches
+// history), so a live session and a reloaded one would report two
 // different context-used numbers for the identical fold.
 func TestLoadSessionCachesFoldEstimateOverRepairedHistory(t *testing.T) {
 	dir := t.TempDir()

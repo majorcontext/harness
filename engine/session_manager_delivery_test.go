@@ -76,16 +76,16 @@ func TestCanceledChildNotifiesParent(t *testing.T) {
 	waitForFinalized(t, mgr, childID, 2*time.Second)
 }
 
-// TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed is the
-// regression test for a live review finding: restoreKnownStatusLocked
-// used to restore ANY committed outcome as StatusDone or StatusFailed —
-// collapsing a genuinely CANCELED child (Cancel()/cancel_tree, which
-// marks n.status StatusCanceled directly, atomically, before
-// finalizeTurn ever runs — see cancelOneNodeLocked's own doc comment)
-// into StatusFailed the moment it was re-adopted after a restart,
-// silently rewriting history: a parent or the UI reading this status
-// afterward could no longer distinguish "this child was deliberately
-// stopped" from "this child genuinely failed."
+// TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed guards
+// against restoreKnownStatusLocked restoring ANY committed outcome as
+// StatusDone or StatusFailed — collapsing a genuinely CANCELED child
+// (Cancel()/cancel_tree, which marks n.status StatusCanceled directly,
+// atomically, before finalizeTurn ever runs — see
+// cancelOneNodeLocked's own doc comment) into StatusFailed the moment
+// it is re-adopted after a restart, silently rewriting history: a
+// parent or the UI reading this status afterward cannot distinguish
+// "this child was deliberately stopped" from "this child genuinely
+// failed."
 //
 // Fixed via taskNotification.Canceled (taskdelivery.go) — a distinct,
 // durably-committed signal, set ONLY by finalizeTurn's alreadyCanceled
@@ -160,16 +160,17 @@ func TestReAdoptedCanceledChildRestoresStatusCanceledNotFailed(t *testing.T) {
 	}
 }
 
-// TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild is
-// the regression test for a live review finding: recoverInterruptedTurnLocked's
-// synthetic transcript closer unconditionally used lostToRestartText —
-// "this turn was interrupted by a process restart and could not
-// complete" — even for a turn whose committed outcome shows it was
-// explicitly Cancel()ed (Canceled: true) before the crash landed. That
-// wording durably records a false cause: the turn's real end was
-// cancellation; the restart only interrupted RECORDING that fact (see
-// canceledInterruptedText's own doc comment). Fixed by picking
-// canceledInterruptedText instead whenever notify.Canceled.
+// TestRecoverInterruptedTurnUsesCanceledClosingTextForACanceledChild
+// guards against recoverInterruptedTurnLocked's synthetic transcript
+// closer unconditionally using lostToRestartText — "this turn was
+// interrupted by a process restart and could not complete" — even for
+// a turn whose committed outcome shows it was explicitly Cancel()ed
+// (Canceled: true) before the crash landed. That wording durably
+// records a false cause: the turn's real end was cancellation; the
+// restart only interrupted RECORDING that fact (see
+// canceledInterruptedText's own doc comment). Picking
+// canceledInterruptedText whenever notify.Canceled keeps the recorded
+// cause accurate.
 //
 // Simulates "a canceled child, then a crash before settling" directly:
 // spawns and abandons a genuinely mid-turn child (so hasUnfinalizedTurn()
@@ -593,9 +594,9 @@ func TestReportTurnStartReattachesReloadedSession(t *testing.T) {
 	}
 }
 
-// TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach is the
-// regression test for a review finding distinct from (and layered on
-// top of) TestReportTurnStartReattachesReloadedSession above: that test
+// TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach covers
+// a case distinct from (and layered on top of)
+// TestReportTurnStartReattachesReloadedSession above: that test
 // only proves a notification enqueued AFTER re-attachment lands on the
 // live object. This proves the harder, more important case — the
 // notification that TRIGGERS the resume in the first place is enqueued
@@ -633,11 +634,11 @@ func TestReportTurnStartMigratesNotificationEnqueuedBeforeReattach(t *testing.T)
 	}
 }
 
-// TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold is
-// the regression test for a live review finding: the migration above
-// (old.drainAllTaskNotifications() -> sess.enqueueTaskNotification) and
-// LoadSession's own durable queued-minus-delivered fold (store.go) now
-// overlap for the exact same notification. old durably enqueues (writes
+// TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold
+// guards against the migration above (old.drainAllTaskNotifications()
+// -> sess.enqueueTaskNotification) and LoadSession's own durable
+// queued-minus-delivered fold (store.go) overlapping for the exact
+// same notification. old durably enqueues (writes
 // recTaskNotifyQueued); a resume cold-loads a fresh session via
 // LoadSession, whose OWN fold already restores that just-written record
 // as "copy 1"; this method's migration then drains the SAME notification
@@ -683,8 +684,8 @@ func TestReportTurnStartMigrationDoesNotDoubleDeliverAlongsideDurableFold(t *tes
 }
 
 // TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification
-// is the regression test for a live review finding on the FIX above: the
-// migration's drain must NOT use the newly-persisting
+// guards against the fix above: the migration's drain must NOT use the
+// newly-persisting
 // drainAllTaskNotifications — old and sess there are two in-memory
 // objects for the SAME durable session id, sharing the SAME log (unlike
 // finalizeTurn/recoverInterruptedTurnLocked's forward-to-a-different-
@@ -722,7 +723,7 @@ func TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification(t *
 	// was driven against reloaded in between). A fresh LoadSession from
 	// the same durable log must still restore it: if the migration's own
 	// drain durably wrote a recTaskNotifyDelivered for it (the bug this
-	// test guards against), the notification would now be permanently,
+	// test guards against), the notification would be permanently,
 	// silently gone.
 	reloadedAgain, err := LoadSession(Config{Providers: reg, SessionDir: dir}, old.ID)
 	if err != nil {
@@ -734,8 +735,8 @@ func TestReportTurnStartMigrationDoesNotDurablyLoseAStillPendingNotification(t *
 }
 
 // TestReportTurnStartMigrationDoesNotDoublePersistANewlyRaceEnqueuedNotification
-// is the regression test for a live review finding on
-// enqueueTaskNotificationMigrated's OTHER branch — the append (genuinely
+// guards against enqueueTaskNotificationMigrated's OTHER branch — the
+// append (genuinely
 // new, not a dedup match) case, exercising the "narrower race" the
 // method's own doc comment describes: LoadSession runs OUTSIDE m.mu, so a
 // notification can be durably enqueued onto the evicted OLD object in the
@@ -1030,9 +1031,9 @@ func TestReloadedChildWithDanglingTurnNotifiesParent(t *testing.T) {
 	t.Fatalf("root never resumed with the dangling child's synthetic notification; history: %+v", root2.History())
 }
 
-// TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget is the
-// regression test for a live review finding: recoverInterruptedTurnLocked
-// built a "lost to restart" notification carrying Usage but never folded
+// TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget guards
+// against recoverInterruptedTurnLocked building a "lost to restart"
+// notification carrying Usage but never folding
 // that usage into m.usageByRoot the way finalizeTurn's own three
 // terminal-outcome branches always do — an interrupted child's real spend
 // escaped SetMaxTreeTokens entirely, letting a later Spawn silently
@@ -1123,15 +1124,14 @@ func TestReloadedChildWithDanglingTurnFoldsUsageIntoTreeBudget(t *testing.T) {
 	}
 }
 
-// TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload is the
-// regression test for a live review finding: recoverInterruptedTurnLocked
-// never mutated the child's history, so the dangling-turn signal (now
-// hasUnfinalizedTurn()/turnUnsettled — see their own doc comments;
-// originally a trailing-message-role heuristic named hasUnansweredTurn,
-// since replaced) stayed true FOREVER — every later re-adoption of the
-// same id (a Reap, then a
-// legitimate follow-up touching it again) re-ran the whole method and
-// re-enqueued a SECOND, duplicate "lost to restart" notification for the
+// TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload
+// guards against recoverInterruptedTurnLocked never mutating the
+// child's history, so the dangling-turn signal
+// (hasUnfinalizedTurn()/turnUnsettled — see their own doc comments)
+// stays true FOREVER — every later re-adoption of the same id (a Reap,
+// then a legitimate follow-up touching it again) re-runs the whole
+// method and re-enqueues a SECOND, duplicate "lost to restart"
+// notification for the
 // SAME child. Proves recovery fires exactly once: reap the recovered
 // child, re-adopt it a second time, and assert the ancestor's message
 // history shows exactly ONE resume-trigger turn, not two.
@@ -1221,9 +1221,9 @@ func TestReloadedChildWithDanglingTurnIsIdempotentAcrossReapAndReload(t *testing
 	}
 }
 
-// TestReloadedChildWithUntrackedParentIsEventuallyReapable is the
-// regression test for a live review finding: an interrupted child whose
-// OWN parent could not be found tracked (adoptReloadedLocked's "true
+// TestReloadedChildWithUntrackedParentIsEventuallyReapable guards
+// against an interrupted child whose OWN parent could not be found
+// tracked (adoptReloadedLocked's "true
 // depth is unrecoverable" case) ends up with parentID == "" purely as a
 // bookkeeping side effect — indistinguishable from a genuine root to
 // Reap, which skips every parentID == "" node unconditionally. Before
@@ -1278,13 +1278,13 @@ func TestReloadedChildWithUntrackedParentIsEventuallyReapable(t *testing.T) {
 	}
 }
 
-// TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt is the
-// regression test for a live review finding: ReportTurnStart's own
-// adopt-on-first-sight branch used to call adoptReloadedLocked exactly
-// the way AdoptReloaded does — including firing recoverInterruptedTurnLocked
-// for a child with a dangling turn. But ReportTurnStart's very next lines
-// unconditionally set n.status = StatusRunning and n.finalized = false to
-// actually drive a fresh turn on that SAME node — so the old behavior was
+// TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt
+// guards against ReportTurnStart's own adopt-on-first-sight branch
+// calling adoptReloadedLocked exactly the way AdoptReloaded does —
+// including firing recoverInterruptedTurnLocked for a child with a
+// dangling turn — while ReportTurnStart's very next lines
+// unconditionally set n.status = StatusRunning and n.finalized = false
+// to actually drive a fresh turn on that SAME node. That is
 // self-contradicting within one call: mark the child StatusFailed, append
 // a synthetic "lost to restart" message to its own transcript, and
 // durably notify a live ancestor it died, immediately before running it
@@ -1396,11 +1396,11 @@ func TestReportTurnStartDoesNotFalselyReportChildDeadWhenContinuingIt(t *testing
 }
 
 // TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt
-// is the regression test for a live review finding: finalizeTurn forwards
-// a terminal child's own pending (grandchild) notifications to the
-// nearest live ancestor via drainAllTaskNotifications — a pre-existing
-// mechanism this PR did not change — but drainAllTaskNotifications itself
-// never wrote recTaskNotifyDelivered for what it drained, unlike its
+// guards against finalizeTurn forwarding a terminal child's own pending
+// (grandchild) notifications to the nearest live ancestor via
+// drainAllTaskNotifications — a pre-existing mechanism — while
+// drainAllTaskNotifications itself never wrote recTaskNotifyDelivered
+// for what it drained, unlike its
 // sibling commitTaskNotifications. The forwarded notification IS
 // correctly re-enqueued (a fresh recTaskNotifyQueued) on the ancestor's
 // own log, but the CHILD's own log kept an unmatched recTaskNotifyQueued
@@ -1465,9 +1465,9 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	// "resurrected" notification this test then reports. Waiting for the
 	// queued record here makes the write order deterministic.
 	//
-	// The same hazard exists in production for a real crash-restart, and
-	// store.go's fold comment claims an order-independence it does not
-	// have. That is a separate finding, filed rather than fixed here.
+	// The same hazard exists for a real crash-restart, and store.go's
+	// fold comment claims an order-independence it does not have. That
+	// gap is out of scope for this test.
 	flushes.waitUntilMsg(t, "test setup: the grandchild's queued notification never landed on mid's own log", func() bool {
 		return countRecordType(t, sessionPath(dir, midID), recTaskNotifyQueued) == 1
 	})
@@ -1501,10 +1501,10 @@ func TestDrainAllTaskNotificationsPersistsDeliverySoReloadDoesNotResurrectIt(t *
 	})
 }
 
-// TestRecoverInterruptedTurnReportsTotalUsageNotDelta is the regression
-// test for a live review finding: recoverInterruptedTurnLocked's notify
-// carried Usage: delta (the not-yet-credited portion, correct for folding
-// into usageByRoot) instead of Usage: total (n.session.Usage(), the full
+// TestRecoverInterruptedTurnReportsTotalUsageNotDelta guards against
+// recoverInterruptedTurnLocked's notify carrying Usage: delta (the
+// not-yet-credited portion, correct for folding into usageByRoot)
+// rather than Usage: total (n.session.Usage(), the full
 // cumulative spend) — every one of finalizeTurn's own three notify-
 // building branches uses the full total. A child recovered on a SECOND
 // interrupted turn, after a FIRST turn's spend was already credited to
@@ -1626,9 +1626,9 @@ func TestRecoverInterruptedTurnReportsTotalUsageNotDelta(t *testing.T) {
 	}
 }
 
-// TestRecoverInterruptedTurnForwardsGrandchildNotifications is the
-// regression test for a live review finding: recoverInterruptedTurnLocked
-// delivered only its own failure notify, never forwarding any of n's OWN
+// TestRecoverInterruptedTurnForwardsGrandchildNotifications guards
+// against recoverInterruptedTurnLocked delivering only its own failure
+// notify, never forwarding any of n's OWN
 // pending notifications (a grandchild that completed and was queued on n
 // while n's turn was still in flight, never checked out before the
 // crash) — unlike finalizeTurn, which forwards a terminal child's pending
@@ -1777,21 +1777,20 @@ func TestRecoverInterruptedTurnForwardsGrandchildNotifications(t *testing.T) {
 }
 
 // TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered
-// is the regression test for a live review finding on
-// recoverInterruptedTurnLocked's own target==nil branch (see
-// nearestLiveAncestorLocked's "no reachable ancestor" case in that
-// method's doc comment): an earlier version of this method called
-// persistDeliveredTaskNotifications(forwarded) UNCONDITIONALLY, even when
-// target was nil and forwarded was actually being dropped, not delivered
-// (see the else branch just above that call in recoverInterruptedTurnLocked
-// — "forwarded is simply dropped here"). That durably wrote a
-// recTaskNotifyDelivered record, on mid's OWN log, for a grandchild
-// notification nobody ever received — LoadSession's queued-minus-delivered
-// fold would then treat it as resolved forever, permanently and silently
-// hiding the fact that it was actually lost. finalizeTurn's own sibling
-// block never had this bug (its persistDeliveredTaskNotifications call
-// already lives strictly inside its own `target != nil` branch) — this
-// fix makes recoverInterruptedTurnLocked match that exactly.
+// guards against recoverInterruptedTurnLocked's own target==nil branch
+// (see nearestLiveAncestorLocked's "no reachable ancestor" case in that
+// method's doc comment) calling persistDeliveredTaskNotifications(forwarded)
+// UNCONDITIONALLY, even when target is nil and forwarded is actually
+// being dropped, not delivered (see the else branch just above that
+// call in recoverInterruptedTurnLocked — "forwarded is simply dropped
+// here"). That would durably write a recTaskNotifyDelivered record, on
+// mid's OWN log, for a grandchild notification nobody ever received —
+// LoadSession's queued-minus-delivered fold would then treat it as
+// resolved forever, permanently and silently hiding the fact that it
+// was actually lost. finalizeTurn's own sibling block avoids this (its
+// persistDeliveredTaskNotifications call lives strictly inside its own
+// `target != nil` branch); recoverInterruptedTurnLocked matches that
+// exactly.
 //
 // Engineered the same three-level root/mid/grand setup
 // TestRecoverInterruptedTurnForwardsGrandchildNotifications uses, but the
@@ -1899,14 +1898,14 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 	}
 }
 
-// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose is
-// the regression test for a live review finding: recoverInterruptedTurnLocked
-// used to durably close the interrupted child's history and mark it
-// settled BEFORE delivering its failure notification to the ancestor. A
-// crash landing between those two durable writes permanently lost the
-// notification — the child's own log already looked "recovered," so no
-// later re-adoption would ever retry, but the ancestor's log never got
-// the recTaskNotifyQueued record. The parent would wait forever for a
+// TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose
+// guards against recoverInterruptedTurnLocked durably closing the
+// interrupted child's history and marking it settled BEFORE delivering
+// its failure notification to the ancestor. A crash landing between
+// those two durable writes would permanently lose the notification —
+// the child's own log already looks "recovered," so no later
+// re-adoption would ever retry, but the ancestor's log never got the
+// recTaskNotifyQueued record. The parent would wait forever for a
 // notification a crash ate in transit.
 //
 // Simulates that exact crash: drives recovery manually, then executes
@@ -1917,8 +1916,7 @@ func TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered(
 // ancestor's log durably has the notification despite the "crash," and
 // (2) the child's own log still shows the turn unfinalized
 // (hasUnfinalizedTurn()/turnUnsettled — see their own doc comments), so
-// a later restart can genuinely retry — the fix this test exists to
-// prove, replacing what used to be silent, permanent loss.
+// a later restart can genuinely retry.
 func TestRecoverInterruptedTurnSurvivesACrashBetweenDeliveryAndHistoryClose(t *testing.T) {
 	dir := t.TempDir()
 	rootProv := scriptedTurns("root", nil)
@@ -2221,12 +2219,11 @@ func TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop(t *testing.T) {
 	}
 }
 
-// TestRecoverInterruptedTurnDoesNotRefireForASettledFailure is the
-// regression test for a live review finding: a child's ORDINARY,
-// PROPERLY-SETTLED provider-error failure — finalizeTurn ran to
-// completion, marked it StatusFailed, and durably delivered its
-// notification to the ancestor — used to be indistinguishable from a
-// genuine crash by the trailing-message-role heuristic
+// TestRecoverInterruptedTurnDoesNotRefireForASettledFailure guards
+// against a child's ORDINARY, PROPERLY-SETTLED provider-error failure —
+// finalizeTurn ran to completion, marked it StatusFailed, and durably
+// delivered its notification to the ancestor — being indistinguishable
+// from a genuine crash by the trailing-message-role heuristic
 // recoverInterruptedTurnLocked's guard relied on: runAgenticLoop's plain
 // (non-interruptedTurnError) provider-error path appends nothing at all,
 // leaving history ending on the bare RoleUser directive, byte-identical
@@ -2311,21 +2308,20 @@ func TestRecoverInterruptedTurnDoesNotRefireForASettledFailure(t *testing.T) {
 	}
 }
 
-// TestRecoverInterruptedTurnDeliversRealResultInsteadOfFalseFailure is the
-// regression test for a live review finding on
-// recoverInterruptedTurnLocked's OTHER direction from the sibling test
-// above: a turn that genuinely, naturally FINISHED — the model's last
-// response is a plain final answer with no pending tool call, appended to
-// the child's own durable history via appendWithUsage — but the process
-// crashed before finalizeTurn ever ran (or ran far enough to durably write
-// the child_turn.settled marker): the "notify->settled window" a live
-// review named directly. An earlier version of recoverInterruptedTurnLocked
-// always synthesized a StatusFailed "lost to restart" notification for
-// ANY detected crash, with no attempt to tell this case apart from a
-// genuine mid-turn crash — so a parent whose child actually succeeded was
-// durably, permanently told it failed. The review judged that worse than a
-// merely-late notification: a lost notification is honestly absent, but a
-// false failure actively misinforms with nothing left to correct it.
+// TestRecoverInterruptedTurnDeliversRealResultInsteadOfFalseFailure
+// guards against recoverInterruptedTurnLocked's OTHER direction from
+// the sibling test above: a turn that genuinely, naturally FINISHED —
+// the model's last response is a plain final answer with no pending
+// tool call, appended to the child's own durable history via
+// appendWithUsage — but the process crashed before finalizeTurn ever
+// ran (or ran far enough to durably write the child_turn.settled
+// marker): the "notify->settled window." recoverInterruptedTurnLocked
+// must not synthesize a StatusFailed "lost to restart" notification for
+// this case the way it does for a genuine mid-turn crash — a parent
+// whose child actually succeeded would otherwise be durably,
+// permanently told it failed. A lost notification is honestly absent,
+// but a false failure actively misinforms with nothing left to correct
+// it.
 //
 // settledSuccessResult (engine.go) closes this for the one unambiguous
 // shape it covers — see its own doc comment for exactly which shape and
@@ -2610,9 +2606,8 @@ func TestFinalizeTurnCrashBeforeDeliveryStillDeliversViaRecovery(t *testing.T) {
 	}
 }
 
-// TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent is
-// the regression test for the crash-window table's step 2 and the exact
-// live review finding this whole mechanism exists to close: a crash
+// TestFinalizeTurnCrashAfterDeliveryReplaysIdenticalFailureNotDivergent
+// is the regression test for the crash-window table's step 2: a crash
 // landing between finalizeTurn's own notification-delivery persist and
 // its settled-marker persist. Before committedOutcome existed, recovery
 // reconstructed a FRESH notify from trailing-history shape on a re-adopt
@@ -2880,23 +2875,22 @@ func TestRecoveryCrashBetweenClosingMessageAndSettleDoesNotMisreportSuccess(t *t
 	}
 }
 
-// TestFinalizeTurnSettlesADurablyParentedButUntrackedNode is the
-// regression test for a live review finding: finalizeTurn's own
-// settled-marker (and, now, commit-outcome) gate used to check the
-// IN-MEMORY sessionNode.parentID, but adoptReloadedLocked's own
-// root/non-root branch — which decides whether a reloaded node is a
+// TestFinalizeTurnSettlesADurablyParentedButUntrackedNode guards
+// against finalizeTurn's own settled-marker (and commit-outcome) gate
+// checking the IN-MEMORY sessionNode.parentID, while adoptReloadedLocked's
+// own root/non-root branch — which decides whether a reloaded node is a
 // recovery CANDIDATE at all — checks the DURABLE TaskParentID() instead.
 // The two normally agree, except for adoptReloadedLocked's own "true
 // depth is unrecoverable" case (its own doc comment): a child whose real
 // parent is not tracked in THIS process gets adopted with an in-memory
 // parentID of "" (root-shaped) even though it durably DOES have a real
-// TaskParentID. Gating the settled-marker on the in-memory pointer meant
-// such a node's turns were NEVER marked settled, even on a completely
-// ordinary, successful completion — hasUnfinalizedTurn() stayed true
-// forever, and a LATER re-adoption spuriously ran recovery against a
+// TaskParentID. Gating the settled-marker on the in-memory pointer means
+// such a node's turns are never marked settled, even on a completely
+// ordinary, successful completion — hasUnfinalizedTurn() stays true
+// forever, and a LATER re-adoption spuriously runs recovery against a
 // turn that had already finished cleanly (adoptReloadedLocked's own
 // root/non-root branch does NOT treat this node as a root, since it
-// checks the durable field, so recovery genuinely does fire for it).
+// checks the durable field, so recovery genuinely fires for it).
 //
 // Reproduces the degraded shape directly (same technique as
 // TestRecoverInterruptedTurnDoesNotFalselyMarkForwardedNotificationDelivered
@@ -3328,14 +3322,13 @@ func TestAdoptRootRecoversCrashedGrandchildTwoLevelsDeep(t *testing.T) {
 }
 
 // TestAdoptRootRestoresLegacySettledChildAsDoneWhenLogReconstructsSuccess
-// is the regression test for a live review finding on
-// restoreKnownStatusLocked's own legacy fallback (no committedOutcome, but
-// proven via SpawnedChildIDs to have already run a turn): before this fix
-// it unconditionally durably marked such a node StatusFailed with
+// guards against restoreKnownStatusLocked's own legacy fallback (no
+// committedOutcome, but proven via SpawnedChildIDs to have already run
+// a turn) unconditionally durably marking such a node StatusFailed with
 // unknownLegacyOutcomeFailReason, even when the node's OWN trailing
-// history unambiguously shows a genuine, natural success — the exact
+// history unambiguously shows a genuine, natural success — the same
 // "successful child rewritten as failed" class of bug the Canceled fix
-// closed for the OTHER status, now closed here too by consulting
+// closes for the OTHER status, closed here too by consulting
 // settledSuccessResult (engine.go, the SAME step-2 fallback
 // recoverInterruptedTurnLocked's own crash-window table already uses)
 // before giving up.
@@ -3496,26 +3489,25 @@ func TestAdoptRootRestoresLegacySettledChildAsUnknownFailureWhenLogCannotReconst
 	}
 }
 
-// TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle is
-// the regression test for a live review finding on
-// restoreKnownStatusLocked's own default branch: a legacy node (no
-// committedOutcome) that never spawned anything has an EMPTY
-// SpawnedChildIDs — before this fix, that alone was (wrongly) treated as
-// proof of "genuinely fresh, never run," landing it in the default
-// branch and leaving it at adoptLocked's bare StatusIdle forever. That
+// TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle
+// guards against restoreKnownStatusLocked's own default branch: a
+// legacy node (no committedOutcome) that never spawned anything has an
+// EMPTY SpawnedChildIDs — that alone is not proof of "genuinely fresh,
+// never run": treating it as proof lands the node in the default
+// branch and leaves it at adoptLocked's bare StatusIdle forever. That
 // is not just a wrong status: Reap only ever collects a FINALIZED,
 // terminal node (StatusDone/Failed/Canceled) — an idle node is never
-// Reap-eligible — so a swept legacy CHILDLESS settled node used to pin
+// Reap-eligible — so a swept legacy CHILDLESS settled node would pin
 // itself in m.nodes permanently, reporting idle for a turn that had
-// already long since ended. Fixed by also checking non-empty History
-// (proof of "definitely not fresh" that does not depend on having
-// spawned anything).
+// already long since ended. Also checking non-empty History (proof of
+// "definitely not fresh" that does not depend on having spawned
+// anything) fixes it.
 //
 // Asserts BOTH halves explicitly: the restored status/result is correct
 // (StatusDone, the real answer — this child's log DOES reconstruct a
 // success, exercising the same settledSuccessResult path the sibling
-// legacy tests cover), AND the node is now actually Reap-eligible —
-// calling Reap() immediately after AdoptRoot collects it.
+// legacy tests cover), AND the node is actually Reap-eligible — calling
+// Reap() immediately after AdoptRoot collects it.
 func TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle(t *testing.T) {
 	dir := t.TempDir()
 	rootProv := scriptedTurns("root", nil)
@@ -3587,24 +3579,24 @@ func TestAdoptRootRestoresLegacyChildlessSettledChildAsTerminalNotIdle(t *testin
 }
 
 // TestAdoptRootReparentsGrandchildPastSettledIntermediateWithoutCommittedOutcome
-// is the regression test for a live review finding on
-// restoreKnownStatusLocked: a node whose own turn settled cleanly but
-// which has NO committedOutcome recorded (a session that predates the
-// whole committedOutcome mechanism, or one whose commit record was
-// otherwise never durably written) used to fall through
-// restoreKnownStatusLocked's own guard and get left at adoptLocked's bare
-// StatusIdle default, un-finalized — even though it definitely already
-// ran at least one full turn, proven by its own SpawnedChildIDs being
-// non-empty (Spawn is only ever callable from WITHIN a turn, so a node
-// that spawned anything cannot be a genuinely fresh, never-run node).
-// nearestLiveAncestorLocked's own walk treats StatusIdle as "still live"
-// (its only terminal cases are Done/Failed/Canceled), so a crashed
-// GRANDCHILD recovered underneath this exact node was delivered directly
-// onto it instead of reparented past it to the next real live ancestor —
-// and because it looked idle, delivery also fired an async resume
-// (fireIdleResumeAsync) that would have spuriously re-run a real turn on
-// a node that had already finished, purely as a side effect of relaying
-// a notification onward.
+// guards against restoreKnownStatusLocked: a node whose own turn
+// settled cleanly but which has NO committedOutcome recorded (a session
+// that predates the whole committedOutcome mechanism, or one whose
+// commit record was otherwise never durably written) falling through
+// restoreKnownStatusLocked's own guard and getting left at
+// adoptLocked's bare StatusIdle default, un-finalized — even though it
+// definitely already ran at least one full turn, proven by its own
+// SpawnedChildIDs being non-empty (Spawn is only ever callable from
+// WITHIN a turn, so a node that spawned anything cannot be a genuinely
+// fresh, never-run node). nearestLiveAncestorLocked's own walk treats
+// StatusIdle as "still live" (its only terminal cases are
+// Done/Failed/Canceled), so a crashed GRANDCHILD recovered underneath
+// this exact node would be delivered directly onto it rather than
+// reparented past it to the next real live ancestor — and because it
+// looks idle, delivery would also fire an async resume
+// (fireIdleResumeAsync) that spuriously re-runs a real turn on a node
+// that had already finished, purely as a side effect of relaying a
+// notification onward.
 //
 // Simulates the "predates the mechanism" case directly, rather than
 // hand-building a session from scratch: mid completes one genuine turn
@@ -3783,10 +3775,9 @@ func stripRecordType(t *testing.T, path, recType string) {
 }
 
 // TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermediate
-// is the trace-verified answer to a live review finding: restoreKnownStatusLocked
-// now marks an already-settled, just-adopted intermediate node BOTH
-// finalized AND terminal — which, unlike before this whole mechanism
-// existed, makes it immediately Reap-eligible (Reap's own guard: only
+// guards against a race in restoreKnownStatusLocked: it marks an
+// already-settled, just-adopted intermediate node BOTH finalized AND
+// terminal, which makes it immediately Reap-eligible (Reap's own guard: only
 // !finalized skips a node; finalized+terminal+childless does not) the
 // instant it is adopted, before its OWN children (a crashed grandchild,
 // say) have finished being recursively discovered and integrated by THIS
@@ -3951,10 +3942,10 @@ func TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermed
 }
 
 // TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce
-// is the regression test for a live review finding on
+// guards against a gap in
 // TestRecoverCrashedChildrenLockedSurvivesConcurrentReapOfJustAdoptedIntermediate's
-// own fix: that earlier fix checked "is n (the node this call is
-// integrating candidates FOR) still live" once, before the candidates
+// own fix: that fix checks "is n (the node this call is integrating
+// candidates FOR) still live" once, before the candidates
 // loop — but adoptReloadedLocked's own recursion (called once PER
 // candidate, for whichever child was just adopted) can release and
 // reacquire m.mu AGAIN, mid-loop, for THAT candidate's own nested sweep.
@@ -4148,14 +4139,14 @@ func TestRecoverCrashedChildrenLockedRevalidatesNPerLoopIterationNotJustOnce(t *
 	}
 }
 
-// TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild is the
-// regression test for a live review finding: recoverCrashedChildrenLocked
-// used to run its own disk-bound LoadSession replay while m.mu — the
-// single lock guarding every session in the tree — was held, the same
-// class of problem deferPersist/unlockAndFlushPersist already closed for
-// durable WRITES on this same set of call paths. The fix releases m.mu
-// for the replay and re-acquires before integrating any result — which
-// means the tree is genuinely NOT frozen for the sweep's own duration,
+// TestRecoverCrashedChildrenLockedSkipsConcurrentlyAdoptedChild guards
+// against recoverCrashedChildrenLocked running its own disk-bound
+// LoadSession replay while m.mu — the single lock guarding every
+// session in the tree — is held, the same class of problem
+// deferPersist/unlockAndFlushPersist already closes for durable WRITES
+// on this same set of call paths. Releasing m.mu for the replay and
+// re-acquiring before integrating any result means the tree is
+// genuinely NOT frozen for the sweep's own duration,
 // and a concurrent adoption of the SAME child (another ancestor's own
 // sweep sharing it, or an explicit AdoptReloaded racing this one) can
 // land in that exact gap.

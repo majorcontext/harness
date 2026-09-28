@@ -511,13 +511,12 @@ func (p *fallbackAnchorRegressionProvider) Stream(_ context.Context, req *provid
 	}
 }
 
-// TestPursueGoalRetryFallbackBoundsDuplicatesAfterUndroppableResidue is the
-// red-first regression test for the review finding on PR #107 at
-// engine/goal.go:1428: moving anchorID capture from per-attempt to
-// once-per-turn is correct for the reuse path above, but it breaks the
+// TestPursueGoalRetryFallbackBoundsDuplicatesAfterUndroppableResidue pins
+// a constraint on anchorID capture at engine/goal.go:1428: capturing it
+// once per turn, rather than per attempt, must stay correct for the
 // FALLBACK path (dropUnansweredDirective, invoked when the tail is some
 // OTHER shape than the bare directive — see directiveReuseEligible's doc
-// comment).
+// comment) as well as for the reuse path above.
 //
 // A plugin tool.execute.before DENY appends [assistant(tool call),
 // tool(denied)] without incrementing toolExecCount (engine.go), so a
@@ -529,9 +528,8 @@ func (p *fallbackAnchorRegressionProvider) Stream(_ context.Context, req *provid
 // of the turn: every later attempt's fallback re-appends a fresh
 // directive and drops none. Across this test's ten retryable-tier
 // failures (well under goalRetryableMaxAttempts = 12) that means ten
-// extra duplicate directives, live AND in the durable log — the exact
-// unbounded duplicate growth this package exists to eliminate, reopened on
-// this one path.
+// extra duplicate directives, live AND in the durable log — unbounded
+// duplicate growth on this one path.
 //
 // Call 1 makes a tool call the hook denies. Calls 2-11 (ten retryable-tier
 // failures — attempt 1's own post-deny continuation, then nine more

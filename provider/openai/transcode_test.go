@@ -392,12 +392,12 @@ func TestTranscodeForeignReasoningDropped(t *testing.T) {
 	}
 }
 
-// TestTranscodeReasoningEmptyProviderDataMarshal is the round-2 forensic
-// regression guard, reconstructed at the transcoder layer: a Reasoning part
-// whose "openai" provider_data entry is present but zero-length (non-nil)
-// — the shape #42 left unguarded, one map-indirection away from the
-// ToolCall.Arguments field #42 actually fixed (see message.ProviderData's
-// doc comment). Before message.ProviderData grew a Get accessor,
+// TestTranscodeReasoningEmptyProviderDataMarshal is a regression guard,
+// reconstructed at the transcoder layer: a Reasoning part whose "openai"
+// provider_data entry is present but zero-length (non-nil) is a shape that
+// can slip past a guard built for the ToolCall.Arguments field alone (see
+// message.ProviderData's doc comment). Before message.ProviderData grew a
+// Get accessor,
 // transcodeMessage read this entry straight out of the map
 // (v.ProviderData[Family]) and copied it via append(json.RawMessage(nil),
 // raw...) — which Go's append happens to normalize to a nil slice when
@@ -410,9 +410,9 @@ func TestTranscodeForeignReasoningDropped(t *testing.T) {
 // sent to the wire carried a spurious `null` item in its input list instead
 // of the reasoning item being dropped like a foreign-provider one. This
 // test exercises the full path (transcodeRequest, then json.Marshal(out) —
-// the "AND marshal request" the incident's method requires, not just the
-// per-item transcode step) and asserts the empty entry is dropped
-// entirely, matching TestTranscodeForeignReasoningDropped, with no
+// marshaling the full request, not just the per-item transcode step, is
+// required to catch this class of bug) and asserts the empty entry is
+// dropped entirely, matching TestTranscodeForeignReasoningDropped, with no
 // spurious item and no error either before or after the fix.
 func TestTranscodeReasoningEmptyProviderDataMarshal(t *testing.T) {
 	for _, c := range []struct {
@@ -436,9 +436,10 @@ func TestTranscodeReasoningEmptyProviderDataMarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("transcodeRequest: %v", err)
 			}
-			// The full wire-request marshal: this is the exact call that
-			// failed in production with "json: error calling MarshalJSON
-			// for type json.RawMessage: unexpected end of JSON input".
+			// The full wire-request marshal: a zero-length, non-nil
+			// json.RawMessage in this position fails with "json: error
+			// calling MarshalJSON for type json.RawMessage: unexpected
+			// end of JSON input" unless it is dropped first.
 			if _, err := json.Marshal(out); err != nil {
 				t.Fatalf("marshal apiRequest: %v", err)
 			}
@@ -497,7 +498,7 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 // TestTranscodeResolvesOrphanToolCalls: the Responses transcoder was the
 // one transcoder NOT calling message.ResolveOrphanToolCalls at request
 // build (anthropic and openaicompat both do — see their transcode.go and
-// message.ResolveOrphanToolCalls's incident doc), so an assistant ToolCall
+// message.ResolveOrphanToolCalls's doc comment), so an assistant ToolCall
 // with no following ToolResult transcoded to a dangling function_call item
 // the API rejects on every retry. The repair must run here too: the
 // dangling call gets a synthetic function_call_output immediately after.
@@ -598,9 +599,9 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 	}
 }
 
-// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is the
-// golden regression test for PR #108 round 5's finding on
-// message/wire_normalize.go:496: a demoted ToolResult's Blob used to
+// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is a
+// golden regression test on message/wire_normalize.go:496: a demoted
+// ToolResult's Blob used to
 // survive as a raw Part regardless of media type, and this adapter's own
 // transcodeBlob (~line 298) hard-errors building a request containing a
 // non-image/*, non-application/pdf Blob, or an application/pdf Blob
@@ -651,8 +652,8 @@ func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) 
 }
 
 // TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
-// the golden regression test for PR #108 round 5's finding on
-// message/wire_normalize.go:370: a demoted ToolResult's Blob must never be
+// a golden regression test on message/wire_normalize.go:370: a demoted
+// ToolResult's Blob must never be
 // left inside an assistant-role wire item. Two ToolResults sharing one
 // assistant message (both with no ToolCall anywhere) reach
 // demoteWireInvalidToolResults' assistant-run branch at all — see
@@ -690,17 +691,16 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 }
 
 // TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
-// the golden regression test for PR #108 round 6's finding: the
-// assistant-run blob hoist (round 5) placed the hoisted item immediately
-// after the assistant's own function_call item -- before the
-// function_call_output answering that SAME function_call. This adapter's
-// flat, call-id-addressed item list tolerates the interposed item (there is
-// no message-turn grouping to violate), but this test pins the shape here
-// too, so a future change to this adapter's own item ordering is caught by
-// the same golden repro all three providers share. See
-// message/wire_normalize_test.go's
-// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
-// canonical-level account (why TWO ToolResults, A and B, are needed
+// a golden regression test: the assistant-run blob hoist places the
+// hoisted item immediately after the assistant's own function_call item --
+// before the function_call_output answering that SAME function_call. This
+// adapter's flat, call-id-addressed item list tolerates the interposed
+// item (there is no message-turn grouping to violate), but this test pins
+// the shape here too, so a future change to this adapter's own item
+// ordering is caught by the same golden repro all three providers share.
+// See message/wire_normalize_test.go's
+// TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for
+// the canonical-level account (why TWO ToolResults, A and B, are needed
 // alongside the live, answered ToolCall C).
 func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *testing.T) {
 	png := tinyPNG(t)
@@ -747,8 +747,8 @@ func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *t
 }
 
 // TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
-// wire-level counterpart to openaicompat's regression test of the same name
-// (PR #108's review round 2): a stray (unanswerable) ToolResult sitting in
+// wire-level counterpart to openaicompat's regression test of the same
+// name: a stray (unanswerable) ToolResult sitting in
 // the FIRST of two consecutive RoleTool messages must not corrupt the real
 // function_call_output items answering the preceding assistant's
 // function_calls. This adapter's flat, call-id-addressed item list was

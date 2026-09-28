@@ -104,12 +104,12 @@ func TestToolResultRetainedAboveInlineLimit(t *testing.T) {
 		t.Errorf("header missing total bytes %d: %q", len(big), header)
 	}
 	preview := tr.Content[1].(*message.Text).Text
-	// F6(a): a plain HasPrefix(big, preview) check is a mutation escape —
-	// it is vacuously true for an EMPTY preview too (every string is a
-	// prefix of "" trivially satisfying HasPrefix in the other direction,
-	// and "" is a prefix of everything), so a regression that silently
-	// zeroed the preview would sail through it. Pin both the exact length
-	// and the exact bytes.
+	// A plain HasPrefix(big, preview) check is a mutation escape — it is
+	// vacuously true for an EMPTY preview too (every string is a prefix of
+	// "" trivially satisfying HasPrefix in the other direction, and "" is a
+	// prefix of everything), so a regression that silently zeroed the
+	// preview would sail through it. Pin both the exact length and the
+	// exact bytes.
 	if len(preview) != 1024 {
 		t.Fatalf("preview len = %d, want exactly 1024 (the inline limit)", len(preview))
 	}
@@ -135,14 +135,14 @@ func TestToolResultRetainedAboveInlineLimit(t *testing.T) {
 	}
 }
 
-// TestToolResultGateMeasuresMaskedLength is a round-5 review finding's red
-// test. The retention gate (`len(text) <= limit`) measured the UNMASKED
-// original length, while everything downstream — the preview, meta.Bytes,
-// the retention-ceiling accounting — measures the MASKED length. A result
+// TestToolResultGateMeasuresMaskedLength pins the retention gate
+// (`len(text) <= limit`) against the MASKED length, not the UNMASKED
+// original length: everything downstream — the preview, meta.Bytes, the
+// retention-ceiling accounting — measures the MASKED length too. A result
 // that masks down to well under the limit (a long secret value collapses
-// to "***") still triggered retention on its pre-mask size: a handle got
-// burned and a sidecar file written for content that fit inline all along
-// once masked, with a "read the rest with read_tool_result" header
+// to "***") must not trigger retention on its pre-mask size: burning a
+// handle and writing a sidecar file for content that fits inline once
+// masked would leave a "read the rest with read_tool_result" header
 // pointing at nothing left to read.
 func TestToolResultGateMeasuresMaskedLength(t *testing.T) {
 	dir := t.TempDir()
@@ -173,15 +173,14 @@ func TestToolResultGateMeasuresMaskedLength(t *testing.T) {
 	}
 }
 
-// TestReadToolResultOutputIsNeverRetained is review finding F2's red test.
-// read_tool_result's OWN output must be exempt from retention: without the
-// exemption, a read whose returned text exceeds the inline limit — which is
-// the ordinary case, since the documented default max_bytes (16384) sits
-// right at a typical inline limit and the tool's own max (65536) is well
-// above it — mints a NEW handle instead of returning inline. That makes
-// the documented max_bytes ceiling unreachable in practice and doubles the
-// on-disk bytes for content that is already durably retained under its
-// source handle.
+// TestReadToolResultOutputIsNeverRetained pins that read_tool_result's OWN
+// output must be exempt from retention: without the exemption, a read whose
+// returned text exceeds the inline limit — which is the ordinary case,
+// since the documented default max_bytes (16384) sits right at a typical
+// inline limit and the tool's own max (65536) is well above it — mints a
+// NEW handle instead of returning inline. That makes the documented
+// max_bytes ceiling unreachable in practice and doubles the on-disk bytes
+// for content that is already durably retained under its source handle.
 func TestReadToolResultOutputIsNeverRetained(t *testing.T) {
 	dir := t.TempDir()
 	// A retained result big enough that a full-window read_tool_result call
@@ -390,9 +389,9 @@ func TestToolResultRetainedBytesCapRefusesRetention(t *testing.T) {
 	}
 }
 
-// TestToolResultCapHeaderDoesNotOverstatePermanence is a round-3 review
-// finding's red test. toolResultBytes is NOT incremented on a refusal
-// (only writeRetainedToolResult increments it, and that never runs on the
+// TestToolResultCapHeaderDoesNotOverstatePermanence pins that
+// toolResultBytes is NOT incremented on a refusal (only
+// writeRetainedToolResult increments it, and that never runs on the
 // cap-refused path), so a later, SMALLER oversized result can still fit
 // under the SAME ceiling and be retained successfully — directly
 // contradicting a header that claims "no further tool result will be
@@ -438,13 +437,12 @@ func TestToolResultCapHeaderDoesNotOverstatePermanence(t *testing.T) {
 	}
 }
 
-// TestToolResultRetainedFileIsMaskedAndPrivate is review finding F4's red
-// test. A retained result routinely contains a command's raw output —
-// including an env dump or a leaked credential in a log line — and the
-// sidecar file must not sit on disk in cleartext, group- and world-
-// readable. This asserts both halves: the obvious secret-shaped line is
-// masked in the bytes actually written to disk, and the file/directory
-// permissions are private (0600/0700).
+// TestToolResultRetainedFileIsMaskedAndPrivate pins that a retained result
+// — which routinely contains a command's raw output, including an env dump
+// or a leaked credential in a log line — must not sit on disk in
+// cleartext, group- and world-readable. This asserts both halves: the
+// obvious secret-shaped line is masked in the bytes actually written to
+// disk, and the file/directory permissions are private (0600/0700).
 func TestToolResultRetainedFileIsMaskedAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	secretValue := "AKIAABCDEFGHIJKLMNOP"
@@ -606,8 +604,8 @@ func TestToolResultHandleMetadataSurvivesResume(t *testing.T) {
 	}
 }
 
-// TestLoadSessionRegistersReadToolResultForExistingHandles is review
-// finding F12's red test. newSession decides whether to register
+// TestLoadSessionRegistersReadToolResultForExistingHandles pins that
+// newSession decides whether to register
 // read_tool_result BEFORE LoadSession's record fold populates
 // s.toolResults — against an empty map, every time, regardless of what the
 // log actually holds. A session resumed after tool_result_inline_bytes was
@@ -718,8 +716,8 @@ func TestLoadSessionSkipsMalformedRetainedRecord(t *testing.T) {
 	}
 }
 
-// TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText is a round-5
-// review finding's red test for silent handle reuse after resume.
+// TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText pins the case
+// of silent handle reuse after resume.
 //
 // toolResultNextID was rebuilt ONLY from toolresult.retained pointer
 // records — but persistToolResultRetainedLocked is best-effort

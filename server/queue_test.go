@@ -423,16 +423,16 @@ func TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp(t *testing.T) {
 }
 
 // TestFreeRunSlotAndEmitIdleSetsQueueDrainPendingUnconditionally is the
-// regression test for a live review finding on freeRunSlotAndEmitIdle
-// (handlers.go): an earlier version gated Server.queueDrainPending on a
-// separate queueDepth cache (`if s.queueDepth[id] > 0`), populated by a
-// SEPARATE event path (publishQueue -> emitDurableLocked) that can itself
+// regression test for a hazard in freeRunSlotAndEmitIdle (handlers.go):
+// gating Server.queueDrainPending on a separate queueDepth cache (`if
+// s.queueDepth[id] > 0`), populated by a SEPARATE event path
+// (publishQueue -> emitDurableLocked) that can itself
 // still be in flight relative to a concurrent enqueue — that enqueue's own
-// append can land before its own cache update, right as a concurrent turn's
-// own freeRunSlotAndEmitIdle reads the (still stale) cache. That
-// reintroduces the exact false-idle class this whole fix exists to close,
-// just triggered by an enqueue racing turn-end instead of a queue that was
-// already non-empty going in.
+// append can land before its own cache update, right as a concurrent
+// turn's own freeRunSlotAndEmitIdle would read the (still stale) cache.
+// That would reintroduce the exact false-idle class this whole fix exists
+// to close, just triggered by an enqueue racing turn-end instead of a
+// queue that was already non-empty going in.
 //
 // Fixed by setting queueDrainPending unconditionally, every time,
 // regardless of what any cache says — maybeDispatchQueued's own deferred

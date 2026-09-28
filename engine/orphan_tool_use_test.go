@@ -34,13 +34,12 @@ func (s *dyingStream) Next() (provider.Event, error) {
 
 func (s *dyingStream) Close() error { return nil }
 
-// diesAfterToolCallProvider models the mechanism behind production
-// incident ses_01hvcs96pq1cf7x3kw0fz4a1yh: its first Stream call returns a
-// dyingStream (one or more tool_call blocks, then a transport-style
-// error, never EventDone); every subsequent Stream call serves the
-// pre-scripted turns in after, exactly like scriptedProvider, so a test can
-// observe what the NEXT request build looks like once the interrupted turn
-// has been recorded.
+// diesAfterToolCallProvider models a provider stream that dies mid-turn
+// after emitting a tool call: its first Stream call returns a dyingStream
+// (one or more tool_call blocks, then a transport-style error, never
+// EventDone); every subsequent Stream call serves the pre-scripted turns in
+// after, exactly like scriptedProvider, so a test can observe what the NEXT
+// request build looks like once the interrupted turn has been recorded.
 type diesAfterToolCallProvider struct {
 	name     string
 	dying    []provider.Event
@@ -67,23 +66,21 @@ func (p *diesAfterToolCallProvider) Stream(_ context.Context, req *provider.Requ
 
 var errTransportDropped = errors.New("engine: simulated transport drop mid-turn")
 
-// TestOrphanedToolCallAppendsSyntheticResult reproduces incident
-// ses_01hvcs96pq1cf7x3kw0fz4a1yh red-first: a provider stream emits one
-// complete tool_call block (provider.EventToolCall — the shape
+// TestOrphanedToolCallAppendsSyntheticResult covers a provider stream that
+// emits one complete tool_call block (provider.EventToolCall — the shape
 // provider/anthropic/anthropic.go's content_block_stop handler and
 // provider/openaicompat/openaicompat.go's emitToolCalls both produce) and
 // then dies before EventDone ever arrives, so the engine never gets a
 // chance to execute it.
 //
-// Before the fix: Prompt's error path discarded the assembled partial
-// content entirely — nothing entered history, so nothing looked
-// "poisoned" in this session's own history yet, but the model's tool_call
-// was lost with no record and no result. Worse, the NEXT prompt in this
-// same test proves the point that matters operationally: with the fix, a
-// self-consistent history (ToolCall immediately followed by its
-// ToolResult) means the subsequent turn's request build succeeds and the
-// session recovers instead of the production shape (three identical
-// retries, all killed by the same orphaned tool_use).
+// Discarding the assembled partial content entirely leaves nothing in
+// history — so nothing looks "poisoned" in this session's own history yet
+// — but the model's tool_call is lost with no record and no result. The
+// NEXT prompt in this same test proves the point that matters
+// operationally: a self-consistent history (ToolCall immediately followed
+// by its ToolResult) lets the subsequent turn's request build succeed and
+// the session recover, rather than repeat three identical retries all
+// killed by the same orphaned tool_use.
 func TestOrphanedToolCallAppendsSyntheticResult(t *testing.T) {
 	orphaned := toolCall("orphan1", "bash", `{"command":"echo hi"}`)
 	prov := &diesAfterToolCallProvider{

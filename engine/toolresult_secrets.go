@@ -1,6 +1,4 @@
-// Minimal, pattern-based secret masking applied to a retained tool result —
-// review findings F4 (original) and N2/N3/N4/N5/N6/N11 (round-2 review of
-// F4's first cut).
+// Minimal, pattern-based secret masking applied to a retained tool result.
 //
 // This repo has no existing secret-masking utility to reuse (searched for
 // maskSecrets/redact/text_utils-shaped helpers; none exist). This is
@@ -12,22 +10,22 @@
 // API token pasted with no label). See the PR body for the documented
 // residual risk.
 //
-// # Round-2 rewrite: N2 (data loss) and N4 (code corruption)
+// # Bounding the value match
 //
-// The original pattern's value half was `\S+` — unbounded, greedy to the
-// next whitespace. Two failure modes came from that:
+// A pattern whose value half is `\S+` — unbounded, greedy to the next
+// whitespace — produces two failure modes:
 //
-//   - N2 (data loss): a single incidental key-shaped match (`&token=` inside
+//   - Data loss: a single incidental key-shaped match (`&token=` inside
 //     a URL, `token=<huge blob>` on one line with no other whitespace)
-//     deleted everything from the match to the next whitespace — measured
+//     deletes everything from the match to the next whitespace — measured
 //     2,097,164 bytes of a 4 MiB single-line retained result destroyed by
 //     ONE masked "value" that was actually mostly unrelated adjacent
 //     content, because \S+ does not stop at `&`, `?`, `,`, `"`, or any other
 //     structural delimiter — only at whitespace.
-//   - N4 (code corruption): `token:=lexer.Next()` (Go's `:=` short variable
+//   - Code corruption: `token:=lexer.Next()` (Go's `:=` short variable
 //     declaration, not an assignment of a value TO a key named "token")
-//     became `token:*** if...` — the old pattern treated the bare `:`
-//     ahead of `=lexer.Next()` as a key/value separator and `\S+` ate the
+//     becomes `token:*** if...` — an unbounded pattern treats the bare `:`
+//     ahead of `=lexer.Next()` as a key/value separator and `\S+` eats the
 //     rest of the statement.
 //
 // The value class here is bounded on BOTH axes: a character class that
@@ -44,29 +42,28 @@
 // TestMaskSecretsCodeCorpus pins this against realistic Go/Python/JS/TS
 // source snippets, byte-identical.
 //
-// # Round 3: quoted env/YAML values
+// # Quoted env/YAML values
 //
-// A round-3 review round found `export TOKEN="secretvalue123"` — an
-// UNQUOTED key with a QUOTED value, an extremely common shell/env-dump
-// shape — slipping through entirely unmasked: the env/YAML alternative
-// required its value class immediately after the separator, and the next
-// byte there (`"`) is not in secretValueClass; the JSON alternative
-// requires a QUOTED key, which a bare `TOKEN` lacks. Two more alternatives
-// cover this (double- and single-quoted, spelled out separately — RE2 has
-// no backreferences, so "whichever quote opened" cannot be one pattern).
+// `export TOKEN="secretvalue123"` — an UNQUOTED key with a QUOTED value, an
+// extremely common shell/env-dump shape — slips through entirely unmasked
+// without a dedicated alternative: the env/YAML alternative requires its
+// value class immediately after the separator, and the next byte there
+// (`"`) is not in secretValueClass; the JSON alternative requires a QUOTED
+// key, which a bare `TOKEN` lacks. Two more alternatives cover this
+// (double- and single-quoted, spelled out separately — RE2 has no
+// backreferences, so "whichever quote opened" cannot be one pattern).
 //
-// # N6: one combined pattern, one pass
+// # One combined pattern, one pass
 //
 // The three shapes (env/YAML, quoted-JSON, Bearer) are ONE regexp with
 // alternation, walked ONCE via FindAllStringSubmatchIndex and rebuilt into
 // one strings.Builder — not three sequential ReplaceAllString passes. Three
-// separate full-text passes measured slower (556ms/4.4MB) than the ORIGINAL
-// single unbounded pattern (352ms/4.4MB) despite matching less text per
-// pass: each ReplaceAllString call re-scans the entire (already largely
-// unchanged) string independently. One pass over the combined pattern
-// measured well under the N6 100ms/4MB target — see
-// TestMaskSecretsPerformance for the current number and the PR body for
-// what was actually measured.
+// separate full-text passes measured slower (556ms/4.4MB) than a single
+// unbounded pattern (352ms/4.4MB) despite matching less text per pass: each
+// ReplaceAllString call re-scans the entire (already largely unchanged)
+// string independently. One pass over the combined pattern measured well
+// under the 100ms/4MB target — see TestMaskSecretsPerformance for the
+// current number and the PR body for what was actually measured.
 package engine
 
 import (
@@ -86,7 +83,7 @@ import (
 // patterns below), not from a leading boundary.
 const secretKeyNames = `secret|token|password|api[_-]?key|access[_-]?key|client[_-]?secret|private[_-]?key`
 
-// secretValueClass is the bounded value character class (N2): alphanumeric
+// secretValueClass is the bounded value character class: alphanumeric
 // plus the punctuation an ordinary token/key/base64(url) value legitimately
 // contains (`_`, `-`, `.`, `/`, `+`, `=` for base64 padding). It excludes
 // whitespace, quotes, and every common delimiter (`&`, `?`, `,`, `}`, `)`,
@@ -94,7 +91,7 @@ const secretKeyNames = `secret|token|password|api[_-]?key|access[_-]?key|client[
 // unrelated content.
 const secretValueClass = `[A-Za-z0-9_\-./+=]`
 
-// secretMaskPattern is the ONE combined pattern (N6) covering all five
+// secretMaskPattern is the ONE combined pattern covering all five
 // recognized shapes, in this alternative order — each is structurally
 // distinct enough (different leading character/shape: a bare key char, a
 // `"`, literal "Authorization:", or an unquoted key immediately followed by
@@ -122,7 +119,7 @@ var secretMaskPattern = regexp.MustCompile(
 		`|(` + secretKeyNames + `)(=|:[ \t]+)'[^']{0,1000}'`,
 )
 
-// secretCandidateKeywords is the cheap pre-filter's keyword list (N6): the
+// secretCandidateKeywords is the cheap pre-filter's keyword list: the
 // same key names secretKeyNames recognizes, plus "authorization", spelled
 // out as plain lowercase substrings for a non-regex Contains check.
 var secretCandidateKeywords = []string{
@@ -158,11 +155,11 @@ func containsSecretCandidate(s string) bool {
 // with a fixed "***", preserving the key and separator so the masked
 // output still reads as the shape it was (a model reading it back still
 // sees "AWS_SECRET_ACCESS_KEY=***", not a mystery blank). Applied to BOTH
-// what is written to disk and the inline preview the model sees (review
-// finding N5) — the two must never disagree about which bytes are secret.
+// what is written to disk and the inline preview the model sees — the two
+// must never disagree about which bytes are secret.
 //
-// N6 performance: two layers of fast-reject before the expensive regex
-// ever runs.
+// Performance: two layers of fast-reject before the expensive regex ever
+// runs.
 //
 //  1. A whole-text containsSecretCandidate check up front: no candidate
 //     keyword anywhere at all (the common case for ordinary tool output)
@@ -175,13 +172,13 @@ func containsSecretCandidate(s string) bool {
 //     candidate keyword is copied verbatim, at Contains cost, without ever
 //     touching the regex engine. Retained tool output is almost always
 //     multi-line, so this is where the real win is; only the pathological
-//     F1 case (one multi-megabyte line with no newlines at all) falls back
+//     case of one multi-megabyte line with no newlines at all falls back
 //     to a single expensive full-text scan, same as before this
 //     optimization — a documented residual, not a regression.
 //
 // maskSecretsLineWindow bounds how many lines FORWARD of a candidate line
-// get grouped with it into one span before the real pattern runs (round-5
-// review finding — see maskSecrets's doc comment). Forward-only: every
+// get grouped with it into one span before the real pattern runs (see
+// maskSecrets's doc comment). Forward-only: every
 // shape that can span a newline (quoted-JSON, Bearer) has its
 // candidate-triggering text — the key's substring, or "authorization" —
 // BEFORE the value in reading order, never after, so a match is never
@@ -266,8 +263,8 @@ func groupCandidateLineWindows(lines []string, window int) []string {
 // maskSecretsSpan runs the actual combined-pattern regex over one span of
 // text (a single line, or — for the single-huge-line fallback in
 // maskSecrets — the whole input) and rebuilds it with every match's value
-// half replaced. FindAllStringSubmatchIndex walks the pattern ONCE (N6);
-// the loop below copies everything BETWEEN matches verbatim and
+// half replaced. FindAllStringSubmatchIndex walks the pattern ONCE; the
+// loop below copies everything BETWEEN matches verbatim and
 // substitutes only key+separator+"***" (quoted to match the matched
 // shape, where the shape was itself quoted) for each match. Group indices
 // that did not participate in a given alternative come back -1 (Go's

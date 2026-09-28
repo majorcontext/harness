@@ -876,8 +876,7 @@ type Config struct {
 	// max_tokens and tool_use (including denied, unknown, or failing tool
 	// calls — none of which need touch toolExecCount) indefinitely inside
 	// one Prompt call, spending an unbounded number of continuations
-	// without ever tripping the bound (an adversarial review finding on
-	// the PR that introduced this field). Exhausting the budget —
+	// without ever tripping the bound. Exhausting the budget —
 	// MaxTokensContinuations+1 max_tokens stops used within the loop —
 	// synthesizes a *maxTokensContinuationExhaustedError naming the bound,
 	// wrapped provider.MarkPermanent so a goal-loop retry
@@ -1188,21 +1187,19 @@ type Session struct {
 	//   - WHILE that turn is still unsettled (hasUnfinalizedTurn() ==
 	//     true): recovery's own crash-replay payload — see
 	//     commitTurnOutcome/committedTurnOutcome's own doc comments and
-	//     the crash-window table on recoverInterruptedTurnLocked's own
-	//     doc comment (session_manager.go) for the full mechanism this
-	//     closes: a live review finding that recovery's OWN
-	//     reconstruction (from trailing history shape, or a generic
-	//     "lost to restart" fallback) can DIVERGE from what finalizeTurn
-	//     already computed and durably delivered before a crash struck
-	//     INSIDE finalizeTurn's own deliver-then-settle sequence —
-	//     producing a duplicate notification with a DIFFERENT payload
-	//     than the one the parent may already have received.
+	//     the crash-window table on recoverInterruptedTurnLocked's own doc
+	//     comment (session_manager.go) for the full mechanism this closes:
+	//     recovery's OWN reconstruction (from trailing history shape, or a
+	//     generic "lost to restart" fallback) can DIVERGE from what
+	//     finalizeTurn already computed and durably delivered before a
+	//     crash struck INSIDE finalizeTurn's own deliver-then-settle
+	//     sequence — producing a duplicate notification with a DIFFERENT
+	//     payload than the one the parent may already have received.
 	//   - ONCE settled: the last known terminal outcome — see
-	//     SessionManager.restoreKnownStatusLocked, which a LATER
-	//     adoption of this already-settled node (a live prod finding)
-	//     uses to restore n.status/n.result/n.failReason correctly,
-	//     rather than leaving adoptLocked's bare StatusIdle default
-	//     uncorrected forever.
+	//     SessionManager.restoreKnownStatusLocked, which a LATER adoption
+	//     of this already-settled node uses to restore
+	//     n.status/n.result/n.failReason correctly, rather than leaving
+	//     adoptLocked's bare StatusIdle default uncorrected forever.
 	//
 	// Reset to nil the moment a NEW turn starts (see appendWithUsage/
 	// appendMemoryOnly's own identical turnUnsettled=true side effect) —
@@ -1496,9 +1493,9 @@ type Session struct {
 	// runs its own compaction over its own history. Trusting that stale,
 	// wrong-scale figure right after a switch to a native model — which
 	// transcodes and sends harness's ACTUAL journal, not the CLI's — is
-	// exactly how a session like ses_01hwcjr3fevxtjadwdnd412c47 (3,667-
-	// message delegated journal, switched to a native model, immediately
-	// rejected as "prompt too long") went uncompacted.
+	// exactly how a session with a large delegated journal, switched to a
+	// native model, can go uncompacted and be immediately rejected as
+	// "prompt too long".
 	//
 	// Set by SetModel on a claude-code-to-native switch and by store.go's
 	// recModel replay fold of the identical transition — the durable
@@ -2071,18 +2068,18 @@ func (s *Session) TaskParentID() string {
 // parent": adoptReloadedLocked's own root/non-root branch (which gates
 // whether s is a recovery candidate at all) and finalizeTurn's
 // settled-marker/commit-outcome gate (session_manager.go). Both MUST use
-// this same helper rather than each re-deriving the answer their own way
-// — a live review finding: finalizeTurn used to gate on
-// sessionNode.parentID, the IN-MEMORY tree-structural pointer, instead of
-// this durable one. The two normally agree, but adoptReloadedLocked's own
-// "true depth is unrecoverable" case (its own doc comment) can leave a
-// node's in-memory parentID blank even when it durably DOES have a real
-// TaskParentID — for exactly that node, finalizeTurn's old gate silently
-// skipped marking its turns settled at all, forever: hasUnfinalizedTurn()
-// misread true on every later reload, even for turns that finished
-// completely normally. Deliberately durable (Config.TaskParentID), never
-// the in-memory pointer — see TaskParentID's own doc comment for why the
-// two are distinct concepts in the first place.
+// this same helper rather than each re-deriving the answer their own way:
+// a gate built on sessionNode.parentID, the IN-MEMORY tree-structural
+// pointer, diverges from this durable one. The two normally agree, but
+// adoptReloadedLocked's own "true depth is unrecoverable" case (its own
+// doc comment) can leave a node's in-memory parentID blank even when it
+// durably DOES have a real TaskParentID — for exactly that node, a gate on
+// the in-memory pointer would silently skip marking its turns settled at
+// all, forever: hasUnfinalizedTurn() misreads true on every later reload,
+// even for turns that finished completely normally. Deliberately durable
+// (Config.TaskParentID), never the in-memory pointer — see TaskParentID's
+// own doc comment for why the two are distinct concepts in the first
+// place.
 func (s *Session) hasTaskParent() bool {
 	return s.TaskParentID() != ""
 }
@@ -3117,8 +3114,7 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 	// never touch toolExecCount; a counter that reset on every StopToolUse
 	// let that alternation spend an unbounded number of max_tokens
 	// continuations inside one Prompt call, defeating
-	// Config.MaxTokensContinuations as a bound on the loop (an adversarial
-	// review finding on the PR that introduced this counter). See
+	// Config.MaxTokensContinuations as a bound on the loop. See
 	// maybeAutoContinueMaxTokens and Config.MaxTokensContinuations.
 	var maxTokensUsed int
 
@@ -3216,11 +3212,9 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 					// StopToolUse round already gets; without this, an
 					// operator message queued during a long truncated
 					// response could sit undelivered for the entire
-					// continuation chain (an adversarial review finding on
-					// the PR that introduced auto-continue). Then loop back
-					// around instead of returning, so that call issues a
-					// real follow-up model request in this SAME Prompt
-					// loop.
+					// continuation chain. Then loop back around instead of
+					// returning, so that call issues a real follow-up model
+					// request in this SAME Prompt loop.
 					s.drainQueuedPromptsIntoHistory()
 					continue
 				}
@@ -3666,27 +3660,27 @@ const interruptedTurnErrorText = "interrupted: tool call was never executed beca
 // in-flight assistant message (via provider.EventToolCall) but before
 // EventDone — i.e. before the engine could ever execute those calls.
 //
-// # Incident ses_01hvcs96pq1cf7x3kw0fz4a1yh
+// # The tool_use-without-tool_result wedge this closes
 //
-// A goal worker turn died with the Anthropic API 400 "tool_use ids were
-// found without tool_result blocks immediately after", and every
-// subsequent goal-loop retry then failed identically, killing the goal.
-// The mechanism: a provider stream died (or the turn otherwise errored)
+// A goal worker turn can die with the Anthropic API 400 "tool_use ids
+// were found without tool_result blocks immediately after", and every
+// subsequent goal-loop retry then fails identically, killing the goal.
+// The mechanism: a provider stream dies (or the turn otherwise errors)
 // after emitting one or more tool_call blocks but before the engine
-// executed them. Before this fix, Prompt's error path
-// (`if err != nil { return nil, err }`) simply discarded the assembled
+// executes them. Without this fix, Prompt's error path
+// (`if err != nil { return nil, err }`) simply discards the assembled
 // partial message, which sounds safe — nothing entered history — except
 // that is exactly backwards from what actually poisons a session: the
 // danger here is not a partial message appended without its result (the
-// old truncated-Arguments incident's shape), it is that some OTHER call
-// path (a provider adapter's own retry, a resumed session replaying a
+// shape a truncated-Arguments failure also takes), it is that some OTHER
+// call path (a provider adapter's own retry, a resumed session replaying a
 // partially-journaled turn, a future change to this loop) could append
 // such a message without this same care. Recording the tool calls here
 // and synthesizing their results immediately — rather than leaving the
 // model's already-emitted intent to either vanish or, worse, reappear
 // unpaired from some other path later — is what keeps history
 // self-consistent at ingest, mirroring the primary fix for the sibling,
-// marshal-level incident (see message.Normalize's doc comment, "fix
+// marshal-level case (see message.Normalize's doc comment, "fix
 // (message,engine): truncated ToolCall.Arguments must never poison
 // history").
 //
@@ -3785,17 +3779,16 @@ func syntheticUnexecutedToolResults(msg *message.Message, text string) message.M
 // The mechanism, unlike the sibling interruptedTurnError case above: the
 // provider stream did NOT error and DID reach EventDone -- a completed,
 // ordinary turn -- but its reported StopReason was something other than
-// StopToolUse (StopEndTurn or StopMaxTokens, depending on the route) while
-// the assistant message it returned nonetheless carried one or more
-// ToolCall parts. Session.Prompt's `if stop != provider.StopToolUse {
-// return asst, nil }` early return appended asst (with its ToolCall parts)
-// to history and returned -- with no following tool-role message ever
-// appended for those calls. Every later request replay finds the same
-// unpaired
-// tool_use.
+// StopToolUse (StopEndTurn, StopMaxTokens, or any other value a route can
+// report) while the assistant message it returned nonetheless carried one
+// or more ToolCall parts. Session.Prompt's `if stop != provider.StopToolUse
+// { return asst, nil }` early return appended asst (with its ToolCall
+// parts) to history and returned -- with no following tool-role message
+// ever appended for those calls. Every later request replay finds the same
+// unpaired tool_use.
 //
 // The fix does NOT execute the orphaned calls: a StopMaxTokens stop can
-// truncate ToolCall.Arguments mid-JSON (see the sibling incident fixed by
+// truncate ToolCall.Arguments mid-JSON (see the sibling case fixed by
 // "truncated ToolCall.Arguments must never poison history"), and running a
 // tool against truncated, possibly invalid arguments is its own hazard --
 // worse than a visible failure. Synthesizing an is_error result instead is
@@ -3913,8 +3906,7 @@ func appendContinuationNudgeMessage(messages []message.Message, seg string) []me
 // chains: with the default bound of 3, one worker attempt already makes 4
 // completed, fully billed max_tokens calls before this error is even
 // returned, and goalWorkerRetries (2 additional attempts) would otherwise
-// multiply that to 12 for one goal boundary (an adversarial review finding
-// on the PR that introduced auto-continue). Unlike a context-overflow
+// multiply that to 12 for one goal boundary. Unlike a context-overflow
 // error, a permanent classification here does not clear the goal — the
 // condition that produced 3+1 consecutive max_tokens stops might not
 // recur on a later resume — it only stops THIS attempt from being retried;

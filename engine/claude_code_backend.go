@@ -667,9 +667,8 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	//
 	// stdin has exactly ONE closer now: this goroutine, here, never the
 	// pump itself (see its own two return paths above). That is what
-	// makes this safe against the wedge an adversarial review found on
-	// #231 (majorcontext/harness#231, commit 7918b6d): the pump can be
-	// BLOCKED inside stdin.Write when stopPump closes — a `claude --bg`
+	// makes this safe against the wedge where the pump can be BLOCKED
+	// inside stdin.Write when stopPump closes — a `claude --bg`
 	// leaked grandchild holding stdin's read end open, or simply a full
 	// pipe buffer at the exact turn-boundary instant — and a goroutine
 	// blocked in a syscall never reaches its own select to observe a
@@ -1125,12 +1124,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 	// standalone assistant message. This is the uncommon path: it fires
 	// only when a differently-parented envelope interrupts a buffered
 	// thinking block (a subagent frame interleaving with the main
-	// thread's own reasoning — never observed live against a real
-	// binary, but never silently dropped either) or when the stream ends
-	// before a reasoning-only envelope is ever followed by another one
-	// (an aborted or crashed turn). The common case — thinking
-	// immediately followed by the rest of its own turn segment — never
-	// reaches here; it merges instead, in the "assistant" case below.
+	// thread's own reasoning; the buffered block must still flush, not
+	// drop) or when the stream ends before a reasoning-only envelope is
+	// ever followed by another one (an aborted or crashed turn). The
+	// common case — thinking immediately followed by the rest of its own
+	// turn segment — never reaches here; it merges instead, in the
+	// "assistant" case below.
 	flushPendingReasoning := func() {
 		if len(pendingReasoning) == 0 {
 			return

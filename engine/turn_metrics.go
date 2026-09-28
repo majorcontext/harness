@@ -103,7 +103,7 @@ type TurnMetrics struct {
 // (Kubernetes captures stdout and stderr alike) scrapes it with no extra
 // wiring — and it stays OFF stdout, which for `harness run` is the
 // answer channel itself: a metrics line interleaved there would corrupt
-// captured output (the review finding that moved this from stdout).
+// captured output.
 var defaultTurnMetricsStderr = slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 // defaultTurnMetricsLog is Config.OnTurnMetrics's default when the embedder

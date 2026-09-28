@@ -169,17 +169,15 @@ func TestCompositeStateGoalRunningDuringBlockedWorker(t *testing.T) {
 	}
 }
 
-// TestCompositeStateBusyDuringForcedIdlePause is the integration-level red
-// test for a state-reporting gap: a session whose
-// goal is worker-parked (pause_reason "worker_failure", forcesIdlePause==
-// true) read state="idle" even while an ordinary prompt turn was actively
-// streaming — an operator watching the monitor could conclude the box was
-// dead mid-turn. forceIdle exists because no loop drives the GOAL; it must
-// never
-// claim a running TURN isn't running. Mirrors
-// TestCompositeStateGoalRunningDuringBlockedWorker's shape (same dual GET
-// /session + GET /session/status check) but for the forceIdle case instead
-// of the plain goal-active case, and
+// TestCompositeStateBusyDuringForcedIdlePause is the integration-level red test
+// for a state-reporting gap: a session whose goal is worker-parked
+// (pause_reason "worker_failure", forcesIdlePause==true) read state="idle" even
+// while an ordinary prompt turn was actively streaming — an operator watching
+// the monitor could conclude the box was dead mid-turn. forceIdle exists
+// because no loop drives the GOAL; it must never claim a running TURN isn't
+// running. Mirrors TestCompositeStateGoalRunningDuringBlockedWorker's shape
+// (same dual GET /session + GET /session/status check) but for the forceIdle
+// case instead of the plain goal-active case, and
 // TestAutoArmAfterRestartResetsPausePresentation's blockWorkerAfter
 // mid-turn-checkpoint technique.
 //
@@ -792,7 +790,7 @@ func TestWaitDisconnectDoesNotLeakWaiter(t *testing.T) {
 }
 
 // TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue is the regression
-// guard for a live review finding on the fix in
+// guard for the same hazard class as
 // TestWaitUntilIdleDoesNotWakeEarlyOnQueuedFollowUp (queue_test.go): gating
 // until=idle naively on "is the queue non-empty" is wrong for a session
 // resumed after a restart with a prompt still durably queued and nothing
@@ -892,10 +890,9 @@ func TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue(t *testing.T) {
 }
 
 // TestWaitSnapshotResidentSessionTrustsOwnRunningOverSessMgrFallback is the
-// regression test for a review finding on waitSnapshot's own SessionManager
-// fallback (a live review on an earlier revision of this fix): the
-// fallback used to fire whenever !running, resident or not. The finding's
-// own trace names a specific window — between freeRunSlotAndEmitIdle
+// regression test proving waitSnapshot's own SessionManager fallback must
+// not fire whenever !running, resident or not. The hazard names a
+// specific window — between freeRunSlotAndEmitIdle
 // (sets st.running=false) and ReportTurnEnd (flips the SessionManager
 // node off StatusRunning) — but that exact window turns out to be masked
 // in practice by Server.queueDrainPending, which freeRunSlotAndEmitIdle
@@ -905,17 +902,17 @@ func TestWaitUntilIdleReturnsImmediatelyForBootResumedQueue(t *testing.T) {
 // maybeDispatchQueued's shared s.mu, guaranteed to also observe
 // ReportTurnEnd's already-applied status update (ReportTurnEnd always
 // runs strictly before the maybeDispatchQueued call that clears the
-// flag) — so the two-lock race the finding describes cannot actually
+// flag) — so the two-lock race described above cannot actually
 // manifest through that one path today.
 //
-// The underlying defect the finding correctly diagnosed stands regardless:
+// The underlying defect stands regardless:
 // consulting sessMgr AT ALL for a resident session is unconditionally
 // wrong, because the server's own st.running is always the authoritative,
 // race-free answer for anything it tracks — the fallback exists ONLY to
 // cover a Spawn-driven child, which is NEVER resident. Proves the fix
 // directly and deterministically rather than via a timing window that
 // happens not to be reachable through today's callers: force the exact
-// state mismatch the finding describes (residency says idle, sessMgr
+// state mismatch described above (residency says idle, sessMgr
 // still says Running) by construction, sidestepping any dependence on
 // which production code path can or cannot currently produce it — a
 // property this test must keep holding even if some future call site
@@ -937,7 +934,7 @@ func TestWaitSnapshotResidentSessionTrustsOwnRunningOverSessMgrFallback(t *testi
 
 	// Flips SessionManager's own node to StatusRunning without touching
 	// st.running at all — the exact mismatch a waiter woken in the real
-	// finalizeTurn/ReportTurnEnd gap the finding describes would see.
+	// finalizeTurn/ReportTurnEnd gap would see.
 	h.srv.sessMgr.ReportTurnStart(sess)
 	if info, ok := h.srv.sessMgr.Info(id); !ok || info.Status != engine.StatusRunning {
 		t.Fatalf("sessMgr status = %v (ok=%v), want StatusRunning — test setup invalid", info.Status, ok)

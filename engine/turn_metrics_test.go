@@ -284,16 +284,13 @@ func TestTurnMetricsRecordsRetryAttempt(t *testing.T) {
 }
 
 // TestDefaultTurnMetricsLogRetryFieldIsZeroBased pins the wire "retry"
-// field's meaning against the exact production incident it caused: a fleet
-// operator read 25 consecutive turn_metrics lines, all "retry":1 and none
-// "retry":0, as a 100% retry rate. TurnMetrics.Attempt is documented and
-// tested (TestTurnMetricsRecordsRetryAttempt) as 1-indexed — 1 means "no
-// retry, succeeded first try" — but defaultTurnMetricsLog wrote that same
-// 1-indexed number under the key literally named "retry", so every
-// never-retried turn logged "retry":1 and a genuinely retried turn logged
-// "retry":2, and no turn could ever log "retry":0. The wire field must
-// count retries, zero-based, matching its own name: 0 for a first-try
-// success, 1 after exactly one retry.
+// field's meaning: it must count retries, zero-based, matching its own
+// name. TurnMetrics.Attempt is documented and tested
+// (TestTurnMetricsRecordsRetryAttempt) as 1-indexed — 1 means "no retry,
+// succeeded first try" — but defaultTurnMetricsLog must not write that same
+// 1-indexed number under the key literally named "retry". Every
+// never-retried turn must log "retry":0, and a genuinely retried turn must
+// log "retry":1: 0 for a first-try success, 1 after exactly one retry.
 func TestDefaultTurnMetricsLogRetryFieldIsZeroBased(t *testing.T) {
 	var log bytes.Buffer
 	oldLogger := defaultTurnMetricsStderr

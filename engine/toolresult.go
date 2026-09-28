@@ -71,13 +71,13 @@ type toolResultMeta struct {
 	// on-disk text (see maybeRetainToolResult/writeRetainedToolResult),
 	// UTF-8-safely truncated. It exists solely so compaction's
 	// retained-results index (compact.go) can name a handle recognizably
-	// without re-opening its sidecar file — see F3.
+	// without re-opening its sidecar file.
 	Head string
 }
 
-// toolResultIndexHeadBytes bounds toolResultMeta.Head — "first ~80 chars"
-// per review finding F3(a). A byte bound, not a rune count, for the same
-// reason truncateUTF8 exists: this must never split a multi-byte rune.
+// toolResultIndexHeadBytes bounds toolResultMeta.Head to roughly the first 80
+// characters. A byte bound, not a rune count, for the same reason
+// truncateUTF8 exists: this must never split a multi-byte rune.
 const toolResultIndexHeadBytes = 80
 
 // toolResultPreviewHeader renders the EXACT preview header line this
@@ -106,19 +106,18 @@ func toolResultPreviewHeader(handle, tool string, totalBytes, totalLines, previe
 // and emitting a handle-shaped token for bytes that do not exist would be
 // worse than saying plainly that they are gone.
 //
-// A round-3 review finding caught an earlier version of this wording
-// overstating permanence in BOTH directions: it claimed "the cap has been
-// reached" (implying accumulation from real retentions, when a single
-// oversized result on a FRESH session — used=0 — refuses just as
-// unconditionally) and "no further tool result will be retained this
-// session" (false: a refusal never increments toolResultBytes — only
-// writeRetainedToolResult does, and that never runs on this path — so a
-// LATER, SMALLER result can still fit under the same ceiling and succeed).
-// TestToolResultCapHeaderDoesNotOverstatePermanence drives that exact
-// contradiction end to end. The wording now says only what is always true:
-// retaining THIS result would exceed the remaining budget, and THIS
-// result's remainder is gone for good — with no claim about what happens
-// next.
+// The wording must not overstate permanence in either direction. It must not
+// claim "the cap has been reached," which implies accumulation from real
+// retentions, when a single oversized result on a fresh session — used=0 —
+// refuses just as unconditionally. It must not claim "no further tool
+// result will be retained this session," because a refusal never increments
+// toolResultBytes — only writeRetainedToolResult does, and that never runs
+// on this path — so a later, smaller result can still fit under the same
+// ceiling and succeed. TestToolResultCapHeaderDoesNotOverstatePermanence
+// drives that exact contradiction end to end. The wording says only what is
+// always true: retaining THIS result would exceed the remaining budget, and
+// THIS result's remainder is gone for good — with no claim about what
+// happens next.
 func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 	return fmt.Sprintf(
 		"[tool result truncated: tool=%s bytes=%d preview_bytes=%d — retaining this result would exceed the per-session retention budget; its remainder is discarded irrecoverably, though a smaller result later this session may still be retained]",
@@ -135,9 +134,8 @@ func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 // This reads Config.ToolResultInlineBytes as given, with no default
 // substitution — a bare engine.Config's zero value (0) means "disabled",
 // byte for byte, never a silent 16384. The PRODUCT default lives one layer
-// up, in config.Config.ToolResultInlineBytesValue (config/config.go) —
-// the sole authoritative source; round-5 review removed a duplicate,
-// unreferenced copy of that number that had drifted into this file.
+// up, in config.Config.ToolResultInlineBytesValue (config/config.go), the
+// sole authoritative source.
 func (s *Session) toolResultInlineLimit() int {
 	if s.cfg.SessionDir == "" {
 		return 0
@@ -176,9 +174,9 @@ func (s *Session) toolResultPath(handle string) string {
 // path (strconv.FormatInt) never produces "trh_+1" or "trh_01", so
 // strconv.ParseInt's looser grammar (which accepts both as spellings of 1)
 // would let those parse as valid handles that are really just alternate,
-// non-canonical spellings of "trh_1" — a false-negative-shaped bug review
-// finding F13 flagged. A caller-supplied handle passes here only if it is
-// byte-for-byte a string writeRetainedToolResult could have minted.
+// non-canonical spellings of "trh_1". A caller-supplied handle passes here
+// only if it is byte-for-byte a string writeRetainedToolResult could have
+// minted.
 func parseToolResultHandle(h string) (int64, bool) {
 	rest, ok := strings.CutPrefix(h, toolResultHandlePrefix)
 	if !ok || rest == "" {
@@ -268,9 +266,8 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 	// documented default and cap both routinely are) mints a NEW handle
 	// instead of returning inline, making the documented max_bytes ceiling
 	// unreachable and doubling the on-disk bytes for content that is
-	// already durably retained under its source handle (review finding
-	// F2). read_tool_result output IS the recovery path FOR retention; it
-	// must never re-enter it.
+	// already durably retained under its source handle. read_tool_result
+	// output IS the recovery path FOR retention; it must never re-enter it.
 	if tool == readToolResultToolName {
 		return content
 	}
@@ -291,29 +288,28 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 		return content
 	}
 
-	// Mask exactly ONCE, up front — review findings N2/N5. Everything
-	// downstream (the preview that goes inline to the model, the bytes
-	// written to disk, and the accounting against the retention ceiling)
-	// must agree on the SAME masked text. The first cut of this feature
-	// masked only what writeRetainedToolResult wrote to disk: the PREVIEW
-	// — which goes straight into the provider request, unlike the sidecar
-	// file — was built from the unmasked original, so a secret sitting in
-	// the first `limit` bytes reached the model in cleartext regardless of
-	// masking existing at all. meta.Bytes/Lines are derived from `masked`
-	// too (not the original `text`), because that is what is actually ON
-	// DISK: a header or read_tool_result advertising the ORIGINAL length
-	// was pointing at a size the file did not have (N2).
+	// Mask exactly ONCE, up front. Everything downstream (the preview that
+	// goes inline to the model, the bytes written to disk, and the
+	// accounting against the retention ceiling) must agree on the SAME
+	// masked text: masking the preview and the sidecar file separately
+	// risks building the preview — which goes straight into the provider
+	// request, unlike the sidecar file — from the unmasked original, so a
+	// secret sitting in the first `limit` bytes would reach the model in
+	// cleartext. meta.Bytes/Lines are derived from `masked` too (not the
+	// original `text`), because that is what is actually ON DISK: a header
+	// or read_tool_result advertising the ORIGINAL length would point at a
+	// size the file does not have.
 	masked := maskSecrets(text)
 
-	// Round-5 review finding: the RETENTION DECISION must be measured
-	// against the masked length too, not just the header/disk/ceiling
-	// accounting above it. `text` exceeding `limit` only means retention
-	// is being CONSIDERED — masking can shrink it well under `limit` (a
-	// long secret value collapses to "***"), and gating on the pre-mask
-	// size burned a handle and wrote a sidecar file for a result that fit
-	// inline all along once masked, with a "read the rest" header pointing
-	// at nothing left to read. If masking alone already brought it within
-	// budget, return the masked text inline — no handle, no sidecar file.
+	// The RETENTION DECISION must be measured against the masked length
+	// too, not just the header/disk/ceiling accounting above it. `text`
+	// exceeding `limit` only means retention is being CONSIDERED — masking
+	// can shrink it well under `limit` (a long secret value collapses to
+	// "***"), and gating on the pre-mask size would burn a handle and write
+	// a sidecar file for a result that fits inline once masked, with a
+	// "read the rest" header pointing at nothing left to read. If masking
+	// alone already brings it within budget, return the masked text inline
+	// — no handle, no sidecar file.
 	if len(masked) <= limit {
 		return append(message.Parts{&message.Text{Text: masked}}, others...)
 	}
@@ -360,10 +356,10 @@ func (s *Session) maybeRetainToolResult(tool string, content message.Parts) mess
 // it. maybeRetainToolResult (the only real production caller) masks once,
 // up front, and passes the already-masked text down here, so the preview
 // that goes inline to the model and the bytes that land on disk are always
-// masked in agreement (review findings N2/N5; see maybeRetainToolResult's
-// doc comment). A direct test caller that passes raw, unmasked text is
-// exercising the write/persist/resume mechanics only, not masking — that is
-// covered separately by the maybeRetainToolResult-path masking tests.
+// masked in agreement (see maybeRetainToolResult's doc comment). A direct
+// test caller that passes raw, unmasked text is exercising the
+// write/persist/resume mechanics only, not masking — that is covered
+// separately by the maybeRetainToolResult-path masking tests.
 //
 // Ordering is file-then-record, deliberately. A crash between the two
 // degrades to an orphaned file on disk plus a handle the session never knew
@@ -387,8 +383,8 @@ func (s *Session) writeRetainedToolResult(tool, text string) (string, error) {
 	dir := s.toolResultsDir()
 	// 0o700/0o600, not 0o755/0o644: a retained result is arbitrary tool
 	// output, routinely including secrets a command printed (an env dump, a
-	// leaked credential in a log line) — see review finding F4. Neither the
-	// directory nor the file should be group- or world-readable.
+	// leaked credential in a log line). Neither the directory nor the file
+	// should be group- or world-readable.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("engine: tool-result retention: %w", err)
 	}
@@ -400,9 +396,8 @@ func (s *Session) writeRetainedToolResult(tool, text string) (string, error) {
 		Handle: handle,
 		Tool:   tool,
 		// Bytes/Lines are measured from `text` AS WRITTEN — the on-disk,
-		// post-mask length (review finding N2). The caller already masked
-		// before reaching here, so this is simply "what's on disk," not a
-		// second masking decision.
+		// post-mask length. The caller already masked before reaching here,
+		// so this is simply "what's on disk," not a second masking decision.
 		Bytes: len(text),
 		Lines: countLines(text),
 		Head:  truncateUTF8(text, toolResultIndexHeadBytes),
@@ -454,21 +449,21 @@ func (s *Session) knownToolResultHandles(max int) []string {
 }
 
 // retainedResultsIndexMaxHandles bounds how many handles
-// retainedResultsIndexPart lists individually (review finding N8):
-// unbounded, 200 handles measured at roughly 6.9k tokens of summary — with
-// the retention ceiling disabled (Config.ToolResultRetainedBytes <= 0) a
-// long session can mint arbitrarily many, and an index that size defeats
-// the point of compaction, which is to REDUCE what the next request pays
-// for. Only the newest N are listed individually; older ones are named by
-// count only ("...and M older retained results (not listed; still on disk,
-// use read_tool_result with the handle number if known)").
+// retainedResultsIndexPart lists individually: unbounded, 200 handles
+// measured at roughly 6.9k tokens of summary — with the retention ceiling
+// disabled (Config.ToolResultRetainedBytes <= 0) a long session can mint
+// arbitrarily many, and an index that size defeats the point of compaction,
+// which is to REDUCE what the next request pays for. Only the newest N are
+// listed individually; older ones are named by count only ("...and M older
+// retained results (not listed; still on disk, use read_tool_result with
+// the handle number if known)").
 const retainedResultsIndexMaxHandles = 32
 
 // retainedResultsIndexPart builds compaction's deterministic, machine-
-// written index of the newest still-live tool-result handles (review
-// finding F3(a)) — one line per handle, sorted ascending by number, naming
-// the handle, its source tool, its byte size, and a short head excerpt so a
-// model skimming the summary can recognize what it is without opening it.
+// written index of the newest still-live tool-result handles — one line per
+// handle, sorted ascending by number, naming the handle, its source tool,
+// its byte size, and a short head excerpt so a model skimming the summary
+// can recognize what it is without opening it.
 // Returns nil when there are no handles at all, so an ordinary compaction
 // with nothing retained gains no spurious empty block.
 //
@@ -482,16 +477,16 @@ const retainedResultsIndexMaxHandles = 32
 // only handles minted within the folded range — a handle minted long before
 // the fold is exactly as reachable-only-through-a-preview-line as one
 // minted inside it, and exactly as easy to lose track of once that line is
-// gone. It is bounded to the newest retainedResultsIndexMaxHandles (N8) —
-// the newest, because those are the ones most likely to still matter to the
-// conversation that is about to continue.
+// gone. It is bounded to the newest retainedResultsIndexMaxHandles, because
+// those are the ones most likely to still matter to the conversation that
+// is about to continue.
 //
 // Each listed handle's sidecar file is stat'd before being described as
-// "readable" (review finding N9): an operator can wipe the toolresults/
-// directory, or a volume can roll back, out from under a live session, and
-// the index must not assert readability it has not checked. A handle whose
-// file is gone is still listed (its metadata is real and its retained-bytes
-// accounting still holds it), just annotated as such.
+// "readable": an operator can wipe the toolresults/ directory, or a volume
+// can roll back, out from under a live session, and the index must not
+// assert readability it has not checked. A handle whose file is gone is
+// still listed (its metadata is real and its retained-bytes accounting
+// still holds it), just annotated as such.
 func (s *Session) retainedResultsIndexPart() *message.Text {
 	s.mu.Lock()
 	var nums []int64

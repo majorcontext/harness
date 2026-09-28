@@ -273,28 +273,27 @@ func TestResolveOrphanToolCallsLeavesSelfAnsweredNonAssistantCallUnrepaired(t *t
 
 // --- Legitimate shapes: must NOT be flagged ---
 
-// TestLegitimateSplitAcrossAssistantMessages is the precise shape named in
-// the "narrow to the verified incident fix" revert commit:
-// [assistant(tool_call A), assistant(text), tool(result A)]. That commit's
-// claim is narrower than "fully wire-valid": it says the reverted rewrite
-// DELETED this result, and that main's purely-additive implementation
-// "can fail to repair, leaving a visible and recoverable 400, but it never
-// deletes." This test verifies exactly that narrower claim — no data loss
-// — and does NOT assert full wire validity, because it does not hold here.
+// TestLegitimateSplitAcrossAssistantMessages covers this shape:
+// [assistant(tool_call A), assistant(text), tool(result A)]. The claim
+// this test verifies is narrower than "fully wire-valid": a rewrite that
+// deletes this real result is wrong, but the purely-additive
+// implementation can fail to repair the shape, leaving a visible and
+// recoverable 400, without ever deleting data. This test verifies exactly
+// that narrower claim — no data loss — and does NOT assert full wire
+// validity, because it does not hold here.
 //
-// TENSION FOUND (reported per the task's instruction, not silently
-// resolved): ResolveOrphanToolCalls only ever looks at messages[i+1], the
-// single next canonical message, never a merged run of same-role
-// messages. Since messages[1] here is RoleAssistant (not RoleTool),
-// message[0]'s tool_call A is treated as unanswered and a SYNTHETIC
-// result is spliced in between message[0] and message[1] — leaving the
-// REAL tool(result A) at the end dangling with no tool_use immediately
-// before it. Run against the real function, checkWire flags this with
-// "tool-result-count-exact: tool_result A appears 1 time(s), but only 0
-// tool_use(s) need it here" (logged below). This is a fourth,
-// previously-unnamed wire-validity gap in the current additive
-// implementation — never a data-loss regression, since the real result
-// is untouched — that NormalizeForWire should also close.
+// A gap exists here: ResolveOrphanToolCalls only ever looks at
+// messages[i+1], the single next canonical message, never a merged run of
+// same-role messages. Since messages[1] here is RoleAssistant (not
+// RoleTool), message[0]'s tool_call A is treated as unanswered and a
+// SYNTHETIC result is spliced in between message[0] and message[1] —
+// leaving the REAL tool(result A) at the end dangling with no tool_use
+// immediately before it. Run against the real function, checkWire flags
+// this with "tool-result-count-exact: tool_result A appears 1 time(s), but
+// only 0 tool_use(s) need it here" (logged below). This is a fourth
+// wire-validity gap in the current additive implementation — never a
+// data-loss regression, since the real result is untouched — that
+// NormalizeForWire should also close.
 func TestLegitimateSplitAcrossAssistantMessages(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -310,15 +309,14 @@ func TestLegitimateSplitAcrossAssistantMessages(t *testing.T) {
 	}
 }
 
-// TestLegitimateResultsSplitAcrossToolMessages is the other shape named in
-// the revert commit: results answering one assistant turn's two
-// tool_use blocks split across two consecutive RoleTool messages. Same
-// narrower claim and same kind of tension as
-// TestLegitimateSplitAcrossAssistantMessages above.
+// TestLegitimateResultsSplitAcrossToolMessages covers the other shape:
+// results answering one assistant turn's two tool_use blocks split across
+// two consecutive RoleTool messages. Same narrower claim and same kind of
+// gap as TestLegitimateSplitAcrossAssistantMessages above.
 //
-// TENSION FOUND: ResolveOrphanToolCalls merges a synthetic result into
-// messages[i+1] alone when checking whether messages[i+1] answers ALL of
-// an assistant turn's calls — it never looks past messages[i+1] to a
+// A gap exists here too: ResolveOrphanToolCalls merges a synthetic result
+// into messages[i+1] alone when checking whether messages[i+1] answers
+// ALL of an assistant turn's calls — it never looks past messages[i+1] to a
 // SECOND consecutive RoleTool message. Here messages[i+1] only carries
 // A's result, so a SYNTHETIC B is merged into it, even though a REAL B
 // arrives one message later. checkWire flags the resulting surplus

@@ -341,9 +341,9 @@ type Message struct {
 // Normalize's old len==0-only check and MarshalJSON's matching check, and
 // only failed once nested inside a larger document forced encoding/json to
 // validate it, reproducing the exact "json: error calling MarshalJSON for
-// type json.RawMessage: ..." failure this package has already incurred once
-// in production for ToolCall.Arguments. Both guards below now check
-// json.Valid, exactly mirroring the ToolCall.Arguments fix.
+// type json.RawMessage: ..." failure the ToolCall.Arguments guard above
+// exists to prevent. Both guards below now check json.Valid, exactly
+// mirroring the ToolCall.Arguments fix.
 //
 // # An empty ToolResult.Content is the same footgun, in reverse
 //
@@ -453,13 +453,11 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 //
 // A non-empty but syntactically invalid Arguments — the truncated-JSON
 // shape a stream that dies mid tool_use block can leave behind (see
-// Message.Normalize's doc comment for the full incident,
-// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 / ses_01hpf4eexb31v0ecyvesf75g5s) — is
-// normalized the same way as empty: json.RawMessage.MarshalJSON does not
-// validate its bytes either, so an invalid value "succeeds" in isolation and
-// only fails once nested inside a larger document that encoding/json must
-// compact to validate, which is exactly the shape that error took in
-// production. Normalize is the primary fix (it sanitizes at the one ingest
+// Message.Normalize's doc comment for the full mechanism) — is normalized
+// the same way as empty: json.RawMessage.MarshalJSON does not validate its
+// bytes either, so an invalid value "succeeds" in isolation and only fails
+// once nested inside a larger document that encoding/json must compact to
+// validate. Normalize is the primary fix (it sanitizes at the one ingest
 // choke point every message passes through, replacing invalid Arguments
 // with nil so this branch never even fires for a message that went through
 // it), but safeArguments checks json.Valid here too as defense in depth: a
@@ -501,7 +499,7 @@ func (*ToolResult) partType() PartType { return PartToolResult }
 // NoToolOutputText is the Content text substituted, via SafeContent below
 // and Message.Normalize, for a ToolResult whose real Content is empty in
 // every sense that matters — see SafeContent's doc comment for the full
-// incident. A marker string, rather than an empty Text part, is chosen
+// mechanism. A marker string, rather than an empty Text part, is chosen
 // deliberately: an agent (or an operator) reading its own transcript
 // benefits from seeing "(no output)" in place of a blank line, the same
 // way a shell prompt distinguishes "ran, produced nothing" from "never
@@ -610,29 +608,27 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // A thinking-block signature or a redacted_thinking payload (see
 // provider/anthropic/transcode.go's anthropicReasoningData) is opaque to
 // this package and, in the ordinary case, small — a few hundred bytes. It
-// is not, however, bounded by anything: a provider is free to hand back an
-// entry orders of magnitude larger (a production session,
-// ses_01hsxbrkg4wpf23h05w2q5307n.jsonl, carries one thinking signature of
-// ~30KB against seven siblings of 350-600 bytes in the same run), and every
-// entry that makes it into history is replayed VERBATIM on every
-// subsequent request for the rest of the session — history only grows, it
-// is never pruned. An oversized entry is therefore not a one-time cost:
-// it is carried on every request from the turn it appears in onward,
-// compounding with whatever the next turn adds. That is a request-size
-// (and, on some providers, request-time) bomb hiding in something this
-// package treats as a small opaque blob.
+// is not, however, bounded by anything: a provider can hand back an entry
+// orders of magnitude larger — a single thinking signature has been
+// observed at roughly 30KB alongside sibling entries of a few hundred bytes
+// in the same run — and every entry that makes it into history is replayed
+// VERBATIM on every subsequent request for the rest of the session —
+// history only grows, it is never pruned. An oversized entry is therefore
+// not a one-time cost: it is carried on every request from the turn it
+// appears in onward, compounding with whatever the next turn adds. That is
+// a request-size (and, on some providers, request-time) bomb hiding in
+// something this package treats as a small opaque blob.
 //
 // maxProviderDataEntry bounds this the same way a zero-length entry is
 // already bounded (both are "Get, below, treats this as absent"): reasoning
 // replay is a context-quality optimization, not a correctness requirement
 // (a Reasoning part crossing to a different provider family is already
-// dropped), so refusing to replay an
-// oversized entry costs a turn's worth of thinking continuity/cache
-// affinity and nothing else. The cap is generous — 256KiB, several hundred
-// times the ordinary entry size seen in production — specifically so it
-// never fires on a legitimate large redacted_thinking payload from a long
-// extended-thinking turn; it exists to catch the pathological case, not to
-// budget the common one.
+// dropped), so refusing to replay an oversized entry costs a turn's worth
+// of thinking continuity/cache affinity and nothing else. The cap is
+// generous — 256KiB, several hundred times the entry sizes typically
+// observed in practice — specifically so it never fires on a legitimate
+// large redacted_thinking payload from a long extended-thinking turn; it
+// exists to catch the pathological case, not to budget the common one.
 //
 // # The map-shaped twin of the ToolCall.Arguments footgun
 //
@@ -647,11 +643,10 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // an entry straight out of the map (v.ProviderData[Family]) and reuses those
 // bytes downstream — as every current transcoder does — bypasses any
 // guard defined on the map type itself, because indexing a map is not a
-// call to any method. #42 fixed the ToolCall case and, because it only
-// looked at ToolCall, missed this one entirely: Reasoning.ProviderData
-// carries the exact same json.RawMessage under the exact same footgun, one
-// layer of map indirection away, and #42's fix does not reach it — which is
-// why the error recurred on a binary that already had #42's fix.
+// call to any method. A guard that covers only ToolCall.Arguments does not
+// close this: Reasoning.ProviderData carries the exact same json.RawMessage
+// under the exact same footgun, one layer of map indirection away, so the
+// fix must cover both types, not ToolCall alone.
 //
 // Get and MarshalJSON below are ProviderData's equivalent of
 // ToolCall.safeArguments/MarshalJSON: Get is the single choke point every
@@ -668,10 +663,10 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 type ProviderData map[string]json.RawMessage
 
 // maxProviderDataEntry bounds a single ProviderData entry's replayed size —
-// 256KiB is chosen to sit far above any signature or
-// redacted_thinking payload observed in production while still being a
-// hard, structural bound: bytes, not tokens or entries, because the whole
-// point is bounding the wire size actually replayed.
+// 256KiB is chosen to sit far above any signature or redacted_thinking
+// payload size observed in practice while still being a hard, structural
+// bound: bytes, not tokens or entries, because the whole point is bounding
+// the wire size actually replayed.
 const maxProviderDataEntry = 256 * 1024
 
 // Get returns the ProviderData entry for family, treating a present-but
@@ -715,7 +710,7 @@ func (pd ProviderData) Get(family string) (json.RawMessage, bool) {
 // "succeeds" here in isolation and only fails once nested inside a larger
 // document that encoding/json must compact to validate — see Normalize's
 // doc comment ("A ProviderData entry has the exact same invalid-but-non-
-// empty footgun") for the incident shape this closes.
+// empty footgun") for the failure shape this closes.
 func (pd ProviderData) MarshalJSON() ([]byte, error) {
 	if pd == nil {
 		return []byte("null"), nil
@@ -934,18 +929,16 @@ func IsSyntheticOrphanID(id string) bool {
 // function's own behavior is unchanged and remains exactly what
 // engine.LoadSession relies on.
 //
-// # Incident ses_01hvcs96pq1cf7x3kw0fz4a1yh
+// # An orphaned tool_use id wedges every retry
 //
-// A goal worker turn died with exactly that 400 naming one tool_use id,
-// and every subsequent goal-loop retry failed identically, killing the
-// goal: once an assistant message carrying a ToolCall part enters a
-// session's history without a following tool-role result — the provider
-// stream died between emitting the tool_call and the engine executing it,
-// or errored mid-turn — every later request replays that same orphaned
-// tool_use and is rejected the same way. This is the sibling, at the wire
-// protocol level, of the marshal-level poisoning fixed in the commit
-// titled "fix(message,engine): truncated ToolCall.Arguments must never
-// poison history" (see message.Normalize and
+// Once an assistant message carrying a ToolCall part enters a session's
+// history without a following tool-role result — the provider stream dies
+// between emitting the tool_call and the engine executing it, or errors
+// mid-turn — every later request replays that same orphaned tool_use and
+// is rejected with that 400. Left unrepaired, the orphaned tool_use is
+// never satisfied, so every subsequent retry fails the same way. This is
+// the sibling, at the wire protocol level, of the marshal-level poisoning
+// message.Normalize fixes for a truncated ToolCall.Arguments (see
 // engine/tool_call_poison_test.go): that fix keeps a poisoned ToolCall
 // marshalable; this one keeps a poisoned history transcodable.
 //

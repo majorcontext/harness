@@ -60,8 +60,8 @@ func spawnSettledChild(t *testing.T, h *harness) (rootID, childID string) {
 // them — the one point a concurrent Reap could ever land — then asserts
 // the rendered response still describes the node the snapshot captured.
 // Reap is the real mutation here, not a stand-in: it is the only
-// operation that removes a live node, and the audit behind PR #157 hit it
-// for a settled child exactly like this one.
+// operation that removes a live node, and it removes exactly this
+// settled-child shape.
 func TestBuildSessionAnswersFromOneSnapshotAcrossAReap(t *testing.T) {
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
 	h := multiProviderHarness(t, message.ModelRef{Provider: "root", Model: "m1"}, nil,

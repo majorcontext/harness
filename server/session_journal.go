@@ -39,11 +39,10 @@ type JournalResponse struct {
 // durable engine log (engine.LoadJournal), reshaped and sanitized, oldest
 // first — read-only, paginated via `from`/`limit` query parameters
 // (mirroring the SSE stream's `from` cursor convention). This is the
-// endpoint that restart-recovery debugging for PR #145 and PR #147 kept
-// needing pod-exec into a box to answer by hand
-// — "was a task-notification checkout/commit/requeue ever recorded for this
-// child" or "did a recovery marker fire on this turn" — now answerable over
-// the wire.
+// endpoint that answers restart-recovery debugging questions — "was a
+// task-notification checkout/commit/requeue ever recorded for this
+// child" or "did a recovery marker fire on this turn" — over the wire,
+// without needing pod-exec into a box to answer them by hand.
 //
 // id must be a session this process actually knows about (resident or
 // disk-loadable via s.lookup, exactly like handleGet) — an unknown id is a

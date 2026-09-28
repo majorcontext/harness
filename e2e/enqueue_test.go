@@ -162,12 +162,11 @@ func durableEnqueueSIGKILLScenario(t *testing.T, buildConfig func(baseURL string
 	}
 }
 
-// TestDurableEnqueueSurvivesSIGKILL is the black-box proof of durable
-// enqueue's headline guarantee: a
-// 202 from POST /session/{id}/enqueue means the prompt.queued record is
-// already fsynced, so an upstream that acks on that 202 may safely crash and
-// retry into a successor process without double delivery — the
-// accepted-but-undelivered window across a real process death. Runs under
+// TestDurableEnqueueSurvivesSIGKILL is the black-box proof of durable enqueue's
+// headline guarantee: a 202 from POST /session/{id}/enqueue means the
+// prompt.queued record is already fsynced, so an upstream that acks on that 202
+// may safely crash and retry into a successor process without double delivery —
+// the accepted-but-undelivered window across a real process death. Runs under
 // the default session_sync ("fsync") mode.
 func TestDurableEnqueueSurvivesSIGKILL(t *testing.T) {
 	skipShort(t)

@@ -81,8 +81,7 @@ func TestLastUsageReflectsMostRecentTurn(t *testing.T) {
 // TestUsageSurvivesReload is the red-first test for issue #62 layer 2's
 // reload correctness gap: cumulative Usage() and LastUsage() must survive a
 // process restart (LoadSession), or an orchestrator polling a freshly
-// reloaded session sees a false "zero usage" and never rotates it — exactly
-// the scenario the reported incident's re-armed goal hit.
+// reloaded session sees a false "zero usage" and never rotates it.
 func TestUsageSurvivesReload(t *testing.T) {
 	turn1 := asstTurn(provider.StopToolUse, &message.Text{Text: "running"}, toolCall("tc1", "bash", `{"command":"echo hi"}`))
 	turn1[len(turn1)-1].Usage = provider.Usage{InputTokens: 10, OutputTokens: 20, CacheReadTokens: 3, CacheWriteTokens: 4}

@@ -202,12 +202,12 @@ func (f *promptQueueFold) dequeued(p promptRecord) {
 
 // ErrEmptyPromptText is returned for a prompt whose text is empty or
 // whitespace-only. One shared sentinel, not a fresh errors.New per call
-// site — a review finding: SessionManager.SendToDescendant validates the
-// same rule for a running target (it enqueues through
-// enqueueMemoryOnlyLocked, which assumes validated text), and a fresh
-// value there could not be classified with errors.Is, so
-// classifyTaskVerbError (task_tool.go) fell through to its default arm
-// and leaked the internal "engine:" layer to the model.
+// site: SessionManager.SendToDescendant validates the same rule for a
+// running target (it enqueues through enqueueMemoryOnlyLocked, which
+// assumes validated text), and a fresh value there could not be
+// classified with errors.Is, so classifyTaskVerbError (task_tool.go)
+// fell through to its default arm and leaked the internal "engine:"
+// layer to the model.
 var ErrEmptyPromptText = errors.New("engine: prompt text must not be empty or whitespace-only")
 
 // EnqueuePrompt appends text to the session's durable FIFO prompt queue: it
@@ -310,10 +310,10 @@ func (s *Session) EnqueuePrompt(text string, messageID string, prov PromptProven
 // SessionManager.deferPersist/unlockAndFlushPersist instead, exactly
 // like the task-notification delivery path already does for its own
 // durable writes (commitOutcomeLocked, finalizeTurn's notify-delivery
-// block). A live review finding: an earlier version of this fix called
-// the full EnqueuePrompt (persist inline) from inside SendToDescendant's
-// own m.mu-held block, stalling every OTHER session's Info/Reap/Spawn/
-// finalize call on this ONE session's fsync for as long as it took.
+// block). Calling the full EnqueuePrompt (persist inline) from inside
+// SendToDescendant's own m.mu-held block would stall every OTHER
+// session's Info/Reap/Spawn/finalize call on this ONE session's fsync
+// for as long as it took.
 //
 // Deliberately does NOT emit: unlike the notification path (which never
 // emits an event on enqueue at all), a queued prompt DOES have an
@@ -352,14 +352,14 @@ type deferredQueueRecord struct {
 	// event is the queue event this record's memory mutation owes its
 	// subscribers, emitted by flushQueueRecordsLocked immediately after
 	// the record is written. Parked with the record, not emitted at
-	// mutation time — a review finding: the two m.mu-held mutation sites
-	// emitted inline, and a subscriber can do real work on the call
-	// (server.Server's Publish journals a prompt.queued/prompt.dequeued
-	// event to events.jsonl, a synchronous disk write under its own
-	// server.mu), which put that write back inside the tree-wide m.mu
-	// this whole park/flush mechanism exists to keep clear of slow work.
-	// Emitting from the flush keeps event order equal to record order for
-	// a session — whichever s.mu holder drains the park emits the parked
+	// mutation time: emitting inline at the two m.mu-held mutation sites
+	// lets a subscriber do real work on the call (server.Server's
+	// Publish journals a prompt.queued/prompt.dequeued event to
+	// events.jsonl, a synchronous disk write under its own server.mu),
+	// which puts that write back inside the tree-wide m.mu this whole
+	// park/flush mechanism exists to keep clear of slow work. Emitting
+	// from the flush keeps event order equal to record order for a
+	// session — whichever s.mu holder drains the park emits the parked
 	// event before its own — while no emit runs under m.mu at all.
 	event Event
 }
@@ -520,13 +520,13 @@ func (s *Session) EnqueuePromptDurable(text string, messageID string, seq int64,
 		return 0, false, err
 	}
 	// Drain the park before this record, exactly as persistPromptQueueLocked
-	// does for every other prompt-queue write — a review finding: this
-	// method writes through writeRecord directly (it owns its own fsync and
-	// error contract), so it was the one writer that could put its own
-	// queued record ahead of a still-parked one. Memory order stayed [A, B]
-	// while disk order became [queued(B), queued(A)], and LoadSession's fold
-	// appends in record order and never sorts by ID, so a reload restored
-	// [B, A] — a FIFO reorder across a restart. See
+	// does for every other prompt-queue write. This method writes through
+	// writeRecord directly (it owns its own fsync and error contract), so
+	// without this drain it is the one writer that can put its own queued
+	// record ahead of a still-parked one: memory order stays [A, B] while
+	// disk order becomes [queued(B), queued(A)], and LoadSession's fold
+	// appends in record order and never sorts by ID, so a reload would
+	// restore [B, A] — a FIFO reorder across a restart. See
 	// queueRecordDeferredLocked's own doc comment for the park itself.
 	//
 	// Ordering only: a parked record carries the ordinary best-effort
@@ -588,16 +588,15 @@ func (s *Session) EnqueuePromptDurable(text string, messageID string, seq int64,
 // remaining is len(s.promptQueue) immediately after the dequeue above,
 // computed under the SAME s.mu hold as the dequeue itself — the caller's
 // one atomic answer to "how many are left," rather than a second,
-// separately-locked QueuedPrompts() call. A live review finding: a
-// caller that dequeued here and THEN called QueuedPrompts() as a
-// follow-up reintroduced a narrower version of the exact
-// dispatchQueueHead race that PR fixed (server/handlers.go) — a
-// DIFFERENT dequeue (a concurrent DELETE /session/{id}/queue, another
-// dispatch) can interleave in the gap between the two separately-locked
-// calls, same as re-reading QueuedPrompts() after spawning runPrompt
-// could observe a queue already drained further than this exact call
-// left it. Returning it as part of this same locked operation removes
-// that gap entirely.
+// separately-locked QueuedPrompts() call. A caller that dequeues here
+// and THEN calls QueuedPrompts() as a follow-up reintroduces the
+// dispatchQueueHead race (server/handlers.go): a DIFFERENT dequeue (a
+// concurrent DELETE /session/{id}/queue, another dispatch) can
+// interleave in the gap between the two separately-locked calls, same
+// as re-reading QueuedPrompts() after spawning runPrompt could observe
+// a queue already drained further than this exact call left it.
+// Returning it as part of this same locked operation removes that gap
+// entirely.
 //
 // reason is one of "delivered" (idle dispatch, Task 3), "injected" (goal-
 // turn-boundary interjection, Task 2), or "cleared" (DELETE

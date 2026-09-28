@@ -111,11 +111,9 @@ func TestSendToDescendantEmitsQueueEventOutsideTreeLock(t *testing.T) {
 }
 
 // TestEnqueuePromptDurableDrainsParkedRecordsFirst is the regression test
-// for a review finding on the parked-record design: every prompt-queue
-// writer must drain the park before its own write, and
-// EnqueuePromptDurable was the one writer that did not — it calls
-// writeRecord directly, for its write-ahead durability and fsync
-// contract.
+// proving every prompt-queue writer drains the park before its own
+// write, including EnqueuePromptDurable, which calls writeRecord
+// directly, for its write-ahead durability and fsync contract.
 //
 // With a prompt.queued record for item A still parked (SendToDescendant's
 // deferred flush not run yet), a durable enqueue of item B wrote

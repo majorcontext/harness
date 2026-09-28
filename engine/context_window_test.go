@@ -93,10 +93,10 @@ func TestResolveModelContextWindow(t *testing.T) {
 	}
 }
 
-// TestResolveContextWindowFloorRejectsBogusValue is the safety-floor case
-// this package exists to close: a implausibly small
-// model-derived value (well below minAutoContextWindowTokens) must not arm
-// a nonsense compaction threshold. Pinned below the floor by construction
+// TestResolveContextWindowFloorRejectsBogusValue is the safety-floor case:
+// an implausibly small model-derived value (well below
+// minAutoContextWindowTokens) must not arm a nonsense compaction
+// threshold. Pinned below the floor by construction
 // (modelBogusTiny = 100 tokens), so this red-verifies against ANY future
 // change to the floor constant, not just today's value.
 func TestResolveContextWindowFloorRejectsBogusValue(t *testing.T) {
@@ -173,9 +173,9 @@ func TestNewSessionUnknownModelStaysDisabled(t *testing.T) {
 
 // --- SetModel: the window follows the active model --------------------------
 
-// TestSetModelFollowsActiveModel is the mid-session-switch case the incident
-// follow-up called out explicitly: compaction must not stay armed (or
-// disarmed) for a model this session no longer runs.
+// TestSetModelFollowsActiveModel is the mid-session-switch case: compaction
+// must not stay armed (or disarmed) for a model this session no longer
+// runs.
 func TestSetModelFollowsActiveModel(t *testing.T) {
 	stubContextWindowLookup(t, testContextWindowTable())
 

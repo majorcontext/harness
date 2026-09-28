@@ -1,14 +1,14 @@
 // Tests for reviving a Reap()-ed descendant across the `task` tool's four
 // verbs (cancel/status/send/log). Reap collects a done/failed/canceled
-// LEAF the instant it settles (Reap's own doc comment, session_manager.go)
-// — before this fix, a caller that spawned that child and asked about it
-// again after that instant, but before observing Reap's own internal
-// timing, got "no such session" for a descendant it plainly still owned.
-// resolveOrReviveDescendantLocked closes that gap by falling back to a
-// disk-backed resolution, validated against the descendant's own durable
-// TaskParentID chain, whenever a live-tree lookup misses. See that
-// method's own doc comment, and each of CancelDescendant/DescendantInfo/
-// DescendantTranscript/SendToDescendant's, for the full design.
+// LEAF the instant it settles (Reap's own doc comment, session_manager.go).
+// Without a fallback, a caller that spawned that child and asks about it
+// again after that instant gets "no such session" for a descendant it
+// plainly still owns. resolveOrReviveDescendantLocked closes that gap by
+// falling back to a disk-backed resolution, validated against the
+// descendant's own durable TaskParentID chain, whenever a live-tree lookup
+// misses. See that method's own doc comment, and each of
+// CancelDescendant/DescendantInfo/DescendantTranscript/SendToDescendant's,
+// for the full design.
 package engine
 
 import (
@@ -51,10 +51,10 @@ func settleAndReapChild(t *testing.T, mgr *SessionManager, parentID string, agen
 // Asynchronously's identical proof for the settled-but-unreaped case this
 // generalizes), not merely a replay of the first.
 //
-// Red-verified: reverting resolveOrReviveDescendantLocked's disk fallback
-// (making SendToDescendant answer ErrUnknownSession on a live-tree miss,
-// the pre-fix behavior) turns this red with exactly the error the live
-// incident reported — `engine: unknown session id`.
+// Red-verified: reverting resolveOrReviveDescendantLocked's disk fallback,
+// so SendToDescendant answers ErrUnknownSession on a live-tree miss, turns
+// this red with exactly the error a caller sees in that case —
+// `engine: unknown session id`.
 func TestSendToDescendantRevivesReapedChild(t *testing.T) {
 	dir := t.TempDir()
 	release := make(chan struct{})

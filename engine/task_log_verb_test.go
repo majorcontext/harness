@@ -1,10 +1,10 @@
 // Tests for the `task` tool's log verb: a parent reading the tail of a
 // descendant's transcript, living or dead.
 //
-// Incident this serves: a child died and its parent had only a one-line
-// fail reason to reason from. The child's own last messages — the tool it
-// was running, what it had already found — were sitting in a session log
-// the parent had no in-process way to read.
+// Without this verb, a parent reading a dead child's one-line fail reason
+// cannot see the child's own last messages — the tool it was running, what
+// it had already found — which sit in the session log with no in-process
+// way to read them.
 package engine
 
 import (
@@ -359,7 +359,7 @@ func TestTaskLogRoutesThroughTheToolDispatch(t *testing.T) {
 // TestTaskLogSurfacesToolResultAttachments proves an image a tool returned
 // is visible in the tail. Parts.Text() renders Text parts only, so a
 // read_file/MCP [Text, Blob] result would otherwise read as a one-line
-// summary with no sign that a picture came back — a review finding.
+// summary with no sign that a picture came back.
 func TestTaskLogSurfacesToolResultAttachments(t *testing.T) {
 	mgr, root, childID := spawnLoggedChild(t, "done")
 	child, ok := mgr.Session(childID)
@@ -404,10 +404,10 @@ func TestTaskLogSkipsEmptyTextParts(t *testing.T) {
 }
 
 // TestTaskLogTruncatedCoversInnerCuts proves the structured flag reports
-// the whole truth. A review finding: Truncated reflected only the
-// entry-level cap, so a tool call whose 5000-rune arguments were cut to
-// 300 — inside an entry whose total text stayed well under the entry cap
-// — reported Truncated: false, and a reader keying on the field read a
+// the whole truth: Truncated must also catch an inner cut, not only the
+// entry-level cap. A tool call whose 5000-rune arguments are cut to 300 —
+// inside an entry whose total text stays well under the entry cap — must
+// not report Truncated: false and let a reader keying on the field see a
 // cut entry as complete.
 func TestTaskLogTruncatedCoversInnerCuts(t *testing.T) {
 	mgr, root, childID := spawnLoggedChild(t, "done")
@@ -432,10 +432,10 @@ func TestTaskLogTruncatedCoversInnerCuts(t *testing.T) {
 }
 
 // TestTaskLogBoundsToolResultTextAtThePart proves a huge tool result is
-// cut where it is read, not copied whole into the builder and cut after —
-// a review finding: a mid-loop child can hold a 200KB read_file result,
-// and a tail of many such messages would allocate tens of MB to discard
-// almost all of it.
+// cut where it is read, not copied whole into the builder and cut after:
+// a mid-loop child can hold a 200KB read_file result, and a tail of many
+// such messages must not allocate tens of MB only to discard almost all
+// of it.
 func TestTaskLogBoundsToolResultTextAtThePart(t *testing.T) {
 	huge := strings.Repeat("q", taskLogEntryCap*10)
 	got, cut := boundedPartsText(message.Parts{&message.Text{Text: huge}}, taskLogEntryCap)
@@ -458,9 +458,9 @@ func TestTaskLogBoundsToolResultTextAtThePart(t *testing.T) {
 }
 
 // TestBoundedPartsTextExactBoundary proves text that exactly fills the cap
-// is not reported as truncated. A review finding: a trailing empty Text
-// part reached the budget check and appended a truncation marker though
-// nothing had been dropped.
+// is not reported as truncated: a trailing empty Text part must not reach
+// the budget check and append a truncation marker when nothing was
+// dropped.
 func TestBoundedPartsTextExactBoundary(t *testing.T) {
 	exact := strings.Repeat("e", 10)
 

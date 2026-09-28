@@ -1,22 +1,19 @@
 // Goal self-set/adjust: the `goal` session tool lets the model itself
 // inspect, set, or adjust this session's completion goal from inside a
 // running turn, in-process — no HTTP round-trip, no run-slot claim (see
-// goal.go for the underlying state machine and docs/design/
-// 2026-07-19-goal-self-adjust.md for the full design).
+// goal.go for the underlying state machine).
 //
 // Three actions only: status (read-only), set (RegisterGoal — arms a new
 // goal that begins running only after the current turn ends), and adjust
 // (UpdateGoal — rewrites an already-active goal's condition in place).
 // There is deliberately no clear action: clearing an active goal stays
-// operator-only (DELETE /goal) per the locked design decision in the plan
-// ("No self-clear"), so an unknown or "clear" action is rejected with a
-// tool error naming that.
+// operator-only (DELETE /goal), so an unknown or "clear" action is
+// rejected with a tool error naming that.
 //
 // Gated by Config.GoalTool (default false): registered in newSession only
 // when the host opts in, exactly like the process tool is gated by a
 // non-nil Config.Processes. The server/CLI wiring that flips this flag on
-// is a later task (see the plan) — this package only defines the tool and
-// its gate.
+// is separate from this package, which only defines the tool and its gate.
 package engine
 
 import (

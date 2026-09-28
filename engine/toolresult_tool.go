@@ -72,25 +72,24 @@ const (
 	// can itself exceed the budget, leaving zero or negative room for any
 	// line — the byte-budget loop in readToolResultRange then reports "no
 	// lines at offset N" even though the result has plenty, because nothing
-	// EVER fit, not because nothing was there (review finding F11). Rather
-	// than silently produce that misleading message, a request below the
-	// floor is rejected outright with an error naming the floor.
+	// EVER fit, not because nothing was there. Rather than silently produce
+	// that misleading message, a request below the floor is rejected
+	// outright with an error naming the floor.
 	//
-	// This constant alone is NOT sufficient (review finding, round 5): the
-	// actual preamble grows with the handle, the TOOL NAME (unbounded —
-	// an MCP tool name can be long), and the byte/line/offset/limit
-	// counts, so a sufficiently long tool name could exceed this floor's
-	// own body budget and reproduce the exact false-empty class it exists
-	// to prevent, silently, at a max_bytes value the gate had just
-	// accepted. See readToolResultFloor, which computes the REAL floor for
-	// one specific request from its ACTUAL preamble rather than guessing —
-	// this constant is only its lower bound for the common case (a short
-	// handle and tool name).
+	// This constant alone is NOT sufficient: the actual preamble grows with
+	// the handle, the TOOL NAME (unbounded — an MCP tool name can be long),
+	// and the byte/line/offset/limit counts, so a sufficiently long tool
+	// name could exceed this floor's own body budget and reproduce the
+	// exact false-empty class it exists to prevent, silently, at a
+	// max_bytes value the gate had just accepted. See readToolResultFloor,
+	// which computes the REAL floor for one specific request from its
+	// ACTUAL preamble rather than guessing — this constant is only its
+	// lower bound for the common case (a short handle and tool name).
 	readToolResultMinMaxBytes = 256
 
 	// readToolResultNoticeReserve is subtracted from maxBytes before the
-	// per-line/per-match budget loop runs, in both range and search modes
-	// (review finding N10). The trailing notice ("[truncated at N bytes;
+	// per-line/per-match budget loop runs, in both range and search modes.
+	// The trailing notice ("[truncated at N bytes;
 	// continue with offset=N]", "[truncated at N bytes after N match(es);
 	// ...]") is built and appended AFTER that loop decides how much body
 	// content fit — if the loop budgeted the body against the FULL
@@ -181,10 +180,10 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 
 	// A budget below the floor can be entirely consumed by the fixed
 	// preamble every read writes, before a single line of actual content —
-	// see readToolResultMinMaxBytes's doc comment (review finding F11) and
-	// readToolResultFloor's (round 5: the flat constant alone doesn't
-	// account for a long tool name or large byte/line counts inflating
-	// THIS request's actual preamble past it).
+	// see readToolResultMinMaxBytes's doc comment and readToolResultFloor's:
+	// the flat constant alone does not account for a long tool name or
+	// large byte/line counts inflating THIS request's actual preamble past
+	// it.
 	if floor := readToolResultFloor(meta, in); in.MaxBytes > 0 && in.MaxBytes < floor {
 		return nil, fmt.Errorf("%s: max_bytes %d is below the minimum %d for this result (handle=%s tool=%q)",
 			readToolResultToolName, in.MaxBytes, floor, meta.Handle, meta.Tool)
@@ -219,25 +218,23 @@ func runReadToolResult(s *Session, raw json.RawMessage) (message.Parts, error) {
 	parts, err := scan(sc)
 	if err == nil && errors.Is(sc.Err(), bufio.ErrTooLong) {
 		// A single line at or beyond readToolResultScanBuf defeats
-		// bufio.Scanner outright (review finding F1): Scan returns false,
-		// sc.Err() is bufio.ErrTooLong, and — because this was never
-		// checked before — the caller saw a plain "no lines"/"no match"
-		// result indistinguishable from a genuinely empty read, on a
-		// result the preview header told the model was recoverable. Retry
-		// once against readerAtLineSource, a raw io.ReaderAt-based line
-		// source with no per-line size limit (review finding N7: the
-		// FIRST cut of this fallback read the entire file into memory
-		// upfront via make([]byte, meta.Bytes) even for a tiny range
-		// request — readerAtLineSource streams in fixed-size chunks
-		// instead, so a small request against a huge oversized-line file
-		// only ever reads as far as the caller actually scans).
+		// bufio.Scanner outright: Scan returns false and sc.Err() is
+		// bufio.ErrTooLong, which without this check reads as a plain
+		// "no lines"/"no match" result indistinguishable from a genuinely
+		// empty read, on a result the preview header told the model was
+		// recoverable. Retry once against readerAtLineSource, a raw
+		// io.ReaderAt-based line source with no per-line size limit: it
+		// streams in fixed-size chunks rather than reading the whole file
+		// into memory up front, so a small request against a huge
+		// oversized-line file only ever reads as far as the caller
+		// actually scans.
 		parts, err = scan(newReaderAtLineSource(f, int64(meta.Bytes)))
 	}
 	return parts, err
 }
 
 // readToolResultFloor computes the REAL minimum max_bytes for ONE specific
-// request — not a guess (review finding, round 5). It builds the EXACT
+// request — not a guess. It builds the EXACT
 // preamble this request's mode (range or search) will produce, from the
 // real meta and real request fields, and floors it at
 // readToolResultMinMaxBytes so the common case (a short handle and tool
@@ -270,9 +267,9 @@ func readToolResultFloor(meta toolResultMeta, in readToolResultArgs) int {
 
 // toolResultLineSource is the line-by-line interface readToolResultRange and
 // readToolResultSearch scan through. *bufio.Scanner satisfies it directly
-// (its Scan/Text/Err methods match exactly); sliceLineSource is the F1
-// fallback source, built from a raw io.ReaderAt read with no per-line size
-// limit.
+// (its Scan/Text/Err methods match exactly); readerAtLineSource is the
+// oversized-line fallback source, built from a raw io.ReaderAt read with no
+// per-line size limit.
 type toolResultLineSource interface {
 	Scan() bool
 	Text() string
@@ -284,13 +281,13 @@ type toolResultLineSource interface {
 // that far ahead of what the caller has actually consumed.
 const readerAtLineSourceChunk = 64 * 1024
 
-// readerAtLineSource is F1's raw-byte fallback line source, streamed via
-// io.ReaderAt in fixed-size chunks rather than loaded into memory all at
-// once (review finding N7: the first cut of this fallback allocated
-// make([]byte, meta.Bytes) — the WHOLE file — even to satisfy a 256-byte
-// range request). It has no per-line size limit at all, unlike
-// bufio.Scanner: that limit is exactly what defeated the scanner in the
-// first place (bufio.ErrTooLong). io.ReaderAt specifically, not Read/Seek:
+// readerAtLineSource is the raw-byte fallback line source for an oversized
+// line, streamed via io.ReaderAt in fixed-size chunks rather than loaded
+// into memory all at once: allocating make([]byte, meta.Bytes) — the WHOLE
+// file — would cost the same even to satisfy a 256-byte range request. It
+// has no per-line size limit at all, unlike bufio.Scanner: that limit is
+// exactly what defeated the scanner in the first place (bufio.ErrTooLong).
+// io.ReaderAt specifically, not Read/Seek:
 // an absolute-offset read is independent of wherever the *bufio.Scanner
 // that failed already left the same *os.File's read cursor.
 //
@@ -383,8 +380,8 @@ func clampInt(v, def, max int) int {
 }
 
 // readToolResultRange implements the offset/limit line window. maxBytes is
-// the caller's FULL budget; the trailing notice's reserve (N10) is carved
-// out of it internally so body+notice together never exceed maxBytes.
+// the caller's FULL budget; the trailing notice's reserve is carved out of
+// it internally so body+notice together never exceed maxBytes.
 func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, limit, maxBytes int) (message.Parts, error) {
 	if offset <= 0 {
 		offset = 1
@@ -423,14 +420,13 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 					b.WriteString(truncateUTF8(t, room))
 					b.WriteByte('\n')
 					shown++
-					// Round-3 review finding: this line's UNSHOWN remainder
-					// must stay reachable. Reporting "continue with
-					// offset+1" (the ordinary case, below) would silently
-					// skip straight to the NEXT line, abandoning whatever
-					// this line didn't fit — permanently, since every
-					// future read at that name would start from line 2
-					// too. partialFirstLine keeps the continuation offset
-					// UNCHANGED instead: a caller that re-reads at the same
+					// This line's UNSHOWN remainder must stay reachable.
+					// Reporting "continue with offset+1" (the ordinary case,
+					// below) would silently skip straight to the NEXT line,
+					// abandoning whatever this line didn't fit — permanently,
+					// since every future read at that name would start from
+					// line 2 too. partialFirstLine keeps the continuation
+					// offset UNCHANGED instead: a caller that re-reads at the same
 					// offset with a bigger max_bytes re-scans from byte
 					// zero and genuinely reaches further into this same
 					// line, rather than being told (accurately, but
@@ -461,8 +457,7 @@ func readToolResultRange(sc toolResultLineSource, meta toolResultMeta, offset, l
 
 // stringsContainsForSearch is strings.Contains, indirected only so a test
 // can force "never matches" and confirm the test suite actually catches
-// that (review finding N1's mutation-verification requirement). Never
-// reassigned outside a test.
+// that. Never reassigned outside a test.
 var stringsContainsForSearch = strings.Contains
 
 // readToolResultSearch implements literal-substring search. offset/limit are
@@ -470,8 +465,8 @@ var stringsContainsForSearch = strings.Contains
 // a line window over a filtered set means something different from a line
 // window over the file, and conflating the two is how a model ends up
 // silently reading the wrong region. maxBytes is the caller's FULL budget;
-// see readToolResultRange's doc comment for the notice-reserve accounting
-// (N10), applied identically here.
+// see readToolResultRange's doc comment for the notice-reserve accounting,
+// applied identically here.
 func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle string, maxBytes int) (message.Parts, error) {
 	bodyMax := maxBytes - readToolResultNoticeReserve
 
@@ -489,27 +484,25 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 		// stringsContainsForSearch (== strings.Contains in production),
 		// never regexp: literal by contract (see the package doc comment).
 		// The indirection exists solely so
-		// TestReadToolResultSearchNeverMatchMutant (review finding N1) can
-		// force "never matches" from a test and confirm the test suite
-		// actually notices — the mutation-verification AGENTS.md's
-		// red-verify rule asks for, kept as a standing regression guard
-		// rather than a one-off manual check.
+		// TestReadToolResultSearchNeverMatchMutant can force "never
+		// matches" from a test and confirm the test suite actually
+		// notices — the mutation-verification AGENTS.md's red-verify rule
+		// asks for, kept as a standing regression guard rather than a
+		// one-off manual check.
 		if !stringsContainsForSearch(t, needle) {
 			continue
 		}
 		entry := fmt.Sprintf("%d: %s\n", line, t)
 		if b.Len()+len(entry) > bodyMax {
-			// Review finding N1: the ORIGINAL code dropped a too-large
-			// entry WHOLE and never incremented matches, so a matching
-			// line that alone exceeds the budget reported "0 match(es)" —
-			// a false negative on exactly the retained-result-is-one-
-			// enormous-line case F1 exists for, with unusable advice
-			// ("narrow the search" on a file that IS one line). Fix: if
+			// A matching line that alone exceeds the budget must not drop
+			// the entry whole and skip counting it, which would report "0
+			// match(es)" — a false negative on exactly the retained-
+			// result-is-one-enormous-line case, with unusable advice
+			// ("narrow the search" on a file that IS one line). Instead, if
 			// this is the FIRST thing found, emit a truncated WINDOW
 			// AROUND THE MATCH — not just a prefix of the line, since the
 			// match itself can sit megabytes into a multi-megabyte line,
-			// well past what a from-byte-0 prefix would ever reach —
-			// instead of silently reporting no match at all.
+			// well past what a from-byte-0 prefix would ever reach.
 			if matches == 0 {
 				prefix := fmt.Sprintf("%d: ", line)
 				const ellipsis = "..."
@@ -535,11 +528,11 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 		b.WriteString(entry)
 		matches++
 		if matches >= readToolResultMaxLimit {
-			// Review finding (round 3): this is a MATCH-COUNT stop, not a
-			// byte-budget stop — reusing byteTrunc's notice ("...increase
-			// max_bytes to see more") actively misdirects the model, since
-			// raising max_bytes cannot surface a single additional match
-			// once counting stopped. countCapped gets its own notice below.
+			// This is a MATCH-COUNT stop, not a byte-budget stop — reusing
+			// byteTrunc's notice ("...increase max_bytes to see more") would
+			// actively misdirect the model, since raising max_bytes cannot
+			// surface a single additional match once counting stopped.
+			// countCapped gets its own notice below.
 			countCapped = true
 			break
 		}
@@ -559,9 +552,9 @@ func readToolResultSearch(sc toolResultLineSource, meta toolResultMeta, needle s
 
 // extractMatchWindow returns a byte-bounded window of t, anchored a small
 // fixed distance BEFORE idx (the needle's byte offset in t) rather than at
-// byte 0 (review finding N1) — a match megabytes into a multi-megabyte
-// single-line result must still be visible, which a from-the-start prefix
-// window cannot guarantee. Both cut points are UTF-8-safe: truncBefore/
+// byte 0 — a match megabytes into a multi-megabyte single-line result must
+// still be visible, which a from-the-start prefix window cannot guarantee.
+// Both cut points are UTF-8-safe: truncBefore/
 // truncAfter report whether that side was actually cut, so the caller can
 // mark it with "...".
 func extractMatchWindow(t string, idx, budget int) (window string, truncBefore, truncAfter bool) {

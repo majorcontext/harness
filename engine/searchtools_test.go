@@ -72,11 +72,11 @@ func TestGlobToolSkipsGitDir(t *testing.T) {
 	}
 }
 
-// TestGlobToolTieBreaksEqualModTimesByPath is the regression test for a
-// review finding: sort.Slice is not stable and glob's modTime sort had
-// no tie-break, so files sharing a modtime (common for files written
-// together — a checkout, a generator run) could appear in either
-// relative order across identical calls. Forces three files to the
+// TestGlobToolTieBreaksEqualModTimesByPath is the regression test for
+// sort.Slice not being stable: glob's modTime sort had no tie-break, so
+// files sharing a modtime (common for files written together — a
+// checkout, a generator run) could appear in either relative order
+// across identical calls. Forces three files to the
 // EXACT same modtime and asserts the listing is alphabetical among them,
 // repeatably.
 func TestGlobToolTieBreaksEqualModTimesByPath(t *testing.T) {
@@ -119,14 +119,14 @@ func TestGlobToolNoMatches(t *testing.T) {
 	}
 }
 
-// TestGlobToolNonExistentBasePathReturnsError is the regression test for a
-// live review finding: WalkDir's callback swallowed the ROOT path's own
-// lstat error via its blanket "err != nil: skip it, don't fail the whole
-// search" (correct for a descendant entry, wrong for the root itself), so
-// glob("*.go", path="/does/not/exist") used to report "(no matches)" —
-// indistinguishable from a real, existing, Go-file-free directory — instead
-// of surfacing the caller's bad path, exactly like grep and ls both already
-// do for the same input.
+// TestGlobToolNonExistentBasePathReturnsError is the regression test for
+// WalkDir's callback swallowing the ROOT path's own lstat error via its
+// blanket "err != nil: skip it, don't fail the whole search" (correct for
+// a descendant entry, wrong for the root itself): glob("*.go",
+// path="/does/not/exist") must surface the caller's bad path as an
+// error, not report "(no matches)" as if it were a real, existing,
+// Go-file-free directory — the same behavior grep and ls already give
+// for the same input.
 func TestGlobToolNonExistentBasePathReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	s := NewSession(Config{WorkDir: dir})
@@ -136,16 +136,15 @@ func TestGlobToolNonExistentBasePathReturnsError(t *testing.T) {
 	}
 }
 
-// TestGlobToolUnreadableBasePathReturnsError is the regression test for a
-// second live review finding on the same fix: os.Stat(base) alone does not
-// catch a directory that IS stat-able (the process has execute on its
-// PARENT) but is NOT readable (no read bit on base itself) — os.Stat
-// succeeds for that case, and it is WalkDir's own internal ReadDir(base)
-// that actually fails, surfacing as p == base with a non-nil err in the
-// walk callback. Skipped when running as root: root bypasses the
-// permission bit this test relies on to make the directory genuinely
-// unreadable, which would make the test pass or fail for the wrong reason
-// depending on platform.
+// TestGlobToolUnreadableBasePathReturnsError is the regression test for
+// os.Stat(base) alone not catching a directory that IS stat-able (the
+// process has execute on its PARENT) but is NOT readable (no read bit on
+// base itself) — os.Stat succeeds for that case, and it is WalkDir's own
+// internal ReadDir(base) that actually fails, surfacing as p == base
+// with a non-nil err in the walk callback. Skipped when running as root:
+// root bypasses the permission bit this test relies on to make the
+// directory genuinely unreadable, which would make the test pass or fail
+// for the wrong reason depending on platform.
 func TestGlobToolUnreadableBasePathReturnsError(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: permission bits are not enforced")
@@ -227,15 +226,13 @@ func TestGrepToolSkipsBinaryFiles(t *testing.T) {
 }
 
 // TestGrepToolSkipsOversizedFiles proves grep never reads a file over
-// maxGrepFileBytes whole into memory — a live review flagged this as an
-// OOM risk (a default, no-path search walking into an unexpectedly huge
-// file). The oversized file is skipped entirely, bounded via
-// io.LimitReader(f, maxGrepFileBytes+1) over one open handle (not a
-// separately captured os.Stat size — an earlier revision used exactly
-// that TOCTOU-prone shape, which docs/engine-request-cycle.md's read_file
-// guidance forbids,
-// and a second review round caught it); a small file alongside it still
-// matches normally.
+// maxGrepFileBytes whole into memory: a default, no-path search walking
+// into an unexpectedly huge file would otherwise risk OOM. The oversized
+// file is skipped entirely, bounded via io.LimitReader(f,
+// maxGrepFileBytes+1) over one open handle, not a separately captured
+// os.Stat size — that TOCTOU-prone shape is exactly what
+// docs/engine-request-cycle.md's read_file guidance forbids; a small
+// file alongside it still matches normally.
 func TestGrepToolSkipsOversizedFiles(t *testing.T) {
 	dir := t.TempDir()
 	huge := make([]byte, maxGrepFileBytes+1)
@@ -260,15 +257,14 @@ func TestGrepToolSkipsOversizedFiles(t *testing.T) {
 	}
 }
 
-// TestGrepToolSkipsBinaryFileWithTextPrefix is the regression test for a
-// live review finding: looksBinary only sniffed the first imageSniffLen
-// (512) bytes, but grep then line-searches the WHOLE file regardless (up
-// to maxGrepFileBytes) — a file whose first 512 bytes are plain ASCII text
-// but whose body turns binary (a NUL well past the old sniff window) used
-// to pass the guard entirely, leaking raw binary bytes into the tool
-// result on any matching "line". The NUL here sits at ~4000 bytes: past
-// the old 512-byte window, comfortably inside the new grepBinarySniffLen
-// (64 KiB) one.
+// TestGrepToolSkipsBinaryFileWithTextPrefix is the regression test for
+// looksBinary only sniffing the first imageSniffLen (512) bytes, while
+// grep then line-searches the WHOLE file regardless (up to
+// maxGrepFileBytes): a file whose first 512 bytes are plain ASCII text
+// but whose body turns binary (a NUL well past that sniff window) passes
+// the guard entirely, leaking raw binary bytes into the tool result on
+// any matching "line". The NUL here sits at ~4000 bytes: past the
+// 512-byte window, comfortably inside grepBinarySniffLen (64 KiB).
 func TestGrepToolSkipsBinaryFileWithTextPrefix(t *testing.T) {
 	dir := t.TempDir()
 	body := make([]byte, 0, 4100)
@@ -366,11 +362,11 @@ func TestLsToolRelativePathResolvesAgainstWorkDir(t *testing.T) {
 	}
 }
 
-// TestLsToolCapsHugeDirectoryListing is the regression test for a live
-// review finding: unlike glob/grep, ls had no maxSearchResults bound at
-// all, so a read-only explore/plan subagent listing a huge directory
-// (node_modules, a data dir, a build-output tree) could flood the tool
-// result / session context with every entry, unbounded.
+// TestLsToolCapsHugeDirectoryListing is the regression test for ls having
+// no maxSearchResults bound, unlike glob/grep: a read-only explore/plan
+// subagent listing a huge directory (node_modules, a data dir, a
+// build-output tree) could flood the tool result / session context with
+// every entry, unbounded.
 func TestLsToolCapsHugeDirectoryListing(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < maxSearchResults+50; i++ {

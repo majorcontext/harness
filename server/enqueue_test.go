@@ -910,11 +910,10 @@ func TestEnqueueNoSuppliedIDMintsLikeBefore(t *testing.T) {
 
 // TestQueuedEnqueueIdenticalTextDistinctIDsReconcileSeparately is the named
 // regression test this whole feature exists to fix: two prompts enqueued
-// with IDENTICAL text while the session is busy used to be indistinguishable
-// to a client reconciling by text — the exact defect that caused two live
-// consoles incidents (fixed only by narrowing a text matcher, never by an
-// id). Each of the two durable messages must carry its OWN caller-supplied
-// id, not collide or swap.
+// with IDENTICAL text while the session is busy must stay distinguishable
+// to a client reconciling by text, not just by a narrowed text matcher.
+// Each of the two durable messages must carry its OWN caller-supplied id,
+// not collide or swap.
 func TestQueuedEnqueueIdenticalTextDistinctIDsReconcileSeparately(t *testing.T) {
 	prov := &queueProv{
 		name:    "test",

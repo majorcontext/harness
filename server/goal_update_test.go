@@ -447,9 +447,9 @@ func TestGoalPostWhilePromptBusyArmsThenAutoStarts(t *testing.T) {
 	}
 }
 
-// TestDeleteGoalDuringArmedPromptLeavesPromptRunning is the PR #77 review's
-// Finding 1: the 202 "armed" path (handleGoalBusy's register-and-arm branch)
-// creates an active goal while a PLAIN PROMPT still holds the run slot -- in
+// TestDeleteGoalDuringArmedPromptLeavesPromptRunning covers the 202 "armed"
+// path (handleGoalBusy's register-and-arm branch): it creates an active
+// goal while a PLAIN PROMPT still holds the run slot -- in
 // that window sessionState.cancel belongs to the prompt (claimForPrompt set
 // it for the prompt's own claim; no goal loop has started yet). DELETE /goal
 // must clear the goal without cancelling that prompt's context -- cancelling

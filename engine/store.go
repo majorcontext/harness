@@ -97,8 +97,8 @@ const (
 	recMCPToolsSelected = "mcp.tools_selected"
 	// recTaskSpawned/recTaskNotifyQueued/recTaskNotifyDelivered are the
 	// subagent-sessions task-delivery records (see session_manager.go's
-	// Spawn and taskdelivery.go), two follow-ups from PR #145's
-	// architecture review landing as one journal mechanism:
+	// Spawn and taskdelivery.go), covering two related concerns in one
+	// journal mechanism:
 	//
 	//   - "Child journal records": before these existed, a task spawn and
 	//     its eventual delivery were visible ONLY as ordinary conversation
@@ -168,13 +168,12 @@ const (
 	// deliver-then-settle sequence that follows still leaves a later
 	// recovery attempt with the AUTHORITATIVE, already-computed payload
 	// to replay verbatim, instead of reconstructing a possibly-DIFFERENT
-	// one from trailing-history-shape heuristics — the fix for a live
-	// review finding: recovery's own reconstruction could diverge from
-	// what finalizeTurn already computed (and possibly already
-	// delivered) before a crash struck between finalizeTurn's own
-	// persist steps, producing a duplicate notification with a
-	// DIFFERENT payload than the one the parent may already have
-	// received.
+	// one from trailing-history-shape heuristics. This guards against
+	// recovery's own reconstruction diverging from what finalizeTurn
+	// already computed (and possibly already delivered) before a crash
+	// struck between finalizeTurn's own persist steps, producing a
+	// duplicate notification with a DIFFERENT payload than the one the
+	// parent may already have received.
 	recTaskOutcomeCommitted = "task.outcome_committed"
 	// recClaudeCodeSessionID records the Claude Code CLI's OWN session id
 	// for a delegated session (see engine/claude_code_backend.go and
@@ -247,10 +246,10 @@ type record struct {
 	// gap TaskParentID's own doc comment describes for a session
 	// predating that field).
 	//
-	// TaskToolNames is a *[]string, not a plain []string — deliberately,
-	// to fix a live review finding. omitempty on a plain []string omits
-	// BOTH nil (no restriction recorded — every record type OTHER than a
-	// session header, and a session header for an unrestricted session)
+	// TaskToolNames is a *[]string, not a plain []string. omitempty on a
+	// plain []string omits BOTH nil (no restriction recorded — every
+	// record type OTHER than a session header, and a session header for
+	// an unrestricted session)
 	// AND a non-nil, LEN-ZERO slice (a real, deliberate zero-tool
 	// restriction — reachable via Spawn's parent-effective-set
 	// INTERSECTION, session_manager.go, whenever a restricted parent's
@@ -2065,9 +2064,9 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 		s.contextWindowErr = requiredContextWindowErr(s.cfg, s.model, miss, "session_resume")
 	}
 	logContextWindowArmed(s.ID, s.model, s.cfg.ContextWindowTokens, s.contextWindowSource, "start")
-	// Review finding (round 5): advance toolResultNextID past every trh_N
-	// handle that appears ANYWHERE in the final replayed history text, not
-	// just the ones the toolresult.retained pointer-record fold above saw.
+	// Advance toolResultNextID past every trh_N handle that appears
+	// ANYWHERE in the final replayed history text, not just the ones the
+	// toolresult.retained pointer-record fold above saw.
 	// That fold is best-effort — persistToolResultRetainedLocked can lose a
 	// crash race, landing in lastPersistErr while writeRetainedToolResult
 	// still returns the handle successfully — but the ToolResult message
@@ -2085,10 +2084,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// a handle can appear on is just "text in history" by the time this
 	// runs.
 	advanceToolResultNextIDFromHistory(s)
-	// read_tool_result registration (review finding F12): newSession decided
-	// whether to register it BEFORE this fold ran, against an empty
-	// s.toolResults — the only state it could see at that point. A session
-	// resumed after its config set tool_result_inline_bytes:0 (retention
+	// read_tool_result registration: newSession decided whether to
+	// register it BEFORE this fold ran, against an empty s.toolResults —
+	// the only state it could see at that point. A session resumed after
+	// its config set tool_result_inline_bytes:0 (retention
 	// disabled going forward) can still have replayed handles from BEFORE
 	// that change, from history written while it was still enabled. Those
 	// handles are real, their sidecar files are real, and read_tool_result
@@ -2196,15 +2195,15 @@ var toolResultHandleInTextPattern = regexp.MustCompile(`trh_[1-9][0-9]*`)
 // advanceToolResultNextIDFromHistory scans every *message.Text part in the
 // final replayed s.history for trh_N handle tokens and advances
 // s.toolResultNextID past the highest one found. See the call site in
-// LoadSession for why this exists (review finding, round 5): the
-// toolresult.retained pointer-record fold is best-effort and can be lost to
-// a crash, while a handle's PREVIEW TEXT reaching history is a strictly
-// stronger durability guarantee (Session.append itself). This single text
-// scan also happens to cover the compaction retained-results index (its
-// lines are embedded directly in the summary message's text) and
-// read_tool_result's own echoed output (its header names the handle it
-// read) — every surface a handle can appear on is just message text by the
-// time this runs, so one scan closes all of them at once.
+// LoadSession: the toolresult.retained pointer-record fold is best-effort
+// and can be lost to a crash, while a handle's PREVIEW TEXT reaching
+// history is a strictly stronger durability guarantee (Session.append
+// itself). This single text scan also happens to cover the compaction
+// retained-results index (its lines are embedded directly in the summary
+// message's text) and read_tool_result's own echoed output (its header
+// names the handle it read) — every surface a handle can appear on is
+// just message text by the time this runs, so one scan closes all of
+// them at once.
 func advanceToolResultNextIDFromHistory(s *Session) {
 	var maxSeen int64
 	for _, m := range s.history {

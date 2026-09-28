@@ -103,8 +103,8 @@ type goalProvider struct {
 	// evaluator side: the first evalErrN evaluator (tool-less) calls fail
 	// with evalErr instead of consuming a scripted verdict — a fake
 	// evaluator-side provider failure (see engine's evaluateGoal/
-	// runEvaluatorWithRetry and GitHub issue #61's evaluator-path mirror,
-	// Round 6). Each failing call still counts against ei's position: the
+	// runEvaluatorWithRetry and GitHub issue #61's evaluator-path mirror).
+	// Each failing call still counts against ei's position: the
 	// scripted eval turns are consumed only once the failures are
 	// exhausted.
 	evalErrN int
@@ -367,22 +367,21 @@ func TestPursueGoalEvaluatorRequestPinsEffortOff(t *testing.T) {
 	}
 }
 
-// TestPursueGoalWorkerReasoningEmptyProviderData is the round-2 forensic
-// regression guard reconstructed at the goal-loop level: the actual shape
-// the incident logs show (two complete goal-supervised turns, then death
-// mid-turn with "json: error calling MarshalJSON for type json.RawMessage:
+// TestPursueGoalWorkerReasoningEmptyProviderData reconstructs a failure
+// where two complete goal-supervised turns are followed by death mid-turn
+// with "json: error calling MarshalJSON for type json.RawMessage:
 // unexpected end of JSON input", surfacing as goal.stalled on every retry
-// attempt because the same poisoned in-memory history got resent
-// unchanged). The worker's assistant message here carries a Reasoning part
+// attempt because the same poisoned in-memory history gets resent
+// unchanged. The worker's assistant message here carries a Reasoning part
 // with a present-but-zero-length provider_data entry — the map-indirected
-// twin of the ToolCall.Arguments footgun #42 fixed, left unguarded by that
-// fix (see message.ProviderData's doc comment) — appended mid-loop, exactly
-// where the incident sessions died. Before the fix this turn's own
-// s.append (persistMessage's json.Marshal) failed, and — because that
-// failure is swallowed into PersistErr rather than returned — the *next*
-// worker call re-sent the same now-poisoned in-memory history to the
-// provider's transcoder, which is where the incident's observed error
-// actually surfaced. The goal must complete normally, not stall.
+// twin of the ToolCall.Arguments empty-provider-data footgun, left
+// unguarded (see message.ProviderData's doc comment) — appended mid-loop.
+// Without a guard, this turn's own s.append (persistMessage's json.Marshal)
+// fails, and — because that failure is swallowed into PersistErr rather
+// than returned — the *next* worker call re-sends the same poisoned
+// in-memory history to the provider's transcoder, which is where the
+// resulting error actually surfaces. The goal must complete normally, not
+// stall.
 func TestPursueGoalWorkerReasoningEmptyProviderData(t *testing.T) {
 	prov := &goalProvider{
 		worker: [][]provider.Event{
@@ -524,20 +523,17 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 	})
 }
 
-// TestPursueGoalUnparseableTwiceDoesNotClearGoal is the REWRITE of the
-// former TestPursueGoalUnparseableTwiceClearsGoal (Round 3), which pinned the
-// exact opposite of today's contract: it asserted that two consecutive
-// unparseable evaluator replies cleared the goal, carrying the error as the
-// reason. That was Round 3's fix for the ses_01hsxbrkg4wpf23h05w2q5307n
-// zombie-goal forensic finding (worker turn succeeded, evaluator failed
-// twice, goal stayed active forever) — but clearing on the FIRST failed
-// boundary traded that incident for a new one: production fleet boxes died
-// mid-healthy-work on a transient evaluator hiccup. Round 6 keeps
-// the no-zombie guarantee (something durable always explains the state —
-// see the goal.eval_failed record asserted below) without treating a single
-// failed boundary as fatal: the goal stays ACTIVE, not cleared, and the loop
-// keeps working. See TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit
-// for where a real, sustained evaluator outage still does eventually clear.
+// TestPursueGoalUnparseableTwiceDoesNotClearGoal asserts that a single
+// failed evaluator boundary does not clear the goal. Clearing on the FIRST
+// failed boundary would guarantee a goal never stays silently active
+// forever when the worker keeps succeeding but the evaluator never
+// produces a parseable verdict — but it also clears goals mid-healthy-work
+// on a transient evaluator hiccup. This test pins the actual contract:
+// something durable always explains the state (see the goal.eval_failed
+// record asserted below) without treating a single failed boundary as
+// fatal — the goal stays ACTIVE, not cleared, and the loop keeps working.
+// See TestPursueGoalEvaluatorTerminalAfterConsecutiveFailureLimit for where
+// a real, sustained evaluator outage still does eventually clear.
 //
 // Run inside a synctest bubble: the failed boundary waits the short
 // goalRetryDelay before PursueGoal returns (see AGENTS.md on synctest for
@@ -600,9 +596,9 @@ func TestPursueGoalUnparseableTwiceDoesNotClearGoal(t *testing.T) {
 	}
 
 	// The failed boundary is durably explained on disk too, and the goal is
-	// still active there — the exact resumability check that would have
-	// caught ses_01hsxbrkg4wpf23h05w2q5307n staying silently active forever,
-	// now applied to the case where the goal SHOULD still be active.
+	// still active there — the same resumability check that guards against
+	// a goal staying silently active forever, applied here to the case
+	// where the goal SHOULD still be active.
 	loaded, err := LoadSession(s.cfg, s.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -652,18 +648,15 @@ func TestPursueGoalUnparseableThenRecovers(t *testing.T) {
 // goalWorkerRetries+1 attempts, waiting the real backoff schedule between
 // them (see TestPursueGoalRetriesTransientWorkerError) — free on fake time,
 // costly on the wall clock (see AGENTS.md on time.Sleep-free tests).
-// TestPursueGoalWorkerFailureEmitsOnce is a Round 7 rewrite: the
-// original concern — a permanently failing worker turn must call
-// emitSessionError exactly once per attempt, never an extra time for
-// PursueGoal's own exhaustion handling — is unchanged, since only the
-// non-emitting tail of that handling (clear vs. park) changed. What
-// changed: PursueGoal no longer clears the goal on exhaustion. It now
-// wraps the underlying error in the *goalWorkerParkedError sentinel
-// (IsGoalWorkerParked) and leaves the goal active — see
-// TestPursueGoalWorkerFailsPermanentlyParksGoal for the full park-shape
-// assertions (the journaled record, ActiveGoal after LoadSession, etc.);
-// this test stays narrowly focused on the emit-count concern its name
-// promises.
+// TestPursueGoalWorkerFailureEmitsOnce asserts that a permanently failing
+// worker turn calls emitSessionError exactly once per attempt, never an
+// extra time for PursueGoal's own exhaustion handling. PursueGoal does not
+// clear the goal on exhaustion; it wraps the underlying error in the
+// *goalWorkerParkedError sentinel (IsGoalWorkerParked) and leaves the goal
+// active — see TestPursueGoalWorkerFailsPermanentlyParksGoal for the full
+// park-shape assertions (the journaled record, ActiveGoal after
+// LoadSession, etc.); this test stays narrowly focused on the emit-count
+// concern its name promises.
 func TestPursueGoalWorkerFailureEmitsOnce(t *testing.T) {
 	workerErr := errors.New("worker provider exploded")
 	hooks := &fakeHooks{}
@@ -771,26 +764,22 @@ func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
 	})
 }
 
-// TestPursueGoalWorkerFailsPermanentlyParksGoal is a Round 7
-// rewrite of TestPursueGoalWorkerFailsPermanentlyClearsGoal. The original
-// concern — a worker turn that keeps failing past the retry budget must
-// never just return a bare error and leave the goal a silent zombie (the
-// bug that left ses_a7410dd987fcae3f's goal active for nearly 7 hours until
-// a human manually cleared it) — is unchanged; what changed is HOW
-// PursueGoal now closes that hole. A production incident showed the
-// original fix (clearing) traded one failure mode for another: OpenRouter
-// 404s (a genuinely non-retryable, deterministic-tier failure) exhausted
-// goalWorkerRetries in seconds, cleared the goal, and the box then sat idle
-// for HOURS with nothing further ever resuming it — a human had to notice
-// and manually re-POST /goal, the exact same "silently abandoned, only a
-// human's attention fixes it" shape Round 2 was meant to close, just
-// reached from the other direction. So PursueGoal must now wrap the error
-// in the *goalWorkerParkedError sentinel (IsGoalWorkerParked), journal a
-// durable, CLASSIFIED goal.parked record (never the raw provider error
-// text — see classifyGoalWorkerError) instead of goal.cleared, and leave
-// the goal fully active — both in memory and, after a reload, on disk —
-// so an external caller (the server's activity-driven auto-arm) can resume
-// it automatically the next time anything happens on the session.
+// TestPursueGoalWorkerFailsPermanentlyParksGoal asserts that a worker turn
+// that keeps failing past the retry budget never just returns a bare error
+// and leaves the goal a silent zombie. Clearing the goal on exhaustion
+// trades one failure mode for another: a genuinely non-retryable,
+// deterministic-tier failure (an OpenRouter 404, for example) exhausts
+// goalWorkerRetries in seconds, and clearing the goal at that point leaves
+// the box idle with nothing further ever resuming it — a human has to
+// notice and manually re-POST /goal, the same "silently abandoned, only a
+// human's attention fixes it" shape reached from the other direction.
+// PursueGoal must instead wrap the error in the *goalWorkerParkedError
+// sentinel (IsGoalWorkerParked), journal a durable, CLASSIFIED goal.parked
+// record (never the raw provider error text — see classifyGoalWorkerError)
+// rather than goal.cleared, and leave the goal fully active — both in
+// memory and, after a reload, on disk — so an external caller (the
+// server's activity-driven auto-arm) can resume it automatically the next
+// time anything happens on the session.
 func TestPursueGoalWorkerFailsPermanentlyParksGoal(t *testing.T) {
 	dir := t.TempDir()
 	var s *Session
@@ -1170,22 +1159,16 @@ func TestClearGoalDuringPendingEvaluationIsCleanStop(t *testing.T) {
 }
 
 // TestClearGoalDuringPendingEvaluatorFailureIsCleanStop reproduces a
-// ClearGoal (DELETE /goal) racing an in-flight evaluator call that then fails
-// with a genuine (non-cancellation, non-retryable) provider error. REWRITTEN
-// (Round 6) doc comment: this test's OLD framing ("must be treated
-// exactly like the same race on the worker-turn path... a deliberately-
-// cleared goal is not an error condition regardless of which half of the
-// loop the clear raced with") described an era where an evaluator failure
-// was otherwise just as fatal as a permanently-failing worker turn, and this
-// test's only point was that the race with ClearGoal pre-empted that
-// fatality. That symmetry no longer holds in general — an evaluator failure
-// is now advisory below goalEvalFailureLimit consecutive boundaries, not
-// fatal — but the race THIS test exercises is unaffected: recordGoalEvalFailed
-// follows recordGoalEval's own no-op-when-inactive convention (see
-// PursueGoal's evaluator-error branch), so a ClearGoal that wins the race
-// still produces exactly the same clean stop it always did — nothing is
-// journaled as a failed boundary for a goal that is already gone, and
-// nothing is left to clear a second time.
+// ClearGoal (DELETE /goal) racing an in-flight evaluator call that then
+// fails with a genuine (non-cancellation, non-retryable) provider error.
+// An evaluator failure is advisory below goalEvalFailureLimit consecutive
+// boundaries, not fatal, so this test exercises whether the race with
+// ClearGoal still produces a clean stop when the evaluator call resolves
+// after the clear: recordGoalEvalFailed follows recordGoalEval's own
+// no-op-when-inactive convention (see PursueGoal's evaluator-error
+// branch), so a ClearGoal that wins the race still produces a clean stop —
+// nothing is journaled as a failed boundary for a goal that is already
+// gone, and nothing is left to clear a second time.
 func TestClearGoalDuringPendingEvaluatorFailureIsCleanStop(t *testing.T) {
 	dir := t.TempDir()
 	entered := make(chan struct{})
@@ -1322,9 +1305,8 @@ func TestGoalEventsEmitWhileLockHeld(t *testing.T) {
 			},
 		},
 		{
-			// recordGoalParked (Round 7) follows the exact same
-			// emit-under-lock discipline as every other goal record — see
-			// its doc comment.
+			// recordGoalParked follows the exact same emit-under-lock
+			// discipline as every other goal record — see its doc comment.
 			name: "recordGoalParked",
 			want: EventGoalParked,
 			run: func(s *Session) {
@@ -1448,20 +1430,20 @@ func TestPursueGoalRetryBackoffCancellable(t *testing.T) {
 	})
 }
 
-// TestPursueGoalNoRetryAfterToolExecution is the red-first test for the
-// non-idempotency review finding: a retry re-issues the WHOLE directive
-// (Prompt has no sub-turn resume point), so once a worker-turn attempt has
-// already executed a tool call before failing on a later model call, retrying
+// TestPursueGoalNoRetryAfterToolExecution asserts a non-idempotency
+// constraint: a retry re-issues the WHOLE directive (Prompt has no
+// sub-turn resume point), so once a worker-turn attempt has already
+// executed a tool call before failing on a later model call, retrying
 // risks re-running that tool. PursueGoal must detect this (via the
-// toolExecCount snapshot) and stop retrying immediately rather than reissue
-// the directive — the failed attempt still counts (one goal.stalled record),
-// but no second attempt, and no second tool execution, ever happens.
+// toolExecCount snapshot) and stop retrying immediately rather than
+// reissue the directive — the failed attempt still counts (one
+// goal.stalled record), but no second attempt, and no second tool
+// execution, ever happens.
 //
-// Updated for Round 7: the gate's own behavior (stop retrying
-// immediately) is unchanged — only what happens to the goal once retrying
-// stops changed, from a clear to a park (see
-// TestPursueGoalWorkerFailsPermanentlyParksGoal for that rewrite's full
-// rationale); this test's tail now asserts the park shape instead.
+// The gate's own behavior (stop retrying immediately) is one concern;
+// what happens to the goal once retrying stops is another — a park, not a
+// clear (see TestPursueGoalWorkerFailsPermanentlyParksGoal for that
+// shape's full rationale). This test's tail asserts the park shape.
 func TestPursueGoalNoRetryAfterToolExecution(t *testing.T) {
 	var toolRuns int
 	testTool := Tool{
@@ -1645,25 +1627,18 @@ func TestPursueGoalRetryableErrorLongBackoffThenRecovers(t *testing.T) {
 	})
 }
 
-// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing is a Round 7
-// rewrite of GitHub issue #61's original deliverable-4 test. The
-// original concern — once the retryable-class budget
-// (goalRetryableMaxAttempts) is exhausted for a turn (a truly long outage),
-// the goal must NOT be cleared into a permanently-dead stall requiring an
-// operator re-POST — is unchanged. What changed is HOW it avoids that dead
-// stall: issue #61's original fix parked by looping IN PLACE (an in-loop
-// `continue` that retried the same directive on the next ordinary turn,
-// never leaving PursueGoal — see goalRetryableExhaustedError's doc
-// comment), so with MaxTurns set the loop only reached the ordinary "max
-// turns" terminal after enough parked cycles. The worker-park rework supersedes that: the
-// FIRST retryable-budget exhaustion now exit-parks immediately — the same
-// terminal a deterministic-tier exhaustion reaches (see
+// TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing asserts
+// that once the retryable-class budget (goalRetryableMaxAttempts) is
+// exhausted for a turn (a truly long outage), the goal must NOT be cleared
+// into a permanently-dead stall requiring an operator re-POST. The FIRST
+// retryable-budget exhaustion exit-parks immediately — the same terminal a
+// deterministic-tier exhaustion reaches (see
 // TestPursueGoalWorkerFailsPermanentlyParksGoal) — freeing the run slot
-// instead of holding it for the rest of the outage. A queued prompt can then
-// dispatch as a normal turn. So this
-// test now asserts exactly ONE turn's worth of retryable attempts before
-// PursueGoal returns the *goalWorkerParkedError sentinel — MaxTurns is no
-// longer even reachable via repeated parking.
+// rather than holding it for the rest of the outage. A queued prompt can
+// then dispatch as a normal turn, so this test asserts exactly ONE turn's
+// worth of retryable attempts before PursueGoal returns the
+// *goalWorkerParkedError sentinel; MaxTurns is never reached via repeated
+// parking.
 func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) {
 	orig := goalJitterFunc
 	t.Cleanup(func() { goalJitterFunc = orig })
@@ -1760,8 +1735,7 @@ func TestPursueGoalRetryableBudgetExhaustedParksInsteadOfClearing(t *testing.T) 
 // backoff — retrying would risk re-running the tool no matter how
 // sympathetic the failure looks.
 //
-// Updated for Round 7: the gate itself is unchanged; the tail now
-// asserts a park (not a clear) — and, since PursueGoal derives
+// The gate's tail asserts a park (not a clear) — and, since PursueGoal derives
 // retryable/class straight from the returned error via provider.AsRetryable
 // rather than from whether promptTurnWithRetry happened to wrap it in
 // *goalRetryableExhaustedError (see PursueGoal's worker-turn error

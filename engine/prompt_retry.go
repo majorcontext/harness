@@ -103,9 +103,9 @@ func waitBasePromptRetryBackoff(ctx context.Context, attempt int) error {
 // per turnHasActionableContent, no non-empty Text and no ToolCall part — is
 // folded into the same bounded retry budget via a synthesized
 // *emptyTurnError, rather than returned as a success. See emptyTurnError's
-// doc comment (engine.go) for the production incident this guards: a
-// provider stream can reach EventDone cleanly while reporting nothing the
-// caller can act on (e.g. thinking alone consumed the entire max_tokens
+// doc comment (engine.go) for why this guard exists: a provider stream can
+// reach EventDone cleanly while reporting nothing the caller can act on
+// (e.g. thinking alone consumed the entire max_tokens
 // ceiling), and that must never be journaled as a completed turn. This is
 // why the check runs before the `err == nil` early return below, not after
 // it.

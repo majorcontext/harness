@@ -126,9 +126,9 @@ func ResolveAgentDefs(dirs []string) (map[string]AgentDef, error) {
 		defs[name] = def
 		source[name] = "builtin"
 	}
-	// Deduped on filepath.Clean(dir) before ever calling LoadAgentDefs —
-	// a live review finding: without this, the SAME directory appearing
-	// twice in dirs (Config.AgentDefsDirs built up from more than one
+	// Deduped on filepath.Clean(dir) before ever calling LoadAgentDefs:
+	// without this, the SAME directory appearing twice in dirs
+	// (Config.AgentDefsDirs built up from more than one
 	// source, or simply a caller-supplied duplicate) got loaded twice,
 	// and every single name it defined then collided with ITSELF on the
 	// second pass — the cross-dir duplicate-name check just below exists
@@ -180,10 +180,9 @@ func ResolveAgentDefs(dirs []string) (map[string]AgentDef, error) {
 // definition are an error surfaced at load, not spawn" true in practice —
 // "load" here means the session's first task-shaped call, not
 // construction: caching here is what stops a definition being re-read and
-// re-parsed from disk on every single spawn, which is what an earlier,
-// uncached version of this call site did (a live review finding: a parent
-// fanning out many children re-parsed the same .agents/*.md files on every
-// one).
+// re-parsed from disk on every single spawn — without it, a parent
+// fanning out many children re-parses the same .agents/*.md files on
+// every one.
 func (s *Session) AgentDefs() (map[string]AgentDef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -230,14 +229,13 @@ func agentDefsDir(workDir string) string {
 //
 // errUnknownFrontmatterKey is the ONE parseAgentDef error class
 // LoadAgentDefs treats leniently — skip this one file, log a warning,
-// keep loading the rest of the directory. A design-owner decision on a
-// live review finding ("frontmatter leniency" scope): an earlier
-// revision of this package skipped-and-warned on EVERY parseAgentDef
-// error alike (bad frontmatter delimiters, a missing required field, an
-// unknown tool name, an invalid model string), reasoning that one
+// keep loading the rest of the directory. This scope is deliberate: a
+// blanket policy of skipping-and-warning on EVERY parseAgentDef error
+// alike (bad frontmatter delimiters, a missing required field, an
+// unknown tool name, an invalid model string) reasons that one
 // contributor's single mistake in one file should never break every
-// OTHER custom agent type in the same directory. A later review
-// disagreed for two specific classes: an unknown tool name and an
+// OTHER custom agent type in the same directory, but that reasoning does
+// not hold for two specific classes: an unknown tool name and an
 // invalid model string are SEMANTIC authoring mistakes the design doc
 // explicitly requires to be "an error surfaced at load, not spawn" — a
 // silently-skipped file means the agent simply does not exist, and a
@@ -245,12 +243,11 @@ func agentDefsDir(workDir string) string {
 // that gives no hint the definition was ever written, let alone why it
 // was rejected. An unknown FRONTMATTER KEY (a stray typo'd line, like
 // `desc:` instead of `description:`) is judged a lower-stakes,
-// genuinely cosmetic mistake worth the same one-file-only blast radius
-// the original leniency fix targeted — every OTHER parseAgentDef error
-// (structural frontmatter problems, missing required fields, duplicate
-// keys, unknown tool names, invalid models) is a hard load error for the
-// WHOLE directory once again, matching the design doc's original,
-// pre-leniency-fix behavior for those classes.
+// genuinely cosmetic mistake worth a one-file-only blast radius — every
+// OTHER parseAgentDef error (structural frontmatter problems, missing
+// required fields, duplicate keys, unknown tool names, invalid models)
+// is a hard load error for the WHOLE directory, matching the design
+// doc's behavior for those classes.
 var errUnknownFrontmatterKey = errors.New("unknown frontmatter key")
 
 // LoadAgentDefs discovers custom agent definitions from dir: loose

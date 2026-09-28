@@ -1,12 +1,10 @@
 // GET /session/{id}/journal support: a read-only, sanitized projection of a
 // session's own durable log (store.go's `record` type) for the debugging
-// class the restart-recovery work (PR #145's task-notification
-// checkout/commit/requeue mechanism, PR #147's crashed-child recovery fix)
-// kept needing pod-exec to see directly — recovery markers
-// (recoverInterruptedTurnLocked's own synthetic closing messages), the
-// task-notification queued/delivered/committed trail, and turn-settlement
-// records. See server/session_journal.go's handleJournal for the HTTP surface this
-// backs.
+// class the restart-recovery mechanisms need pod-exec to see directly —
+// recovery markers (recoverInterruptedTurnLocked's own synthetic closing
+// messages), the task-notification queued/delivered/committed trail, and
+// turn-settlement records. See server/session_journal.go's handleJournal
+// for the HTTP surface this backs.
 //
 // This is deliberately a SEPARATE, curated type from store.go's own
 // `record` — never the raw internal wire format — for two reasons: it never

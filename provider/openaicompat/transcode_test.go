@@ -432,10 +432,10 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	return string(ab) == string(bb)
 }
 
-// TestTranscodeOrphanToolCallMidHistory reproduces the mechanism behind
-// production incident ses_01hvcs96pq1cf7x3kw0fz4a1yh at the transcoder
-// level: an assistant tool_call with no result at all in history (the turn
-// died before the engine could execute it, or append one — see
+// TestTranscodeOrphanToolCallMidHistory covers an orphan tool_call at the
+// transcoder level: an assistant tool_call with no result at all in
+// history (the turn died before the engine could execute it, or append
+// one — see
 // engine/engine.go's own primary fix), buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
 // message.ResolveOrphanToolCalls, this produced a wire request with a
@@ -457,11 +457,11 @@ func TestTranscodeOrphanToolCallMidHistory(t *testing.T) {
 	assertToolCallFollowedByToolMessage(t, out, "orphan1")
 }
 
-// TestTranscodeOrphanToolCallFinalMessage covers the other shape the
-// incident's mechanism can leave behind: the orphaned tool_call is the
-// very last message in history — the turn died and nothing was ever
-// appended after it, so there is no "next" message to look at, let alone
-// merge a result into. Covers a turn with more than one tool call, all
+// TestTranscodeOrphanToolCallFinalMessage covers the other shape an orphan
+// tool_call can take: it is the very last message in history — the turn
+// died and nothing was ever appended after it, so there is no "next"
+// message to look at, let alone merge a result into. Covers a turn with
+// more than one tool call, all
 // orphaned.
 func TestTranscodeOrphanToolCallFinalMessage(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
@@ -530,9 +530,9 @@ func assertToolCallFollowedByToolMessage(t *testing.T, out *apiRequest, id strin
 // though the request still BUILDS -- produces a request the provider
 // rejects with an asynchronous 400 at request time instead of a loud,
 // synchronous, local build failure: exactly the wedge class this whole line
-// of work exists to remove (see PR #108 review round 2, finding on
+// of work exists to remove (see
 // TestTranscodeOrphanToolResultBuildsSuccessfully's original, too-weak
-// build-only assertion).
+// build-only assertion below).
 func assertToolCallsAnsweredContiguously(t *testing.T, out *apiRequest) {
 	t.Helper()
 	for i, m := range out.Messages {
@@ -555,9 +555,9 @@ func assertToolCallsAnsweredContiguously(t *testing.T, out *apiRequest) {
 	}
 }
 
-// TestTranscodeOrphanToolResultBuildsSuccessfully is the golden, wire-level
-// regression test for PR #108's finding 1: an orphan ToolResult (its CallID
-// matches no ToolCall anywhere in history) that message.NormalizeForWire
+// TestTranscodeOrphanToolResultBuildsSuccessfully is a golden, wire-level
+// regression test: an orphan ToolResult (its CallID matches no ToolCall
+// anywhere in history) that message.NormalizeForWire
 // demotes to a Text part. The demoted Text part used to be left inside its
 // original RoleTool message; this adapter's own transcodeToolMessages is
 // role-strict and hard-errors on any non-ToolResult part in a "tool"-role
@@ -566,8 +566,8 @@ func assertToolCallsAnsweredContiguously(t *testing.T, out *apiRequest) {
 // transcodeRequest (not message.NormalizeForWire's own output checked
 // against message's internal oracle, which cannot see a provider-specific
 // role-strictness failure) and asserts both that the request builds AND
-// that its SHAPE is valid -- "it builds" alone let a wedge slip through
-// PR #108's first review round (see the split-tool-run test below).
+// that its SHAPE is valid -- "it builds" alone lets a wedge slip through
+// undetected (see the split-tool-run test below).
 func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 	out := mustTranscode(t, baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "go"}}},
@@ -602,9 +602,9 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 	assertToolCallsAnsweredContiguously(t, out)
 }
 
-// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is the
-// golden regression test for PR #108 round 5's finding on
-// message/wire_normalize.go:496: a demoted ToolResult's Blob used to
+// TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is a
+// golden regression test on message/wire_normalize.go:496: a demoted
+// ToolResult's Blob used to
 // survive as a raw Part regardless of media type, and this adapter's own
 // blobURL (~line 343) hard-errors building a request containing ANY
 // non-image/* Blob — the narrowest of the three transcoders (it has no
@@ -660,14 +660,13 @@ func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) 
 }
 
 // TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
-// the golden regression test for PR #108 round 5's finding on
-// message/wire_normalize.go:370: a demoted ToolResult's Blob left inside a
-// RoleAssistant message used to make transcodeAssistantMessage hard-error
-// "unsupported part type *message.Blob in assistant message" -- the
-// finding this test package's own transcodeAssistantMessage is named in.
-// Two ToolResults sharing one assistant message (both with no ToolCall
-// anywhere) reach demoteWireInvalidToolResults' assistant-run branch at
-// all -- see message/wire_normalize_test.go's
+// a golden regression test on message/wire_normalize.go:370: a demoted
+// ToolResult's Blob left inside a RoleAssistant message used to make
+// transcodeAssistantMessage hard-error "unsupported part type
+// *message.Blob in assistant message". Two ToolResults sharing one
+// assistant message (both with no ToolCall anywhere) reach
+// demoteWireInvalidToolResults' assistant-run branch at all -- see
+// message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
 // a single one alone would not.
 func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
@@ -707,15 +706,14 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 }
 
 // TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer is
-// the golden regression test for PR #108 round 6's finding: the
-// assistant-run blob hoist (round 5) placed the hoisted "user"-role wire
-// message immediately after the assistant run's own wire message -- which
-// is BEFORE the "tool"-role wire message(s) answering that SAME assistant
-// message's live tool_calls. This adapter has distinct "user" and "tool"
-// wire roles with no folding, so the interposed "user" message breaks the
-// tool_calls' required contiguity with their "tool" answer -- the same
-// wedge class round 3's fix already closed for the non-assistant branch's
-// own hoist, one branch over. See
+// a golden regression test: the assistant-run blob hoist places the
+// hoisted "user"-role wire message immediately after the assistant run's
+// own wire message -- which is BEFORE the "tool"-role wire message(s)
+// answering that SAME assistant message's live tool_calls. This adapter
+// has distinct "user" and "tool" wire roles with no folding, so the
+// interposed "user" message breaks the tool_calls' required contiguity
+// with their "tool" answer -- the same wedge class already closed for the
+// non-assistant branch's own hoist, one branch over. See
 // message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
 // canonical-level account of the shape (why TWO ToolResults, A and B, are
@@ -762,9 +760,9 @@ func TestTranscodeAssistantRunBlobHoistDoesNotSplitToolCallsFromTheirAnswer(t *t
 	}
 }
 
-// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is the golden,
-// wire-level regression test for PR #108's review round 2: a stray
-// (unanswerable) ToolResult sitting in the FIRST of two consecutive
+// TestTranscodeOrphanToolResultDoesNotSplitContiguousToolRun is a golden,
+// wire-level regression test: a stray (unanswerable) ToolResult sitting
+// in the FIRST of two consecutive
 // RoleTool messages must not have its demoted text land BETWEEN the two
 // "tool" wire messages that answer the preceding assistant's tool_calls.
 // An earlier fix hoisted the demoted part into a new message positioned

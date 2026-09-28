@@ -161,16 +161,16 @@ func TestReadToolResultBoundedByMaxBytes(t *testing.T) {
 	}
 }
 
-// TestReadToolResultPartialFirstLineOffsetIsRecoverable is a round-3 review
-// finding's red test. When the very FIRST shown line alone exceeds
-// max_bytes, only a truncated prefix is emitted (shown=1) — but the
-// original notice reported "continue with offset=offset+1", silently
-// skipping past the UNSHOWN REMAINDER of that same line: it can never be
-// retrieved through range mode at any max_bytes, because every
-// continuation jumps straight to the NEXT line.
+// TestReadToolResultPartialFirstLineOffsetIsRecoverable pins the case where
+// the very FIRST shown line alone exceeds max_bytes: only a truncated
+// prefix is emitted (shown=1), and the continuation notice must not report
+// "continue with offset=offset+1", which would silently skip past the
+// UNSHOWN REMAINDER of that same line — it could never be retrieved
+// through range mode at any max_bytes, because every continuation jumps
+// straight to the NEXT line.
 //
-// The fix keeps the continuation offset UNCHANGED in this specific case,
-// so a caller that re-reads at the same offset with a larger max_bytes
+// The continuation offset stays UNCHANGED in this specific case, so a
+// caller that re-reads at the same offset with a larger max_bytes
 // makes real progress into the same line (each read re-scans from byte
 // zero, so a bigger budget naturally reaches further before truncating
 // again) — genuinely recoverable, not just an honest dead end.
@@ -227,16 +227,16 @@ func TestReadToolResultLimitHardCapped(t *testing.T) {
 	}
 }
 
-// TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes is a
-// round-3 review finding's red test. Hitting the MATCH-COUNT cap
-// (readToolResultMaxLimit, 2000) set the same byteTrunc flag a byte-budget
-// stop uses, so the notice always said "...narrow the search or increase
-// max_bytes to see more" — but raising max_bytes cannot surface a single
-// additional match once the count cap fired; the search simply stopped
-// counting. That half of the advice actively misdirects the model's
-// recovery attempt. This constructs 2500 short matching lines with a
-// generous max_bytes (well above what 2000 short entries need), so the
-// COUNT cap — not the byte budget — is what actually stops the search.
+// TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes pins the
+// case where hitting the MATCH-COUNT cap (readToolResultMaxLimit, 2000)
+// must not set the same byteTrunc flag a byte-budget stop uses: reusing
+// that flag would make the notice say "...narrow the search or increase
+// max_bytes to see more" even though raising max_bytes cannot surface a
+// single additional match once the count cap fires — the search simply
+// stopped counting, and that half of the advice would actively misdirect
+// the model's recovery attempt. This constructs 2500 short matching lines
+// with a generous max_bytes (well above what 2000 short entries need), so
+// the COUNT cap — not the byte budget — is what actually stops the search.
 func TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= 2500; i++ {
@@ -257,11 +257,11 @@ func TestReadToolResultSearchCountCapNoticeDoesNotSuggestMaxBytes(t *testing.T) 
 }
 
 // TestReadToolResultMaxMaxBytesIsPinned pins readToolResultMaxMaxBytes's
-// concrete value (review finding F6(b)), the same way
-// TestReadToolResultLimitHardCapped pins readToolResultMaxLimit: a bare
-// relative assertion ("clamped to SOME max") would keep passing if the
-// constant silently changed, which is exactly the drift this guards against
-// for the documented "max 65536" contract in the tool's own description.
+// concrete value, the same way TestReadToolResultLimitHardCapped pins
+// readToolResultMaxLimit: a bare relative assertion ("clamped to SOME
+// max") would keep passing if the constant silently changed, which is
+// exactly the drift this guards against for the documented "max 65536"
+// contract in the tool's own description.
 func TestReadToolResultMaxMaxBytesIsPinned(t *testing.T) {
 	if readToolResultMaxMaxBytes != 65536 {
 		t.Fatalf("readToolResultMaxMaxBytes = %d, want 65536 (the documented hard cap)", readToolResultMaxMaxBytes)
@@ -271,8 +271,8 @@ func TestReadToolResultMaxMaxBytesIsPinned(t *testing.T) {
 	}
 }
 
-// TestReadToolResultRejectsMaxBytesBelowFloor: review finding F11. A
-// max_bytes smaller than the fixed preamble every read writes left NO room
+// TestReadToolResultRejectsMaxBytesBelowFloor: a max_bytes smaller than
+// the fixed preamble every read writes left NO room
 // for any line, and the byte-budget loop reported the same "no lines at
 // offset N" message a genuinely empty result gets — indistinguishable from
 // the real thing. max_bytes=1 must be rejected outright with a clear error
@@ -299,13 +299,13 @@ func TestReadToolResultRejectsMaxBytesBelowFloor(t *testing.T) {
 	}
 }
 
-// TestReadToolResultFloorAccountsForLongToolName is a round-5 review
-// finding's red test. The flat 256-byte floor did not account for the
-// ACTUAL preamble a request would produce — for a long MCP-shaped tool
-// name plus large byte/line counts, the preamble alone can exceed
-// bodyMax (floor - the 128-byte notice reserve), reproducing exactly the
-// F11 false-empty class the floor exists to prevent, at a max_bytes value
-// (256) the tool had just accepted as valid.
+// TestReadToolResultFloorAccountsForLongToolName pins the case where the
+// flat 256-byte floor does not account for the ACTUAL preamble a request
+// would produce — for a long MCP-shaped tool name plus large byte/line
+// counts, the preamble alone can exceed bodyMax (floor - the 128-byte
+// notice reserve), reproducing exactly the false-empty class the floor
+// exists to prevent, at a max_bytes value (256) the tool had just
+// accepted as valid.
 func TestReadToolResultFloorAccountsForLongToolName(t *testing.T) {
 	dir := t.TempDir()
 	longTool := "mcp__some_moderately_long_server_name_here__a_fairly_long_tool_name_here_too_yes_indeed"
@@ -315,8 +315,8 @@ func TestReadToolResultFloorAccountsForLongToolName(t *testing.T) {
 		SessionDir:            dir,
 		ToolResultInlineBytes: 512,
 	})
-	// Large byte/line counts, matching the reviewer's "large byte/line/
-	// offset/limit numbers" half of the scenario.
+	// Large byte/line counts, so the preamble's byte/line/offset/limit
+	// numbers are large too.
 	handle, err := s.writeRetainedToolResult(longTool, strings.Repeat("line-x\n", 123456))
 	if err != nil {
 		t.Fatal(err)
@@ -339,28 +339,27 @@ func TestReadToolResultFloorAccountsForLongToolName(t *testing.T) {
 	}
 }
 
-// TestReadToolResultSurvivesOversizedLine is review finding F1's red test:
-// a single line at or beyond readToolResultScanBuf defeats bufio.Scanner
-// entirely (Scan returns false, sc.Err() is bufio.ErrTooLong). Before the
-// fix, range mode reported "no lines at offset 1 (has 1 lines)" and search
-// mode false-negatived on a needle that is plainly present — no max_bytes
-// value recovered anything, on a result whose own preview header told the
-// model it was recoverable via read_tool_result. The fix falls back to a
-// raw io.ReaderAt-based line source with no per-line limit.
+// TestReadToolResultSurvivesOversizedLine pins the case where a single
+// line at or beyond readToolResultScanBuf defeats bufio.Scanner entirely
+// (Scan returns false, sc.Err() is bufio.ErrTooLong). Without a fallback,
+// range mode would report "no lines at offset 1 (has 1 lines)" and search
+// mode would false-negative on a needle that is plainly present — no
+// max_bytes value would recover anything, on a result whose own preview
+// header told the model it was recoverable via read_tool_result. The
+// fallback is a raw io.ReaderAt-based line source with no per-line limit.
 //
 // The needle sits ~1.2 MiB into the 2 MiB line — deliberately far past both
 // readToolResultScanBuf (1 MiB) AND the default max_bytes (16384): a
-// rescue that only ever showed a prefix from byte 0 of the line (the
-// original round-2 shape review finding N1 caught) could never reach it,
-// only a window ANCHORED AT THE MATCH can.
+// rescue that only ever showed a prefix from byte 0 of the line could
+// never reach it, only a window ANCHORED AT THE MATCH can.
 //
 // The assertion is on the BODY only — everything after the first "\n" —
-// never the whole output (review finding N1's second half): the header
-// line itself echoes the needle back via `lines matching %q:`, so
-// asserting against the whole string is tautological and passes even if
-// matching is completely broken. TestReadToolResultSearchNeverMatchMutant
-// exercises that escape directly by forcing strings.Contains to report no
-// match, proving THIS test would catch it.
+// never the whole output: the header line itself echoes the needle back
+// via `lines matching %q:`, so asserting against the whole string is
+// tautological and passes even if matching is completely broken.
+// TestReadToolResultSearchNeverMatchMutant exercises that escape directly
+// by forcing strings.Contains to report no match, proving THIS test would
+// catch it.
 func TestReadToolResultSurvivesOversizedLine(t *testing.T) {
 	// 2 MiB, one line, well beyond readToolResultScanBuf (1 MiB).
 	needle := "UNIQUE-NEEDLE-31337"
@@ -393,9 +392,9 @@ func TestReadToolResultSurvivesOversizedLine(t *testing.T) {
 // searchBodyAfterHeader strips readToolResultSearch's first line (the
 // header, which echoes the search needle back via `lines matching %q:` and
 // so must never be used as evidence a match was actually found — see
-// TestReadToolResultSurvivesOversizedLine's doc comment, review finding
-// N1). The zero-match case is a single line with no header at all (it
-// never got as far as writing one) — treated as its own body, verbatim.
+// TestReadToolResultSurvivesOversizedLine's doc comment). The zero-match
+// case is a single line with no header at all (it never got as far as
+// writing one) — treated as its own body, verbatim.
 func searchBodyAfterHeader(t *testing.T, out string) string {
 	t.Helper()
 	i := strings.IndexByte(out, '\n')
@@ -405,8 +404,8 @@ func searchBodyAfterHeader(t *testing.T, out string) string {
 	return out[i+1:]
 }
 
-// TestReadToolResultSearchNeverMatchMutant is review finding N1's mutation-
-// verification: it forces strings.Contains to report NO match ever (a
+// TestReadToolResultSearchNeverMatchMutant is a mutation-verification
+// test: it forces strings.Contains to report NO match ever (a
 // literal implementation of "search is completely broken"), and confirms
 // TestReadToolResultSurvivesOversizedLine's body-only assertion catches it
 // — proving that assertion is not the tautology the original
@@ -450,14 +449,13 @@ func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile is review finding
-// N7's red test: the FIRST cut of the F1 fallback (toolResultFallbackLines)
-// allocated make([]byte, meta.Bytes) and read the file via ONE ReadAt call
+// TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile pins that
+// readerAtLineSource, the oversized-line fallback source, must not
+// allocate make([]byte, meta.Bytes) and read the file via ONE ReadAt call
 // — the ENTIRE file into memory — even to satisfy a request for just the
-// first line. This asserts the streaming replacement
-// (readerAtLineSource): reading only the first (short) line of an 8 MiB
-// file touches only a small, bounded number of bytes, nowhere near the
-// file's full size.
+// first line. It asserts the streaming behavior instead: reading only the
+// first (short) line of an 8 MiB file touches only a small, bounded
+// number of bytes, nowhere near the file's full size.
 func TestReaderAtLineSourceStreamsRatherThanBuffersWholeFile(t *testing.T) {
 	size := 8 * 1024 * 1024
 	content := "first line\n" + strings.Repeat("x", size-len("first line\n"))
@@ -510,11 +508,11 @@ func TestReaderAtLineSourceReadsWholeContentWhenScannedToCompletion(t *testing.T
 	}
 }
 
-// TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize is a
-// round-3 review finding's red test: readerAtLineSource busy-loops FOREVER
-// (100% CPU, wedging the run slot indefinitely) when the underlying file is
-// SHORTER than the size it was constructed with (meta.Bytes) — a volume
-// rollback, or an operator's partial wipe, the exact class of mismatch the
+// TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize pins the
+// case where readerAtLineSource must not busy-loop FOREVER (100% CPU,
+// wedging the run slot indefinitely) when the underlying file is SHORTER
+// than the size it was constructed with (meta.Bytes) — a volume rollback,
+// or an operator's partial wipe, the exact class of mismatch the
 // surrounding errToolResultFileMissing handling already anticipates
 // elsewhere in this package.
 //
@@ -564,21 +562,20 @@ func TestReaderAtLineSourceTerminatesWhenFileShorterThanClaimedSize(t *testing.T
 	}
 }
 
-// TestReadToolResultOutputNeverExceedsMaxBytes is review finding N10's red
-// test. The trailing continuation/truncation notice was appended AFTER the
-// per-line/per-match budget loop decided how much body fit against the
-// FULL max_bytes — so body+notice together could exceed max_bytes by
-// however long the notice text was (~50-80 bytes measured). Checked across
+// TestReadToolResultOutputNeverExceedsMaxBytes pins that the trailing
+// continuation/truncation notice must not be appended AFTER the
+// per-line/per-match budget loop decides how much body fits against the
+// FULL max_bytes — body+notice together must never exceed max_bytes by
+// however long the notice text is (~50-80 bytes measured). Checked across
 // both modes and a range of max_bytes values, including right at the
 // floor, where the notice reserve is proportionally largest.
 func TestReadToolResultOutputNeverExceedsMaxBytes(t *testing.T) {
 	big := linesText(20000) // long enough to force truncation at every max_bytes tried below
 	s, h := retainedSession(t, big)
 
-	// The floor is now computed PER REQUEST from the actual preamble
-	// (review finding, round 5) — for this fixture's large byte/line
-	// counts, that floor sits a little above the flat
-	// readToolResultMinMaxBytes constant. Start the sweep at the real
+	// The floor is computed PER REQUEST from the actual preamble — for this
+	// fixture's large byte/line counts, that floor sits a little above the
+	// flat readToolResultMinMaxBytes constant. Start the sweep at the real
 	// computed floor (search's is the larger of the two modes here) rather
 	// than the flat constant, so this test's smallest value is always
 	// accepted rather than legitimately rejected.
@@ -676,16 +673,16 @@ func TestReadToolResultMissingFile(t *testing.T) {
 	}
 }
 
-// TestReadToolResultNonMissingErrorIsNotReportedAsGone is a round-3 review
-// finding's red test. openRetainedToolResult mapped EVERY os.Open error —
-// not just os.ErrNotExist — to errToolResultFileMissing, so a transient
-// condition (permission denied, EMFILE descriptor exhaustion, a flaky I/O
-// error) got the SAME terminal "no longer on disk ... it cannot be read
-// back" wording as a genuinely deleted file, steering the model away from
-// retrying a read that would succeed once the transient condition clears.
-// Only a true not-exist should get that permanent wording; anything else
-// should fall through to the generic "cannot read handle" error, which
-// carries no false claim of permanence.
+// TestReadToolResultNonMissingErrorIsNotReportedAsGone pins the case where
+// openRetainedToolResult must not map EVERY os.Open error — not just
+// os.ErrNotExist — to errToolResultFileMissing: a transient condition
+// (permission denied, EMFILE descriptor exhaustion, a flaky I/O error)
+// must not get the SAME terminal "no longer on disk ... it cannot be read
+// back" wording as a genuinely deleted file, which would steer the model
+// away from retrying a read that would succeed once the transient
+// condition clears. Only a true not-exist gets that permanent wording;
+// anything else falls through to the generic "cannot read handle" error,
+// which carries no false claim of permanence.
 func TestReadToolResultNonMissingErrorIsNotReportedAsGone(t *testing.T) {
 	s, h := retainedSession(t, linesText(10))
 
@@ -761,8 +758,8 @@ func TestToolResultRetentionSurvivesVeryLongSingleLine(t *testing.T) {
 	long := strings.Repeat("x", 300*1024) + "\n"
 	s, h := retainedSession(t, long)
 	got := readResult(t, s, fmt.Sprintf(`{"handle":%q,"max_bytes":1024}`, h))
-	// A single line this size is exactly the partial-first-line case (round
-	// 3): the notice names the recovery path (increase max_bytes, re-read
+	// A single line this size is exactly the partial-first-line case: the
+	// notice names the recovery path (increase max_bytes, re-read
 	// at the same offset) rather than the generic "truncated ... continue
 	// with offset=N+1" wording, which would silently abandon this line's
 	// unshown remainder — see TestReadToolResultPartialFirstLineOffsetIsRecoverable.
@@ -833,7 +830,7 @@ func TestParseToolResultHandle(t *testing.T) {
 	}
 	for _, in := range []string{
 		"", "trh_", "trh_0", "trh_-1", "trh_x", "trh_1x", "bogus", "1", "../trh_1", "trh_1/../..",
-		// F13: digits-only, no leading zero, no sign — strconv.ParseInt
+		// Digits-only, no leading zero, no sign — strconv.ParseInt
 		// alone accepts these as alternate spellings of trh_1, but
 		// writeRetainedToolResult (strconv.FormatInt) never produces
 		// either, so they must not parse as aliases of the canonical

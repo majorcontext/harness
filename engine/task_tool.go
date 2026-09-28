@@ -291,22 +291,21 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 		model = ref
 	}
 	// Validate the provider is configured BEFORE Spawn, mirroring the
-	// `model` tool's own identical check (runModelTool) — a live review
-	// finding: ParseModelRef only checks the ref is well-formed, not that
-	// its provider is registered, so an unconfigured model used to sail
-	// through Spawn, consume a concurrency slot and a session log, and
-	// only fail later at the child's first turn — surfacing to the parent
-	// as a delayed "[tasks: ... failed: ...]" notification instead of the
+	// `model` tool's own identical check (runModelTool): ParseModelRef
+	// only checks the ref is well-formed, not that its provider is
+	// registered, so an unconfigured model can otherwise sail through
+	// Spawn, consume a concurrency slot and a session log, and only fail
+	// later at the child's first turn — surfacing to the parent as a
+	// delayed "[tasks: ... failed: ...]" notification instead of the
 	// immediate, synchronous tool error a caller-side mistake like this
-	// deserves. Covers BOTH sources of model, not just in.Model: an
-	// earlier revision of this fix validated only the caller's override,
-	// missing that def.Model — an agent DEFINITION naming an unconfigured
-	// provider — sails through exactly the same way, a live review
-	// finding on the first pass at this fix. model.IsZero() (def.Model
-	// unset AND no override) is deliberately exempt: Spawn treats a zero
-	// Model as "inherit the parent's own, already-configured model" (see
-	// its own `if !opts.Model.IsZero()` guard) — never itself a candidate
-	// for an unconfigured provider.
+	// deserves. Covers BOTH sources of model, not just in.Model: checking
+	// only the caller's override misses that def.Model — an agent
+	// DEFINITION naming an unconfigured provider — sails through exactly
+	// the same way. model.IsZero() (def.Model unset AND no override) is
+	// deliberately exempt: Spawn treats a zero Model as "inherit the
+	// parent's own, already-configured model" (see its own
+	// `if !opts.Model.IsZero()` guard) — never itself a candidate for an
+	// unconfigured provider.
 	if !model.IsZero() && !s.ModelSupported(model) {
 		return nil, fmt.Errorf("task: provider %q is not configured (%s)", model.Provider, s.modelChoicesHint())
 	}
@@ -349,7 +348,7 @@ func runTaskCancel(s *Session, in taskToolArgs) (message.Parts, error) {
 	// status) and never re-derived from a separate later read, which
 	// could race a caller's own periodic Reap sweep collecting an
 	// already-terminal leaf in the gap — see CancelDescendant's own doc
-	// comment for the live review finding this closes.
+	// comment for why.
 	status, err := m.CancelDescendant(s.ID, in.SessionID)
 	if err != nil {
 		return nil, classifyTaskVerbError(err, in.SessionID)
@@ -400,14 +399,14 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	if in.SessionID == "" {
 		return nil, fmt.Errorf("task: session_id is required for action %q", taskActionSend)
 	}
-	// TrimSpace, not a bare == "" test: a whitespace-only prompt used to
-	// behave OPPOSITELY by target state — a live review finding. A running
-	// target reached SendToDescendant's own enqueue validation and came
-	// back with a raw, non-sentinel error classifyTaskVerbError leaks to
-	// the model verbatim ("task: engine: EnqueuePrompt requires non-empty
-	// text"), while a settled target accepted the blank text and burned a
-	// whole real turn on it. One validation here, before either path,
-	// makes both answers the same and keeps the message model-facing.
+	// TrimSpace, not a bare == "" test: without it, a whitespace-only
+	// prompt behaves OPPOSITELY by target state. A running target reaches
+	// SendToDescendant's own enqueue validation and comes back with a
+	// raw, non-sentinel error classifyTaskVerbError leaks to the model
+	// verbatim ("task: engine: EnqueuePrompt requires non-empty text"),
+	// while a settled target accepts the blank text and burns a whole
+	// real turn on it. One validation here, before either path, makes
+	// both answers the same and keeps the message model-facing.
 	// The trimmed text is what gets sent, matching EnqueuePrompt's own
 	// trim-then-store rule (queue.go).
 	prompt := strings.TrimSpace(in.Prompt)
@@ -427,21 +426,19 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 	// never yet run, or resumed to idle) — SendToDescendant's else branch
 	// fires for anything that isn't StatusRunning/StatusCanceled, not
 	// only done/failed — and telling the model a session "finished" when
-	// it never ran a turn at all could mislead its follow-up reasoning. A
-	// live review finding.
+	// it never ran a turn at all could mislead its follow-up reasoning.
 	//
 	// "dispatched," not a guaranteed "started": SendToDescendant's
 	// settled-target path reserves the turn synchronously
 	// (reserveSendLocked, under the same m.mu hold as its own admission
 	// checks) but runs it in a launched goroutine, so this call returns
-	// before the re-run's first provider request. Admission failures are
-	// no longer lost — an earlier revision released m.mu and let that
-	// goroutine's own Send call discard ErrUnknownSession/
-	// ErrSessionCanceled/ErrConcurrencyLimit, which two live review
-	// findings closed — so the reservation itself is certain by the time
-	// the model reads this note. "Started" would still overclaim the
-	// turn's own progress, and task status on session_id remains the way
-	// to observe it.
+	// before the re-run's first provider request. Admission failures must
+	// not be lost here: releasing m.mu before the reservation and letting
+	// the goroutine's own Send call discard ErrUnknownSession/
+	// ErrSessionCanceled/ErrConcurrencyLimit would leave the reservation
+	// uncertain by the time the model reads this note. "Started" would
+	// still overclaim the turn's own progress, and task status on
+	// session_id remains the way to observe it.
 	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
 		// Hedged with "unless it is canceled first," not an unconditional
@@ -451,13 +448,12 @@ func runTaskSend(s *Session, in taskToolArgs) (message.Parts, error) {
 		// this call but before its next turn boundary drops the queued
 		// entry along with everything else in its subtree (cancellation's
 		// ordinary "stop, full stop" semantics — see CancelDescendant's
-		// own doc comment), which this note should not paper over. A live
-		// review finding.
+		// own doc comment), which this note should not paper over.
 		//
-		// "interrupted ... by a cancel or an abort", not "canceled":
-		// a second review finding. A cancel is not the only way a
-		// running descendant loses a queued message. An external POST
-		// /abort on an ancestor (AbortTurn), or a base-ctx shutdown,
+		// "interrupted ... by a cancel or an abort", not "canceled": a
+		// cancel is not the only way a running descendant loses a queued
+		// message. An external POST /abort on an ancestor (AbortTurn), or
+		// a base-ctx shutdown,
 		// cancels the descendant's ctx through Go's context cascade
 		// while its status stays StatusRunning until its interrupted
 		// Prompt returns; finalizeTurn's re-drive gate and
@@ -537,9 +533,9 @@ func classifyTaskToolError(err error) error {
 // ever removes a TERMINAL leaf node — s cannot have been forgotten out
 // from under its own in-flight call.
 //
-// The ErrSessionBusy case below is currently unreachable too — a review
-// finding: none of the three callers this function serves can produce it
-// synchronously. SendToDescendant deliberately ENQUEUES to a running
+// The ErrSessionBusy case below is currently unreachable too: none of the
+// three callers this function serves can produce it synchronously.
+// SendToDescendant deliberately ENQUEUES to a running
 // target rather than refusing it (see its own doc comment), and
 // CancelDescendant/DescendantInfo only ever return ErrUnknownSession/
 // ErrNotDescendant. Send CAN return ErrSessionBusy, but only from
@@ -568,7 +564,7 @@ func classifyTaskVerbError(err error, targetID string) error {
 		// runTaskSend rejects blank text before either send path runs, so
 		// this arm is defense in depth for a future caller — it keeps the
 		// answer model-facing instead of leaking the "engine:" layer
-		// through the default arm below (a review finding).
+		// through the default arm below.
 		return fmt.Errorf("task: prompt must not be empty or whitespace-only")
 	default:
 		return fmt.Errorf("task: %w", err)
@@ -649,11 +645,11 @@ type taskLogResult struct {
 // transcript, living or dead (SessionManager.DescendantTranscript).
 //
 // The verb exists because a fail reason is one line and a death is a
-// story. A live incident had a parent guess at a dead child's cause and
-// act on the guess; the child's own last messages — the tool it was
-// running, what it had already found — were sitting in memory the parent
-// had no in-process way to read. `task status` reports the lifecycle
-// facts; this reports the evidence behind them.
+// story. Without it, a parent can only guess at a dead child's cause and
+// act on the guess, while the child's own last messages — the tool it
+// was running, what it had already found — sit in memory with no
+// in-process way for the parent to read them. `task status` reports the
+// lifecycle facts; this reports the evidence behind them.
 //
 // A separate verb rather than a bigger status result: status is a small,
 // cheap, poll-shaped answer that several call sites already render, and
@@ -807,9 +803,9 @@ func renderTaskLogEntry(m message.Message) taskLogEntry {
 // boundedPartsText renders ps's Text parts joined by newlines, exactly as
 // message.Parts.Text() does, but stops once n runes are written — so a
 // huge tool result is never materialized in full just to be cut
-// afterwards (the copy-free cut is runePrefix; a review round caught this
-// function []rune-ing the first part whole, defeating its own point). cut
-// reports whether anything was dropped. The inter-part newline is charged
+// afterwards. The copy-free cut is runePrefix, not a []rune conversion of
+// the first part whole, which would defeat its own point. cut reports
+// whether anything was dropped. The inter-part newline is charged
 // against the budget DELIBERATELY: content whose text plus separators
 // exceeds n is cut even when the text alone would fit exactly — the
 // conservative direction, a complete-looking entry never silently spends
@@ -820,11 +816,11 @@ func boundedPartsText(ps message.Parts, n int) (text string, cut bool) {
 	for _, p := range ps {
 		t, ok := p.(*message.Text)
 		// An EMPTY Text part is skipped before the budget check, not
-		// after: it contributes nothing, so letting it reach the check
-		// made a result whose parts summed to exactly n report a
-		// truncation that dropped nothing (a review finding). The error
-		// was conservative — complete text marked incomplete — but a flag
-		// that cries wolf is worth less than one that does not.
+		// after: letting it reach the check would make a result whose
+		// parts summed to exactly n report a truncation that dropped
+		// nothing. That error would be conservative — complete text
+		// marked incomplete — but a flag that cries wolf is worth less
+		// than one that does not.
 		if !ok || t.Text == "" {
 			continue
 		}
@@ -859,10 +855,10 @@ func countBlobs(ps message.Parts) int {
 
 // capRunes cuts s to at most n runes, marking a cut in the text and
 // reporting it to the caller (which folds it into taskLogEntry.Truncated).
-// It scans for the cut point instead of materializing []rune(s) — a
-// review finding: the copy doubled a potentially huge input's memory just
-// to measure it. truncateTaskResult (taskdelivery.go) delegates here so
-// the marker and cut semantics live in one place.
+// It scans for the cut point instead of materializing []rune(s), which
+// would double a potentially huge input's memory just to measure it.
+// truncateTaskResult (taskdelivery.go) delegates here so the marker and
+// cut semantics live in one place.
 func capRunes(s string, n int) (text string, cut bool) {
 	prefix, _, wasCut := runePrefix(s, n)
 	if !wasCut {

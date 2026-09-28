@@ -844,20 +844,17 @@ func TestSnapshotCarriesClaudeCodeCost(t *testing.T) {
 	}
 }
 
-// TestSnapshotVersionBumpDiscardsPreFixForceCompactionCheckSnapshot is the
-// red-first regression test for NEW-BLOCKING 8 (review round 2 of
-// claude-code-compaction-forced-switch): a snapshot written by a
-// binary that predates ForceCompactionCheck's addition to sessionSnapshot
-// cannot know the field exists, so decoding it back always yields the JSON
-// zero value (false), no matter what the LIVE session's
-// forceCompactionCheck actually was at capture time. sessionSnapshotVersion
-// must be bumped so THAT specific pre-fix snapshot shape is discarded, not
-// trusted — the normal sequence of delegated turns, a switch to a native
-// model, and an on-idle snapshot (engine.go's snapshotOnIdle defer) is
-// exactly how a pre-fix binary anchored a snapshot PAST the recModel
-// record that arms the flag, permanently disarming this entire fix for
-// every session that already hit the incident, for exactly session
-// ses_01hwcjr3fevxtjadwdnd412c47's own shape.
+// TestSnapshotVersionBumpDiscardsPreFixForceCompactionCheckSnapshot is a
+// red-first regression test: a snapshot written by a binary that predates
+// ForceCompactionCheck's addition to sessionSnapshot cannot know the field
+// exists, so decoding it back always yields the JSON zero value (false),
+// no matter what the session's forceCompactionCheck actually was at
+// capture time. sessionSnapshotVersion must be bumped so THAT specific
+// pre-fix snapshot shape is discarded, not trusted — the normal sequence
+// of delegated turns, a switch to a native model, and an on-idle snapshot
+// (engine.go's snapshotOnIdle defer) is exactly how a pre-fix binary
+// anchors a snapshot PAST the recModel record that arms the flag,
+// permanently disarming this fix for any session with that shape.
 //
 // This drives a real claude-code-to-native switch (arming
 // forceCompactionCheck live), snapshots at the current (fixed) code, then

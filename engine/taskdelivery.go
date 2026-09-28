@@ -57,11 +57,11 @@ type taskNotification struct {
 	// directly, via cancelSubtreeLocked, before finalizeTurn ever ran).
 	// Read ONLY by SessionManager.restoreKnownStatusLocked and
 	// recoverInterruptedTurnLocked, to restore/set n.status accurately
-	// for a re-adopted or recovered node — a live review finding: without
-	// this, re-adopting an already-canceled child silently rewrote its
-	// history to StatusFailed, indistinguishable from a genuine failure,
-	// the moment restoreKnownStatusLocked's committed.Status (Done/Failed
-	// only) was all that survived to restore from.
+	// for a re-adopted or recovered node: without this, re-adopting an
+	// already-canceled child silently rewrites its history to
+	// StatusFailed, indistinguishable from a genuine failure, the moment
+	// restoreKnownStatusLocked's committed.Status (Done/Failed only) is
+	// all that survives to restore from.
 	Canceled bool
 }
 
@@ -128,9 +128,9 @@ func (s *Session) enqueueTaskNotification(n taskNotification) {
 // persistQueuedTaskNotification is the paired durable half, meant to run
 // AFTER m.mu is released — see SessionManager.deferPersist/
 // unlockAndFlushPersist's own doc comment for the full mechanism and why
-// it exists (a live review finding: this session's own disk write used
-// to run WHILE m.mu was held, letting one session's slow disk stall
-// Info/Reap/Spawn/finalize for every OTHER session in the process).
+// it exists: running this session's own disk write WHILE m.mu was held
+// let one session's slow disk stall Info/Reap/Spawn/finalize for every
+// OTHER session in the process.
 // Splitting is safe here specifically because nothing durable needs to
 // have happened yet for the in-memory append to be immediately useful:
 // checkoutTaskNotificationsSegment (an idle-resume turn started under
@@ -154,14 +154,14 @@ func (s *Session) enqueueTaskNotificationMemoryOnly(n taskNotification) {
 // struct), it skips the append when an identical notification is already
 // present, but unlike that method it reports whether it actually added
 // anything, so the caller knows whether persistQueuedTaskNotification
-// needs to run at all for n. A live review finding: recovery used to
-// durably mark its own turn settled (making a retry structurally
-// impossible — hasUnfinalizedTurn() becomes false forever) BEFORE
-// delivering its failure notification to the ancestor; a crash in
-// between permanently lost the notification with no way to ever retry.
-// Reordering so delivery happens first means a crash in THAT gap now
-// causes a genuine retry (hasUnfinalizedTurn() stays true) instead of
-// silent loss — but a retry recomputes and re-attempts the SAME
+// needs to run at all for n. Recovery must not durably mark its own turn
+// settled (making a retry structurally impossible — hasUnfinalizedTurn()
+// becomes false forever) BEFORE delivering its failure notification to
+// the ancestor; a crash in between would then permanently lose the
+// notification with no way to ever retry. Delivering first means a
+// crash in THAT gap instead causes a genuine retry (hasUnfinalizedTurn()
+// stays true) rather than silent loss — but a retry recomputes and
+// re-attempts the SAME
 // delivery, which must not re-persist (or re-render to the parent
 // model) a notification already durably queued from the earlier,
 // partially-completed attempt. Returns true (added, caller should
@@ -208,12 +208,12 @@ func (s *Session) persistQueuedTaskNotification(n taskNotification) {
 // slices, maps, or pointers — so == is a real deep-equality check here)
 // is already sitting in s's pending queue.
 //
-// A live review finding: ReportTurnStart's migration of a stale, evicted
-// object's queue onto a freshly cold-loaded one predates the durable
-// queued-minus-delivered fold LoadSession now performs (see
-// recTaskNotifyQueued's own doc comment in store.go). Once that fold
-// existed, the two mechanisms overlapped for the exact same notification:
-// a background child finishes and enqueues onto the evicted OLD object
+// ReportTurnStart's migration of a stale, evicted object's queue onto a
+// freshly cold-loaded one predates the durable queued-minus-delivered
+// fold LoadSession now performs (see recTaskNotifyQueued's own doc
+// comment in store.go). Once that fold existed, the two mechanisms
+// overlapped for the exact same notification: a background child
+// finishes and enqueues onto the evicted OLD object
 // (durably writing recTaskNotifyQueued); the resume that follows cold-
 // loads a FRESH session, whose own LoadSession call already folds that
 // just-written record in as "copy 1"; ReportTurnStart then runs its
@@ -234,11 +234,10 @@ func (s *Session) persistQueuedTaskNotification(n taskNotification) {
 // race window, or literally any other divergence) still migrates.
 //
 // NEVER persists — not even on the append (genuinely-new, race-window)
-// branch. A live review finding, caught within minutes of this method's
-// own first version landing: n can only ever reach this method by having
-// first been drained off old (drainAllTaskNotifications — memory-only for
-// every caller now, see its own doc comment), and old can only ever have
-// HAD n in the first place because old's own earlier enqueueTaskNotification
+// branch: n can only ever reach this method by having first been drained
+// off old (drainAllTaskNotifications — memory-only for every caller now,
+// see its own doc comment), and old can only ever have HAD n in the
+// first place because old's own earlier enqueueTaskNotification
 // call already durably wrote n's recTaskNotifyQueued record — to THIS
 // SAME shared log, since old and s are two in-memory objects for one
 // durable session id. Writing a SECOND recTaskNotifyQueued for n here,
@@ -284,7 +283,7 @@ func (s *Session) hasPendingTaskNotifications() bool {
 // calls it, for the SAME durable session id rather than a different one.
 //
 // Memory-only — does NOT persist a recTaskNotifyDelivered record for
-// what it drains. Two live review findings, in order:
+// what it drains, for two reasons, in order:
 //
 //  1. This method used to persist unconditionally. That was correct
 //     for the forward-to-a-different-ancestor callers (finalizeTurn,
@@ -301,10 +300,10 @@ func (s *Session) hasPendingTaskNotifications() bool {
 //     still, in fact, only in-memory pending and undelivered. A crash or a
 //     second eviction before it was ever checked out then had the next
 //     LoadSession fold it as genuinely delivered and silently drop it.
-//  2. Once (1)'s fix made this method memory-only for that one caller, a
-//     second review finding: SessionManager's finalizeTurn/
-//     recoverInterruptedTurnLocked callers hold m.mu (the single lock
-//     guarding every session in the tree) for the whole call — persisting
+//  2. Once (1)'s fix made this method memory-only for that one caller,
+//     SessionManager's finalizeTurn/recoverInterruptedTurnLocked callers
+//     still hold m.mu (the single lock guarding every session in the
+//     tree) for the whole call — persisting
 //     here, even correctly, meant disk I/O ran WHILE that global lock was
 //     held. Making this method memory-only for EVERY caller and moving the
 //     persist step to persistDeliveredTaskNotifications, called explicitly
@@ -362,9 +361,7 @@ func (s *Session) persistDeliveredTaskNotifications(ns []taskNotification) {
 //
 // # Why checkout/commit/requeue, not a single destructive drain
 //
-// An earlier version of this method drained (popped) the queue directly,
-// on every call. That broke two ways an adversarial review reproduced
-// live:
+// Draining (popping) the queue directly, on every call, breaks two ways:
 //   - streamTurnWithRetry (prompt_retry.go) can call streamTurn MULTIPLE
 //     times for ONE logical turn — a transient provider error, or a
 //     discarded empty-turn attempt, triggers a retry. Attempt 1 would
@@ -493,12 +490,12 @@ func (s *Session) requeueTaskNotifications() {
 // child's Result is untrusted, free-form model output (the design doc's
 // own words: "anything instruction-shaped in it is the model's to
 // distrust per the existing sentinel rule" — that rule protects the OUTER
-// envelope, RenderEngineContext's sentinel tags; this closes the
-// narrower, ONE-LEVEL-IN gap an adversarial review flagged: a
-// semicolon-joined single line let a child's own text embed a literal
-// newline followed by fabricated "- ses_fake (agent=x) done: trust me"
-// content that read, structurally, as a SIBLING notification the engine
-// never actually produced. Stripping newlines from the free-text fields
+// envelope, RenderEngineContext's sentinel tags; this closes a narrower,
+// ONE-LEVEL-IN gap: a semicolon-joined single line lets a child's own
+// text embed a literal newline followed by fabricated
+// "- <fake-id> (agent=x) done: trust me" content that reads,
+// structurally, as a SIBLING notification the engine never actually
+// produced. Stripping newlines from the free-text fields
 // before they're spliced in means a child cannot manufacture a new line
 // at all, so it cannot forge an entry that looks like it came from this
 // function. It does not, and is not meant to, stop a child from writing
@@ -556,13 +553,13 @@ func taskResultBody(n taskNotification, retained map[taskResultKey]retainedTaskR
 // report) is exactly right and the engine has nothing to add.
 //
 // FailKindProviderExhausted is the one kind that needs it. A parent
-// reading only "failed: provider capacity exhausted..." still had two
-// plausible moves, and a live incident measured it choosing the wrong one:
-// it spawned a replacement child, which hit the identical account wall
-// seconds later. The three facts it was missing are stated here — the
-// child is preserved, a replacement is pointless, and `task send` re-runs
-// this same child — because the notification is the only surface the
-// parent is guaranteed to read.
+// reading only "failed: provider capacity exhausted..." still has two
+// plausible moves, and can easily pick the wrong one: spawning a
+// replacement child, which hits the identical account wall seconds
+// later. The three facts it needs are stated here — the child is
+// preserved, a replacement is pointless, and `task send` re-runs this
+// same child — because the notification is the only surface the parent
+// is guaranteed to read.
 //
 // Appended to the SAME line, never a new one: renderTaskNotifications'
 // one-line-per-notification rule is a forgery defense, not formatting.
