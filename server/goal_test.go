@@ -460,9 +460,9 @@ func TestGoalStalledRetryableFieldsSurfaced(t *testing.T) {
 	})
 }
 
-// TestGoalBusyRejectsPromptAndGoal is narrowed by Task 5 and again by the
-// prompt-queue work (docs/plans/2026-07-19-prompt-queue.md): a plain prompt
-// during a running goal loop no longer 409s — it is durably queued instead
+// TestGoalBusyRejectsPromptAndGoal is narrowed by the prompt-queue work: a
+// plain prompt during a running goal loop no longer 409s — it is durably
+// queued instead
 // (invariant 9) — but a SECOND goal POST while a goal loop is already
 // running still updates the running loop's condition in place and reports
 // 200 (see TestGoalPostWhileGoalRunningUpdatesInPlace for the dedicated

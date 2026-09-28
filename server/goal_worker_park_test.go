@@ -1,10 +1,6 @@
 // Tests for Task 2 of the goal worker-failure park work (Round 7): the
 // server-side outcome mapping, pause-presentation fold, and resume-on-
-// activity behavior for engine/goal.go's exit-parked worker turns (Task 1,
-// commit 1ffb48a). See docs/plans/2026-07-21-goal-worker-park.md's
-// "Invariants" list — invariant 1's server half, invariant 2's server half,
-// invariant 4, invariant 5, and invariant 7 (already-covered operator paths)
-// are this file's.
+// activity behavior for engine/goal.go's exit-parked worker turns.
 package server
 
 import (

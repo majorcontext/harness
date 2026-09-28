@@ -1,8 +1,7 @@
 // Tests for Task 2 of the goal-evaluator resilience work (Round 6): the
 // server-side outcome mapping, journal folds, and Session JSON surfacing of
 // engine/goal.go's advisory goal.eval_failed boundaries and its bounded
-// evaluator_exhausted terminal. See docs/plans/2026-07-20-goal-eval-
-// resilience.md's "Invariants" list — invariants 8 and 9 are this file's.
+// evaluator_exhausted terminal.
 package server
 
 import (

@@ -50,7 +50,7 @@ const (
 	// by anything in this package.
 	recGoalParked = "goal.parked"
 	// recPromptQueued/recPromptDequeued are the prompt-queue records (see
-	// queue.go and docs/plans/2026-07-19-prompt-queue.md): one prompt.queued
+	// queue.go): one prompt.queued
 	// per EnqueuePrompt call, one prompt.dequeued per pop (whatever the
 	// reason — delivered/injected/cleared). Queued text never becomes a
 	// recMessage until delivered, so these are the only durable trace of a
@@ -63,8 +63,8 @@ const (
 	// a separate recMessage) and the summarization call's own Usage.
 	recCompact = "compact"
 	// recToolResultRetained is one retained tool result's durable POINTER
-	// record (see toolresult.go and docs/plans/2026-08-19-tool-result-
-	// handles.md §5): handle, source tool, and size. Deliberately not the
+	// record (see toolresult.go): handle, source tool, and size.
+	// Deliberately not the
 	// content — the bytes live in the per-session sidecar file, precisely
 	// so LoadSession's full-log replay never pays for them. It is what
 	// makes the trh_N counter, the handle metadata, and the retained-bytes
@@ -1860,8 +1860,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 		case recToolResultRetained:
 			// Fold a retained tool result's pointer record (see
-			// toolresult.go and docs/plans/2026-08-19-tool-result-
-			// handles.md §5) back into three pieces of session state:
+			// toolresult.go) back into three pieces of session state:
 			//
 			//   1. toolResultNextID advances past every handle number
 			//      seen — folded or skipped — so a resumed session can

@@ -21,9 +21,9 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestAmbientMCPStatusPresentWhenDegraded is invariant 6's headline test
-// (docs/plans/2026-07-20-mcp-init-resilience.md), red-verified against
-// pre-Task-2 engine.go: a degraded MCP server produced no in-band signal at
+// TestAmbientMCPStatusPresentWhenDegraded is the headline test for
+// ambient status, red-verified against
+// the earlier engine.go: a degraded MCP server produced no in-band signal at
 // all — the model had nothing to go on but a missing tool. This test asserts
 // the request the model actually sees carries a status block naming the
 // degraded server.
@@ -244,9 +244,9 @@ func TestFormatMCPServerStatusRetryingClauseBeforeParked(t *testing.T) {
 	}
 }
 
-// TestFormatMCPServerStatusParkedHint is invariant 2's unit-level test
-// (docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), red-verified against
-// pre-Task-1 mcp_status.go: MCPServerStatus had no Parked field at all, and
+// TestFormatMCPServerStatusParkedHint is the unit-level test for the
+// parked hint, red-verified against
+// the earlier mcp_status.go: MCPServerStatus had no Parked field at all, and
 // formatMCPServerStatus always rendered "; retrying" — indefinite retry
 // meant that clause was always true. Once retries are exhausted, the clause
 // must instead point the model at the mcp tool's connect action; the

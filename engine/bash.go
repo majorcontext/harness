@@ -18,8 +18,8 @@ import (
 // is truncated. 96KB is generous enough for ordinary command output (test
 // runs, git logs, file dumps) while bounding the worst case — an apt-get or
 // npm install storm that would otherwise dump megabytes into a single
-// message, bloating the session log and the next provider request built from
-// it (see docs/history/goal-loop-resilience.md for the incident this fixed).
+// message, bloating the session log and the next provider request built
+// from it.
 const defaultBashOutputCap = 96 * 1024
 
 // bashWaitDelay bounds how long cmd.Wait may block on the command's output

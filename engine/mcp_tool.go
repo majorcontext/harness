@@ -1,6 +1,6 @@
 // The `mcp` session tool: status introspection and on-demand connect for
 // MCP servers, the explicit re-trigger past retryServer's bounded
-// background schedule. See docs/plans/2026-07-20-mcp-bounded-retry.md.
+// background schedule.
 // Template: goal_tool.go — the
 // same Tool{Def,Run} shape, action schema, and JSON-result convention.
 //

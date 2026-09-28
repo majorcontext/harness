@@ -218,7 +218,7 @@ func TestReadToolResultOutputIsNeverRetained(t *testing.T) {
 }
 
 // TestToolResultPreviewHeaderExactFormat pins the documented header, byte
-// for byte (docs/plans/2026-08-19-tool-result-handles.md §2.1). It compares
+// for byte. It compares
 // against a hand-written literal, NOT against the same fmt verbs the
 // producer uses — a test that reassembled the format string would pass no
 // matter what the format became, which is the exact drift this guards.

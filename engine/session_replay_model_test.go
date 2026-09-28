@@ -480,8 +480,7 @@ func (m *sessionModel) Check(t *rapid.T) {
 // See sessionModel's and sessionReferenceFold's doc comments for what each
 // side independently derives.
 //
-// Default rapid tuning keeps this comfortably under the plan's ~10s budget
-// (see docs/plans/2026-07-21-fuzz-property-coverage.md's Conventions): the
+// Default rapid tuning keeps this comfortably under a ~10s budget: the
 // only per-action I/O is the same handful of small appends/fsyncs
 // TestQueueReplayModel already pays, plus in-process scripted-provider calls
 // with no real network or disk I/O of their own.

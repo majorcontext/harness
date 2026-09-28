@@ -104,8 +104,8 @@ type sessionJSON struct {
 	// spawns lazily. Always present as an array (empty, never null) when no
 	// plugins are configured.
 	Plugins []plugin.Info `json:"plugins"`
-	// Queued is the session's current durable prompt-queue depth (see
-	// docs/plans/2026-07-19-prompt-queue.md): prompts submitted via
+	// Queued is the session's current durable prompt-queue depth: prompts
+	// submitted via
 	// prompt_async while the session was busy, waiting for the next natural
 	// drain trigger (idle dispatch or a goal loop's turn-boundary
 	// injection). Always present (0 when nothing is waiting, never
@@ -114,8 +114,8 @@ type sessionJSON struct {
 	// directly from engine.Session.QueuedPrompts(), so it is correct for a
 	// resident session and a freshly reloaded one alike (see buildSession).
 	Queued int `json:"queued"`
-	// Lineage is session.info's extension for the subagent-sessions tree
-	// (docs/plans/2026-08-23-subagent-sessions-design.md): present
+	// Lineage is session.info's extension for the subagent-sessions tree:
+	// present
 	// whenever this server's SessionManager tracks the session (every
 	// session created or loaded by this process — see handleCreate and
 	// s.opts.LoadSession call sites), OR — for a child session this
@@ -1803,8 +1803,8 @@ type promptAsyncResponse struct {
 	Command *commandReceiptJSON `json:"command,omitempty"`
 }
 
-// handlePrompt is POST /session/{id}/prompt_async (see docs/plans/2026-07-19-
-// prompt-queue.md). An idle session claims its run slot exactly as before and
+// handlePrompt is POST /session/{id}/prompt_async. An idle session claims
+// its run slot exactly as before and
 // starts running immediately ("started"). A session already busy with
 // ANOTHER prompt or goal loop no longer 409s: the prompt is enqueued
 // durably (engine.Session.EnqueuePrompt, synchronously, before any response
@@ -2202,8 +2202,8 @@ type enqueueResponse struct {
 	MessageID string `json:"message_id,omitempty"`
 }
 
-// handleEnqueue is POST /session/{id}/enqueue (see docs/plans/2026-07-21-
-// durable-enqueue.md): prompt_async's shape with an honest durability and
+// handleEnqueue is POST /session/{id}/enqueue: prompt_async's shape with an
+// honest durability and
 // idempotency contract. The prompt is fsynced into the session journal
 // (engine.Session.EnqueuePromptDurable) BEFORE any success response — a 2xx
 // authorizes the caller to ack ITS upstream — and a seq at or below the
@@ -2816,8 +2816,7 @@ func (s *Server) clearQueueDrainPending(id string) {
 // and the session's engine-level goal is active with no loop currently
 // attached (armed by a POST /goal that arrived while this prompt was busy —
 // see handleGoalBusy's "armed" 202 — or by the `goal` session tool's own
-// `set` action invoked mid-turn, per docs/plans/2026-07-19-goal-self-
-// adjust.md's headline user story), the goal loop starts running right now
+// `set` action invoked mid-turn), the goal loop starts running right now
 // instead of waiting for the next external poke.
 //
 // It reclaims the run slot itself via claimForPrompt, exactly like a fresh
@@ -2884,8 +2883,7 @@ type goalPostResponse struct {
 	Status string `json:"status"`
 }
 
-// handleGoal starts, updates, or arms a goal loop on a session — see
-// docs/plans/2026-07-19-goal-self-adjust.md's Task 5 for the full design.
+// handleGoal starts, updates, or arms a goal loop on a session.
 // Like prompt_async it claims the session's single run slot when the
 // session is idle; the evaluator model comes from Options.GoalEvaluator
 // (config goal_evaluator_model), and goals are rejected with 400 when it is
@@ -3729,8 +3727,8 @@ type queuedItemJSON struct {
 	MessageID string `json:"message_id,omitempty"`
 }
 
-// handleQueueGet is the reconciliation read surface for durable enqueue
-// (see docs/plans/2026-07-21-durable-enqueue.md): an upstream recovering
+// handleQueueGet is the reconciliation read surface for durable enqueue:
+// an upstream recovering
 // from its own crash reads the watermark to learn which messages are
 // already accepted rather than re-sending blind. It resolves the session
 // via s.lookup — the same resolve-or-load helper handleGet uses for every

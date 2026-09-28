@@ -471,8 +471,8 @@ components:
         queued:
           type: integer
           description: >
-            Current durable prompt-queue depth (docs/plans/2026-07-19-
-            prompt-queue.md): prompts submitted via prompt_async while the
+            Current durable prompt-queue depth: prompts submitted via
+            prompt_async while the
             session was busy, waiting for the next natural drain trigger —
             most often a tool-call boundary inside the CURRENTLY RUNNING
             turn (plain or goal-worker alike), so this can drop to 0 well
@@ -1769,9 +1769,8 @@ components:
           description: >
             The durable-enqueue high-water mark: the largest seq any POST
             /session/{id}/enqueue call has durably accepted for this
-            session, live or restored from the journal after a restart
-            (docs/plans/2026-07-21-durable-enqueue.md). 0 if the session has
-            never received a durable enqueue.
+            session, live or restored from the journal after a restart.
+            0 if the session has never received a durable enqueue.
         queued:
           type: array
           description: >
@@ -2030,10 +2029,9 @@ components:
             "worker_failure" pause, which is goal.parked's own live event
             above, not a boot-time observation either.
             prompt.queued and prompt.dequeued are the durable records of the
-            prompt queue (docs/plans/2026-07-19-prompt-queue.md):
-            prompt.queued fires whenever prompt_async or POST
-            /session/{id}/enqueue (docs/plans/2026-07-21-durable-enqueue.md)
-            durably enqueues a prompt, carrying queue_id, queue_text,
+            prompt queue: prompt.queued fires whenever prompt_async or POST
+            /session/{id}/enqueue durably enqueues a prompt, carrying
+            queue_id, queue_text,
             queue_message_id, the resulting queue_len, and — for a POST
             /session/{id}/enqueue accept only — queue_seq (see that
             field). prompt.dequeued fires whenever the
@@ -2341,8 +2339,8 @@ components:
         queue_seq:
           type: integer
           description: >
-            The caller-issued idempotency sequence (docs/plans/2026-07-21-
-            durable-enqueue.md) on a prompt.queued event emitted by POST
+            The caller-issued idempotency sequence on a prompt.queued
+            event emitted by POST
             /session/{id}/enqueue. Absent/0 on a plain prompt_async-queued
             entry and on every prompt.dequeued event, regardless of origin.
         queue_source:
@@ -3491,7 +3489,7 @@ paths:
         and results arrive on /event.
 
         A session already busy with another prompt or a running goal loop no
-        longer 409s (see docs/plans/2026-07-19-prompt-queue.md): the prompt
+        longer 409s: the prompt
         is durably enqueued instead (`status: queued`) and delivered as soon
         as possible, at whichever boundary comes first — a tool-call
         boundary inside the CURRENTLY RUNNING turn (plain or goal-worker
@@ -3632,7 +3630,7 @@ paths:
       operationId: enqueue
       summary: Durably, idempotently deliver a prompt (attested 2xx).
       description: |
-        docs/plans/2026-07-21-durable-enqueue.md's durability primitive: unlike
+        This endpoint's durability primitive: unlike
         prompt_async, a 2xx from this endpoint is an honest attestation — the
         prompt.queued record is durably accepted into the session journal
         BEFORE the response is written, per the configured `session_sync`
@@ -3641,8 +3639,8 @@ paths:
         docs/deploy-modal.md) — for a caller (an inbox poller, a coordinator
         relay) whose own upstream ack must ride on this call's success
         without risk of ghost- or double-delivery. Delivery itself is
-        unchanged prompt-queue machinery (docs/plans/2026-07-19-prompt-
-        queue.md), shared exactly with prompt_async: an idle session
+        unchanged prompt-queue machinery, shared exactly with prompt_async:
+        an idle session
         dispatches the queue HEAD immediately (not necessarily this
         request's own prompt), a busy one queues FIFO behind whatever is
         already waiting, drained at the next tool-call/goal-turn boundary
@@ -3751,8 +3749,7 @@ paths:
             upstream ack is authorized; retry with the SAME seq once the
             underlying condition clears. A torn on-disk write left by this
             failure (if any) heals automatically on the next successful
-            retry's replay (last-writer-wins fold,
-            docs/plans/2026-07-21-durable-enqueue.md) — no caller-visible
+            retry's replay (last-writer-wins fold) — no caller-visible
             effect, and this healing is identical in "volume" mode, which
             has no fsync step to fail but can equally lose an unsynced tail
             on abrupt process death.
@@ -3770,7 +3767,7 @@ paths:
       operationId: getPromptQueue
       summary: Durable-enqueue watermark and the pending prompt queue (reconciliation read).
       description: >
-        The reconciliation read for docs/plans/2026-07-21-durable-enqueue.md:
+        The reconciliation read for this endpoint's durability primitive:
         an upstream recovering from its own crash reads `watermark` to learn
         which seqs are already inside the durability domain, instead of
         re-sending blind (re-sending is always safe — see POST
@@ -3799,7 +3796,7 @@ paths:
       summary: Drain a session's durable prompt queue.
       description: >
         Journals a prompt.dequeued(reason="cleared") record for every prompt
-        currently waiting (docs/plans/2026-07-19-prompt-queue.md), then 204.
+        currently waiting, then 204.
         Idempotent: an already-empty queue is still 204, nothing journaled.
         A currently RUNNING turn is left completely untouched — this clears
         only prompts waiting for a future turn; use POST
@@ -3829,7 +3826,7 @@ paths:
         is asymmetric: claimForPrompt does not distinguish what currently
         holds the slot, so a prompt_async or goal request that arrives while
         THIS compact call is running does not 409 either — it durably
-        queues (prompt_async, docs/plans/2026-07-19-prompt-queue.md) or
+        queues (prompt_async) or
         registers/updates-in-place (goal), exactly as it would against a
         busy prompt or goal loop. A successful, non-empty compaction emits
         the summary via an ordinary `message` event first, then a durable
@@ -3948,7 +3945,7 @@ paths:
             holder session) — or a genuinely unclaimable session state (e.g.
             a concurrent registration lost an internal race). A plain
             prompt_async while a goal loop runs no longer reaches this
-            response either (docs/plans/2026-07-19-prompt-queue.md): it is
+            response either: it is
             durably queued instead (`status: queued` on prompt_async's 202)
             and dispatched as a labeled operator interjection at the loop's
             next turn boundary; a second goal POST while a goal loop runs

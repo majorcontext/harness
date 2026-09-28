@@ -590,8 +590,8 @@ func TestClaimForPromptResetsStaleGoalLoop(t *testing.T) {
 	}
 }
 
-// TestGoalToolSetAutoArmsAfterPrompt is the headline user story from
-// docs/plans/2026-07-19-goal-self-adjust.md: a prompt whose scripted tool
+// TestGoalToolSetAutoArmsAfterPrompt is the headline user story for
+// self-adjusting goals: a prompt whose scripted tool
 // call invokes the `goal` session tool's `set` action (registering a goal
 // mid-turn, in-process, no HTTP round-trip); once that prompt finishes, the
 // goal auto-arms and runs to achievement — with no POST /goal at all.

@@ -354,8 +354,8 @@ const (
 	// exactly like it already does for the boot-only restart pause.
 	EventGoalParked = "goal.parked"
 
-	// Prompt-queue events (see queue.go and docs/plans/2026-07-19-prompt-
-	// queue.md). EventPromptQueued fires on every EnqueuePrompt call;
+	// Prompt-queue events (see queue.go). EventPromptQueued fires on every
+	// EnqueuePrompt call;
 	// EventPromptDequeued fires on every DequeuePrompt/dequeueAllLocked pop,
 	// whatever the reason (delivered/injected/cleared).
 	EventPromptQueued   = "prompt.queued"
@@ -767,8 +767,7 @@ type Config struct {
 	// (the default) installs no `goal` tool at all, exactly like a nil
 	// Config.Processes installs no `process` tool. The server/CLI wiring
 	// that sets this true when a goal evaluator is configured is a later
-	// task (see docs/plans/2026-07-19-goal-self-adjust.md) — this field
-	// only gates registration.
+	// task — this field only gates registration.
 	GoalTool bool
 
 	// ModelTool enables the built-in `model` session tool (status/set — see
@@ -958,8 +957,8 @@ type Config struct {
 
 	// ToolResultInlineBytes is the size above which a TEXT tool result is
 	// retained into this session's sidecar store and replaced in history by
-	// a short preview carrying a trh_N handle (see toolresult.go and
-	// docs/plans/2026-08-19-tool-result-handles.md). Zero or negative — the
+	// a short preview carrying a trh_N handle (see toolresult.go). Zero or
+	// negative — the
 	// zero value — DISABLES retention entirely: an embedder building a bare
 	// engine.Config gets exactly the pre-retention behavior, with no sidecar
 	// directory ever created. The config/CLI layer supplies the product
@@ -1576,7 +1575,7 @@ type Session struct {
 	lastCompactedAt time.Time
 
 	// promptQueue is the session's durable FIFO of prompts enqueued while
-	// busy (see queue.go and docs/plans/2026-07-19-prompt-queue.md). Each
+	// busy (see queue.go). Each
 	// entry is delivered later either via a normal Prompt call (idle drain,
 	// Task 3) or as a goal-turn-boundary interjection (Task 2) — a queued
 	// prompt never enters s.history nor any provider request before then
@@ -3251,8 +3250,7 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			Parts:     results,
 			CreatedAt: time.Now().UTC(),
 		})
-		// Tool-call-boundary queue drain (docs/plans/2026-07-19-prompt-queue.md's
-		// "Design amendment: tool-call-boundary injection"): the model is
+		// Tool-call-boundary queue drain: the model is
 		// about to make ANOTHER provider request in THIS SAME turn (tool
 		// results just landed, stop reason was StopToolUse and at least one
 		// tool actually ran) — this is the earliest point a prompt that

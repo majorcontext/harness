@@ -633,8 +633,7 @@ func TestMCPManagerConnectTimeoutFailsOpen(t *testing.T) {
 // TestMCPManagerConnectsOnce verifies the connect-and-list step happens
 // exactly once for a server that connects successfully, even across
 // repeated Tools()/CallTool() calls — it is cached, not re-attempted every
-// call. REWRITTEN for the retry state machine (see
-// docs/plans/2026-07-20-mcp-init-resilience.md invariant 3): this is no
+// call. REWRITTEN for the retry state machine: this is no
 // longer "every server connects exactly once, period" (a FAILED server now
 // gets a bounded background retry — see
 // TestMCPManagerFailedServerRetriesInBackgroundAndRecovers) but narrows to
@@ -1100,9 +1099,9 @@ func TestMCPManagerCloseBounded(t *testing.T) {
 	}
 }
 
-// # Retry state machine (docs/plans/2026-07-20-mcp-init-resilience.md)
+// # Retry state machine
 //
-// The tests below cover invariants 2-5 and 8 of that plan. Most run inside
+// The tests below cover the retry state machine's core invariants. Most run inside
 // a testing/synctest bubble with mcpConnectFunc swapped for a network-free
 // fake — AGENTS.md is explicit that real network I/O does not behave
 // deterministically inside a synctest bubble, so a fake keeps the whole
@@ -1332,18 +1331,15 @@ type mcpCommitEvent struct {
 	connected bool
 }
 
-// TestMCPManagerIndependentRetrySchedules is
-// docs/plans/2026-07-20-mcp-init-resilience.md's invariant 8's dedicated
-// test ("multiple servers failing simultaneously retry independently") —
-// not to be confused with docs/plans/2026-07-20-mcp-bounded-retry.md's own,
-// differently-numbered invariant 8 ("tool absent when no MCP servers
-// configured"), which this test has nothing to do with: two servers that
+// TestMCPManagerIndependentRetrySchedules is the dedicated
+// test for "multiple servers failing simultaneously retry independently" —
+// not to be confused with the unrelated invariant "tool absent when no MCP
+// servers configured": two servers that
 // BOTH fail their first attempt and are both actively retrying must
 // progress on independent schedules — "fast" (succeeds on its 2nd attempt)
 // must recover without waiting for "slow" (succeeds only on its 4th, its
 // LAST possible attempt now that background retries are bounded at
-// mcpRetryMaxAttempts — deliberately at the boundary, see
-// docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), and Tools() must
+// mcpRetryMaxAttempts — deliberately at the boundary), and Tools() must
 // reflect that partial recovery immediately rather than waiting for every
 // retrying server to settle. Adjusted from "5th" (pre-Task-1: retries were
 // indefinite, so any attempt count demonstrated independence) down to "4th"
@@ -1632,9 +1628,9 @@ func TestMCPManagerCloseDuringInFlightRetryConnectStopsPromptly(t *testing.T) {
 	})
 }
 
-// TestMCPManagerBackgroundRetryBoundedThenParked is invariant 1's headline
-// test (docs/plans/2026-07-20-mcp-bounded-retry.md Task 1), red-verified
-// against pre-Task-1 mcp.go: retryServer looped indefinitely, so a server
+// TestMCPManagerBackgroundRetryBoundedThenParked is the headline test for
+// bounding background retries, red-verified against the earlier mcp.go:
+// retryServer looped indefinitely, so a server
 // whose EVERY attempt fails never stopped retrying and Status() had no
 // notion of "gave up" at all (no Parked field existed). A server whose
 // first attempt and every subsequent background retry fail gets exactly

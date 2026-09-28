@@ -17,8 +17,8 @@ import (
 )
 
 // glob, grep, and ls are minimal, read-only search tools. The
-// subagent-sessions design doc (docs/plans/2026-08-23-subagent-sessions-design.md)
-// names tools with these exact names in its read-only agent presets
+// subagent-sessions design names tools with these exact names in its
+// read-only agent presets
 // (explore, plan — see agentdef.go), as if mapping onto an existing
 // registry entry. None existed before this file: the only prior search
 // capability was the unrestricted bash tool, which cannot back a preset

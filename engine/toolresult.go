@@ -1,8 +1,7 @@
 // Tool-result handles: retention of an oversized TEXT tool result into a
 // per-session sidecar store, replaced in canonical history by a short
 // preview carrying a session-monotonic handle (trh_N) the model reads back
-// with the read_tool_result tool. See
-// docs/plans/2026-08-19-tool-result-handles.md.
+// with the read_tool_result tool.
 //
 // # Where this sits
 //
@@ -81,8 +80,8 @@ type toolResultMeta struct {
 // reason truncateUTF8 exists: this must never split a multi-byte rune.
 const toolResultIndexHeadBytes = 80
 
-// toolResultPreviewHeader renders the EXACT preview header line documented
-// in docs/plans/2026-08-19-tool-result-handles.md §2.1. It exists as one
+// toolResultPreviewHeader renders the EXACT preview header line this
+// package documents. It exists as one
 // function with one caller precisely so the documented format and the
 // produced format cannot drift: TestToolResultPreviewHeaderExactFormat pins
 // this string literally, character for character, rather than reassembling

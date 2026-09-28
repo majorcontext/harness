@@ -839,8 +839,7 @@ func TestTranscodeCompactionDoubleRoleUserMerges(t *testing.T) {
 
 // TestTranscodeMergesToolResultsWithInjectedUserText pins the coupling
 // mid-turn prompt-queue injection depends on (engine/engine.go's tool-call-
-// boundary queue drain, ~line 792, "Design amendment: tool-call-boundary
-// injection" in docs/plans/2026-07-19-prompt-queue.md): after tool results
+// boundary queue drain, ~line 792): after tool results
 // land, the engine appends a REAL RoleUser message straight into history —
 // immediately after the RoleTool results message, with no assistant turn in
 // between. Both RoleTool and RoleUser transcode to wire role "user" here, so

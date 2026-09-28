@@ -194,8 +194,8 @@ type Event struct {
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 
 	// Prompt-queue fields, carried by the prompt.queued/prompt.dequeued
-	// durable records (see engine/queue.go and docs/plans/2026-07-19-prompt-
-	// queue.md). QueueID is the queue-assigned, session-monotonic prompt ID.
+	// durable records (see engine/queue.go). QueueID is the queue-assigned,
+	// session-monotonic prompt ID.
 	// QueueText is the queued prompt text, carried on both events. QueueReason
 	// is empty on prompt.queued and one of "delivered" (idle drain),
 	// "injected" (goal-turn-boundary injection), or "cleared" (DELETE
@@ -226,9 +226,9 @@ type Event struct {
 	QueueLen    *int   `json:"queue_len,omitempty"`
 	// QueueSeq mirrors engine.Event.QueueSeq: the caller-issued idempotency
 	// sequence carried on a prompt.queued record from a durable enqueue
-	// (POST /session/{id}/enqueue, engine.Session.EnqueuePromptDurable) —
-	// see docs/plans/2026-07-21-durable-enqueue.md. 0/omitted on a plain
-	// enqueue (prompt_async) and on every prompt.dequeued.
+	// (POST /session/{id}/enqueue, engine.Session.EnqueuePromptDurable).
+	// 0/omitted on a plain enqueue (prompt_async) and on every
+	// prompt.dequeued.
 	QueueSeq int64 `json:"queue_seq,omitempty"`
 	// QueueSource, QueueSourceID, and QueueSourceLabel mirror
 	// engine.Event.QueueSource/QueueSourceID/QueueSourceLabel: the queued

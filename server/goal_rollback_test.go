@@ -80,8 +80,7 @@ func TestGoalReArmAfterAbortWithDifferentConditionResumes(t *testing.T) {
 
 	// Not stranded busy in some OTHER way: the goal is running again
 	// (against the new condition), so prompt_async correctly still cannot
-	// run immediately — it is durably queued instead of 409ing (docs/plans/
-	// 2026-07-19-prompt-queue.md).
+	// run immediately — it is durably queued instead of 409ing.
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "hi"}},
 	})

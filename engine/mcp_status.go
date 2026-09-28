@@ -1,8 +1,7 @@
 // Ambient degraded-MCP status block. Structurally mirrors
 // engine/process.go's processStatusSegment (see that file's doc comment):
 // computed fresh every streamTurn call from live state, appended only to
-// the newest user message, never persisted to the session log. See
-// docs/plans/2026-07-20-mcp-init-resilience.md Task 2 for the design.
+// the newest user message, never persisted to the session log.
 package engine
 
 import (

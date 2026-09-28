@@ -320,7 +320,7 @@ func TestEnqueuePromptDropsUnusableBlobs(t *testing.T) {
 // TestEnqueuePromptDurablePersistsAttachments is EnqueuePromptDurable's
 // counterpart to TestEnqueuePromptPersistsAttachments: the durable,
 // caller-seq-idempotent primitive POST /session/{id}/enqueue calls
-// (docs/plans/2026-07-21-durable-enqueue.md) must carry a blob onto its own
+// must carry a blob onto its own
 // prompt.queued record exactly like the plain queue already does — the
 // write half of a box's enqueued screenshot surviving a restart.
 func TestEnqueuePromptDurablePersistsAttachments(t *testing.T) {

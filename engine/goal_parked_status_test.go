@@ -30,9 +30,9 @@ func TestAmbientGoalParkedStatusAbsentWithNoGoal(t *testing.T) {
 	}
 }
 
-// TestAmbientGoalParkedStatusPresentAfterWorkerPark is invariant 6's
-// headline test (docs/plans/2026-07-21-goal-worker-park.md): a worker-turn
-// exhaustion parks the goal (Task 1) but, before this change, left no
+// TestAmbientGoalParkedStatusPresentAfterWorkerPark is the
+// headline test for the parked status: a worker-turn
+// exhaustion parks the goal but, before this change, left no
 // in-band signal at all for a model prompted mid-outage — the same "nothing
 // to go on" gap TestAmbientMCPStatusPresentWhenDegraded closed for degraded
 // MCP servers. Red-verified: with goalParkedSegment (and its call site in

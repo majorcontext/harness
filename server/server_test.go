@@ -1061,7 +1061,7 @@ func TestSessionFilter(t *testing.T) {
 }
 
 // TestConcurrentPromptConflict pins the queue-on-busy contract that replaced
-// the old 409 (docs/plans/2026-07-19-prompt-queue.md, invariant 9): a
+// the old 409: a
 // prompt_async against a session already busy with another prompt is
 // durably ENQUEUED and 202'd, not rejected. The response names it "queued"
 // with the current depth, and GET /session mirrors that depth.
@@ -2282,8 +2282,8 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 	}
 
 	// A concurrent prompt on the running A must be a clean durable enqueue,
-	// not a second claim that could diverge state (docs/plans/2026-07-19-
-	// prompt-queue.md replaced the old 409 here with queue-on-busy).
+	// not a second claim that could diverge state (queue-on-busy replaced
+	// the old 409 here).
 	resp, data = h.do("POST", "/session/"+idA+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "again"}},
 	})

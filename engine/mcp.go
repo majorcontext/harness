@@ -396,7 +396,7 @@ const (
 // this is under 10s of background effort before parking. An operator or
 // the model (via the mcp session tool's connect action, once it lands)
 // must re-trigger a connect explicitly to un-park a server past this
-// point — see docs/plans/2026-07-20-mcp-bounded-retry.md.
+// point.
 const mcpRetryMaxAttempts = 3
 
 // mcpRetryDelay returns the base (pre-jitter) backoff for the given

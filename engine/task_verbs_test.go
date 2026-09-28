@@ -2,7 +2,7 @@
 // status, and send — and their SessionManager-level backing methods
 // (CancelDescendant, DescendantInfo, SendToDescendant), plus
 // HasHistoryOrSpawnedChildren, the small declined-thread follow-up this
-// same change folds in. See docs/plans/2026-08-23-subagent-sessions-design.md.
+// same change folds in.
 package engine
 
 import (

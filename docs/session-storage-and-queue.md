@@ -414,7 +414,7 @@ is silently dropped when the prompt is queued** — there is no slot in
 model swap to take effect must re-issue the request once it is confirmed
 `started`.
 
-`POST /session/{id}/enqueue` (docs/plans/2026-07-21-durable-enqueue.md) is
+`POST /session/{id}/enqueue` is
 `prompt_async`'s durable, idempotent sibling for a caller whose own upstream
 ack rides on this call succeeding — an inbox poller or coordinator relay,
 not an interactive client. `Session.EnqueuePromptDurable` extends

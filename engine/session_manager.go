@@ -24,8 +24,7 @@ import (
 // done and failed are reserved for CHILD sessions — ones with a non-empty
 // parent, spawned as a unit of delegated work via Spawn (and, model-facing,
 // the `task` tool). A child's spawning turn outcome is exactly what gets
-// reported to its parent as a completion notification (see the design doc's
-// Stage 3, docs/plans/2026-08-23-subagent-sessions-design.md). A root
+// reported to its parent as a completion notification. A root
 // session — the CLI/server's existing single-session flow, or any session
 // created with no parent — has no assignment to complete: it cycles
 // running <-> idle forever, exactly like a bare engine.Session used outside
@@ -1730,9 +1729,7 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 }
 
 // recoverInterruptedTurnLocked closes the "in-flight-children restart
-// semantics" gap — a follow-up finding, decided and documented here (see
-// also docs/plans/2026-08-23-subagent-sessions-design.md's "Process-
-// restart recovery" section): every OTHER terminal outcome a child can
+// semantics" gap: every OTHER terminal outcome a child can
 // reach (provider failure, tool crash, cancellation, natural completion)
 // durably notifies its parent via finalizeTurn — but a child whose turn
 // was genuinely IN FLIGHT when the process crashed or was killed has NO

@@ -163,7 +163,7 @@ func durableEnqueueSIGKILLScenario(t *testing.T, buildConfig func(baseURL string
 }
 
 // TestDurableEnqueueSurvivesSIGKILL is the black-box proof of durable
-// enqueue's headline guarantee (docs/plans/2026-07-21-durable-enqueue.md): a
+// enqueue's headline guarantee: a
 // 202 from POST /session/{id}/enqueue means the prompt.queued record is
 // already fsynced, so an upstream that acks on that 202 may safely crash and
 // retry into a successor process without double delivery — the

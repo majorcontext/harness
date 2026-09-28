@@ -838,8 +838,8 @@ func runCmd(args []string) error {
 	lateAPI.Bind(newLazyRunClientAPI(func() *engine.Session { return sess }))
 
 	// sessMgr enables the `task` tool for `harness run` too, not only
-	// `harness serve` — docs/plans/2026-08-23-subagent-sessions-design.md.
-	// A single-shot run's tree lives and dies with this one process; unlike
+	// `harness serve`. A single-shot run's tree lives and dies with this one
+	// process; unlike
 	// serveCmd there is no separate wire surface to register children
 	// against, so AdoptReloaded below (right after resolveSession) is the
 	// only registration point this mode needs.
@@ -1696,9 +1696,9 @@ func serveCmd(args []string) error {
 	}
 	taskEvents := newTaskEventLogger(logger)
 	var srv *server.Server
-	// sessMgr enables the `task` tool on every served session
-	// (docs/plans/2026-08-23-subagent-sessions-design.md). Built HERE, as a
-	// plain local value, rather than read back later via srv.SessionManager()
+	// sessMgr enables the `task` tool on every served session. Built HERE,
+	// as a plain local value, rather than read back later via
+	// srv.SessionManager()
 	// — mkCfg's closures already reference srv itself before it's assigned
 	// (see OnEvent just below), which is safe ONLY because Publish is never
 	// invoked until an event actually fires, long after srv is assigned. A

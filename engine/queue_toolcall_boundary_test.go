@@ -37,8 +37,8 @@ func gateTool(entered, release chan struct{}) Tool {
 }
 
 // TestMidTurnInjectionAtToolBoundary is the headline test for the tool-call-
-// boundary injection amendment (docs/plans/2026-07-19-prompt-queue.md's
-// addendum): a prompt enqueued WHILE a tool call is still executing must be
+// boundary injection amendment: a prompt enqueued WHILE a tool call is
+// still executing must be
 // delivered into the very next provider request of that SAME turn — not
 // wait for the turn (or a goal boundary) to end.
 //

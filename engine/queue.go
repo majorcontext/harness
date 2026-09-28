@@ -423,8 +423,7 @@ func (s *Session) flushQueueRecordsLocked() {
 
 // EnqueuePromptDurable is EnqueuePrompt with an honest durability and
 // idempotency contract, for callers (an inbox poller, a coordinator relay)
-// whose OWN upstream ack rides on this call's success — see
-// docs/plans/2026-07-21-durable-enqueue.md:
+// whose OWN upstream ack rides on this call's success:
 //
 //   - seq is a caller-issued, session-monotonic idempotency sequence. At or
 //     below the current high-water mark (EnqueueSeq) the call is a clean
@@ -744,8 +743,7 @@ const (
 // prepends it (operatorContextGoal) to a turn's directive/guidance at the
 // goal's own turn boundary; engine.go's Prompt loop appends it
 // (operatorContextTask) as a standalone user message at a mid-turn
-// tool-call boundary (see the "Design amendment: tool-call-boundary
-// injection" note in docs/plans/2026-07-19-prompt-queue.md). The task
+// tool-call boundary. The task
 // wording applies even when that mid-turn drain happens to fire inside a
 // goal loop's worker turn — the drain has no way to know (and does not
 // need to) that its enclosing Prompt call is being driven by PursueGoal;

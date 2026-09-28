@@ -1,8 +1,7 @@
 # Goal loop
 
 This document is the technical system of record for the current goal-loop
-contract. See `docs/history/goal-loop-resilience.md` for incident history and
-the sequence of earlier fixes.
+contract.
 
 ## Control loop and evaluator
 

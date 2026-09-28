@@ -1,6 +1,5 @@
 // The `read_tool_result` session tool: bounded reads back into context of a
-// tool result that retention moved out of context (see toolresult.go and
-// docs/plans/2026-08-19-tool-result-handles.md §6).
+// tool result that retention moved out of context (see toolresult.go).
 //
 // Two read modes, one shape each:
 //

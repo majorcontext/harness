@@ -17,14 +17,13 @@ remain authoritative when historical material describes an earlier behavior.
 | [deploy-modal.md](deploy-modal.md) | Deployment modal behavior |
 
 The plugin wire contract is in [plugin/PROTOCOL.md](../plugin/PROTOCOL.md).
-The goal-loop implementation history is in
-[history/goal-loop-resilience.md](history/goal-loop-resilience.md).
 
-## Designs and plans
+## Designs
 
-`design/` contains architectural designs and durable decisions. `plans/`
-contains dated implementation plans. Keep current behavior in the runtime
-documents above and keep superseded chronology in `history/` or `plans/`.
+`design/` contains architectural designs and durable decisions. Keep current
+behavior in the runtime documents above. Keep implementation history and
+superseded chronology in the commit body and the pull request body, not in
+a standalone document.
 
 | Design | Subject |
 |---|---|
