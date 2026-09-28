@@ -261,6 +261,21 @@ sitting in the queue when a turn or a compact call ends is dispatched first —
 direct user input outranks the background objective — and the goal only
 auto-arms once the queue is empty.
 
+**A delegated compact turn takes no mid-turn injection.** The claude-code
+backend's stdin pump (`engine/claude_code_backend.go`) normally registers
+`claudeCodeQueueWake` so a prompt queued mid-turn reaches the running child's
+stdin. It skips that registration when the turn's own driving text invokes the
+CLI's `/compact` command (`isCompactCommandText`, `engine/compact.go`). A
+compact turn answers nothing and then replaces its own history, so an injected
+prompt would be consumed without ever being answered, and the succeeding stdin
+write would advance the history watermark past it — defeating the
+`claudeCodeHistoryDirectiveArgs` recovery that only fires when `priorCount !=
+watermark`. The prompt therefore stays queued and the tail drain above delivers
+it, journaled `dequeued(delivered)`, once compaction returns. The text is the
+signal rather than the caller, because `resolvePromptCommand`
+(`server/commands.go`) resolves a command only for a typed prompt while the CLI
+honors `/compact` from any prompt's plain stdin text.
+
 **Delivery granularity is per tool-call boundary, not per turn.** Inside
 `Session.Prompt`'s agentic loop (`engine/engine.go`), the instant a
 tool-result message is appended — after the model made one or more tool
