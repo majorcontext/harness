@@ -539,8 +539,9 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	s.compactCount++
 	s.lastCompactedAt = summary.CreatedAt
 	// The fold just removed the history lastUsage was measured against:
-	// report it unknown until the next completed turn remeasures (see
-	// contextUnknown's own doc comment). lastUsage itself is untouched.
+	// mark that measurement stale until the next completed turn remeasures,
+	// and cache the post-fold estimate ContextReading reports in its place
+	// (see contextUnknown's own doc comment). lastUsage itself is untouched.
 	s.contextUnknown = true
 	s.contextFoldEstimate = estimatePromptTokensFromHistory(s.history)
 	// Journal only the real, persisted boundary IDs (see journaledFirstID/

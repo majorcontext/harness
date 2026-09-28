@@ -660,13 +660,15 @@ components:
             remeasure it, this instead carries a byte-derived SIZE ESTIMATE
             over the post-fold history — the same estimate automatic
             compaction itself already trusts as a fallback trigger signal —
-            for a session read from a live process (GET /session, and the
-            turn.end context_used_tokens mirror). A caller cannot tell a
+            whenever the answering projection holds the session in memory:
+            the turn.end context_used_tokens mirror, and GET /session, GET
+            /session/{id} and GET /session/status. A caller cannot tell a
             measurement from an estimate by inspecting this field alone,
             and does not need to: both answer the same question, "how full
-            is context now," to the precision each has available. A cold
-            read (GET /session/status for a non-resident session) cannot
-            estimate and reports plain 0 in that case instead. 0 always
+            is context now," to the precision each has available. When any
+            of those three endpoints answers a non-resident session from its
+            durable sidecar index, that index carries no message history to
+            estimate over, so this reports plain 0 in that case. 0 always
             means "no known reading" — also true before any turn has
             completed — never "empty", mirroring window_tokens' own 0
             meaning "unknown", never "full".
