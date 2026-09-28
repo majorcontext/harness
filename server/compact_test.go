@@ -859,3 +859,58 @@ func TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T)
 		t.Error(`compaction.claude_code CompactStartedAt is zero, want the instant this stream observed the preceding "compacting" status`)
 	}
 }
+
+// TestCompactEndpointHistoryCompactedCarriesContextFields is the red-first
+// test for the console gauge gap: a live SSE consumer must learn the
+// post-fold context size the instant history.compacted fires, without
+// waiting for the next turn.end. Before this fix, ContextUsedTokens/
+// ContextWindowTokens were carried by turn.end only.
+func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
+	}
+
+	ev := sse.waitFor(t, "history.compacted")
+	if ev.ContextUsedTokens <= 0 {
+		t.Errorf("history.compacted context_used_tokens = %d, want a positive post-fold estimate", ev.ContextUsedTokens)
+	}
+}
+
+// TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens is the
+// red-first test for the same gauge gap on the delegated lane: the CLI's
+// own reported post_tokens must also land in context_used_tokens, so a
+// console consumer never needs a separate field for the same number.
+func TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens(t *testing.T) {
+	bin := buildFakeClaudeForServer(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+
+	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+	nativeProv := &scriptedProvider{name: "test"}
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	id := h.createSession("")
+	sse := h.openSSE("", "")
+
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want 200: %s", resp.StatusCode, data)
+	}
+
+	sse.waitFor(t, "compaction.started")
+	ev := sse.waitFor(t, "compaction.claude_code")
+	if ev.ContextUsedTokens != ev.PostTokens {
+		t.Errorf("compaction.claude_code context_used_tokens = %d, want post_tokens %d", ev.ContextUsedTokens, ev.PostTokens)
+	}
+}

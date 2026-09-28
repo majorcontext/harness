@@ -531,12 +531,17 @@ durable `compact` record carries the summary inline rather than as a
 for a message it never received. Then a `history.compacted` engine event
 (journaled via the server's `emitDurable` path like `session.status`)
 carrying `{first_id, last_id, turns_folded, summary_id,
-compact_started_at}`, where `summary_id` refers to the message the
-tailer just saw and `compact_started_at` is when the blocking
-summarization call began — a consumer derives duration as this durable
-record's own `recorded_at` minus `compact_started_at`, never a
-client-observed delivery time, since replay and SSE reconnect can deliver
-the record long after `recorded_at` was assigned. A tailer replaying
+compact_started_at, context_used_tokens, context_window_tokens}`, where
+`summary_id` refers to the message the tailer just saw and
+`compact_started_at` is when the blocking summarization call began — a
+consumer derives duration as this durable record's own `recorded_at`
+minus `compact_started_at`, never a client-observed delivery time, since
+replay and SSE reconnect can deliver the record long after `recorded_at`
+was assigned. `context_used_tokens`/`context_window_tokens` mirror
+`Session.context` at the fold instant (see "The context-window gauge"
+below), so a live SSE consumer's gauge updates the moment compaction
+settles rather than waiting for that turn's own turn.end. A tailer
+replaying
 from a `from` cursor older than the compaction sees the original messages,
 the summary message, and the compaction event — the event is the
 reconciliation signal telling it which prefix the summary replaced. The
@@ -564,6 +569,16 @@ above: `consumeClaudeCodeStream` sets it to the instant this stream
 observed the CLI's own preceding `"compacting"` status, zero when none
 preceded the boundary in the same turn — a real, honest absence, not a
 bug, distinct from the pre_tokens/post_tokens caveat below.
+
+It also carries `context_used_tokens`/`context_window_tokens`, the SAME
+shared fields `history.compacted` carries. Unlike `history.compacted`,
+`context_used_tokens` here mirrors `post_tokens` directly rather than
+`Session.ContextReading()`: at the instant this event fires, harness's own
+`lastUsage` (which that call would read) still describes the CLI's PRE-
+compaction turn — the CLI's own reported `post_tokens` is the only
+signal at hand that already reflects the fold. It therefore shares
+`post_tokens`' own absent-vs-zero caveat below. `context_window_tokens`
+still reads `Session.ContextWindowTokens()`, unaffected by that caveat.
 
 **Wire truth for the absent case.** Each of `trigger`/`pre_tokens`/
 `post_tokens` is `omitempty` on `server.Event` (`server/journal.go`), and
@@ -657,7 +672,8 @@ through `GET /session/{id}/journal`'s projection, matching the sibling
 records, none of which do either.
 
 **The context-window gauge.** `Session.context` (`used_tokens`,
-`window_tokens`) and the mirrored `turn.end` event fields
+`window_tokens`) and the mirrored `turn.end`, `history.compacted`, and
+`compaction.claude_code` event fields
 (`context_used_tokens`/`context_window_tokens`) expose the same two numbers
 this section's trigger check compares: `used_tokens` is
 `InputTokens + CacheReadTokens + CacheWriteTokens` from the most recent
@@ -711,11 +727,12 @@ two on the wire: both answer the same question, "how full is context now,"
 to the precision each has available, and no consumer needs to tell them
 apart (see `server/openapi.yaml`'s `used_tokens` description).
 
-This split is honestly asymmetric across the four projections, not
-uniform. `contextJSONForSession` and `recordTurnEnd` (`server/handlers.go`,
-`server/journal.go`) hold a live `*engine.Session` and read
-`Session.ContextReading()` directly, so they estimate. `recordTurnEnd`
-matters most of the four, because `turn.end` is the live path a console
+This split is honestly asymmetric across the five projections, not
+uniform. `contextJSONForSession`, `recordTurnEnd`, and
+`publishHistoryCompacted` (`server/handlers.go`, `server/journal.go`) hold
+a live `*engine.Session` and read `Session.ContextReading()` directly, so
+they estimate. `recordTurnEnd` and `publishHistoryCompacted` matter most,
+because `turn.end` and `history.compacted` are the live paths a console
 gauge follows during a session while the other three projections only
 answer on a read. `contextJSONForInfo` and `contextJSONForIndex` are cold
 projections built from `SessionInfo`/`SessionIndex` — metadata sidecars

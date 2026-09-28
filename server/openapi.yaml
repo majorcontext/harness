@@ -2059,7 +2059,9 @@ components:
             `message` event, so this is the reconciliation signal telling a
             replaying tailer which prefix that summary replaced. It also
             carries compact_started_at, the instant the summarization call
-            began.
+            began, and context_used_tokens/context_window_tokens, so a
+            live console gauge updates without waiting for a later
+            turn.end (see those two properties' own descriptions).
             compaction.failed is compaction's fire-and-forget failure
             counterpart (never journaled — a failed compaction never mutates
             durable state), carrying the failure detail in `error`.
@@ -2090,7 +2092,12 @@ components:
             output omitted that data — `pre_tokens`/`post_tokens` in
             particular are indistinguishable, on the wire, from a genuine
             report of 0: a consumer must render "unknown", never "0", for
-            an absent key.
+            an absent key. It also carries context_used_tokens (mirroring
+            post_tokens, sharing its absent-vs-zero caveat) and
+            context_window_tokens (see those two properties' own
+            descriptions), so a console gauge updates for the delegated
+            lane the same way history.compacted updates it for the native
+            one.
             command is durable and carries the resolved slash command's
             record (`command`, below) — one per journaled `CommandRecord`,
             so a dispatched command's `accepted` record and its later
@@ -2431,24 +2438,30 @@ components:
         context_used_tokens:
           type: integer
           description: >
-            Carried on turn.end only: the same value as Context.used_tokens
-            (see that schema, including the measurement-vs-estimate split),
-            read from the session at the moment the turn settled — so an
-            SSE consumer's gauge updates every turn without a separate
-            GET /session poll. Absent (0) both when the server had no live
-            session to read at settle time and when a live session exists
-            but has completed no turn yet and never folded; a compaction
-            fold with no later remeasurement instead carries the same
-            post-fold size estimate Context.used_tokens does. A consumer
-            must treat an absent value as "unknown", never as "empty".
+            Carried on turn.end, history.compacted, and compaction.
+            claude_code: the same value as Context.used_tokens (see that
+            schema, including the measurement-vs-estimate split), read from
+            the session at the moment the event fired — so an SSE
+            consumer's gauge updates the instant a compaction settles,
+            without waiting for that turn's own turn.end. Absent (0) both
+            when the server had no live session to read at settle time and
+            when a live session exists but has completed no turn yet and
+            never folded; a compaction fold with no later remeasurement
+            instead carries the same post-fold size estimate
+            Context.used_tokens does. On compaction.claude_code this
+            instead mirrors post_tokens directly (the CLI's own
+            post-compaction reading) and shares its absent-vs-zero caveat,
+            never engine's size estimate. A consumer must treat an absent
+            value as "unknown", never as "empty".
         context_window_tokens:
           type: integer
           description: >
-            Carried on turn.end only: the same value as
-            Context.window_tokens. Absent (0) both when automatic
-            compaction is disarmed for this session and when the server
-            had no live session to read at settle time — a client must
-            treat either as "unknown", never as "full".
+            Carried on turn.end, history.compacted, and compaction.
+            claude_code: the same value as Context.window_tokens. Absent
+            (0) both when automatic compaction is disarmed for this
+            session and when the server had no live session to read at
+            settle time — a client must treat either as "unknown", never
+            as "full".
 
     JournalResponse:
       type: object
