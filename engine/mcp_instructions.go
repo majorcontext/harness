@@ -14,6 +14,7 @@
 //
 // Session.mcpInstructionsSegment memoizes the rendered block for exactly
 // this reason — see its doc comment for what a late-connecting server costs.
+
 package engine
 
 import (

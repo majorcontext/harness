@@ -2,6 +2,7 @@
 // in-memory queue changes, so folds use the journal as their source.
 // Readers validate the journal size, modification time, and checksum before use.
 // A single writer appends records. Synthetic orphan repairs affect Messages, not DurableMessages.
+
 package engine
 
 import (

@@ -3,6 +3,7 @@
 // processStatusSegment (see either's doc comment): computed fresh from live
 // Session state on every streamTurn call, pinned as its own message via the
 // shared withPinnedAmbient, and never persisted to the session log. It does not survive a process restart.
+
 package engine
 
 import "fmt"

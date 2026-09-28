@@ -27,6 +27,7 @@
 // order, after the preview parts. Image bytes are already bounded by
 // imageclamp.Clamp at transcode time; retaining them here would duplicate
 // that bound in a layer that cannot see the provider's limit.
+
 package engine
 
 import (

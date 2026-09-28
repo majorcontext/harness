@@ -5,6 +5,7 @@
 // Probe, chain dispatch) is a complete, separately tested library — nothing
 // here reimplements its lazy-spawn or chaining semantics; this file only
 // resolves manifests and wires the result in.
+
 package main
 
 import (

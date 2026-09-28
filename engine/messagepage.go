@@ -37,6 +37,7 @@
 //     every seq after it shifts down by N-1. A client paging across a
 //     compaction can see one page overlap another; message ids, which are
 //     stable, are the way to de-duplicate.
+
 package engine
 
 import (

@@ -6,6 +6,7 @@
 // it unset everywhere, so compaction never armed on any session and a
 // session died with "context exhausted: prompt 1136916 tokens > limit
 // 1000000" instead of compacting first.
+
 package engine
 
 import (

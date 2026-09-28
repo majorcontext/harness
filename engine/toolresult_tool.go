@@ -21,6 +21,7 @@
 // `process`/`goal`/`mcp` tools gate on their own preconditions: a session
 // that can never mint a handle must not advertise a tool whose only
 // argument is one.
+
 package engine
 
 import (

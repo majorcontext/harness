@@ -1,4 +1,5 @@
 // Queued prompts stay outside history and requests until delivery. Queue records and events share the session lock.
+
 package engine
 
 import (

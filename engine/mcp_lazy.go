@@ -39,6 +39,7 @@
 //     mcpConfigReader interfaces mcp_status.go and mcp_tool.go already
 //     define. Growing MCPRegistry would force every out-of-package fake to
 //     grow with it.
+
 package engine
 
 import (

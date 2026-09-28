@@ -17,6 +17,7 @@
 // config, never triggering a connect attempt itself): a session with no MCP
 // servers at all gets no `mcp` tool, exactly like a nil Config.Processes
 // installs no `process` tool.
+
 package engine
 
 import (

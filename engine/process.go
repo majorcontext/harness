@@ -12,6 +12,7 @@
 // prefix. The live roster (including runtime declarations) is visible
 // through the tool's own `list` action and the ambient status block (see
 // processStatusSegment) instead.
+
 package engine
 
 import (

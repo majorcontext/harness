@@ -21,6 +21,7 @@
 // segment is present on every request — a small, fixed per-request
 // formatting cost, and still cache-safe, since (like its siblings) it only
 // ever touches the newest user message, never the cached prefix before it.
+
 package engine
 
 import (

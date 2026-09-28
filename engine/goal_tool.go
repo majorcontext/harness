@@ -14,6 +14,7 @@
 // when the host opts in, exactly like the process tool is gated by a
 // non-nil Config.Processes. The server/CLI wiring that flips this flag on
 // is separate from this package, which only defines the tool and its gate.
+
 package engine
 
 import (

@@ -1,4 +1,5 @@
 // Session logs use append-only JSONL. The engine creates them on the first write.
+
 package engine
 
 import (

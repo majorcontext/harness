@@ -1,4 +1,5 @@
 // MCP connections start on first use. Failed servers retry in the background, then park until an explicit connection request.
+
 package engine
 
 import (

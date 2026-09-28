@@ -64,6 +64,7 @@
 // string independently. One pass over the combined pattern measured well
 // under the 100ms/4MB target — see TestMaskSecretsPerformance for the
 // current number and the PR body for what was actually measured.
+
 package engine
 
 import (

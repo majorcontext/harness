@@ -39,6 +39,7 @@
 // The journal is never truncated. Snapshots are pure acceleration and can
 // be deleted at any time; deleting them all restores exactly the behavior
 // this package had before this file existed.
+
 package engine
 
 import (
