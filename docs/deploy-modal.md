@@ -241,7 +241,7 @@ and the skill catalog in their expected order.
 ## Browser clients and CORS
 
 This repository ships no browser UI. A browser client of a running
-`harness serve` instance — for example the `meetneptune/boxes` console —
+`harness serve` instance — for example the `majorcontext/bailey` console —
 lives outside this repo and talks to the box over the HTTP+SSE API.
 
 Because a browser page enforces the same-origin policy, `harness serve` must

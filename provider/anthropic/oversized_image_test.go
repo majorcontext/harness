@@ -12,8 +12,8 @@ import (
 )
 
 // oversizedPNG builds a solid PNG whose height exceeds any provider's 8000px
-// dimension cap — the shape of the full-page screenshot that wedged three
-// boxes in incident 2026-07-30.
+// dimension cap — the shape of a full-page screenshot that can wedge a
+// session.
 func oversizedPNG(t *testing.T) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, 100, 8500))

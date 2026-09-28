@@ -333,11 +333,10 @@ type Options struct {
 	// nil-guards before touching it, so an unset Logger is exactly today's
 	// silent behavior, not a panic.
 	//
-	// This exists because of a field report (2026-08-06): a session ran
-	// 631 messages / 141k output tokens and produced ZERO log lines: an
-	// operator tailing `harness serve`'s stderr could not tell a box
-	// mid-turn from a dead one, because nothing on the turn/goal path ever
-	// logged anything — only boot/config/MCP wiring did. Codex's
+	// This exists because a long-running session can produce ZERO log
+	// lines: an operator tailing `harness serve`'s stderr could not tell
+	// a box mid-turn from a dead one, because nothing on the turn/goal
+	// path ever logged anything — only boot/config/MCP wiring did. Codex's
 	// equivalent path logs every stream retry via a structured warn!
 	// (turn id, retries, max, delay); this field is the same bar applied
 	// to this server's own durable-record choke points, so an operator

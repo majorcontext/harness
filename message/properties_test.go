@@ -119,7 +119,7 @@ import (
 //     replace it. Wire VALIDITY is not asserted against
 //     ResolveOrphanToolCalls at all: it is additive-only by design and
 //     leaves several shapes wire-invalid forever. The transcode-only
-//     repair NEP-5293 part 2 introduces owns that property instead.
+//     repair NormalizeForWire introduces owns that property instead.
 
 // --- Generators --------------------------------------------------------
 //
@@ -528,8 +528,9 @@ func TestNormalizeForWirePropertyNoDataLoss(t *testing.T) {
 // and a ToolResult barrier-blocked from relocating out of an
 // assistant-role block or into a run that actually demands it) rather
 // than proving them unsatisfiable — the same class of mistake that sank
-// the first attempt at NEP-5293, there by bending the oracle to match the
-// implementation, here by bending the input space instead. Both gaps are
+// an earlier attempt at this repair, there by bending the oracle to match
+// the implementation, here by bending the input space instead. Both gaps
+// are
 // now closed by demoteWireInvalidToolResults (message/wire_normalize.go):
 // any ToolResult still wire-invalid after every relocation and synthesis
 // NormalizeForWire's main pass can perform is rewritten to plain text
@@ -544,8 +545,8 @@ func TestNormalizeForWirePropertyNoDataLoss(t *testing.T) {
 //
 // # Why this checks NormalizeForWire, not ResolveOrphanToolCalls
 //
-// NEP-5293 part 2's required architecture (see the issue and its "fourth
-// gap shape" comment) keeps ResolveOrphanToolCalls purely additive forever
+// NormalizeForWire's required architecture keeps ResolveOrphanToolCalls
+// purely additive forever
 // — engine.LoadSession applies it to LIVE history, where a destructive
 // repair would lose data for the session's whole life, not one request —
 // and puts every destructive/relocating repair in a NEW transcode-only

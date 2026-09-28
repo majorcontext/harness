@@ -9,16 +9,14 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// This file is the regression coverage for a live prod finding: box
-// box_01m1kyfxebfyjt0tg5dwk2jb32's pod was OOMKilled at 23:09:55Z mid-turn
-// on a ROOT session (ses_01m1kyhka3ewf8vcth0qbqm222, a claude-code
-// delegated session). recoverInterruptedTurnLocked already existed to
-// surface exactly this kind of crash — but only ever ran for a CHILD
+// This file is the regression coverage for a real crash-recovery gap: a
+// ROOT session's pod was OOMKilled mid-turn on a claude-code delegated
+// session. recoverInterruptedTurnLocked already existed to surface exactly
+// this kind of crash — but only ever ran for a CHILD
 // (adoptReloadedLocked's non-root branch); adoptRootLocked never called it
 // for the root's OWN turn. The root cold-reloaded with
 // hasUnfinalizedTurn() still true and nothing ever appended a marker or
-// cleared it: the session sat silently wedged until a human happened to
-// send a brand-new prompt roughly 18 minutes later.
+// cleared it: the session sat silently wedged until a new prompt arrived.
 
 // TestFinalizeTurnMarksRootTurnSettled proves the enabling half of the
 // fix: finalizeTurn's own settled-marker call used to be gated to
@@ -45,7 +43,7 @@ func TestFinalizeTurnMarksRootTurnSettled(t *testing.T) {
 }
 
 // TestAdoptRootSurfacesInterruptedTurnOnRecovery is the main regression
-// test for the live OOM-kill finding described above. It simulates the
+// test for the OOM-kill crash-recovery gap described above. It simulates the
 // crash the same way the existing child-recovery tests do
 // (TestRecoverInterruptedTurnFiresForChildCrashedMidToolLoop): manually
 // append a user message, then an assistant tool-call/tool-result pair,
@@ -57,7 +55,7 @@ func TestFinalizeTurnMarksRootTurnSettled(t *testing.T) {
 // Red-verify: before this fix, reloadedRoot.hasUnfinalizedTurn() stays
 // true after AdoptRoot, no synthetic marker is ever appended to history,
 // and info.Status stays StatusIdle (adoptLocked's bare default) forever
-// — exactly the silent wedge Andy hit.
+// — exactly the silent wedge described above.
 func TestAdoptRootSurfacesInterruptedTurnOnRecovery(t *testing.T) {
 	dir := t.TempDir()
 	reg := provider.Registry{"root": scriptedTurns("root", doneTurn("resumed"))}

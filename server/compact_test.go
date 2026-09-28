@@ -561,7 +561,7 @@ func TestCompactPanicReleasesClaim(t *testing.T) {
 // statements were never reached. The session is left reporting status
 // "busy", state "busy", and lineage.status "running" forever, with no
 // runner process alive to ever finish it -- the exact shape of the live
-// incident on session ses_01m1ht79e5fgfbx2cjx4cf4xm8.
+// incident on session ses_01hac3jqn64npr07q9rxbmtb9z.
 //
 // Red-verified: against the pre-fix handleCompact, this test times out
 // waiting for lineage.status to leave "running" (waitForLineageStatus's own

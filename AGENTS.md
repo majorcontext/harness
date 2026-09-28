@@ -89,7 +89,7 @@ Do not add these features without a new explicit design decision:
 - A JavaScript runtime or an opencode plugin compatibility layer.
 - Plugin auth hooks. Deployed credential injection belongs at the network layer.
 - A2A support without a concrete cross-organization use case.
-- A web UI or browser frontend. `meetneptune/boxes` owns that surface.
+- A web UI or browser frontend. `majorcontext/bailey` owns that surface.
 
 ## Startup rules
 

@@ -1923,7 +1923,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// LoadSession calls Normalize on every message it replays,
 			// including a compact record's inline summary.
 			rec.Compact.Summary.Normalize()
-			// Heal path (NEP-5292 candidate fix 3): a record journaled by an
+			// Heal path: a record journaled by an
 			// unpatched build can name a message.ResolveOrphanToolCalls
 			// synthetic ID as LastID — that message is minted fresh by the
 			// repair below, AFTER this scan loop finishes, and was never

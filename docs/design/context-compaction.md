@@ -34,8 +34,8 @@ own summary. `Usage()` (cumulative)
 is deliberately NOT the signal — it sums every turn ever run, which is not
 "how large is the next request."
 
-**Where `ContextWindowTokens` comes from (added after the jumpy-pizza
-incident).** This design originally left `ContextWindowTokens` fully
+**Where `ContextWindowTokens` comes from (added to close a gap).** This
+design originally left `ContextWindowTokens` fully
 opt-in — "the engine has no built-in per-model table" — on the theory that
 whatever embeds the engine would set it. In production that theory failed
 silently: the boxes platform set it nowhere, so every box ran with
@@ -58,7 +58,7 @@ therefore whether compaction is armed at all) matched to whichever model is
 actually running. One INFO log line at session start (and again on any
 switch that changes the effective window) names the resolved window and its
 source (`config`/`model-derived`/`disabled`) — the operator signal that
-would have made jumpy-pizza's disarmed compaction visible well before the
+would have made a disarmed compaction visible well before the
 box died.
 
 **Explicit: `POST /session/{id}/compact`.** Always available regardless of
@@ -107,9 +107,8 @@ whose request transcodes harness's REAL journal — not whatever the CLI last
 reported. Trusting the stale, wrong-scale `LastUsage()` figure here would
 compare the wrong number against the new model's window and skip
 compaction, forwarding a potentially huge, never-once-compacted journal to
-a provider that rejects it outright ("prompt too long") — the live
-2026-09-08 incident this paragraph documents (session
-`ses_01m1kyhka3ewf8vcth0qbqm222`, a 3,667-message, 5-day delegated run).
+a provider that rejects it outright ("prompt too long") — as seen on a
+3,667-message, 5-day delegated run.
 
 `SetModel` therefore arms a `forceCompactionCheck` flag exactly when the
 PRIOR model was claude-code-delegated and the new one is not (never on a
@@ -142,7 +141,7 @@ than decode a missing key as the field's zero value.
 The next `maybeAutoCompact` call that sees the flag armed reads it WITHOUT
 clearing it yet. Instead of reading `LastUsage()`, it estimates the prompt
 size straight from `s.History()` (the same crude byte-count fallback §1's
-nimble-pizza case already uses for "provider reports nothing usable"),
+zero-usage fallback already uses for "provider reports nothing usable"),
 folding in the byte length of `Session.lastSystem` — the system segments
 assembled for the most recent model call in this process, if any — so the
 estimate accounts for the system prompt and skills/MCP catalog a native
@@ -358,7 +357,7 @@ strictly better than blocking the caller's real turn on it.
 A call that completes without a transport/stream error but returns no
 usable text — an empty summary — is a DIFFERENT case, not a failure of this
 kind: the model was asked, answered, and had nothing to add. Treating it as
-the same hard-error shape as the above (2026-08-19 incident: `{"error":
+the same hard-error shape as the above (`{"error":
 "engine: compaction summary was empty"}` surfaced from an operator's
 otherwise-ordinary `POST /session/{id}/compact` call) puts an operator
 manually folding a large session in the position of treating "the model
@@ -808,7 +807,7 @@ never resurrects the stale number a live process would have suppressed.
   holds unconditionally after the model-derivation follow-up above: a
   deployment whose sessions run a model `modelmeta` recognizes now gets
   compaction armed where it previously silently wasn't — the intended fix
-  for the jumpy-pizza incident, not a regression, but worth calling out
+  for the disarmed-compaction gap above, not a regression, but worth calling out
   explicitly since it is the one behavior change on an upgrade with no
   config edit. An explicit `context_window_tokens: 0` is not distinguishable
   from "unset" (see `config.Config.ContextWindowTokens`'s doc comment) — a

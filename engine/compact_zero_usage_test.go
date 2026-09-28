@@ -9,11 +9,11 @@ import (
 )
 
 // TestMaybeAutoCompactFallsBackToSizeEstimateOnZeroUsage is the red-first
-// regression test for the 2026-08-06 nimble-pizza field incident: a
-// Bedrock-via-gateway route reported InputTokens=0, CacheReadTokens=0, and
-// CacheWriteTokens=0 on EVERY turn of a 631-message session (OutputTokens
-// was correct throughout — only the input side of that route's usage
-// accounting was broken). maybeAutoCompact's threshold check sums exactly
+// regression test for a Bedrock-via-gateway route that reports
+// InputTokens=0, CacheReadTokens=0, and CacheWriteTokens=0 on every turn of
+// a session (OutputTokens still correct throughout — only the input side
+// of that route's usage accounting is broken). maybeAutoCompact's
+// threshold check sums exactly
 // those three fields, so `promptTokens` was permanently 0 and `over` could
 // never become true no matter how large history actually grew: automatic
 // compaction could never fire on that route, and the session ran to a hard

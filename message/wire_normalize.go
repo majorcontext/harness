@@ -71,7 +71,7 @@ func computeRelocationBarrier(msgRun []int, allResults []wireResultOcc) []int {
 // side (assistant or not), keyed purely on Message.Role. This matches the
 // provider merge step for messages that produce wire blocks.
 //
-// Known divergence — NEP-5304: transcodeRequest drops a message that
+// Known divergence: transcodeRequest drops a message that
 // transcodes to zero blocks (an assistant turn whose only content is
 // another provider's reasoning) and opens no wire message for it, merging
 // the runs on either side. computeTranscodeSpans does not know this: a
@@ -635,10 +635,11 @@ func demoteToolCall(tc *ToolCall) *Text {
 // (see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired cases). It still
 // never DELETES a real ToolResult — every one that goes in comes out
 // somewhere, unchanged, in the same relative order among all other real
-// results (see checkNoDataLoss in wire_oracle_test.go, and NEP-5293's
-// account of the reverted rewrite that broke exactly this promise).
+// results (see checkNoDataLoss in wire_oracle_test.go: an earlier
+// ResolveOrphanToolCalls rewrite broke exactly this promise and was
+// reverted).
 //
-// # The gaps this closes (NEP-5293 part 2)
+// # The gaps this closes
 //
 //  1. A duplicate call id within one assistant message (the two-tool_use
 //     one-tool_result shape): fixed by counting occurrences per id per run,

@@ -9,7 +9,7 @@ session's whole message history through `GET
 /session/{id}/message?stream_from=1` (the `Transcript` envelope — see
 `server/journal.go`'s `transcriptSyncedThrough`), then trims it client-side
 to the most recent messages that fit a byte budget
-(`meetneptune/boxes`'s `internal/api/transcript_truncate.go`,
+(`majorcontext/bailey`'s `internal/api/transcript_truncate.go`,
 `budgetTranscript`). Harness never budgets this read itself; it always
 answers the whole history.
 
@@ -77,11 +77,11 @@ client's own request.
 It does not make harness budget the byte-budget tail itself, and it does
 not change the `before_seq`/`limit` page endpoint's own envelope
 (`first_seq`/`last_seq`/`total`/`has_more`) at all — that mechanism
-(`docs/design/transcript-backward-pagination.md`, in `meetneptune/boxes`)
+(`docs/design/transcript-backward-pagination.md`, in `majorcontext/bailey`)
 already answers a real anchor for every page AFTER the first one. This
 closes the one gap before it: the FIRST page, computed from a tail harness
 never bounded in the first place.
 
-See `meetneptune/boxes`'s own `docs/design/transcript-scroll-first-load.md`
+See `majorcontext/bailey`'s own `docs/design/transcript-scroll-first-load.md`
 for the client-side half: how the byte-budget trim picks the kept tail's
 first message and turns its `seqs` entry into a real `before_seq`.

@@ -95,7 +95,7 @@ func TestPlainRateLimitStaysRetryable(t *testing.T) {
 }
 
 // TestMalformedRequestStaysPlainPermanent is the other surplus-direction
-// guard: the NEP-5272 orphaned-tool_use 400 must stay an unqualified
+// guard: an orphaned-tool_use 400 must stay an unqualified
 // permanent error, never an exhaustion a parent would wait out.
 func TestMalformedRequestStaysPlainPermanent(t *testing.T) {
 	err := streamErr(t, http.StatusBadRequest,

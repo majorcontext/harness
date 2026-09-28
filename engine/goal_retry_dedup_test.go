@@ -29,8 +29,8 @@ func countUserMessagesWithText(history []message.Message, want string) int {
 }
 
 // TestPursueGoalRetryDoesNotDuplicateDirectiveInHistory is the red-first
-// regression test for NEP-5272's defect 2 (operator finding on box
-// hyper-lemon): promptTurnWithRetry's non-idempotency doc already
+// regression test for the retry-directive-duplication case:
+// promptTurnWithRetry's non-idempotency doc already
 // acknowledges that a retry re-issues the whole directive through Prompt,
 // which "has no partial-turn resume point to retry from below itself" — but
 // Prompt ALSO unconditionally appends that directive as a brand new,

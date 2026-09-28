@@ -22,8 +22,8 @@ import (
 //
 // An earlier version of this poison instead set a non-empty-but-invalid
 // Reasoning.ProviderData entry, reproducing the exact mechanism behind
-// production incident ses_01kx453ewfedqrg7p3c64f8sca /
-// ses_01kx453ev9ejattygpf7rbzptw — "passes every len()==0 guard (Normalize,
+// production incident ses_01hxqvbr9q7cw1ejp1bpj7fbf8 /
+// ses_01hpf4eexb31v0ecyvesf75g5s — "passes every len()==0 guard (Normalize,
 // ProviderData.MarshalJSON, ProviderData.Get) and only fails once
 // encoding/json tries to compact it inside a larger document." That whole
 // class of failure was closed by extending ProviderData.MarshalJSON and

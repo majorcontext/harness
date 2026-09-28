@@ -39,8 +39,8 @@ func TestMarkStreamTruncatedClassifies(t *testing.T) {
 		t.Errorf("errors.Is(wrapped, base) = false, want true (Unwrap must expose the original error)")
 	}
 	// The journaled reason must name the failure, not just re-surface a
-	// cryptic "EOF" — the 2026-08-06 incident's goal.stalled records read
-	// bare "EOF" and cost hours of diagnosis.
+	// cryptic "EOF": a goal.stalled record that reads bare "EOF" costs
+	// hours of diagnosis.
 	if got := wrapped.Error(); !strings.Contains(got, "stream ended before completion") {
 		t.Errorf("Error() = %q, want it to contain %q", got, "stream ended before completion")
 	}

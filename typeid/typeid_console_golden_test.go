@@ -3,7 +3,7 @@ package typeid
 import "testing"
 
 // TestConsoleGoldenMessageIDParses pins a cross-language compatibility
-// fixture for meetneptune/boxes' web console, which mints a "msg" TypeID
+// fixture for majorcontext/bailey's web console, which mints a "msg" TypeID
 // by hand in TypeScript (mintClientMessageID, web/src/lib/agent-events.ts)
 // rather than depending on this package. The golden string was generated
 // FROM a fixed 16-byte UUIDv7-shaped input via this package's own

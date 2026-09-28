@@ -9,8 +9,8 @@ and tool behavior. Read only the sections relevant to the change.
 - **The session log stores the canonical message format, never a provider's.** Every request, the provider adapter transcodes canonical history → provider wire format from scratch (stateless transcoding). Mid-session model swap = next request uses a different transcoder. No migration step.
 - **Provider-specific opaque data (reasoning/thinking blocks, encrypted reasoning items) is stored as provider-tagged attachments** on canonical messages: replayed verbatim to the same provider, dropped when crossing providers. Tool-call IDs are internal; each transcoder maps deterministically to provider-compliant IDs. Prompt-cache markers are injected at transcode time, never stored.
 - **Model refs are `provider/model`** plus user-defined aliases (`fast`, `smart`) from config. Context-window metadata comes from the curated static `modelmeta` table. It never refreshes over the network.
-- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line. (Incident: a `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted; see NEP-5293.) The concrete split is in "Wire normalization" below.
-- **An empty tool result must never serialize as `null`.** The provider reads a null-content `tool_result` as ABSENT and rejects the whole request with "tool_use ids were found without tool_result blocks immediately after" — naming a block that IS in the payload. A tool that produces no output (a `grep` that matches nothing) is enough to wedge a session forever. `message.NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` hold this line; every transcoder reads through `SafeContent`, never `Content`. (Incident: NEP-5272.)
+- **A history repair that runs on live or persisted state is additive-only.** `LoadSession` writes the repaired slice back into live history, so a repair that deletes loses data permanently — not for one request, but for the life of the session. Add synthetic parts; never drop, reorder, or relocate a part another producer wrote. A transcode-time repair MAY be destructive, because it builds one throwaway request and never touches the record. Put every destructive rule on that side of the line: an earlier `ResolveOrphanToolCalls` rewrite deleted genuine tool output in three shapes and was reverted for exactly this reason. The concrete split is in "Wire normalization" below.
+- **An empty tool result must never serialize as `null`.** The provider reads a null-content `tool_result` as ABSENT and rejects the whole request with "tool_use ids were found without tool_result blocks immediately after" — naming a block that IS in the payload. A tool that produces no output (a `grep` that matches nothing) is enough to wedge a session forever. `message.NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` hold this line; every transcoder reads through `SafeContent`, never `Content`.
 
 ## Wire normalization
 
@@ -593,14 +593,13 @@ the model off mid-emission — it did not choose to stop. Before this existed,
 `runAgenticLoop`'s `if stop != provider.StopToolUse` branch
 (`engine/engine.go`) treated every non-`tool_use` stop reason alike: append
 `asst`, synthesize an is_error result for any orphaned `ToolCall` part via
-`appendUnexecutedToolCallResults` (NEP-5272, see "Wire normalization"
+`appendUnexecutedToolCallResults` (see "Wire normalization"
 above), and return. For `max_tokens` specifically that return settles the
-session idle with nothing further ever prompting it. Incident: box
-harness-parallel-tools — the model emitted a large tool call, the provider
-stopped mid-emission with `max_tokens`, the engine synthesized the
-unexecuted-call result exactly as designed, and the session then sat idle
-until a human noticed and re-prompted it. On an autonomous fleet a silent
-work stoppage is as bad as a crash.
+session idle with nothing further ever prompting it: the model emits a
+large tool call, the provider stops mid-emission with `max_tokens`, the
+engine synthesizes the unexecuted-call result exactly as designed, and the
+session then sits idle until something notices and re-prompts it. On an
+autonomous fleet a silent work stoppage is as bad as a crash.
 
 `runAgenticLoop` now branches on `stop == provider.StopMaxTokens` inside
 that same `if`: `maybeAutoContinueMaxTokens` decides whether to `continue`

@@ -1093,7 +1093,7 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 // That cold path used to call engine.LoadSession, decode every message
 // body, rebuild the whole history, and then throw all of it away to report
 // a dozen scalar fields — about 7 s per read on the fleet's longest session
-// (see docs/design/console-read-path.md in meetneptune/boxes).
+// (see docs/design/console-read-path.md in majorcontext/bailey).
 func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.sessionIDOrNotFound(w, r)
 	if !ok {
@@ -1210,8 +1210,8 @@ type messagePlaceholder struct {
 // only scrubs zero-length entries — used to take the entire endpoint down
 // with a 500 ("json: error calling MarshalJSON for type message.Parts"),
 // exactly when the transcript view was most needed to diagnose the death
-// (observed in production on ses_01kx453ewfedqrg7p3c64f8sca and
-// ses_01kx453ev9ejattygpf7rbzptw). Now a message that fails to marshal is
+// (observed in production on ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and
+// ses_01hpf4eexb31v0ecyvesf75g5s). Now a message that fails to marshal is
 // replaced with a messagePlaceholder carrying its ID, role, and the marshal
 // error, and every other message in the response is unaffected: the
 // endpoint always returns 200 with as much of the transcript as is actually
@@ -3957,7 +3957,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	// a real, live panic inside Compact (e.g. a native provider's
 	// transcoder choking on claude-code-produced history right after an
 	// operator switches a delegated session's model and then compacts, the
-	// exact incident this fixes: ses_01m1ht79e5fgfbx2cjx4cf4xm8) logs
+	// exact incident this fixes: ses_01hac3jqn64npr07q9rxbmtb9z) logs
 	// "http: panic serving ..." and closes that one connection, but the
 	// harness process stays up — while this session was left claimed
 	// forever: status "busy", state "busy", lineage.status "running", no

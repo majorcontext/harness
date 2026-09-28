@@ -18,7 +18,7 @@ import (
 func TestOperatorBatchMessageWireShape(t *testing.T) {
 	createdAt := time.Date(2026, 9, 8, 17, 27, 0, 0, time.UTC)
 	msg := Message{
-		ID:        "msg_01m210y3yvfmhtykzhd9j6gs2w",
+		ID:        "msg_01h8aas356v3kb8bjj8jwzab5p",
 		Role:      RoleUser,
 		Parts:     Parts{&Text{Text: "OPERATOR MESSAGES (address these, then continue the task):\n1. first\n2. second\n"}},
 		CreatedAt: createdAt,
@@ -37,7 +37,7 @@ func TestOperatorBatchMessageWireShape(t *testing.T) {
 				SourceID:        "sched_123",
 				SourceLabel:     "nightly CI check",
 				AttachmentCount: 1,
-				MessageID:       "msg_01m210y3yvfmhtykzhd9j6gs2x",
+				MessageID:       "msg_01hzxke6kddj5nyaa08t7ejc0g",
 			},
 		},
 	}
@@ -47,13 +47,13 @@ func TestOperatorBatchMessageWireShape(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 
-	const want = `{"id":"msg_01m210y3yvfmhtykzhd9j6gs2w","role":"user",` +
+	const want = `{"id":"msg_01h8aas356v3kb8bjj8jwzab5p","role":"user",` +
 		`"parts":[{"type":"text","text":"OPERATOR MESSAGES (address these, then continue the task):\n1. first\n2. second\n"}],` +
 		`"created_at":"2026-09-08T17:27:00Z",` +
 		`"origin":"operator_batch",` +
 		`"operator_batch":[` +
 		`{"enqueue_id":1,"text":"first","source":"api"},` +
-		`{"enqueue_id":2,"text":"second","source":"schedule","source_id":"sched_123","source_label":"nightly CI check","attachment_count":1,"message_id":"msg_01m210y3yvfmhtykzhd9j6gs2x"}` +
+		`{"enqueue_id":2,"text":"second","source":"schedule","source_id":"sched_123","source_label":"nightly CI check","attachment_count":1,"message_id":"msg_01hzxke6kddj5nyaa08t7ejc0g"}` +
 		`]}`
 
 	if string(data) != want {

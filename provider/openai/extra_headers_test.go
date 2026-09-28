@@ -41,7 +41,7 @@ func TestExtraHeaders(t *testing.T) {
 	for _, tc := range []struct {
 		name, header, extraValue, want string
 	}{
-		{"reaches the upstream", "X-Neptune-User", "someone@example.com", "someone@example.com"},
+		{"reaches the upstream", "X-Boxes-User", "someone@example.com", "someone@example.com"},
 		{"cannot override Authorization", "Authorization", "Bearer stolen", "Bearer test-key"},
 		{"cannot override Content-Type", "Content-Type", "text/plain", "application/json"},
 	} {

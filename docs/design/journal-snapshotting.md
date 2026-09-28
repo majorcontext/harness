@@ -1,7 +1,7 @@
 # Journal Snapshotting — design
 
-**Status:** Harness Layer B implemented (2026-08-27); Boxes Layer A remains proposed here.
-**Repos:** harness (`majorcontext/harness`, Layer B) + boxes (`meetneptune/boxes`, Layer A).
+**Status:** Harness Layer B implemented; Boxes Layer A remains proposed here.
+**Repos:** harness (`majorcontext/harness`, Layer B) + boxes (`majorcontext/bailey`, Layer A).
 **Extends:** `boxes/docs/design/console-read-path.md` (this is the source-level fix its workstream 1 gestured at, and the seam its workstream 5 mirror plugs into).
 
 ## 1. Problem
@@ -19,7 +19,7 @@ and grows for the life of the session. Measured on the deployed Webhooks box:
   `claimForPrompt` whenever the target session is not resident (first prompt
   after harness start / wake-from-hibernation / LRU eviction), blocking the 202.
 
-The endpoint audit (2026-08-27) confirms this replay underlies the worst
+The endpoint audit confirms this replay underlies the worst
 findings (serial double-replay on `/transcript`, uncapped child transcript,
 the goal/model/thinking reads). It is **not CPU** — the box sits at ~11m during
 the reads; it is I/O + parse to rebuild the session, on the box's slow (gVisor)
@@ -45,7 +45,7 @@ has no cap at all — because nothing shared enforces the discipline.
 
 **Non-goals (explicitly deferred)**
 - Any residency/read cache in the control plane (deferred until the baseline is
-  proven — Andy: "no caching until we get the baseline architecture right").
+  proven: no caching until the baseline architecture is right).
 - The control-plane **mirror/projection** (read-path workstream 5). This design
   is the *seam* it plugs into, not the projection itself.
 - **Truncating** the journal. The journal stays the untruncated source of truth
@@ -249,7 +249,7 @@ count ≤ K), **not** raw aggregate request counts.
 - Backward compatible ⇒ old sessions with no snapshot behave as today until they
   earn their first snapshot.
 
-## 9. Decisions (locked 2026-08-27)
+## 9. Decisions (locked)
 Both harness facts are **verified** (§4.1 schema, §4.5 single-writer). Tuning/
 layout choices, decided:
 1. **K cadence = 64 records**, exposed as **config** (not a magic constant) so it
@@ -262,7 +262,7 @@ layout choices, decided:
    `Session`, bumped under `s.mu` in `writeRecord`. Persisted `record.seq`
    (option b) is a clean follow-up, not needed for v1.
 
-## 10. Implementation touch points (verified against `/Users/andybons/dev/harness`)
+## 10. Implementation touch points (verified against this repository)
 - `engine/store.go`: `LoadSession` (**:968** — snapshot-aware recovery),
   `writeRecord` (:919 — bump the seq counter / emit the append-boundary trigger),
   `scanLog` (:1528 — tail replay from > N), the `record` type (:165 — if we take

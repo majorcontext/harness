@@ -236,7 +236,7 @@ func TestStreamInlineError(t *testing.T) {
 }
 
 // TestStreamInlineInvalidRequestErrorIsPermanent is the red-first
-// regression test for NEP-5272's NEW MAJOR #5: apiError's HTTP-path
+// regression test asserting that apiError's HTTP-path
 // classifies a 400 invalid_request_error permanent (fail fast, never
 // retry), but the mid-stream "error" SSE case handled here went through
 // classifyErrorType only, which knows nothing but
@@ -285,7 +285,7 @@ func TestStreamNoAPIKey(t *testing.T) {
 }
 
 // TestStreamUsageFromMessageDelta: Bedrock-translating gateways (bifrost's
-// /anthropic route, captured live 2026-08-06) emit message_start with ALL
+// /anthropic route) emit message_start with ALL
 // usage fields zero and deliver the real input/cache counts in
 // message_delta's usage alongside output_tokens — the Bedrock convention of
 // usage-in-final-metadata, translated. Reading input usage only from

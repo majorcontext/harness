@@ -16,7 +16,7 @@ import (
 )
 
 // TestLoadSessionRepairsEmptyToolResultContent is the red-first regression
-// test for NEP-5272's B1 finding: LoadSession never called
+// test asserting that LoadSession never called
 // message.Message.Normalize, so a persisted ToolResult with empty Content
 // (an older, unpatched write — or a plugin/adapter that bypassed the live
 // Normalize path) reloaded unchanged and reproduced the exact wire wedge
@@ -37,7 +37,7 @@ func TestLoadSessionRepairsEmptyToolResultContent(t *testing.T) {
 	// and its result both persisted, but the result's Content is an empty
 	// array — the precise shape bash.go's captured-output path leaves for
 	// a command with no stdout/stderr (see message.ToolResult.SafeContent's
-	// doc comment, "Incident NEP-5272, root cause 2").
+	// doc comment).
 	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
 {"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"go"}]}}
 {"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"tc1","name":"bash","arguments":{}}]}}

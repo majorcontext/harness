@@ -30,8 +30,8 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 		{"rate limit 429", http.StatusTooManyRequests, "rate_limit_error", provider.RetryableRateLimited, true, false},
 		{"internal 500", http.StatusInternalServerError, "api_error", provider.RetryableServerError, true, false},
 		{"bad gateway 502", http.StatusBadGateway, "api_error", provider.RetryableServerError, true, false},
-		// bad request 400/invalid_request_error is the permanent case
-		// (NEP-5272): never retryable, always classified permanent so the
+		// bad request 400/invalid_request_error is the permanent case:
+		// never retryable, always classified permanent so the
 		// goal loop fails fast instead of burning a retry budget on a
 		// request shape that can never succeed.
 		{"bad request 400", http.StatusBadRequest, "invalid_request_error", "", false, true},
@@ -116,8 +116,8 @@ func TestStreamInlineErrorClassification(t *testing.T) {
 	}
 }
 
-// TestStreamTruncationClassification is the red-first test for the
-// 2026-08-06 nimble-pizza incident: a stream cut mid-turn — the connection
+// TestStreamTruncationClassification is the red-first test for a stream
+// cut mid-turn — the connection
 // dying before message_stop, with no HTTP error status and no inline error
 // event (the gateway's ~111s ceiling returned HTTP 200 and then severed the
 // body) — surfaced as a bare io.EOF, which the goal loop classified

@@ -1,8 +1,8 @@
 // Structured turn-lifecycle and goal-lifecycle logging (Options.Logger, see
-// its doc comment on server.go). Field report (2026-08-06): a session ran
-// 631 messages / 141k output tokens and produced ZERO log lines, so an
-// operator tailing `harness serve`'s stderr could not tell a box mid-turn
-// from a dead one. These tests drive the same durable-record choke points
+// its doc comment on server.go). A long-running session can produce ZERO
+// log lines, so an operator tailing `harness serve`'s stderr could not
+// tell a box mid-turn from a dead one. These tests drive the same durable-
+// record choke points
 // the existing journal tests already exercise (recordTurnEnd,
 // publishGoal's goal.* folds, and the session.error emit site in
 // handlers.go) and assert the configured slog.Logger actually receives a

@@ -4,7 +4,7 @@
 //
 // The problem. GET /session/{id}/message answered with the ENTIRE message
 // history, always. On the fleet's longest production session that is 1.4 MB
-// and 5.8 s per load, every time a console opens (meetneptune/boxes
+// and 5.8 s per load, every time a console opens (majorcontext/bailey
 // docs/design/console-read-path.md, workstream 2). A console shows the tail
 // first and pages older messages in on scroll, so it needs a bounded read.
 //

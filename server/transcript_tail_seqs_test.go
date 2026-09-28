@@ -70,7 +70,7 @@ func TestTranscriptSeqs_ParallelToMessages(t *testing.T) {
 // from the ?stream_from=1 envelope and feeds it to the REAL before_seq/
 // limit page endpoint (GET /session/{id}/message?before_seq=N&limit=K,
 // server/handlers.go's handleMessagePage -> engine.ReadMessagePage), the
-// exact use meetneptune/boxes's console pane makes of it
+// exact use majorcontext/bailey's console pane makes of it
 // (docs/design/transcript-tail-seqs.md, transcript-window.ts's
 // loadTranscriptTail).
 //

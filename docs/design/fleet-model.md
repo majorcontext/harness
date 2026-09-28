@@ -241,7 +241,7 @@ the selected box name through the environment described below.
 The name is historical: it dates from the development hub this repository
 removed. The name stays because deployed orchestrators already set it, so
 harness cannot change it unilaterally without breaking them. Renaming it is a
-coordinated change across `meetneptune/boxes`.
+coordinated change across `majorcontext/bailey`.
 
 When an orchestrator spawns a box, it generates or selects the box's NAME (§1)
 and passes it to the spawn command's environment as `HARNESS_HUB_BOX_NAME`.

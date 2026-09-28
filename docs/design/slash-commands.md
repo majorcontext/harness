@@ -585,7 +585,7 @@ but it adds a new trigger. Reintroduce it only as an explicit decision.
 cover model-invoked instructions. A second mechanism splits that story.
 
 **The control plane owns control commands.** Rejected. A harness session
-must work with no other service present. `meetneptune/boxes` has no
+must work with no other service present. `majorcontext/bailey` has no
 compaction endpoint at all, so `/compact` would exist nowhere. That repo
 adds fleet commands (`/spawn`, `/hibernate`) and wraps some harness routes
 for its own reasons — a session-less box, error remapping, a hibernated
@@ -602,7 +602,7 @@ box. Wrapping is not owning, and it is out of scope here.
 3. `cmd/harness` dispatcher: `Op` to a method call on the held session,
    for `-resume` and `-continue` runs.
 4. Console menu: `/` in the input area opens a menu built from
-   `GET /commands`. This stage lands in `meetneptune/boxes`, not here.
+   `GET /commands`. This stage lands in `majorcontext/bailey`, not here.
 5. `.agents/commands/*.md` discovery, `commands_dirs`, substitution, and
    `PromptSourceCommand`.
 

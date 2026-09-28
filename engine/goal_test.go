@@ -528,7 +528,7 @@ func TestPursueGoalUnparseableTwice(t *testing.T) {
 // former TestPursueGoalUnparseableTwiceClearsGoal (Round 3), which pinned the
 // exact opposite of today's contract: it asserted that two consecutive
 // unparseable evaluator replies cleared the goal, carrying the error as the
-// reason. That was Round 3's fix for the ses_01kx3ts0pjfap950bmr9b2js0b
+// reason. That was Round 3's fix for the ses_01hsxbrkg4wpf23h05w2q5307n
 // zombie-goal forensic finding (worker turn succeeded, evaluator failed
 // twice, goal stayed active forever) — but clearing on the FIRST failed
 // boundary traded that incident for a new one: production fleet boxes died
@@ -601,7 +601,7 @@ func TestPursueGoalUnparseableTwiceDoesNotClearGoal(t *testing.T) {
 
 	// The failed boundary is durably explained on disk too, and the goal is
 	// still active there — the exact resumability check that would have
-	// caught ses_01kx3ts0pjfap950bmr9b2js0b staying silently active forever,
+	// caught ses_01hsxbrkg4wpf23h05w2q5307n staying silently active forever,
 	// now applied to the case where the goal SHOULD still be active.
 	loaded, err := LoadSession(s.cfg, s.ID)
 	if err != nil {
@@ -775,7 +775,7 @@ func TestPursueGoalRetriesTransientWorkerError(t *testing.T) {
 // rewrite of TestPursueGoalWorkerFailsPermanentlyClearsGoal. The original
 // concern — a worker turn that keeps failing past the retry budget must
 // never just return a bare error and leave the goal a silent zombie (the
-// bug that left ses_41813d5a411c2ba5's goal active for nearly 7 hours until
+// bug that left ses_a7410dd987fcae3f's goal active for nearly 7 hours until
 // a human manually cleared it) — is unchanged; what changed is HOW
 // PursueGoal now closes that hole. A production incident showed the
 // original fix (clearing) traded one failure mode for another: OpenRouter

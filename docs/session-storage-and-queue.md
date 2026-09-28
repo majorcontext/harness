@@ -17,7 +17,7 @@ Before the index, a read of a non-live session called `LoadSession`. That
 call decodes every message body and rebuilds the whole history. The handler
 then reported a dozen scalars and dropped the rest. The list endpoint paid
 that cost once per non-live session (workstream 1 in the
-`console-read-path.md` design from the meetneptune/boxes repository).
+`console-read-path.md` design from the majorcontext/bailey repository).
 
 The index is a fold of the journal (`engine/index.go`). Three rules keep it
 honest.
@@ -168,7 +168,7 @@ names either parameter gets a `MessagePage` envelope instead — `messages`,
 needs the page's position and a client that does not must not have to learn a
 new shape. A console loads the tail and pages older messages in on scroll
 (workstream 2 and directive 1 in the `console-read-path.md` design from the
-meetneptune/boxes repository). Before this, every console open transferred
+majorcontext/bailey repository). Before this, every console open transferred
 the whole transcript.
 
 **Seq is an ordinal over the DURABLE message sequence**: message records in

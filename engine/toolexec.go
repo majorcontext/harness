@@ -126,7 +126,7 @@ func (s *Session) runToolBatch(ctx context.Context, asst *message.Message) messa
 // turn was canceled, no execution path filled its slot, or the tool
 // panicked. All three exist to hold the pairing invariant: a tool_use
 // block with no tool_result wedges a session permanently (see
-// docs/engine-request-cycle.md, NEP-5272).
+// docs/engine-request-cycle.md).
 const (
 	toolCallCanceledText = "tool call not started: the turn was canceled"
 	toolCallNoResultText = "tool call produced no result"

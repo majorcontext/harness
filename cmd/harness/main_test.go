@@ -1389,7 +1389,7 @@ func TestBaseBehaviorGuidanceGovernsCommentsAndDocs(t *testing.T) {
 	}
 }
 
-// TestBaseBehaviorGuidanceStaysUnderBudget pins the line/word ceiling Andy set
+// TestBaseBehaviorGuidanceStaysUnderBudget pins the line/word ceiling set
 // for the addition ("the prose is minimal and not too crazy long") so a later
 // clause-by-clause addition cannot silently balloon it back into a
 // Codex-sized style guide.

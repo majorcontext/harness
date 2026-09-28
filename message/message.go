@@ -289,15 +289,14 @@ type Message struct {
 //
 // # A salvaged tool call must never carry invalid Arguments
 //
-// Two production goal sessions, ses_01kx453ewfedqrg7p3c64f8sca and
-// ses_01kx453ev9ejattygpf7rbzptw, died at the start of a worker turn with
-// "json: error calling MarshalJSON for type json.RawMessage: unexpected end
-// of JSON input" — three identical attempts — and GET /session/{id}/message
-// on them then 500'd with the message.Parts wrapper of the same error,
-// while the on-disk log stayed clean (the poisoned message failed to
-// persist and was never journaled). The len(Arguments) == 0 guard
-// safeArguments already carries did not catch it: a provider stream that
-// dies mid tool_use block — a connection drop during input_json_delta
+// A worker turn can die at its start with "json: error calling MarshalJSON
+// for type json.RawMessage: unexpected end of JSON input", and
+// GET /session/{id}/message on that session then 500s with the
+// message.Parts wrapper of the same error, while the on-disk log stays
+// clean (the poisoned message fails to persist and is never journaled).
+// The len(Arguments) == 0 guard safeArguments already carries does not
+// catch it: a provider stream that dies mid tool_use block — a connection
+// drop during input_json_delta
 // accumulation, or, as provider/anthropic/anthropic.go's protocol shows, a
 // max_tokens cutoff mid tool-call, which the API still closes out with a
 // normal content_block_stop/message_delta/message_stop sequence rather than
@@ -348,8 +347,8 @@ type Message struct {
 //
 // # An empty ToolResult.Content is the same footgun, in reverse
 //
-// See SafeContent's doc comment (NEP-5272, root cause 2) for the full
-// incident. A ToolResult with empty Content transcodes to a tool_result
+// See SafeContent's doc comment for the full mechanism. A ToolResult
+// with empty Content transcodes to a tool_result
 // block every provider adapter in this package either rejects or drops.
 // Content counts as empty when it is nil, or when it carries only a blank
 // Text part — the exact shape bash.go leaves behind for a command with no
@@ -455,7 +454,7 @@ func (*ToolCall) partType() PartType { return PartToolCall }
 // A non-empty but syntactically invalid Arguments — the truncated-JSON
 // shape a stream that dies mid tool_use block can leave behind (see
 // Message.Normalize's doc comment for the full incident,
-// ses_01kx453ewfedqrg7p3c64f8sca / ses_01kx453ev9ejattygpf7rbzptw) — is
+// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 / ses_01hpf4eexb31v0ecyvesf75g5s) — is
 // normalized the same way as empty: json.RawMessage.MarshalJSON does not
 // validate its bytes either, so an invalid value "succeeds" in isolation and
 // only fails once nested inside a larger document that encoding/json must
@@ -528,22 +527,21 @@ func (tr ToolResult) isEmpty() bool {
 // SafeContent normalizes Content for marshaling and transcoding, mirroring
 // ToolCall.safeArguments's role for Arguments.
 //
-// # Incident NEP-5272, root cause 2: a null/absent tool_result content
-// wedges a session with no crash at all
+// # A null/absent tool_result content wedges a session with no crash at
+// all
 //
-// Folded into the same incident as the stop-reason orphan (see
-// engine.unexecutedToolCallStopReasonTextFmt's doc comment): replaying box
-// hyper-lemon's actual wedged history (session
-// ses_01kze9vds5fxd89dtv4accqjcp) against the live Bedrock/bifrost gateway
-// showed a request that was internally balanced — 44 tool_use, 44
-// tool_result, every pair adjacent — yet still 400'd with the identical
-// "tool_use ids were found without tool_result blocks immediately after".
-// The offending block was the tool_result for a `grep ... | head -20` that
-// matched nothing. Empty stdout made bash.go's captured-output path return
-// a ToolResult whose Content was a single blank Text part.
+// This is a distinct root cause from the stop-reason orphan (see
+// engine.unexecutedToolCallStopReasonTextFmt's doc comment): a request can
+// be internally balanced — every tool_use paired with a tool_result,
+// every pair adjacent — and still 400 with the identical "tool_use ids
+// were found without tool_result blocks immediately after" whenever one of
+// those tool_result blocks carries null or absent content. A
+// `grep ... | head -20` that matches nothing is enough: empty stdout makes
+// bash.go's captured-output path return a ToolResult whose Content is a
+// single blank Text part.
 //
-// A minimal 3-message reproduction against the live gateway isolated the
-// exact shape. Two wire shapes trigger the rejection: an explicit null,
+// A minimal 3-message reproduction isolates the exact shape. Two wire
+// shapes trigger the rejection: an explicit null,
 // and an omitted content field. The gateway ACCEPTS an empty array, an
 // empty string, and a single blank text block — only the absent forms
 // fail. That distinction matters here, because omitempty on
@@ -614,7 +612,7 @@ func (*Reasoning) partType() PartType { return PartReasoning }
 // this package and, in the ordinary case, small — a few hundred bytes. It
 // is not, however, bounded by anything: a provider is free to hand back an
 // entry orders of magnitude larger (a production session,
-// ses_01kx3ts0pjfap950bmr9b2js0b.jsonl, carries one thinking signature of
+// ses_01hsxbrkg4wpf23h05w2q5307n.jsonl, carries one thinking signature of
 // ~30KB against seven siblings of 350-600 bytes in the same run), and every
 // entry that makes it into history is replayed VERBATIM on every
 // subsequent request for the rest of the session — history only grows, it
@@ -901,8 +899,8 @@ const SyntheticOrphanIDPrefix = "synthetic-orphan-tool-result-"
 // through Session.append. Such a message exists only in the in-memory
 // history LoadSession rebuilds on every load — it is never itself
 // persisted to a session's durable log — so a durable record (a compact
-// record's FirstID/LastID, for example) must never name one. See NEP-5292
-// and engine/compact.go's Session.Compact.
+// record's FirstID/LastID, for example) must never name one. See
+// engine/compact.go's Session.Compact.
 func IsSyntheticOrphanID(id string) bool {
 	return strings.HasPrefix(id, SyntheticOrphanIDPrefix)
 }
@@ -916,7 +914,7 @@ func IsSyntheticOrphanID(id string) bool {
 // missing (Anthropic: HTTP 400 "tool_use ids were found without
 // tool_result blocks immediately after").
 //
-// # Superseded at transcode time by NormalizeForWire (NEP-5293 part 2)
+// # Superseded at transcode time by NormalizeForWire
 //
 // This function is purely additive by design — see its own "never
 // mutated in place" guarantee below — because engine.LoadSession applies
@@ -936,7 +934,7 @@ func IsSyntheticOrphanID(id string) bool {
 // function's own behavior is unchanged and remains exactly what
 // engine.LoadSession relies on.
 //
-// # Incident ses_01kx48z4rqfkpbwmzfdv1jzeg6
+// # Incident ses_01hvcs96pq1cf7x3kw0fz4a1yh
 //
 // A goal worker turn died with exactly that 400 naming one tool_use id,
 // and every subsequent goal-loop retry failed identically, killing the

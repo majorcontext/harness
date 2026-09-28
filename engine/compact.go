@@ -95,8 +95,7 @@ const compactionMaxTokens = 1024
 // every OTHER summarization failure (rate limit, transient 5xx, a
 // truncated stream). Compact treats this one specifically as a benign
 // no-op (TurnsFolded: 0, no error to the caller) rather than a hard
-// failure — see Compact's own doc comment for why (2026-08-19 incident,
-// ses_jumpy-pizza).
+// failure — see Compact's own doc comment for why.
 var errEmptyCompactionSummary = errors.New("compaction summary was empty")
 
 // CompactionSummaryBanner prefixes every synthesized compaction summary
@@ -289,9 +288,9 @@ func turnBoundaries(history []message.Message) []int {
 // this replaced and why no text-based fallback is needed). Re-summarizing a
 // real lone summary — asking a model to compress an already-compressed
 // artifact with nothing else new alongside it — has nothing left to
-// reduce; it is a real, cheap-to-detect instance of the 2026-08-19
-// ses_jumpy-pizza incident's empty-summary failure (a small keep_turns
-// landed a fold range dominated by a prior summary), caught BEFORE ever
+// reduce; it is a real, cheap-to-detect instance of the empty-summary
+// failure Compact treats as a benign no-op (a small keep_turns landed a
+// fold range dominated by a prior summary), caught BEFORE ever
 // calling the provider rather than after, the same way the not-enough-turns
 // check above short-circuits for the same reason: nothing to gain by
 // folding.
@@ -337,9 +336,9 @@ func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (C
 // compacted summary message with nothing else to reduce (see
 // isLoneExistingSummary) — both cases have nothing to gain by folding, so
 // neither ever calls the provider. An EMPTY summary from a call that DID run
-// is also not an error surfaced to the caller (2026-08-19 incident,
-// ses_jumpy-pizza): the summarization call still ran and still failed to
-// produce anything usable, so EventCompactionFailed still fires for
+// is also not an error surfaced to the caller: the summarization call
+// still ran and still failed to produce anything usable, so
+// EventCompactionFailed still fires for
 // observability, but Compact reports it the same benign TurnsFolded == 0
 // shape rather than a hard error — compaction is a best-effort relief
 // valve (§2 "Failure handling"), and forcing an operator manually unwedging
@@ -387,9 +386,9 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	spliceFirstID := history[foldStart].ID
 	spliceLastID := history[foldEnd].ID
 
-	// journaledFirstID/journaledLastID are the durable record's IDs (NEP-
-	// 5292): a synthetic repair message is never itself persisted, so a
-	// journal record naming one is unloadable forever afterward (see
+	// journaledFirstID/journaledLastID are the durable record's IDs: a
+	// synthetic repair message is never itself persisted, so a journal
+	// record naming one is unloadable forever afterward (see
 	// message.IsSyntheticOrphanID's doc comment). Walk to the nearest real,
 	// persisted message on each edge before writing anything durable. The
 	// synthetic message does not exist in raw replayed history at all, so
@@ -465,9 +464,9 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	if err != nil {
 		s.emit(Event{Type: EventCompactionFailed, Text: err.Error()})
 		// errEmptyCompactionSummary is deliberately NOT surfaced as an error
-		// to the caller (2026-08-19 incident, ses_jumpy-pizza): the
-		// summarization call ran and completed without error, it simply had
-		// nothing usable to return. EventCompactionFailed above still fires
+		// to the caller: the summarization call ran and completed without
+		// error, it simply had nothing usable to return. EventCompactionFailed
+		// above still fires
 		// (an operator/tailer watching for this is exactly who benefits from
 		// seeing it happened), but the result reported here is the same
 		// benign "nothing worth folding" shape the not-enough-turns and
@@ -616,7 +615,7 @@ func nonSyntheticIDBackward(history []message.Message, start, end int) (id strin
 // from the folded range: exactly those messages, plus one trailing RoleUser
 // instruction message, ALWAYS — never conditionally.
 //
-// # Why unconditional (2026-08-19 incident, session ses_jumpy-pizza)
+// # Why unconditional
 //
 // foldEnd (see Compact above) is the last message before the next KEPT
 // turn's leading RoleUser message — ordinarily that folded turn's own final
@@ -630,16 +629,15 @@ func nonSyntheticIDBackward(history []message.Message, start, end int) (id strin
 // You can pre-fill part of the Assistant's response"). Some models reject
 // prefill outright with a 400 invalid_request_error: "This model does not
 // support assistant message prefill. The conversation must end with a user
-// message." — the exact failure hit compacting ses_jumpy-pizza with
-// keep_turns=20, since that boundary landed on an ordinary completed turn
-// (RoleAssistant last). A DIFFERENT keep_turns on the SAME session
-// (keep_turns=8) happened to succeed only because that boundary instead
-// landed on a message.ResolveOrphanToolCalls synthetic repair message
-// (RoleTool — wire-transcoded to Anthropic's "user" role, see
-// provider/anthropic/transcode.go's `role := "user"` default) left by an
-// interrupted tool call; that is a property of where a wedged session
-// happened to leave its history, not something this call can rely on in
-// general.
+// message." — whether a fold boundary hits this failure depends on where
+// it lands: an ordinary completed turn ends in RoleAssistant and hits the
+// prefill rejection, while a boundary that instead lands on a
+// message.ResolveOrphanToolCalls synthetic repair message (RoleTool — wire-
+// transcoded to Anthropic's "user" role, see provider/anthropic/
+// transcode.go's `role := "user"` default) left by an interrupted tool call
+// ends in a user turn and does not; that is a property of where a
+// session's history happens to put the boundary, not something this call
+// can rely on in general.
 //
 // Rather than special-case "does folded end in RoleAssistant," append the
 // actual "summarize this" instruction (compactionInstructionText) as its
@@ -813,7 +811,7 @@ func spliceCompactBounds(history []message.Message, start, end int, summary mess
 // indexOfMessageID returns the index of the first message in history whose
 // ID equals id, and whether one was found. Used by LoadSession's recCompact
 // replay (store.go) to decide, BEFORE calling spliceCompact, whether a
-// record's LastID needs NEP-5292's heal path below.
+// record's LastID needs healCompactFoldEnd's heal path below.
 func indexOfMessageID(history []message.Message, id string) (int, bool) {
 	for i, m := range history {
 		if m.ID == id {
@@ -824,8 +822,8 @@ func indexOfMessageID(history []message.Message, id string) (int, bool) {
 }
 
 // healCompactFoldEnd re-derives a compact record's fold-end message ID when
-// the recorded LastID cannot be found verbatim in replayed history
-// (NEP-5292, candidate fix 3): an unpatched build could journal
+// the recorded LastID cannot be found verbatim in replayed history: an
+// unpatched build could journal
 // message.ResolveOrphanToolCalls's synthetic repair-message ID as LastID,
 // but that message is minted fresh on every LoadSession, AFTER the scan
 // loop that calls this runs — it was never itself persisted, so this replay
@@ -905,11 +903,11 @@ const bytesPerTokenEstimate = 4
 // byte heuristic.
 const imageBlockTokenEstimate = 1600
 
-// estimatePromptTokensFromHistory is maybeAutoCompact's fallback for the
-// 2026-08-06 nimble-pizza incident: a Bedrock-via-gateway route reported
-// InputTokens=0, CacheReadTokens=0, CacheWriteTokens=0 on EVERY turn of a
-// 631-message session (OutputTokens was correct throughout, so this was a
-// prompt-accounting gap on that route, not a dead provider). maybeAutoCompact's
+// estimatePromptTokensFromHistory is maybeAutoCompact's fallback for a
+// Bedrock-via-gateway route that reports InputTokens=0, CacheReadTokens=0,
+// CacheWriteTokens=0 on every turn of a session (OutputTokens still
+// correct throughout, so this is a prompt-accounting gap on that route,
+// not a dead provider). maybeAutoCompact's
 // threshold check sums exactly those three fields; permanently zero meant
 // `over` could never become true, so automatic compaction could never fire on
 // that route no matter how large history actually grew — the session ran to
@@ -1084,8 +1082,8 @@ func (s *Session) maybeAutoCompact(ctx context.Context) error {
 		// All-zero across every input component on a turn that DID complete
 		// (haveLastUsage is true) is a different case entirely: it is
 		// missing data, not evidence of a cheap prompt, and treating it as
-		// "0 tokens, never over" is exactly the nimble-pizza failure mode
-		// (see estimatePromptTokensFromHistory's doc comment). Falling back
+		// "0 tokens, never over" is exactly the broken-accounting failure mode
+		// estimatePromptTokensFromHistory exists to guard against. Falling back
 		// to the size-derived estimate here keeps this overflow-prevention
 		// layer alive on a route with broken input-usage accounting; it is
 		// used for this threshold comparison ONLY and is never written into

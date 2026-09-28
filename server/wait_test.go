@@ -170,11 +170,12 @@ func TestCompositeStateGoalRunningDuringBlockedWorker(t *testing.T) {
 }
 
 // TestCompositeStateBusyDuringForcedIdlePause is the integration-level red
-// test for the nimble-pizza incident (2026-08-06, live): a session whose
+// test for a state-reporting gap: a session whose
 // goal is worker-parked (pause_reason "worker_failure", forcesIdlePause==
 // true) read state="idle" even while an ordinary prompt turn was actively
-// streaming — an operator watching the monitor concluded the box was dead
-// mid-turn. forceIdle exists because no loop drives the GOAL; it must never
+// streaming — an operator watching the monitor could conclude the box was
+// dead mid-turn. forceIdle exists because no loop drives the GOAL; it must
+// never
 // claim a running TURN isn't running. Mirrors
 // TestCompositeStateGoalRunningDuringBlockedWorker's shape (same dual GET
 // /session + GET /session/status check) but for the forceIdle case instead

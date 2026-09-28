@@ -87,8 +87,9 @@ func TestNoEffortKeepsSampling(t *testing.T) {
 // items its stateless multi-turn tool use requires; only an explicit "reasoning
 // off" intent drops them (symmetric with the anthropic thinking-block strip:
 // shipping a stored item while the request omits `reasoning` is rejected).
-// (Regression: NEP-5272 review of PR #117 — the prior loop asserted stripping
-// on BOTH EffortUnset and EffortOff, codifying the default-session data loss.)
+// An earlier version of this loop asserted stripping on BOTH EffortUnset
+// and EffortOff, codifying the default-session data loss this test guards
+// against.
 func TestReasoningStrippedWhenOff(t *testing.T) {
 	history := func() []message.Message {
 		return []message.Message{
@@ -140,7 +141,7 @@ func TestReasoningStrippedWhenOff(t *testing.T) {
 	}
 }
 
-// TestReasoningReplayedOnUnsetToolContinuation is the NEP-5272 regression guard
+// TestReasoningReplayedOnUnsetToolContinuation is the regression guard
 // for the gpt-5 tool-continuation shape. A multi-turn TOOL continuation at the
 // DEFAULT (EffortUnset) effort — nothing sets req.Effort, exactly as every
 // harness run/serve session — MUST replay the stored encrypted reasoning item.

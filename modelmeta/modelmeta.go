@@ -120,9 +120,9 @@ var bedrockAnthropicContextWindows = map[string]int{
 }
 
 // bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
-// for the Fireworks models the boxes fleet ships, keyed by the last path
-// segment. firerouter has no models.dev entry; its value is the smallest
-// window among the open-source targets it can redirect to.
+// for the Fireworks models a Bifrost deployment ships, keyed by the last
+// path segment. firerouter has no models.dev entry; its value is the
+// smallest window among the open-source targets it can redirect to.
 var bifrostFireworksContextWindows = map[string]int{
 	"firerouter":             1_000_000,
 	"kimi-k3":                1_048_576,
@@ -133,7 +133,7 @@ var bifrostFireworksContextWindows = map[string]int{
 }
 
 // bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
-// for the Vertex Gemini models the boxes fleet ships.
+// for the Vertex Gemini models a Bifrost deployment ships.
 var bifrostVertexContextWindows = map[string]int{
 	"gemini-3.1-pro-preview": 1_048_576,
 	"gemini-3.5-flash-lite":  1_048_576,
@@ -148,7 +148,7 @@ var bifrostVertexContextWindows = map[string]int{
 // treat that 0 as "unknown", never as a usable size.
 //
 // ref.Model is normalized before lookup because the boxes platform
-// (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
+// (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
 // refs exclusively — e.g. "anthropic/anthropic/claude-fable-5" or
 // "anthropic/bedrock_mantle/anthropic.claude-opus-5" — and
 // message.ParseModelRef splits on the FIRST slash only (see ModelRef's doc
@@ -196,7 +196,7 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		tokens, ok = openaiContextWindows[model]
 	case codexProvider:
 		// A ref routed through the ChatGPT Codex backend (see
-		// meetneptune/boxes internal/api/codex_models.go, which mints refs
+		// majorcontext/bailey internal/api/codex_models.go, which mints refs
 		// like "codex/gpt-5.6-sol") names the SAME underlying OpenAI model
 		// its "openai/*" counterpart does — openaiContextWindows already
 		// keys every codex model boxes uses (gpt-5.6-sol, gpt-5.6-terra,
@@ -238,7 +238,7 @@ const claudeCodeProvider = "claude-code"
 
 // codexProvider is the message.ModelRef.Provider value the boxes platform
 // mints for a ChatGPT Codex backend model (see
-// meetneptune/boxes internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
+// majorcontext/bailey internal/api/codex_models.go, e.g. "codex/gpt-5.6-sol")
 // — distinct from provider/openai.CodexFamily, which names an "openai"-type
 // provider's Client.Family for the same backend's wire format, not a
 // message.ModelRef.Provider value this package switches on.

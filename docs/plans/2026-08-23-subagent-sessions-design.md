@@ -1,6 +1,6 @@
 # Subagent sessions
 
-Status: design approved in conversation (Andy, 2026-08-23); this document is
+Status: design approved in conversation (2026-08-23); this document is
 the written spec for review before implementation planning.
 
 ## Motivation

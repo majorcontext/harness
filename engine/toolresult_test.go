@@ -677,7 +677,7 @@ func TestLoadSessionRegistersReadToolResultForExistingHandles(t *testing.T) {
 // advances the counter, so a burned handle can never be reissued.
 func TestLoadSessionSkipsMalformedRetainedRecord(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_01m0g96daxegnaqwtqe135ah3k"
+	id := "ses_01hdrcmt74h24kxn5cxjn810mg"
 	log := strings.Join([]string{
 		`{"type":"session","id":"` + id + `","created_at":"2026-08-19T00:00:00Z"}`,
 		`{"type":"toolresult.retained","tool_result":{"handle":"trh_1","tool":"bash","bytes":100,"lines":5}}`,
@@ -741,7 +741,7 @@ func TestLoadSessionSkipsMalformedRetainedRecord(t *testing.T) {
 // result must NOT mint trh_7 again.
 func TestLoadSessionAdvancesNextIDPastHandlesSeenInHistoryText(t *testing.T) {
 	dir := t.TempDir()
-	id := "ses_01m0g96daxegnaqwtqe135ah4x"
+	id := "ses_01h6dwgwgt4w0awb4pyvrwbjq2"
 	previewHeader := toolResultPreviewHeader("trh_7", "bash", 5000, 100, 500)
 	log := strings.Join([]string{
 		`{"type":"session","id":"` + id + `","created_at":"2026-08-19T00:00:00Z"}`,

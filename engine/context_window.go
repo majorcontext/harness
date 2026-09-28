@@ -1,11 +1,11 @@
 // Automatic compaction's context window: derived from the session's MODEL
 // when the operator hasn't set one explicitly. See docs/design/
 // context-compaction.md for the compaction mechanism itself (sound and
-// unchanged by this file) and the jumpy-pizza incident this file exists to
-// close: Config.ContextWindowTokens was opt-in, the boxes platform set it
-// nowhere, so compaction never armed on any box and a session died with
-// "context exhausted: prompt 1136916 tokens > limit 1000000" instead of
-// compacting first.
+// unchanged by this file) and the gap this file exists to close:
+// Config.ContextWindowTokens was opt-in, a deploying platform could leave
+// it unset everywhere, so compaction never armed on any session and a
+// session died with "context exhausted: prompt 1136916 tokens > limit
+// 1000000" instead of compacting first.
 package engine
 
 import (

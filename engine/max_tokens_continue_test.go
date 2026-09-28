@@ -41,8 +41,8 @@ func containsSubstring(texts []string, substr string) bool {
 	return false
 }
 
-// TestMaxTokensWithToolCallAutoContinues reproduces the box
-// harness-parallel-tools incident: the provider stops mid-tool-call
+// TestMaxTokensWithToolCallAutoContinues reproduces a real failure mode:
+// the provider stops mid-tool-call
 // emission with stop reason "max_tokens". Before this fix,
 // appendUnexecutedToolCallResults synthesized the usual unexecuted-call
 // result and runAgenticLoop returned -- the session then sat idle with no

@@ -3,7 +3,7 @@
 Status: implemented.
 Extends: `docs/design/journal-snapshotting.md` (Layer B), `docs/design/
 live-event-tip-cursor.md`, `docs/design/transcript-tail-seqs.md`.
-Related (other repo): `meetneptune/boxes`'s `docs/design/
+Related (other repo): `majorcontext/bailey`'s `docs/design/
 transcript-backward-pagination.md` and `docs/design/
 transcript-scroll-first-load.md`.
 

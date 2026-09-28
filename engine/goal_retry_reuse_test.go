@@ -530,8 +530,8 @@ func (p *fallbackAnchorRegressionProvider) Stream(_ context.Context, req *provid
 // directive and drops none. Across this test's ten retryable-tier
 // failures (well under goalRetryableMaxAttempts = 12) that means ten
 // extra duplicate directives, live AND in the durable log — the exact
-// NEP-5272 growth this package exists to eliminate, reopened on this one
-// path.
+// unbounded duplicate growth this package exists to eliminate, reopened on
+// this one path.
 //
 // Call 1 makes a tool call the hook denies. Calls 2-11 (ten retryable-tier
 // failures — attempt 1's own post-deny continuation, then nine more

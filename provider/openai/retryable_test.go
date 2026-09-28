@@ -191,7 +191,7 @@ func assertExhaustionClassification(t *testing.T, err error, wantExhausted bool,
 }
 
 // TestStreamTruncationClassification mirrors provider/anthropic's test of
-// the same name (see the 2026-08-06 incident described there): a stream cut
+// the same name: a stream cut
 // before response.completed must be classified
 // provider.RetryableStreamTruncated, never surface as a bare,
 // deterministic-looking io.EOF.

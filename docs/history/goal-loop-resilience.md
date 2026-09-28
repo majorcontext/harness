@@ -6,11 +6,11 @@ the current goal-loop contract.
 ## Incident
 
 Two production sessions were found with an active goal that had stopped
-making progress: `ses_41813d5a411c2ba5.jsonl` and, earlier,
-`ses_55e4ae35d8344540.jsonl`. Both show the same shape. Immediately after a
+making progress: `ses_a7410dd987fcae3f.jsonl` and, earlier,
+`ses_ceb90278a159c305.jsonl`. Both show the same shape. Immediately after a
 `goal.eval` "NOT MET" verdict, the fixed-template guidance message is
 appended to the log as the next directive — and then nothing. No assistant
-turn, no error record, no further `goal.eval`. In `ses_41813d5a411c2ba5.jsonl`
+turn, no error record, no further `goal.eval`. In `ses_a7410dd987fcae3f.jsonl`
 the guidance message is timestamped `2026-07-09T05:20:12Z`; the very next
 record in the file is a bare `goal.cleared`, followed by a message
 timestamped `2026-07-09T12:12:52Z` — nearly seven hours later — that reads:
@@ -21,7 +21,7 @@ timestamped `2026-07-09T12:12:52Z` — nearly seven hours later — that reads:
 That `goal.cleared` and the recovery message are not something the engine
 produced. They are a human, seven hours later, noticing the session had gone
 silent with an active goal, clearing it by hand, and manually steering the
-agent to at least commit and push whatever it had. `ses_55e4ae35d8344540.jsonl`
+agent to at least commit and push whatever it had. `ses_ceb90278a159c305.jsonl`
 shows the identical pattern twice in a row: a `goal.set` → guidance message →
 silence → (manually cleared) → `goal.set` (a manual resume) → guidance
 message → silence → (manually cleared) again.
@@ -113,7 +113,7 @@ longer current; it is kept here as a record of what changed and why.
 Originally: an evaluator call that failed outright (a provider error, or two
 unparseable replies in a row, see `errEvaluatorUnparseable`) was the one
 edge out of ACTIVE that had no clear-and-explain treatment. One production
-session (`ses_01kx3ts0pjfap950bmr9b2js0b.jsonl`) hit exactly this: the
+session (`ses_01hsxbrkg4wpf23h05w2q5307n.jsonl`) hit exactly this: the
 worker turn succeeded, the evaluator returned unparseable output twice in a
 row, `session.error` was emitted, and the goal stayed active in the log
 forever — turns=0, no `goal.eval` ever, nothing to explain the silence
@@ -203,7 +203,7 @@ asked for, not a claim that the risk is eliminated.
 ### Incident
 
 Two production days, one shared Anthropic overload wave: four separate goal
-loops (`ses_01kx6423nef95t30vxgs36p80s`, `ses_01kx6423rne45s73xx1r816g1n`, and
+loops (`ses_01h72nha9e8takdawwdm69phh4`, `ses_01hxqhq478wxwg5kxjnr6cay5n`, and
 two more on other sessions, all on volume `harness-dev-sessions-v2`) died
 within minutes of each other with
 

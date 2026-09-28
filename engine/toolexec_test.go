@@ -588,7 +588,7 @@ func TestBatchPartialFailureLetsSiblingsFinish(t *testing.T) {
 }
 
 // TestBatchCancellationStillYieldsOneResultPerCall is the orphan-pairing
-// guard (docs/engine-request-cycle.md, NEP-5272): a tool_use block with no
+// guard (docs/engine-request-cycle.md): a tool_use block with no
 // tool_result wedges a session forever, so an aborted turn must still produce exactly one
 // result per call — never fewer, and never a duplicate.
 //

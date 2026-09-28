@@ -72,10 +72,10 @@ var errEvaluatorUnparseable = errors.New("engine: goal evaluator returned unpars
 
 // goalStreamTruncatedMaxAttempts bounds worker-turn attempts whose failure
 // is classified provider.RetryableStreamTruncated — a response stream that
-// died before its terminal event. Truncation is retryable (the 2026-08-06
-// incident's truncated turns were followed by clean successes minutes
-// later on the same model — the cut was a gateway's per-response ceiling,
-// not a dead provider) but it is NOT weather: waiting longer does not
+// died before its terminal event. Truncation is retryable (a truncated
+// turn is commonly followed by a clean success minutes later on the same
+// model — the cut is a gateway's per-response ceiling, not a dead
+// provider) but it is NOT weather: waiting longer does not
 // raise a stream ceiling, and every retry re-prompts a full turn at full
 // input cost, so it must never ride goalRetryableMaxAttempts' 12-attempt/
 // ~30-minute schedule. Three attempts on the short goalRetryDelay
@@ -428,8 +428,8 @@ type goalWorkerParkedError struct {
 	err       error
 	attempts  int
 	retryable bool
-	// permanent is true when err was classified provider.AsPermanent (NEP-
-	// 5272 defect 1) — a fail-fast, single-attempt park, distinct from an
+	// permanent is true when err was classified provider.AsPermanent — a
+	// fail-fast, single-attempt park, distinct from an
 	// ordinary deterministic exhaustion (goalWorkerRetries+1 attempts). Only
 	// ever true when retryable is false (the two classifications are
 	// mutually exclusive — see provider.AsPermanent's doc comment); named
@@ -482,8 +482,9 @@ func IsGoalWorkerParked(err error) bool {
 // rate_limited/server_error, see provider.RetryableClass), so this string
 // only needs to say which TIER parked the turn, not repeat that detail.
 //
-// permanent (NEP-5272 defect 1) distinguishes a fail-fast, single-attempt
-// park (a malformed-request-shape error provider.AsPermanent classified) —
+// permanent (the permanent-error early-park case) distinguishes a
+// fail-fast, single-attempt park (a malformed-request-shape error
+// provider.AsPermanent classified) —
 // which never spent the deterministic budget at all — from an ordinary
 // exhausted-retries park, so an operator reading this reason is never
 // misled into thinking goalWorkerRetries+1 identical attempts happened when
@@ -807,8 +808,8 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 				s.clearGoal(err.Error())
 				return nil, err
 			}
-			// NEP-5272 defect 1: a permanent-classified error (see
-			// promptTurnWithRetry's fail-fast branch above) is, like context
+			// A permanent-classified error (see promptTurnWithRetry's
+			// fail-fast branch above) is, like context
 			// overflow, never classified retryable — but unlike context
 			// overflow it does NOT clear: the malformed request shape that
 			// produced it might be fixed by something else entirely before a
@@ -1083,8 +1084,8 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 	// anchor's tail then never again shrinks to a droppable shape, so
 	// EVERY later fallback re-appends yet another duplicate and drops none
 	// — up to one per remaining attempt over a long outage
-	// (goalRetryableMaxAttempts = 12), the exact NEP-5272 growth this
-	// package exists to eliminate, reopened on this one path. Re-anchoring
+	// (goalRetryableMaxAttempts = 12), the exact unbounded duplicate growth
+	// this package exists to eliminate, reopened on this one path. Re-anchoring
 	// to right before the fresh directive each fallback appends means the
 	// NEXT attempt's tail is that directive alone, so directiveReuseEligible
 	// picks it up and reuse resumes — bounding the damage to the one
@@ -1214,7 +1215,7 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			return attempts, err
 		}
 		if !providerExhausted && provider.AsPermanent(err) {
-			// NEP-5272 defect 1: a provider error classified permanent (an
+			// A provider error classified permanent (an
 			// HTTP 400 invalid_request_error naming a structurally
 			// malformed request — e.g. an orphaned tool_use left over from
 			// an earlier bug) is, like context overflow above, deterministic
@@ -1253,8 +1254,9 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// of waiting and trying again — regardless of classification.
 			return attempts, err
 		}
-		// NEP-5272 defect 2. Before docs/design/goal-retry-directive-reuse.md,
-		// NOT every branch below this point was about to retry — the three
+		// The retry-directive-duplication case. Before
+		// docs/design/goal-retry-directive-reuse.md, NOT every branch below
+		// this point was about to retry — the three
 		// budget-exhaustion returns just below (deterministic, and the two
 		// goalRetryableExhaustedError cases) PARK instead, and a parked
 		// attempt's directive must stay in live history verbatim (see
@@ -1416,8 +1418,8 @@ func (s *Session) lastMessageID() string {
 // all; it reuses that exact message instead (runAgenticLoop, engine.go), so
 // no duplicate is ever appended and nothing here needs to run.
 //
-// This originated as NEP-5272 defect 2's mitigation (operator finding on
-// box hyper-lemon): before the reuse fix, EVERY retry re-issued the
+// This originated as a mitigation for the retry-directive-duplication
+// case: before the reuse fix, EVERY retry re-issued the
 // directive through Prompt, which appends whatever text it is given as a
 // brand-new user message with no notion of "this is a retry, don't
 // duplicate it" — N failed attempts left N unanswered copies in history,

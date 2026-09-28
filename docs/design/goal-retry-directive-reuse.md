@@ -14,8 +14,7 @@ a directive already in history."
 
 N failed attempts therefore write N identical, unanswered directives to the
 durable log. Every later request in the session pays input cost for all of
-them. The production complaint on box hyper-lemon was "a single wake of the
-box added 3 more."
+them: a single wake of a stalled box can add several more.
 
 `dropUnansweredDirective` (`engine/goal.go`) removes the copy from LIVE
 `s.history` before the next attempt. It cannot touch the log. So a resumed
@@ -94,9 +93,10 @@ So in a mixed-version fleet:
    be absent. `spliceCompact` returns a hard error and the session never
    loads again.
 
-That is the same permanent-wedge class as NEP-5272 and NEP-5292, reached
-through a third door. A cost optimization must not be able to wedge a
-session. NEP-5292's `turns_folded` heal would soften step 3, but relying on
+That is the same permanent-wedge class as the orphaned-tool-call and
+orphan-fold-boundary defects, reached through a third door. A cost
+optimization must not be able to wedge a session. The `turns_folded` heal
+would soften step 3, but relying on
 one fix to make another one safe is a poor trade when a design with no
 format change exists.
 

@@ -356,16 +356,14 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		// message.Reasoning{Text: ""}, consumeClaudeCodeStream's
 		// `if r.Text != ""` guard emits no EventReasoningDelta, and every
 		// consumer sees a signature-only part it can neither render nor
-		// align against a streamed row. The boxes console rendered a turn
-		// TWICE off that asymmetry (meetneptune/boxes#599).
+		// align against a streamed row. A downstream console rendered a turn
+		// TWICE off that asymmetry.
 		//
 		// --thinking-display is the CLI's own override for that default and
 		// the ONLY channel that carries it: the `showThinkingSummaries`
-		// setting does not reach the request (verified — it returns an empty
-		// thinking field), and the API parameter is not otherwise reachable
-		// through the CLI. Verified end to end against a live Opus
-		// subscription session: 383 characters of summarized thinking where
-		// the same prompt without the flag returned 0.
+		// setting does not reach the request and returns an empty thinking
+		// field, and the API parameter is not otherwise reachable through the
+		// CLI.
 		//
 		// The flag is real but NOT listed in `claude --help` (`claude
 		// --thinking-display bogus` answers "Allowed choices are summarized,
@@ -1363,9 +1361,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// if a LATER envelope's own message happened to overwrite the
 			// stranded row, so a turn ending on its text (no tool call
 			// after it) left the duplicate on screen until the viewer
-			// reloaded. Reported twice against the boxes console
-			// (meetneptune/boxes#599 fixed a different orphan shape; this
-			// is the one that produced the plain-text repro).
+			// reloaded.
 			emitClaudeCodeParts(msg.Parts[alreadyStreamed:], msg.ID, msg.CreatedAt)
 			pendingAssistant = &msg
 			pendingAssistantUpstream = upstream

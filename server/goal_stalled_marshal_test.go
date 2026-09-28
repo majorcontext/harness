@@ -15,7 +15,7 @@ import (
 
 // TestMessageEndpointTruncatedGoalStalledTail is the forensic regression
 // guard for GET /session/{id}/message 500ing on the incident session
-// (ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a cold (non-resident) session whose
+// (ses_01hntn4vmryer5nq9apyjvzk2h.jsonl): a cold (non-resident) session whose
 // on-disk log ends in a truncated goal.stalled record — the shape a crash
 // mid-append leaves, per scanLog's documented discipline (engine/store.go) —
 // must still be gettable and its messages still servable, unaffected by the

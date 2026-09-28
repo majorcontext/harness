@@ -22,10 +22,9 @@ import (
 //
 // A permanently silent stream — no bytes, no EOF, no error — is otherwise
 // unbounded: nothing in the engine or the adapters would ever cut it, and
-// the turn (and any goal loop driving it) wedges forever. Field report
-// 2026-08-06 (finding 2b) requested exactly this bound after observing
-// streams stall with single-digit chunk counts while the transport stayed
-// open.
+// the turn (and any goal loop driving it) wedges forever. This bound
+// exists because a stream can stall with single-digit chunk counts while
+// the transport stays open.
 //
 // All methods are nil-receiver-safe so the disabled path costs nothing.
 type streamWatchdog struct {

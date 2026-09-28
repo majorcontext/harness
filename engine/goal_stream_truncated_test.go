@@ -16,8 +16,8 @@ import (
 // truncatedProviderErr builds the error shape every provider adapter now
 // returns when a response stream dies before its terminal event (see
 // provider.MarkStreamTruncated and the adapters' stream-read boundaries):
-// the 2026-08-06 nimble-pizza incident's failure, where a gateway cut
-// streams at a ~111s ceiling with HTTP 200 already sent.
+// a gateway can cut a stream at a ~111s ceiling with HTTP 200 already
+// sent.
 func truncatedProviderErr() error {
 	return provider.MarkStreamTruncated(io.EOF)
 }

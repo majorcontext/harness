@@ -32,7 +32,7 @@ func TestContextWindowOpenAI(t *testing.T) {
 
 // TestContextWindowCodex proves a "codex"-provider ref (the boxes platform's
 // form for a ChatGPT Codex backend model — see
-// meetneptune/boxes internal/api/codex_models.go, which mints refs like
+// majorcontext/bailey internal/api/codex_models.go, which mints refs like
 // "codex/gpt-5.6-sol") resolves from the SAME openaiContextWindows table the
 // "openai" provider case already uses: each model is served over two
 // different transports (openai/<model> and codex/<model>) but names one
@@ -94,10 +94,10 @@ func TestContextWindowBedrockVersionedSuffix(t *testing.T) {
 	}
 }
 
-// TestContextWindowBifrost verifies the boxes fleet default
+// TestContextWindowBifrost verifies a Bifrost deployment's default
 // ("bifrost/fireworks/accounts/fireworks/routers/firerouter") and every
-// other bifrost/<vendor>/<path> ref the boxes catalog ships resolves a
-// known window.
+// other bifrost/<vendor>/<path> ref this table's Bifrost catalog covers
+// resolves a known window.
 func TestContextWindowBifrost(t *testing.T) {
 	cases := []struct {
 		refString string
@@ -127,7 +127,7 @@ func TestContextWindowBifrost(t *testing.T) {
 }
 
 // TestContextWindowBoxesThreeSegmentRefs verifies that the boxes platform
-// (meetneptune/boxes internal/api/bifrost_models.go) passes THREE-segment
+// (majorcontext/bailey internal/api/bifrost_models.go) passes THREE-segment
 // model refs exclusively, e.g. "anthropic/anthropic/claude-fable-5" and
 // "anthropic/bedrock_mantle/anthropic.claude-opus-5". message.ParseModelRef
 // splits on the FIRST slash only, so these refs parse to

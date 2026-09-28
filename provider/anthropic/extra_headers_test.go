@@ -8,10 +8,10 @@ import "testing"
 func TestExtraHeadersReachTheUpstream(t *testing.T) {
 	h := captureHeaders(t, &Client{
 		APIKey:       "test-key",
-		ExtraHeaders: map[string]string{"X-Neptune-User": "someone@example.com"},
+		ExtraHeaders: map[string]string{"X-Boxes-User": "someone@example.com"},
 	})
-	if got := h.Get("X-Neptune-User"); got != "someone@example.com" {
-		t.Errorf("X-Neptune-User = %q, want %q", got, "someone@example.com")
+	if got := h.Get("X-Boxes-User"); got != "someone@example.com" {
+		t.Errorf("X-Boxes-User = %q, want %q", got, "someone@example.com")
 	}
 }
 

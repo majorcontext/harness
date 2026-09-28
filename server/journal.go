@@ -1081,7 +1081,7 @@ func (s *Server) syncMessages(sessionID string) {
 // after it, with no REPLAY window that can re-deliver (or, symmetrically,
 // permanently drop) a message straddling the two reads — the tail-load
 // versus live-stream race the console's duplicate-render bug traces to (see
-// the meetneptune/boxes repo's docs/console-read-path.md, and
+// the majorcontext/bailey repo's docs/console-read-path.md, and
 // handleMessages' ?stream_from=1 branch, this function's only caller).
 //
 // It is syncMessages (above) PLUS one extra locked read: sess.History() and
@@ -1141,7 +1141,7 @@ func (s *Server) syncMessages(sessionID string) {
 // argument, and its history in docs/design/transcript-tail-seqs.md). 0
 // for one with none (a message.IsSyntheticOrphanID load-time repair). It
 // exists so a caller that BUDGETS this history down to a shorter tail
-// (meetneptune/boxes's byte-budget console-bootstrap read, which trims
+// (majorcontext/bailey's byte-budget console-bootstrap read, which trims
 // client-side after this call returns the whole thing) can still learn
 // which durable ordinal its own kept window starts at, and page backward
 // from a real anchor on its FIRST "load older" request instead of

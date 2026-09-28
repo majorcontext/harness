@@ -34,7 +34,7 @@ import (
 // (engine.Session.PromptWithOrigin). A blob no provider can accept would
 // therefore be persisted first and rejected on every turn afterwards — the
 // exact wedge imageclamp exists to heal (see imageclamp's package doc:
-// three Neptune boxes, oversized screenshots, a 400 that survived respawn).
+// three boxes, oversized screenshots, a 400 that survived respawn).
 // imageclamp handles the sizes it can repair by downscaling; this gate
 // handles the ones nothing can repair — a type no provider decodes, bytes
 // that are not the image they claim to be, an attachment with no payload.

@@ -56,7 +56,7 @@ func TestStreamHTTPErrorClassification(t *testing.T) {
 }
 
 // TestStreamTruncationClassification mirrors provider/anthropic's test of
-// the same name (see the 2026-08-06 incident described there): a stream cut
+// the same name: a stream cut
 // before the [DONE] sentinel — no HTTP error, no error payload, the body
 // just ends — must be classified provider.RetryableStreamTruncated, never
 // surface as a bare, deterministic-looking io.EOF.

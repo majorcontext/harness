@@ -616,7 +616,7 @@ func TestLoadLegacySessionFixture(t *testing.T) {
 }
 
 // TestGoalStalledRecordRoundTrip is the forensic regression guard for the
-// goal-supervised session incident (ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a
+// goal-supervised session incident (ses_01hntn4vmryer5nq9apyjvzk2h.jsonl): a
 // worker turn failed with "json: error calling MarshalJSON for type
 // json.RawMessage: unexpected end of JSON input" (see
 // TestToolCallEmptyArgumentsMarshal in the message package for the exact
@@ -746,7 +746,7 @@ func TestLoadSessionRepairsOrphanedToolCalls(t *testing.T) {
 	// must repair the history at ingest so every downstream consumer (the
 	// next prompt's request, GET /message, goal replay) sees a
 	// protocol-valid history, durably — not just at transcode time.
-	// Incident: ses_01kx48z4rqfkpbwmzfdv1jzeg6 (goal killed by Anthropic
+	// Incident: ses_01hvcs96pq1cf7x3kw0fz4a1yh (goal killed by Anthropic
 	// 400 "tool_use ids were found without tool_result blocks").
 	dir := t.TempDir()
 	id := "ses_6666666666666666"

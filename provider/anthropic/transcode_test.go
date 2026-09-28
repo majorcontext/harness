@@ -166,7 +166,7 @@ func TestTranscodeThinkingReplay(t *testing.T) {
 // replayed verbatim on every subsequent request for the rest of the
 // session (see message.ProviderData's doc comment, "Unbounded replay is a
 // request-size/time bomb") — a production session
-// (ses_01kx3ts0pjfap950bmr9b2js0b.jsonl) carried a ~30KB signature where
+// (ses_01hsxbrkg4wpf23h05w2q5307n.jsonl) carried a ~30KB signature where
 // its seven siblings in the same run were 350-600 bytes. This is a
 // synthetic fixture of that shape, not session-log content: an oversized
 // signature must be dropped exactly like a foreign-provider or
@@ -304,10 +304,10 @@ func TestTranscodeReadFileImageArrivesAsRealWireImageBlock(t *testing.T) {
 }
 
 // TestTranscodeEmptyToolResultContentNeverOmitsWireField is the red-first
-// regression test for NEP-5272's B1 finding: a ToolResult with empty
-// Content used to transcode to a tool_result block whose Content ended up
+// regression test for a ToolResult with empty
+// Content that used to transcode to a tool_result block whose Content ended up
 // nil/empty, and apiBlock.Content's own "content,omitempty" tag then
-// dropped the key from the wire entirely — the exact shape the live
+// dropped the key from the wire entirely — the exact shape an
 // Anthropic/Bedrock gateway 400s with "tool_use ids were found without
 // tool_result blocks immediately after", even though the block IS present,
 // because it carries no recognizable content. transcodeParts now reads
@@ -426,7 +426,7 @@ func TestTranscodeEmptyHistoryFails(t *testing.T) {
 }
 
 // TestTranscodeOrphanToolUseMidHistory reproduces the mechanism behind
-// production incident ses_01kx48z4rqfkpbwmzfdv1jzeg6 at the transcoder
+// production incident ses_01hvcs96pq1cf7x3kw0fz4a1yh at the transcoder
 // level: an assistant tool_use with no result at all in history (the turn
 // died before the engine could execute it, or append one — see
 // engine/engine.go's own primary fix), buried mid-transcript, followed by
@@ -517,7 +517,7 @@ func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
 }
 
 // TestTranscodeSplitAssistantMessageRelocatesRealResult is the golden,
-// wire-level test for NEP-5293 part 2's fourth gap shape: a real
+// wire-level test for NormalizeForWire's fourth gap shape: a real
 // ToolResult separated from its ToolCall by an intervening assistant
 // message. It asserts the ACTUAL apiMessage sequence transcodeRequest
 // emits, not just the message-package oracle's structural check —
@@ -591,8 +591,8 @@ func TestTranscodeSplitAssistantMessageRelocatesRealResult(t *testing.T) {
 // golden, wire-level test for the fifth gap: a ToolResult whose CallID
 // matches no ToolCall anywhere in history at all. Before the demotion fix,
 // this transcoded straight through as a tool_result block naming an id no
-// tool_use ever carried — verified live against this real transcoder — the
-// SAME permanent-wedge HTTP 400 class as NEP-5272 ("tool_use ids were
+// tool_use ever carried — the
+// SAME permanent-wedge HTTP 400 class ("tool_use ids were
 // found without tool_result blocks immediately after" is the mirror image
 // of this: a tool_result naming a tool_use that was never made). Neither
 // counting nor relocation can ever answer an id with zero ToolCalls

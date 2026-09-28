@@ -222,7 +222,7 @@ func TestModelRef(t *testing.T) {
 
 // TestToolCallEmptyArgumentsMarshal is the regression guard for the
 // json.RawMessage footgun that produced the goal-supervised session
-// incident (session ses_01kx3pvqttfwgbf2n5x1f1y8yh.jsonl): a worker turn's
+// incident (session ses_01hntn4vmryer5nq9apyjvzk2h.jsonl): a worker turn's
 // json.Marshal failed with "json: error calling MarshalJSON for type
 // json.RawMessage: unexpected end of JSON input" because a ToolCall's
 // Arguments field was an empty-but-non-nil json.RawMessage.
@@ -573,7 +573,7 @@ func TestProviderDataGetOversizedEntryIsAbsent(t *testing.T) {
 
 // TestToolCallInvalidTruncatedArgumentsMarshal is the defense-in-depth
 // regression guard from the incident behind two production goal sessions,
-// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and ses_01hpf4eexb31v0ecyvesf75g5s: both
 // died at the start of a worker turn with "json: error calling MarshalJSON
 // for type json.RawMessage: unexpected end of JSON input", and
 // GET /session/{id}/message on them then 500'd with the message.Parts
@@ -652,7 +652,7 @@ func TestToolCallInvalidTruncatedArgumentsMarshal(t *testing.T) {
 
 // TestNormalizeDropsInvalidToolCallArguments is the primary-fix regression
 // guard for the incident behind two production goal sessions,
-// ses_01kx453ewfedqrg7p3c64f8sca and ses_01kx453ev9ejattygpf7rbzptw: both
+// ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and ses_01hpf4eexb31v0ecyvesf75g5s: both
 // died at the start of a worker turn with "json: error calling MarshalJSON
 // for type json.RawMessage: unexpected end of JSON input" — three identical
 // attempts, because every retry re-transcoded the same poisoned history —
@@ -744,7 +744,7 @@ func TestResolveOrphanToolCallsNoOrphans(t *testing.T) {
 }
 
 // TestResolveOrphanToolCallsMidHistory reproduces the shape behind incident
-// ses_01kx48z4rqfkpbwmzfdv1jzeg6 with the orphan buried mid-transcript: an
+// ses_01hvcs96pq1cf7x3kw0fz4a1yh with the orphan buried mid-transcript: an
 // assistant tool_use with no result at all (the very next message skips
 // straight to a fresh user turn), followed by ordinary, well-formed turns.
 // ResolveOrphanToolCalls must inject a synthetic RoleTool message
@@ -795,7 +795,7 @@ func TestResolveOrphanToolCallsMidHistory(t *testing.T) {
 }
 
 // TestResolveOrphanToolCallsFinalMessage covers the other shape incident
-// ses_01kx48z4rqfkpbwmzfdv1jzeg6's mechanism can leave behind: the orphaned
+// ses_01hvcs96pq1cf7x3kw0fz4a1yh's mechanism can leave behind: the orphaned
 // tool_use is the very last message in history (the turn died and nothing
 // else was ever appended after it) — there is no "next" message at all to
 // look at, let alone merge into.
@@ -901,7 +901,7 @@ func TestResolveOrphanToolCallsDistinctSyntheticIDs(t *testing.T) {
 }
 
 // TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls is the red-first test
-// for NEP-5292's shared-prefix requirement: IsSyntheticOrphanID must report
+// for the shared-prefix requirement: IsSyntheticOrphanID must report
 // true for exactly the IDs ResolveOrphanToolCalls actually mints (built from
 // the same SyntheticOrphanIDPrefix constant, so the two can never drift) and
 // false for an ordinary message ID.
@@ -925,10 +925,11 @@ func TestIsSyntheticOrphanIDMatchesResolveOrphanToolCalls(t *testing.T) {
 }
 
 // TestToolResultNilContentNeverMarshalsNull reproduces the second root
-// cause folded into NEP-5272: ToolResult.Content has json tag "content"
-// with no omitempty, so json.Marshal of a ToolResult whose Content is nil
-// (a tool that produced truly no output, e.g. box hyper-lemon's `grep ... |
-// head -20` matching nothing) marshals as literal `"content": null`.
+// cause folded into the orphaned-tool-call wedge: ToolResult.Content has
+// json tag "content" with no omitempty, so json.Marshal of a ToolResult
+// whose Content is nil (a tool that produced truly no output, e.g. a
+// `grep ... | head -20` matching nothing) marshals as literal
+// `"content": null`.
 // Bedrock/Anthropic's own API rejects a null-content tool_result block
 // with the same "tool_use ids were found without tool_result blocks
 // immediately after" 400 a fully missing tool_result produces — this is
@@ -961,7 +962,7 @@ func TestToolResultNilContentNeverMarshalsNull(t *testing.T) {
 }
 
 // TestToolResultBlankTextContentNeverMarshalsNull covers the EXACT shape
-// behind box hyper-lemon's wedge: the tool ran successfully (no error) and
+// behind the null/absent tool_result wedge: the tool ran successfully (no error) and
 // returned Content holding one Text part whose Text is the empty string
 // (bash.go's captured-output path for a command with no stdout/stderr) --
 // non-nil, len 1, but empty in every way that matters. This must be

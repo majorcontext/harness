@@ -116,7 +116,7 @@ func TestOverloadedErrorNotClassifiedAsContextOverflow(t *testing.T) {
 }
 
 // TestOrdinaryInvalidRequestClassifiedPermanent is the red-first regression
-// test for NEP-5272: an HTTP 400 invalid_request_error whose message does
+// test for an HTTP 400 invalid_request_error whose message does
 // NOT name a token limit (so it is not a context overflow — the ordinary
 // bad-request case TestOrdinaryInvalidRequestNotClassified above already
 // covers not misclassifying it as overflow) must come back marked

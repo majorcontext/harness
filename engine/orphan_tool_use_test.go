@@ -35,7 +35,7 @@ func (s *dyingStream) Next() (provider.Event, error) {
 func (s *dyingStream) Close() error { return nil }
 
 // diesAfterToolCallProvider models the mechanism behind production
-// incident ses_01kx48z4rqfkpbwmzfdv1jzeg6: its first Stream call returns a
+// incident ses_01hvcs96pq1cf7x3kw0fz4a1yh: its first Stream call returns a
 // dyingStream (one or more tool_call blocks, then a transport-style
 // error, never EventDone); every subsequent Stream call serves the
 // pre-scripted turns in after, exactly like scriptedProvider, so a test can
@@ -68,7 +68,7 @@ func (p *diesAfterToolCallProvider) Stream(_ context.Context, req *provider.Requ
 var errTransportDropped = errors.New("engine: simulated transport drop mid-turn")
 
 // TestOrphanedToolCallAppendsSyntheticResult reproduces incident
-// ses_01kx48z4rqfkpbwmzfdv1jzeg6 red-first: a provider stream emits one
+// ses_01hvcs96pq1cf7x3kw0fz4a1yh red-first: a provider stream emits one
 // complete tool_call block (provider.EventToolCall — the shape
 // provider/anthropic/anthropic.go's content_block_stop handler and
 // provider/openaicompat/openaicompat.go's emitToolCalls both produce) and

@@ -287,7 +287,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// within one turn, so a toggle between turns faces a final assistant TEXT
 	// turn. STATUS: a live enable-mid-tool-round probe
 	// (server/thinking_realmodel_live_test.go, TestEnableMidToolRoundLive) was
-	// TOLERATED by the API on 2026-08-11 — the turn completed, no reject — so
+	// TOLERATED by the API — the turn completed, no reject — so
 	// this limitation is theoretical, not confirmed. No fix is warranted unless
 	// that probe later reproduces a reject; the live suite keeps it as the guard.
 	// (The OFF direction, by contrast, DID wedge and is fixed below.)
@@ -346,7 +346,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	}
 
 	// Defense-in-depth against a poisoned history (incident
-	// ses_01kx48z4rqfkpbwmzfdv1jzeg6): a ToolCall with no matching
+	// ses_01hvcs96pq1cf7x3kw0fz4a1yh): a ToolCall with no matching
 	// ToolResult in the immediately-following wire turn would otherwise
 	// transcode to a dangling tool_use block, which the Anthropic API
 	// rejects wholesale with HTTP 400 "tool_use ids were found without
@@ -355,11 +355,11 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// engine/engine.go), but this backstops any OTHER producer of history
 	// — a plugin hook, a hand-rolled adapter, a replayed log from an
 	// older binary — so a request never ships an orphaned tool_use.
-	// NormalizeForWire (NEP-5293 part 2), not ResolveOrphanToolCalls,
+	// NormalizeForWire, not ResolveOrphanToolCalls,
 	// belongs here: this call site builds one throwaway request and never
 	// touches the durable record, so the destructive/relocating repairs
 	// only NormalizeForWire performs are safe here specifically. See its
-	// doc comment for the full incident and the additive/transcode-only
+	// doc comment for the full mechanism and the additive/transcode-only
 	// split.
 	messages := imageclamp.Clamp(message.NormalizeForWire(req.Messages), imageLimits)
 

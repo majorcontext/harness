@@ -2564,8 +2564,8 @@ func killLeakedFakeClaude(t *testing.T, pidFile string) {
 
 // TestClaudeCodeQueueInjectedMidTurnViaOpenStdin is the regression test for
 // the live production bug reported as "queue doesn't seem to be working in
-// opus subscription sessions" (box box_01m1f4g92bfb0a3e5863hqgbpw, session
-// ses_01m1f4hbpee1nvwzam39b7fwm3): a prompt enqueued via POST
+// opus subscription sessions" (box box_01hpwktm5m0y0s7x74m9faz27k, session
+// ses_01ha2gy1khksdcyp648vdn1q84): a prompt enqueued via POST
 // .../sessions/{id}/send while a claude-code-lane turn was busy sat
 // durably queued, undelivered, for the ENTIRE remainder of that turn —
 // live-reproduced sitting queued 6+ minutes with the underlying `claude`
@@ -2683,8 +2683,8 @@ func TestClaudeCodeQueueInjectedMidTurnViaOpenStdin(t *testing.T) {
 }
 
 // TestClaudeCodeQueueInjectionStampsOperatorBatch is the named-failure
-// test for the live console mis-split bug (meetneptune/boxes:
-// msg_01m210y3yvfmhtykzhd9j6gs2w rendered as 4 fake user bubbles): the
+// test for a console mis-split bug (a queued prompt rendered as 4 fake
+// user bubbles): the
 // delegated backend's own mid-turn drain (claude_code_backend.go, the
 // pump goroutine's <-wake branch) appended a message with no Origin and
 // no structured prompt list, forcing a client to guess boundaries from

@@ -109,8 +109,8 @@ because the next model resolves its own.
 The registry covers `anthropic`, `openai`, `codex`, `amazon-bedrock`,
 `claude-code`, and `bifrost` refs. The `bifrost` case
 (`modelmeta.bifrostFireworksContextWindows`,
-`modelmeta.bifrostVertexContextWindows`) answers for the boxes fleet's
-openai-compat gateway route, e.g. the fleet default
+`modelmeta.bifrostVertexContextWindows`) answers for a Bifrost deployment's
+openai-compat gateway route, e.g. the default
 `bifrost/fireworks/accounts/fireworks/routers/firerouter` — without it,
 every `bifrost/<vendor>/<path>` ref was a registry miss and refused unless a
 config set `context_window_required: false`.
@@ -152,8 +152,8 @@ like a model swap, needs no migration step:
   gateway (Bifrost) maps it to the upstream provider's own knob. A non-off
   level sends the level string; `EffortOff` sends the literal string `"off"`,
   not an omitted field — several gateway upstreams reason BY DEFAULT when
-  the field is absent, so omitting it cannot express "disabled." Measured
-  (2026-08-12): Fireworks kimi-k3 through Bifrost streamed a full reasoning
+  the field is absent, so omitting it cannot express "disabled." Fireworks
+  kimi-k3 through Bifrost streams a full reasoning
   block (266 chars) with the field absent, and zero reasoning content (0
   chars, 8 vs 133 completion tokens) with the literal `"off"` sent. Only
   `EffortUnset` omits the field, leaving the gateway/model default in force.
@@ -194,7 +194,7 @@ the two providers default differently:
   every pre-effort-control build did (`stripReasoning` in
   `provider/openai/transcode.go`, gated on `req.Effort == EffortOff`). So
   `unset != off` here — do NOT re-fold the openai strip back onto
-  `!Reasoning()`. (Regression: NEP-5272 review of PR #117.) One residual the
+  `!Reasoning()`. One residual the
   off-only strip cannot enforce: a `SetModel` swap to a NON-reasoning openai
   model (gpt-5 -> gpt-4o) at unset effort still replays the stored items — the
   same per-model gating punt the enable direction has, so the caller (a
@@ -261,8 +261,7 @@ enables thinking over that same history — the documented ENABLE-direction
 compaction instead of a live turn.
 
 **The summarization request always ends in a trailing `RoleUser` message,
-never the folded range's own last message verbatim** (2026-08-19 incident,
-session `ses_jumpy-pizza`). `foldEnd` (`Session.Compact`) is the last
+never the folded range's own last message verbatim.** `foldEnd` (`Session.Compact`) is the last
 message before the next KEPT turn's leading `RoleUser` message — ordinarily
 that folded turn's own final assistant reply, `RoleAssistant` — so sending
 `folded` as `req.Messages` verbatim ordinarily ends the wire request in an
@@ -388,17 +387,17 @@ documents its own affinity hint:
 Both follow the same omit-on-empty rule: a non-empty `SessionKey` sets the
 field; an empty key omits it entirely, never an empty string.
 `provider/anthropic` ignores `SessionKey` — it already uses explicit
-`cache_control` markers, so a routing hint would add nothing; a live probe
-through Bifrost (2026-08-12) confirmed a 41k-token cache write followed by a
-41k-token cache read on the very next turn with no `SessionKey` involved.
+`cache_control` markers, so a routing hint would add nothing: Bifrost still
+performs a 41k-token cache write followed by a 41k-token cache read on the
+very next turn with no `SessionKey` involved.
 
 The reason `SessionKey` exists at all is measured, not theoretical: Fireworks
 serverless prompt caching is prefix-based, automatic, and PER-REPLICA.
 Without a routing hint, a re-sent request can land on a different replica
-and miss its own prefix cache. A live probe through Bifrost (2026-08-12)
-sent a byte-identical 150k-token prompt twice: with no `user` field, the
-second call still read `cached_tokens=0` at 10.8s time-to-first-token; with
-a stable `user` field, the second call read `cached_tokens=150,300` at 2.8s
+and miss its own prefix cache. A byte-identical 150k-token prompt sent
+twice through Bifrost shows the effect directly: with no `user` field, the
+second call still reads `cached_tokens=0` at 10.8s time-to-first-token; with
+a stable `user` field, the second call reads `cached_tokens=150,300` at 2.8s
 time-to-first-token, through the same gateway. Stateless routes re-send the
 whole history every request, so a long session on the openaicompat route (a
 gateway to Fireworks kimi-k3 and similar models) pays full prefill on nearly

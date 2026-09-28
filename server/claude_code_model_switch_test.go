@@ -130,7 +130,7 @@ func waitIdleClaudeCode(t *testing.T, h *harness, id string) {
 
 // TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle reproduces the
 // literal shape of the live incident on session
-// ses_01m1ht79e5fgfbx2cjx4cf4xm8: several claude-code/opus turns end in a
+// ses_01hac3jqn64npr07q9rxbmtb9z: several claude-code/opus turns end in a
 // retryable overloaded error (turn end outcome:error), an operator then
 // switches the session's model to a native provider (POST
 // /session/{id}/model, mirroring "reason=model_switch" in the harness log),
@@ -223,7 +223,7 @@ func TestClaudeCodeModelSwitchAfterRetryableErrorsEndsIdle(t *testing.T) {
 }
 
 // TestClaudeCodeCompactedEventIsDurableAndTyped is the red-first regression
-// test for SHOULD 6+7 of the andybons/claude-code-compaction-forced-switch
+// test for SHOULD 6+7 of the claude-code-compaction-forced-switch
 // fix round: evtClaudeCodeCompacted used to be publishLive-only, so a tab
 // not connected at the exact instant the CLI's own compact_boundary
 // envelope arrived could never learn it happened, including a fresh

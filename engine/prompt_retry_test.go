@@ -287,8 +287,7 @@ func TestPromptRetriesZeroDisables(t *testing.T) {
 }
 
 // emptyMaxTokensTurn builds the provider.Event a completed-but-empty turn
-// reports: production incident box fx-context-limits (session
-// ses_01m0ga6v25f1h902fnmx98zhn3, 2026-08-20) had sonnet-5's thinking
+// reports: sonnet-5's thinking can
 // consume the entire max_tokens ceiling — output_tokens exactly 8192 (4096
 // EffortLow budget_tokens + 4096 thinkingCompletionMargin) — before emitting
 // any text or tool call, so the assistant message carried only a Reasoning

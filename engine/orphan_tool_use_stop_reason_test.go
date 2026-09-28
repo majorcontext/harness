@@ -9,14 +9,14 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// TestNonToolUseStopWithToolCallsAppendsSyntheticResult reproduces incident
-// NEP-5272: a provider completes a turn NORMALLY (EventDone arrives, no
-// stream error at all) but reports a stop reason other than StopToolUse
+// TestNonToolUseStopWithToolCallsAppendsSyntheticResult reproduces the
+// orphaned-tool-call wedge: a provider completes a turn NORMALLY (EventDone
+// arrives, no stream error at all) but reports a stop reason other than
+// StopToolUse
 // while the assistant message nonetheless carries one or more ToolCall
-// parts. This is exactly the bifrost/Bedrock wire shape captured from box
-// hyper-lemon (session ses_01kze9vds5fxd89dtv4accqjcp): 44 tool calls, 43
-// results, the orphaned call at wire index 91 immediately followed by a
-// plain user message.
+// parts. This is exactly the bifrost/Bedrock wire shape: N tool calls,
+// N-1 results, the orphaned call immediately followed by a plain user
+// message.
 //
 // Before the fix, Session.Prompt's `if stop != provider.StopToolUse {
 // return asst, nil }` early return left that ToolCall in history with no

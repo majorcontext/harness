@@ -13,13 +13,13 @@ import (
 //     checkNoDataLoss) flags it.
 //  2. Deliberate-gap documentation: ResolveOrphanToolCalls is purely
 //     additive and PERMANENTLY leaves several shapes unrepaired (see its
-//     own doc comment and NEP-5293). Each is run through that REAL
+//     own doc comment). Each is run through that REAL
 //     function and then the oracle, which must flag it. These tests
 //     assert the gap EXISTS, so they pass today and must keep passing.
 //     They are not pending work, and closing them here would be a BUG.
 //     ResolveOrphanToolCalls must stay additive because LoadSession writes
 //     its output back into live history — see AGENTS.md's additive-only
-//     history-repair invariant. NEP-5293 part 2 closes these shapes in a
+//     history-repair invariant. NormalizeForWire closes these shapes in a
 //     separate transcode-only repair instead, on the side of that line
 //     where a destructive rule is safe. If one of these tests ever goes
 //     red, ResolveOrphanToolCalls has become destructive and that
@@ -78,8 +78,8 @@ func TestOracleMetaFlagsToolUseInNonAssistantBlock(t *testing.T) {
 
 // TestOracleMetaFlagsEmptyToolResultContent (invariant 3) feeds a
 // tool_result whose only content is a blank Text part — the exact shape
-// NEP-5272 root cause 2 describes as read by the provider as ABSENT — and
-// asserts the oracle flags it.
+// SafeContent's doc comment describes as read by the provider as ABSENT —
+// and asserts the oracle flags it.
 func TestOracleMetaFlagsEmptyToolResultContent(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -172,15 +172,15 @@ func violationStrings(v []wireViolation) string {
 
 // --- Red-verification: current main's known-unrepaired shapes ---
 
-// TestResolveOrphanToolCallsLeavesDuplicateCallIDUnrepaired red-verifies gap 1 named
-// in NEP-5293: two tool_use blocks in one assistant message share a
+// TestResolveOrphanToolCallsLeavesDuplicateCallIDUnrepaired red-verifies gap 1:
+// two tool_use blocks in one assistant message share a
 // CallID. ResolveOrphanToolCalls's presence check is set-membership
 // (`present[id] = true`), so the single matching tool_result satisfies
 // BOTH tool_use blocks and the second is never repaired — the request
 // ships 2 tool_use / 1 tool_result for the same id.
 //
 // This gap is PERMANENT in ResolveOrphanToolCalls by design. The test
-// asserts it still exists. NEP-5293 part 2 closes it at transcode time,
+// asserts it still exists. NormalizeForWire closes it at transcode time,
 // in a separate repair, not here.
 func TestResolveOrphanToolCallsLeavesDuplicateCallIDUnrepaired(t *testing.T) {
 	in := []Message{
@@ -294,7 +294,7 @@ func TestResolveOrphanToolCallsLeavesSelfAnsweredNonAssistantCallUnrepaired(t *t
 // tool_use(s) need it here" (logged below). This is a fourth,
 // previously-unnamed wire-validity gap in the current additive
 // implementation — never a data-loss regression, since the real result
-// is untouched — that NEP-5293 part 2 should also close.
+// is untouched — that NormalizeForWire should also close.
 func TestLegitimateSplitAcrossAssistantMessages(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},

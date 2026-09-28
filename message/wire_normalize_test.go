@@ -9,8 +9,8 @@ import (
 )
 
 // This file tests NormalizeForWire, the transcode-only sibling of
-// ResolveOrphanToolCalls (see NormalizeForWire's own doc comment and
-// NEP-5293 part 2). Every case below is checked against the independent
+// ResolveOrphanToolCalls (see NormalizeForWire's own doc comment).
+// Every case below is checked against the independent
 // wire-model oracle in wire_oracle_test.go — never against this function's
 // own internals — exactly as message/wire_oracle_meta_test.go's red-
 // verification cases do for ResolveOrphanToolCalls.
@@ -113,7 +113,7 @@ func TestNormalizeForWireRepairsToolResultPrecedingToolCall(t *testing.T) {
 }
 
 // TestNormalizeForWireRepairsIntervalAssistantMessageSplit is gap 4 (the
-// fourth shape found by the oracle, see the Linear comment on NEP-5293): a
+// fourth shape found by the oracle): a
 // real ToolResult is separated from its ToolCall by an intervening
 // assistant message. provider/anthropic/transcode.go merges adjacent
 // same-role messages, so the wire sees ONE assistant run spanning both
@@ -236,7 +236,7 @@ func TestNormalizeForWireNoOpOnValidHistory(t *testing.T) {
 
 // TestNormalizeForWireOrdinaryOrphanAtEndOfHistory pins that the ordinary,
 // already-repaired-by-ResolveOrphanToolCalls case (a trailing unanswered
-// tool_use, incident ses_01kx48z4rqfkpbwmzfdv1jzeg6) is still handled.
+// tool_use, incident ses_01hvcs96pq1cf7x3kw0fz4a1yh) is still handled.
 func TestNormalizeForWireOrdinaryOrphanAtEndOfHistory(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -282,7 +282,7 @@ func TestNormalizeForWireIsFixedPoint(t *testing.T) {
 }
 
 // TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes guards the
-// architecture NEP-5293 part 2 requires: ResolveOrphanToolCalls is the
+// architecture NormalizeForWire requires: ResolveOrphanToolCalls is the
 // function engine.LoadSession applies to LIVE history (engine/store.go),
 // so it must stay purely additive FOREVER, even for the four gap shapes
 // NormalizeForWire (this file's own subject) exists specifically to
@@ -334,8 +334,8 @@ func TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes(t *testing.T) {
 // regression test for the fifth gap: a ToolResult whose CallID matches NO
 // ToolCall anywhere in history at all. Neither counting nor relocation can
 // ever answer it (there is no tool_use to answer), and it is the SAME
-// permanent-wedge class as NEP-5272 if shipped as a tool_result block —
-// found live against the real anthropic transcoder. The fix changes its
+// permanent-wedge class as the orphaned-tool-call wedge if shipped as a
+// tool_result block. The fix changes its
 // PART TYPE (ToolResult -> Text) rather than deleting or moving it: every
 // byte of the real output stays plainly visible to the model, just no
 // longer claiming to be an answer to a call that never happened.

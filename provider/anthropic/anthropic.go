@@ -136,9 +136,9 @@ func apiError(resp *http.Response) error {
 			}
 		}
 		// Every OTHER 400 invalid_request_error is a permanent, deterministic
-		// failure (NEP-5272): a malformed request — most notably a message
-		// array with an orphaned tool_use, the incident that motivated this —
-		// fails identically no matter how many times it is retried, unlike
+		// failure: a malformed request — most notably a message array with
+		// an orphaned tool_use — fails identically no matter how many times
+		// it is retried, unlike
 		// the transient weather classifyStatus recognizes below. Checked
 		// only once context overflow is ruled out (the two are disjoint:
 		// overflow always returns above), and only for this one status/type
@@ -262,8 +262,8 @@ func parseContextOverflow(errType string, status int, message string) (promptTok
 // per-token THROTTLE, which is ordinary weather classifyStatus already
 // handles correctly (TestPlainRateLimitStaysRetryable guards that line).
 var usageExhaustionPatterns = []*regexp.Regexp{
-	// "You have reached your specified API usage limits." — the live
-	// 2026-08-25 incident's own message, an HTTP 400.
+	// "You have reached your specified API usage limits." — the exact
+	// message this pattern matches, an HTTP 400.
 	regexp.MustCompile(`(?i)reached your specified API usage limits?`),
 	// "Your credit balance is too low to access the Anthropic API"
 	regexp.MustCompile(`(?i)credit balance is too low`),
@@ -561,8 +561,8 @@ func (s *stream) handle(name string, data []byte) error {
 		}
 		// Input/cache counts normally arrive in message_start and are zero
 		// here (real Anthropic omits them from message_delta) — but a
-		// Bedrock-translating gateway (bifrost's /anthropic route, captured
-		// live 2026-08-06) emits message_start with ALL usage fields zero
+		// Bedrock-translating gateway (bifrost's /anthropic route) emits
+		// message_start with ALL usage fields zero
 		// and delivers the real input/cache counts in message_delta
 		// instead, the Bedrock convention of usage-in-final-metadata.
 		// Nonzero values here win; zeros never clobber message_start's.
@@ -603,7 +603,7 @@ func (s *stream) handle(name string, data []byte) error {
 			return fmt.Errorf("anthropic: stream error: %s", data)
 		}
 		err := fmt.Errorf("anthropic: %s (%s)", ev.Error.Message, ev.Error.Type)
-		// Mirror apiError's HTTP-path classification (NEP-5272): an
+		// Mirror apiError's HTTP-path classification: an
 		// invalid_request_error naming a structurally malformed request —
 		// most notably an orphaned tool_use — fails identically on every
 		// retry, whether it arrives as an HTTP 400 before the stream ever

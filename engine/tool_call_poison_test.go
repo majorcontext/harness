@@ -11,8 +11,8 @@ import (
 )
 
 // TestPersistTruncatedToolCallArguments reproduces the incident behind two
-// goal sessions observed in production, ses_01kx453ewfedqrg7p3c64f8sca and
-// ses_01kx453ev9ejattygpf7rbzptw: both died at the start of a worker turn
+// goal sessions observed in production, ses_01hxqvbr9q7cw1ejp1bpj7fbf8 and
+// ses_01hpf4eexb31v0ecyvesf75g5s: both died at the start of a worker turn
 // with "json: error calling MarshalJSON for type json.RawMessage:
 // unexpected end of JSON input", three identical attempts, and
 // GET /session/{id}/message on them returned 500 with "MarshalJSON for
@@ -56,7 +56,7 @@ import (
 // following worker turn — which now transcodes a clean history — succeeds
 // instead of dying identically on every retry.
 //
-// # NEP-5272 update: this exact stop reason is now paired, not left orphaned
+// # This exact stop reason is now paired, not left orphaned
 //
 // StopMaxTokens-with-a-ToolCall is precisely the shape
 // appendUnexecutedToolCallResults exists for (see its doc comment and
@@ -97,8 +97,8 @@ func TestPersistTruncatedToolCallArguments(t *testing.T) {
 	// arguments are gone, normalized the same way empty Arguments already
 	// are (see ToolCall.safeArguments) rather than dropping the whole part
 	// and losing which tool the model was calling. The assistant message is
-	// now the second-to-last entry, not the last (see the NEP-5272 update
-	// above): appendUnexecutedToolCallResults appends a synthetic tool-role
+	// now the second-to-last entry, not the last (see above):
+	// appendUnexecutedToolCallResults appends a synthetic tool-role
 	// result for tc1 right after it, so history never ends on a dangling
 	// tool_use.
 	h := s.History()

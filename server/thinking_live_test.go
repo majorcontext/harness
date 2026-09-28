@@ -16,10 +16,9 @@
 //
 //	HARNESS_LIVE=1          required, or every case skips
 //	BIFROST_API_KEY=...     optional; defaults to the ip-bypass placeholder
-//	BIFROST_BASE=...        optional; defaults to https://bifrost.meetneptune.dev
+//	BIFROST_BASE=...        optional; defaults to https://bifrost.example.com
 //
-// The base URLs mirror the box's own .harness.json exactly (see the boxes
-// images/shared/box-runtime.sh harness_write_box_config): the "anthropic"
+// The base URLs mirror a box's own .harness.json exactly: the "anthropic"
 // native route at BASE/anthropic, the "bifrost" openai-compat route at BASE/v1,
 // and the "openai" native Responses route at BASE (the adapter appends
 // /v1/responses).
@@ -54,7 +53,7 @@ func liveEnabled(t *testing.T) string {
 	}
 	base := os.Getenv("BIFROST_BASE")
 	if base == "" {
-		base = "https://bifrost.meetneptune.dev"
+		base = "https://bifrost.example.com"
 	}
 	return strings.TrimRight(base, "/")
 }

@@ -14,10 +14,10 @@ import (
 // map, so an unsorted toolDefs emits the built-in tool array in a different
 // order on every request. Tools sit at the FRONT of the cached prefix on every
 // provider (Anthropic caches tools, then system, then messages), so one
-// reordering invalidates the whole prefix and rewrites it — measured live on
-// 2026-08-25: two consecutive turns of one session both reported
-// cache_creation_input_tokens > 0 and cache_read_input_tokens = 0, because the
-// tools array had reshuffled between them.
+// reordering invalidates the whole prefix and rewrites it: two consecutive
+// turns of one session can both report cache_creation_input_tokens > 0 and
+// cache_read_input_tokens = 0 because the tools array reshuffled between
+// them.
 //
 // The loop runs the production entry point repeatedly: Go randomizes map
 // iteration per range, so one call proves little and many calls make an

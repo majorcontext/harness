@@ -16,16 +16,17 @@ import (
 // permanentProviderErr builds a fake provider error marked permanent, as if
 // an adapter (provider/anthropic's apiError) had classified it — mirrors
 // retryableProviderErr's shape exactly. The message reproduces the
-// NEP-5272 incident fingerprint verbatim, since these tests also assert
-// that the classified goal.parked reason (see classifyGoalWorkerError)
-// never leaks it.
+// orphaned-tool-call wedge's error fingerprint verbatim, since these tests
+// also assert that the classified goal.parked reason (see
+// classifyGoalWorkerError) never leaks it.
 func permanentProviderErr() error {
 	return provider.MarkPermanent(errors.New("anthropic: messages.85: `tool_use` ids were found without `tool_result` blocks immediately after (invalid_request_error, HTTP 400)"))
 }
 
 // TestPursueGoalPermanentWorkerErrorParksAfterOneAttempt is the red-first
-// regression test for NEP-5272's defect 1: a worker-turn error the adapter
-// classifies provider.AsPermanent (an HTTP 400 invalid_request_error naming
+// regression test for the permanent-error early-park case: a worker-turn
+// error the adapter classifies provider.AsPermanent (an HTTP 400
+// invalid_request_error naming
 // a structurally malformed request — the orphaned tool_use, in the
 // production incident) must fail fast after exactly ONE attempt, no backoff
 // wait, instead of burning the full goalWorkerRetries deterministic budget
@@ -34,8 +35,8 @@ func permanentProviderErr() error {
 // Mirrors TestPursueGoalContextOverflowFailsFastAndPermanently's shape
 // (elapsed == 0 inside a synctest bubble, exactly one worker call) but PARKS
 // instead of clearing: unlike context overflow, a malformed-request shape
-// might be fixed by something else entirely (e.g. NEP-5272's own
-// orphan-tool-call repair) between now and a later resume, so the goal must
+// might be fixed by something else entirely (e.g. the orphan-tool-call
+// repair) between now and a later resume, so the goal must
 // stay resumable rather than being asserted permanently dead.
 func TestPursueGoalPermanentWorkerErrorParksAfterOneAttempt(t *testing.T) {
 	dir := t.TempDir()

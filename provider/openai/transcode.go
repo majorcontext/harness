@@ -341,7 +341,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// unset != off here. Anthropic's sibling strip can safely key on
 	// !Reasoning() because Claude emits no thinking block without the control;
 	// an OpenAI default turn always carries one. Do NOT re-fold this back into
-	// reasoningEnabled. (Regression: NEP-5272 review of PR #117.)
+	// reasoningEnabled.
 	//
 	// One residual the off-only strip cannot enforce: a SetModel swap to a
 	// non-reasoning OpenAI (Responses) model (e.g. gpt-5 -> gpt-4o) while effort
@@ -396,10 +396,10 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// transcoders: a ToolCall with no matching ToolResult in the
 	// immediately-following wire turn would transcode to a dangling
 	// function_call item the API rejects on every retry.
-	// message.NormalizeForWire (NEP-5293 part 2) is the transcode-only
+	// message.NormalizeForWire is the transcode-only
 	// repair — this call site builds one throwaway request and never
 	// touches the durable record, so its destructive/relocating repairs
-	// are safe here; see its doc comment for the incident history and the
+	// are safe here; see its doc comment for the full mechanism and the
 	// additive (message.ResolveOrphanToolCalls, used only against LIVE
 	// history) / transcode-only split. Composed with image clamping
 	// exactly as the anthropic transcoder does; imageLimits.RecurseToolResults

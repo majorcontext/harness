@@ -174,17 +174,14 @@ func TestTranscodeUserImage(t *testing.T) {
 }
 
 // TestTranscodeUserNonImageBlobOmitted: a non-image blob in a USER message
-// is dropped with a note rather than failing the request.
-//
-// This test asserted the opposite until 2026-09-02 — that the request
-// errors. That was safe while prompt_async took text only, because a
-// non-image blob could then only come from a tool result. Once a person can
-// ATTACH one, the same error becomes a permanent wedge: the attachment is
-// in durable history, so a session that attached a PDF under anthropic and
-// then switched to a provider on this lane would fail every later turn with
-// no repair path. The error still exists in blobURL for any caller that
-// reaches it directly; transcodeUserMessage just no longer lets it escape
-// for the one shape a person can create.
+// is dropped with a note rather than failing the request, because it can
+// arrive as a genuine user attachment: the same error would otherwise
+// become a permanent wedge once attached — the attachment is in durable
+// history, so a session that attached a PDF under anthropic and then
+// switched to a provider on this lane would fail every later turn with no
+// repair path. The error still exists in blobURL for any caller that
+// reaches it directly; transcodeUserMessage does not let it escape for the
+// one shape a person can create.
 func TestTranscodeUserNonImageBlobOmitted(t *testing.T) {
 	req := baseRequest(
 		message.Message{Role: message.RoleUser, Parts: message.Parts{
@@ -436,7 +433,7 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 }
 
 // TestTranscodeOrphanToolCallMidHistory reproduces the mechanism behind
-// production incident ses_01kx48z4rqfkpbwmzfdv1jzeg6 at the transcoder
+// production incident ses_01hvcs96pq1cf7x3kw0fz4a1yh at the transcoder
 // level: an assistant tool_call with no result at all in history (the turn
 // died before the engine could execute it, or append one — see
 // engine/engine.go's own primary fix), buried mid-transcript, followed by

@@ -108,11 +108,11 @@ func TestForcesIdlePauseIncludesWorkerFailure(t *testing.T) {
 }
 
 // TestCompositeStateForceIdleNeverMasksRunningTurn is the unit-level red
-// test for the nimble-pizza incident (2026-08-06, live): compositeState
+// test for a state-reporting gap: compositeState
 // checked forceIdle first and returned "idle" unconditionally, so a session
 // whose goal was worker-parked (forceIdle==true) read "idle" even while an
 // ordinary prompt turn was actively streaming (running==true) — an operator
-// watching the monitor concluded the box was dead mid-turn. The fix:
+// watching the monitor could conclude the box was dead mid-turn. The fix:
 // forceIdle&&running must read "busy" (never "goal-running" either —
 // goalActive must not win in the forceIdle case, that's the zombie-goal trap
 // forceIdle exists to close), and forceIdle&&!running must still read

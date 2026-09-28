@@ -505,12 +505,13 @@ func TestRetainedResultsIndexNotesMissingSidecar(t *testing.T) {
 }
 
 // TestCompactSummaryRequestAlwaysEndsInUserRole is the red-first test for
-// the 2026-08-19 live incident (session ses_jumpy-pizza, model
-// anthropic/anthropic/claude-fable-5): compacting with keep_turns=20
-// returned `{"error":"[permanent] anthropic: This model does not support
+// a compaction failure shape: compacting with a fold boundary that lands on
+// an ordinary completed turn returns
+// `{"error":"[permanent] anthropic: This model does not support
 // assistant message prefill. The conversation must end with a user
-// message. (invalid_request_error, HTTP 400)"}` while keep_turns=8 on the
-// SAME session succeeded. Root cause: foldEnd (Compact's fold range) is the
+// message. (invalid_request_error, HTTP 400)"}`, while a different
+// keep_turns on the same session that lands the boundary elsewhere
+// succeeds. Root cause: foldEnd (Compact's fold range) is the
 // last message before the next KEPT turn's leading RoleUser message —
 // ordinarily that folded turn's own final assistant reply, RoleAssistant —
 // and the old code sent `folded` as req.Messages verbatim, with no trailing
@@ -912,10 +913,9 @@ func TestCompactFailureNoJournalNoMutation(t *testing.T) {
 	}
 }
 
-// TestCompactEmptySummarySkipsGracefully is the red-first test for the
-// 2026-08-19 live incident (session ses_jumpy-pizza): a follow-up compact
-// with keep_turns=2 (fold range dominated by a prior compaction summary
-// plus a couple of real turns) returned
+// TestCompactEmptySummarySkipsGracefully is the red-first test for a
+// follow-up compact with keep_turns=2 (fold range dominated by a prior
+// compaction summary plus a couple of real turns) that returns
 // `{"error":"engine: compaction summary was empty"}` — a summarization
 // call that completed without a transport/stream error, but produced no
 // usable text, was treated identically to a hard failure and surfaced as
@@ -1679,12 +1679,13 @@ func TestCompactCorruptRangeIsLoadError(t *testing.T) {
 	}
 }
 
-// nep5292FixtureLines is the exact reproduction journal from NEP-5292: three
+// orphanFoldFixtureLines is the exact reproduction journal for the orphan-fold
+// boundary fix: three
 // turns, the first turn's assistant message carrying a tool_call ("A") with
 // no matching tool_result — the orphan message.ResolveOrphanToolCalls
 // repairs at every LoadSession, in memory only. With keepTurns=2 the fold
 // boundary lands exactly on that in-memory-only synthetic message.
-const nep5292FixtureLines = `{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"task 1"}]}}
+const orphanFoldFixtureLines = `{"type":"message","message":{"id":"msg_1","role":"user","parts":[{"type":"text","text":"task 1"}]}}
 {"type":"message","message":{"id":"msg_2","role":"assistant","parts":[{"type":"tool_call","call_id":"A","name":"bash","arguments":{}}]}}
 {"type":"message","message":{"id":"msg_3","role":"user","parts":[{"type":"text","text":"task 2"}]}}
 {"type":"message","message":{"id":"msg_4","role":"assistant","parts":[{"type":"text","text":"done"}]}}
@@ -1692,23 +1693,23 @@ const nep5292FixtureLines = `{"type":"message","message":{"id":"msg_1","role":"u
 {"type":"message","message":{"id":"msg_6","role":"assistant","parts":[{"type":"text","text":"done"}]}}
 `
 
-// writeNEP5292Fixture writes the reproduction journal above under id, with a
+// writeOrphanFoldFixture writes the reproduction journal above under id, with a
 // session header line so it satisfies every other reader's expectations too.
-func writeNEP5292Fixture(t *testing.T, dir, id string) {
+func writeOrphanFoldFixture(t *testing.T, dir, id string) {
 	t.Helper()
 	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
-` + nep5292FixtureLines
+` + orphanFoldFixtureLines
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// nep5292RawHistory is the exact message.Message values nep5292FixtureLines
+// orphanFoldRawHistory is the exact message.Message values orphanFoldFixtureLines
 // encodes, built directly (not by parsing JSON) for tests that need to feed
 // them to spliceCompact without going through LoadSession at all — this is
 // what ANY binary's scan loop, old or new, sees before
 // message.ResolveOrphanToolCalls ever runs.
-func nep5292RawHistory() []message.Message {
+func orphanFoldRawHistory() []message.Message {
 	return []message.Message{
 		{ID: "msg_1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "task 1"}}},
 		{ID: "msg_2", Role: message.RoleAssistant, Parts: message.Parts{&message.ToolCall{CallID: "A", Name: "bash", Arguments: json.RawMessage("{}")}}},
@@ -1720,7 +1721,8 @@ func nep5292RawHistory() []message.Message {
 }
 
 // TestCompactNeverJournalsSyntheticOrphanID is the red-first test for Part A
-// of NEP-5292's fix: Session.Compact must never persist a fold boundary ID
+// of the orphan-fold-boundary fix: Session.Compact must never persist a
+// fold boundary ID
 // that names a message.ResolveOrphanToolCalls synthetic repair message —
 // that message exists only in this process's live memory (see
 // engine/store.go's LoadSession, which applies the repair AFTER replay) and
@@ -1728,7 +1730,7 @@ func nep5292RawHistory() []message.Message {
 // arrival: no future LoadSession will ever find it.
 //
 // It reproduces the exact mechanism from the issue: loading
-// nep5292FixtureLines leaves an orphaned tool_call at msg_2, which
+// orphanFoldFixtureLines leaves an orphaned tool_call at msg_2, which
 // LoadSession's ResolveOrphanToolCalls repair turns into a synthetic
 // RoleTool message at live history index 2. A keepTurns=2 compact folds
 // exactly turn 1 (indices 0-2), so the naive fold-end id would be that
@@ -1739,7 +1741,7 @@ func nep5292RawHistory() []message.Message {
 func TestCompactNeverJournalsSyntheticOrphanID(t *testing.T) {
 	dir := t.TempDir()
 	id := "ses_5292000000000001"
-	writeNEP5292Fixture(t, dir, id)
+	writeOrphanFoldFixture(t, dir, id)
 
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
@@ -1825,7 +1827,8 @@ func TestCompactNeverJournalsSyntheticOrphanID(t *testing.T) {
 }
 
 // TestCompactNewRecordReplaysIdenticallyWithoutHealPath is the version-skew
-// half of NEP-5292's fix: an OLD binary — one with no heal path at all,
+// half of the orphan-fold-boundary fix: an OLD binary — one with no heal
+// path at all,
 // calling spliceCompact directly and never message.IsSyntheticOrphanID —
 // must still replay a compact record written by the FIXED Compact
 // correctly. This is what makes downgrading to an old binary after this fix
@@ -1848,7 +1851,7 @@ func TestCompactNeverJournalsSyntheticOrphanID(t *testing.T) {
 func TestCompactNewRecordReplaysIdenticallyWithoutHealPath(t *testing.T) {
 	dir := t.TempDir()
 	id := "ses_5292000000000003"
-	writeNEP5292Fixture(t, dir, id)
+	writeOrphanFoldFixture(t, dir, id)
 
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 5}),
@@ -1887,7 +1890,7 @@ func TestCompactNewRecordReplaysIdenticallyWithoutHealPath(t *testing.T) {
 	// pre-compact history, using the journaled ids/summary verbatim (read
 	// from disk above, not from CompactResult), no heal function ever
 	// called or even in scope.
-	oldSpliced, err := spliceCompact(nep5292RawHistory(), last.Compact.FirstID, last.Compact.LastID, last.Compact.Summary)
+	oldSpliced, err := spliceCompact(orphanFoldRawHistory(), last.Compact.FirstID, last.Compact.LastID, last.Compact.Summary)
 	if err != nil {
 		t.Fatalf("old-binary-equivalent spliceCompact = %v, want success (on-disk LastID must be a real, persisted id an old binary can find)", err)
 	}
@@ -1906,7 +1909,8 @@ func TestCompactNewRecordReplaysIdenticallyWithoutHealPath(t *testing.T) {
 }
 
 // TestLoadSessionHealsPhantomSyntheticCompactLastID is the red-first test
-// for Part B of NEP-5292's fix: a journal ALREADY containing a phantom
+// for Part B of the orphan-fold-boundary fix: a journal ALREADY containing
+// a phantom
 // synthetic LastID (written by an unpatched build, before Part A existed)
 // must still load — LoadSession re-derives the fold end from FirstID plus
 // the record's own turns_folded count instead of failing outright. The
@@ -1917,7 +1921,7 @@ func TestLoadSessionHealsPhantomSyntheticCompactLastID(t *testing.T) {
 	dir := t.TempDir()
 	id := "ses_5292000000000002"
 	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
-` + nep5292FixtureLines +
+` + orphanFoldFixtureLines +
 		`{"type":"compact","compact":{"first_id":"msg_1","last_id":"synthetic-orphan-tool-result-1-A","turns_folded":1,"summary":{"id":"msg_summary","role":"user","parts":[{"type":"text","text":"[compacted summary of earlier conversation]\n\nthe gist"}]}}}
 `
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
@@ -1955,7 +1959,7 @@ func TestLoadSessionCompactPhantomLastIDFailsLoudlyWhenUnhealable(t *testing.T) 
 	dir := t.TempDir()
 	id := "ses_5292000000000004"
 	data := `{"type":"session","id":"` + id + `","created_at":"2025-01-02T03:04:05Z"}
-` + nep5292FixtureLines +
+` + orphanFoldFixtureLines +
 		`{"type":"compact","compact":{"first_id":"msg_does_not_exist","last_id":"synthetic-orphan-tool-result-1-A","turns_folded":1,"summary":{"id":"msg_summary","role":"user","parts":[{"type":"text","text":"x"}]}}}
 `
 	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(data), 0o644); err != nil {
@@ -2218,7 +2222,7 @@ func seedDelegatedTurn(s *Session, text string) {
 
 // TestMaybeAutoCompactForcedAfterClaudeCodeToNativeSwitch is the red-first
 // regression test for the live incident (session
-// ses_01m1kyhka3ewf8vcth0qbqm222): a session delegated to the Claude Code
+// ses_01hwcjr3fevxtjadwdnd412c47): a session delegated to the Claude Code
 // CLI for its entire life accumulates a huge harness journal purely as a
 // passive record (harness's own automatic compaction is unconditionally
 // skipped for a delegated turn — see PromptWithOrigin's early dispatch).
@@ -2364,7 +2368,7 @@ func TestForcedCompactionErrorProceedsToNativeProviderAfterClaudeCodeSwitch(t *t
 }
 
 // TestForceCompactionCheckSurvivesReload is the red-first regression test
-// for BLOCKING 1 of the andybons/claude-code-compaction-forced-switch fix
+// for BLOCKING 1 of the claude-code-compaction-forced-switch fix
 // round: forceCompactionCheck used to be a memory-only Session field,
 // deliberately excluded from the journal fold AND the snapshot. The stale
 // signal it exists to distrust — a delegated turn's lastUsage, folded in by

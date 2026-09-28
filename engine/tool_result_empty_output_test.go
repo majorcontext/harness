@@ -11,9 +11,10 @@ import (
 )
 
 // TestEmptyToolOutputNeverAppendsNullContent reproduces the second root
-// cause folded into NEP-5272: a tool that runs successfully and produces
-// truly empty output (mirroring box hyper-lemon's `grep ... | head -20`
-// that matched nothing) must never leave a ToolResult in history whose
+// cause folded into the orphaned-tool-call wedge: a tool that runs
+// successfully and produces truly empty output (mirroring a
+// `grep ... | head -20` that matched nothing) must never leave a
+// ToolResult in history whose
 // Content collapses to nothing on the wire. Session.append's call to
 // Message.Normalize (see message.ToolResult.SafeContent's doc comment) is
 // the fix under test here; this exercises it through the real engine loop
@@ -56,8 +57,9 @@ func TestEmptyToolOutputNeverAppendsNullContent(t *testing.T) {
 
 	// The whole point: the persisted/serialized form must never carry a
 	// literal null (or otherwise empty) content, since that is exactly
-	// what wedged box hyper-lemon despite the request being internally
-	// balanced (44 tool_use, 44 tool_result, every pair adjacent).
+	// what can wedge a session despite the request being internally
+	// balanced (every tool_use paired with a tool_result, every pair
+	// adjacent).
 	raw, err := json.Marshal(h)
 	if err != nil {
 		t.Fatalf("json.Marshal(History()) = %v, want success", err)

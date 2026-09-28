@@ -25,9 +25,9 @@ import (
 //
 // That does not hold: message.Message.Normalize (Session.append's
 // appendWithUsage, run on every append) already coerces the identical
-// invalid-Arguments shape to nil in place -- the deliberate, incident-tested
-// fix for a real production defect (see TestPersistTruncatedToolCallArguments,
-// engine/tool_call_poison_test.go, NEP-5272-adjacent) -- before the
+// invalid-Arguments shape to nil in place -- the deliberate fix for a real
+// production defect (see TestPersistTruncatedToolCallArguments,
+// engine/tool_call_poison_test.go) -- before the
 // continuation request is ever built. This test proves that end to end
 // through the REAL production entry point rather than a hand-rolled check:
 // a genuine `*anthropic.Client` (provider/anthropic), talking to an httptest
