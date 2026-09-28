@@ -530,8 +530,12 @@ durable `compact` record carries the summary inline rather than as a
 `recMessage`, so without this emission a tailer would hold a dangling id
 for a message it never received. Then a `history.compacted` engine event
 (journaled via the server's `emitDurable` path like `session.status`)
-carrying `{first_id, last_id, turns_folded, summary_id}`, where
-`summary_id` refers to the message the tailer just saw. A tailer replaying
+carrying `{first_id, last_id, turns_folded, summary_id,
+compact_started_at}`, where `summary_id` refers to the message the
+tailer just saw and `compact_started_at` is when the blocking
+summarization call began — a consumer derives duration as this event's
+own delivery time minus `compact_started_at`, without holding open the
+live stream that preceded it. A tailer replaying
 from a `from` cursor older than the compaction sees the original messages,
 the summary message, and the compaction event — the event is the
 reconciliation signal telling it which prefix the summary replaced. The
@@ -553,7 +557,12 @@ fields would name IDs that do not exist. Instead it carries a typed
 `trigger`/`pre_tokens`/`post_tokens` payload (mirroring the CLI's own
 `compact_metadata`) — a consumer reads these fields directly rather than
 parsing the event's `text`, which carries the same data as a
-human-readable string for logs only.
+human-readable string for logs only. It also carries
+`compact_started_at`, the SAME shared field `history.compacted` carries
+above: `consumeClaudeCodeStream` sets it to the instant this stream
+observed the CLI's own preceding `"compacting"` status, zero when none
+preceded the boundary in the same turn — a real, honest absence, not a
+bug, distinct from the pre_tokens/post_tokens caveat below.
 
 **Wire truth for the absent case.** Each of `trigger`/`pre_tokens`/
 `post_tokens` is `omitempty` on `server.Event` (`server/journal.go`), and
@@ -570,6 +579,14 @@ consumer MUST render "unknown" when a key is missing, never "0" — treating
 an absent `pre_tokens`/`post_tokens` as a reported zero silently invents a
 number the CLI never sent.
 
+`compact_started_at` does not share this caveat: it is `time.Time` with
+the `omitzero` tag, not `omitempty` on a plain value, so the zero time
+alone already distinguishes "absent" from "a real, measured start" on
+the wire — the same fix `FoldedTokensEst`'s `*int` applied to the engine
+journal's own `compact_started_at`/`compact_folded_tokens_est` pair.
+Fixing `pre_tokens`/`post_tokens` the same way is a separate change with
+its own wire-compatibility question, not addressed here.
+
 UNLIKE `compaction.failed`/`compaction.started` above, this event IS
 journaled (`server/journal.go`'s `Publish` routes it through `emitDurable`,
 not `publishLive`): it names no harness journal splice to reconcile on
@@ -583,10 +600,10 @@ open at the exact moment the CLI compacts, which is not a fix for the
 gap's general shape.
 
 `server/openapi.yaml`'s `Event` schema documents `compaction.claude_code`
-and its `trigger`/`pre_tokens`/`post_tokens` fields alongside
-`history.compacted`/`compaction.failed`/`compaction.started`, including the
-absent-vs-zero caveat above — the hand-written API contract a caller reads
-instead of this design doc.
+and its `trigger`/`pre_tokens`/`post_tokens`/`compact_started_at` fields
+alongside `history.compacted`/`compaction.failed`/`compaction.started`,
+including the absent-vs-zero caveat above — the hand-written API contract
+a caller reads instead of this design doc.
 
 **Durable observability for the delegated lane.** Unlike the native lane,
 a delegated compaction never leaves a `compact` record: `Session.Compact`
