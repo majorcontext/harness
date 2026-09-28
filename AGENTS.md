@@ -215,6 +215,9 @@ verification in the commit or pull request body.
 Use `Fixes #N` or `Updates #N` when an issue exists. Do not add
 AI-attribution footers.
 
+Add a `CHANGELOG.md` entry for each user-visible change. Put it under the
+unreleased version heading, in `Added`, `Changed`, or `Fixed`.
+
 ## Code review
 
 Read the latest automated review in full, including its top-level summary.
