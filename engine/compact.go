@@ -305,6 +305,15 @@ func isLoneExistingSummary(folded []message.Message) bool {
 
 const compactCommandText = "/compact"
 
+// isCompactCommandText reports whether text invokes the Claude Code CLI's
+// own /compact command, which takes optional instructions after the name.
+// The CLI honors it from plain stream-json stdin, so a delegated turn
+// driving this text compacts whether or not harness resolved a command.
+func isCompactCommandText(text string) bool {
+	fields := strings.Fields(text)
+	return len(fields) > 0 && fields[0] == compactCommandText
+}
+
 // RunCompactCommand is the engine entry point for a resolved compact
 // command: POST /session/{id}/compact and the serve/run dispatchers.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
@@ -312,8 +321,6 @@ func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (C
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
 			return CompactResult{}, errors.New("engine: keep_turns/model are not applicable to a session delegated to the Claude Code CLI, which owns its own context")
 		}
-		s.claudeCodeCompactTurn.Store(true)
-		defer s.claudeCodeCompactTurn.Store(false)
 		if _, err := s.dispatchClaudeCodeTurn(ctx, backend, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
 			return CompactResult{}, err
 		}

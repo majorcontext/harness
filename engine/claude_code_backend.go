@@ -528,7 +528,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 	// child (cmd.Wait(), below).
 	firstWriteErrCh := make(chan error, 1)
 	wake := make(chan struct{}, 1)
-	if !s.claudeCodeCompactTurn.Load() {
+	if !isCompactCommandText(text) {
 		// A compact turn's own result replaces history, so an injected
 		// prompt would be consumed without ever being answered.
 		s.claudeCodeQueueWake.Store(&wake)

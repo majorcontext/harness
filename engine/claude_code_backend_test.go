@@ -590,64 +590,72 @@ func TestRunCompactCommandRejectsOptionsOnDelegatedSession(t *testing.T) {
 // server's own tail dispatch (maybeDispatchQueued) to deliver once
 // compaction ends.
 func TestClaudeCodeCompactTurnDoesNotInjectMidTurnQueuedPrompt(t *testing.T) {
-	s, _ := claudeCodeTestSession(t, "compact_queue_injection")
+	for _, tc := range []struct {
+		name string
+		run  func(*Session) error
+	}{
+		{"resolved command", func(s *Session) error {
+			_, err := s.RunCompactCommand(context.Background(), CompactOptions{})
+			return err
+		}},
+		{"unresolved literal", func(s *Session) error {
+			_, err := s.Prompt(context.Background(), "/compact focus on the fruit")
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := claudeCodeTestSession(t, "compact_queue_injection")
 
-	var mu sync.Mutex
-	var events []Event
-	waiting := make(chan struct{})
-	var waitingOnce sync.Once
-	s.cfg.OnEvent = func(ev Event) {
-		mu.Lock()
-		events = append(events, ev)
-		mu.Unlock()
-		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
-			waitingOnce.Do(func() { close(waiting) })
-		}
-	}
+			var mu sync.Mutex
+			var events []Event
+			waiting := make(chan struct{})
+			var waitingOnce sync.Once
+			s.cfg.OnEvent = func(ev Event) {
+				mu.Lock()
+				events = append(events, ev)
+				mu.Unlock()
+				if ev.Type == EventMessage && ev.Message != nil && ev.Message.Parts.Text() == "WAITING_FOR_QUEUE" {
+					waitingOnce.Do(func() { close(waiting) })
+				}
+			}
 
-	type outcome struct {
-		res CompactResult
-		err error
-	}
-	done := make(chan outcome, 1)
-	go func() {
-		res, err := s.RunCompactCommand(context.Background(), CompactOptions{})
-		done <- outcome{res, err}
-	}()
+			done := make(chan error, 1)
+			go func() { done <- tc.run(s) }()
 
-	select {
-	case res := <-done:
-		t.Fatalf("RunCompactCommand returned %+v before fakeclaude ever emitted WAITING_FOR_QUEUE", res)
-	case <-waiting:
-	case <-time.After(10 * time.Second):
-		t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
-	}
+			select {
+			case err := <-done:
+				t.Fatalf("turn returned (err=%v) before fakeclaude ever emitted WAITING_FOR_QUEUE", err)
+			case <-waiting:
+			case <-time.After(10 * time.Second):
+				t.Fatal("fakeclaude never emitted WAITING_FOR_QUEUE within 10s")
+			}
 
-	queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: must stay queued", "", PromptProvenance{})
-	if err != nil {
-		t.Fatalf("EnqueuePrompt: %v", err)
-	}
+			queueID, _, err := s.EnqueuePrompt("QUEUE-MARKER: must stay queued", "", PromptProvenance{})
+			if err != nil {
+				t.Fatalf("EnqueuePrompt: %v", err)
+			}
 
-	var res outcome
-	select {
-	case res = <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("RunCompactCommand did not return within 10s")
-	}
-	if res.err != nil {
-		t.Fatalf("RunCompactCommand: %v", res.err)
-	}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("turn: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("turn did not return within 10s")
+			}
 
-	if q := s.QueuedPrompts(); len(q) != 1 || q[0].ID != queueID {
-		t.Fatalf("QueuedPrompts() after the compact turn = %+v, want the one enqueued prompt still queued", q)
-	}
+			if q := s.QueuedPrompts(); len(q) != 1 || q[0].ID != queueID {
+				t.Fatalf("QueuedPrompts() after the compact turn = %+v, want the one enqueued prompt still queued", q)
+			}
 
-	mu.Lock()
-	defer mu.Unlock()
-	for _, ev := range events {
-		if ev.Type == EventPromptDequeued && ev.QueueReason == "injected" {
-			t.Fatalf("prompt.dequeued reason=%q fired during a /compact turn, want it to stay queued instead", ev.QueueReason)
-		}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, ev := range events {
+				if ev.Type == EventPromptDequeued && ev.QueueReason == "injected" {
+					t.Fatalf("prompt.dequeued reason=%q fired during a /compact turn, want it to stay queued instead", ev.QueueReason)
+				}
+			}
+		})
 	}
 }
 
