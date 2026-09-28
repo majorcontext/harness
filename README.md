@@ -18,9 +18,48 @@ A fast, extensible, composable agent harness in Go.
 - **Composable** — headless engine, event streams, client/server, MCP both directions
 - **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
 
-See [AGENTS.md](AGENTS.md) for repository-wide rules and the scoped
-instruction index. Each major subsystem has its own concise `AGENTS.md`.
-See [docs/README.md](docs/README.md) for technical documentation.
+## Install
+
+```bash
+go install github.com/majorcontext/harness/cmd/harness@latest
+```
+
+## Use the CLI
+
+```bash
+export ANTHROPIC_API_KEY=...
+harness run -p "Find the TODOs in this repo and fix the easy ones"
+harness run -c -p "Now write a test for each fix"   # continue the last session
+harness run -model openai/gpt-5 -p "Review the diff"  # any provider/model
+harness run -goal "go test ./... passes"             # needs goal_evaluator_model in config
+harness serve                                         # HTTP+SSE session API
+```
+
+Run `harness --help` for all commands and flags.
+
+## Use the library
+
+The engine is a Go package. The CLI and server are clients of it.
+
+```go
+s := engine.NewSession(engine.Config{
+	Providers: provider.Registry{
+		anthropic.Family: &anthropic.Client{APIKey: os.Getenv("ANTHROPIC_API_KEY")},
+	},
+	Model:   message.ModelRef{Provider: anthropic.Family, Model: "claude-fable-5"},
+	WorkDir: ".",
+	OnEvent: func(e engine.Event) {
+		if e.Type == engine.EventTextDelta {
+			fmt.Print(e.Text)
+		}
+	},
+})
+reply, err := s.Prompt(ctx, "List the files in this directory.")
+```
+
+See [examples/](examples) for programs that run, and the
+[API reference](https://pkg.go.dev/github.com/majorcontext/harness/engine) for
+everything else.
 
 ## Configuration
 
@@ -97,6 +136,12 @@ An unrecognized `type`, an `openai-compat` or `openai` entry missing
 `base_url`, or a `responses_path` on an entry that builds neither Responses
 adapter, fails config loading loudly rather than silently registering
 nothing.
+
+## Contributing
+
+Read [AGENTS.md](AGENTS.md) first. It holds repository-wide rules and an index
+of each subsystem's `AGENTS.md`. [docs/README.md](docs/README.md) indexes the
+technical documentation.
 
 ---
 
