@@ -1245,6 +1245,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					}
 				}
 				s.recordClaudeCodeCompact(trigger, preTokens, postTokens, compactStartedAt, boundaryObservedAt)
+				startedAt := compactStartedAt
 				compactStartedAt = time.Time{}
 				s.emit(Event{
 					Type:                        EventClaudeCodeCompacted,
@@ -1252,6 +1253,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					ClaudeCodeCompactTrigger:    trigger,
 					ClaudeCodeCompactPreTokens:  preTokens,
 					ClaudeCodeCompactPostTokens: postTokens,
+					CompactStartedAt:            startedAt,
 				})
 			}
 			// Any other subtype (e.g. "api_retry") is observed but

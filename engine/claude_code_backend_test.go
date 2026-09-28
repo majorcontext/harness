@@ -3243,3 +3243,73 @@ func TestIndexRefoldsPreWindowVersion(t *testing.T) {
 		t.Errorf("WindowTokens = %d, want 1000000 refolded from the journal", got.WindowTokens)
 	}
 }
+
+// TestEventClaudeCodeCompactedCarriesCompactStartedAt: the durable
+// EventClaudeCodeCompacted must carry the same StartedAt the persisted
+// claude_code.compact record does, mirroring the native-lane
+// EventHistoryCompacted contract.
+func TestEventClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "compact_turn")
+	var events []Event
+	s.cfg.OnEvent = func(ev Event) { events = append(events, ev) }
+
+	if _, err := s.RunCompactCommand(context.Background(), CompactOptions{}); err != nil {
+		t.Fatalf("RunCompactCommand: %v", err)
+	}
+
+	var compacted *Event
+	for i := range events {
+		if events[i].Type == EventClaudeCodeCompacted {
+			compacted = &events[i]
+		}
+	}
+	if compacted == nil {
+		t.Fatal("no EventClaudeCodeCompacted was emitted")
+	}
+	if compacted.CompactStartedAt.IsZero() {
+		t.Error(`EventClaudeCodeCompacted.CompactStartedAt is zero, want the instant this stream observed the preceding "compacting" status`)
+	}
+
+	rec := lastClaudeCodeCompactRecord(readSessionRecords(t, s.cfg.SessionDir, s.ID))
+	if rec == nil {
+		t.Fatal("no claude_code.compact record found in the session log")
+	}
+	if !compacted.CompactStartedAt.Equal(rec.ClaudeCodeCompactStartedAt) {
+		t.Errorf("EventClaudeCodeCompacted.CompactStartedAt = %v, want it to match the persisted record's ClaudeCodeCompactStartedAt %v", compacted.CompactStartedAt, rec.ClaudeCodeCompactStartedAt)
+	}
+}
+
+// TestEventClaudeCodeCompactedOmitsCompactStartedAtWithoutPrecedingStatus:
+// a boundary with no preceding "compacting" status must leave the live
+// event's CompactStartedAt zero too, mirroring the persisted record —
+// never inventing a start time harness never observed.
+func TestEventClaudeCodeCompactedOmitsCompactStartedAtWithoutPrecedingStatus(t *testing.T) {
+	bin := buildFakeClaude(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_boundary")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+	dir := t.TempDir()
+	var events []Event
+	s := NewSession(Config{
+		SessionDir: dir,
+		Model:      message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode: ClaudeCodeConfig{BinaryPath: bin},
+		OnEvent:    func(ev Event) { events = append(events, ev) },
+	})
+
+	if _, err := s.Prompt(context.Background(), "keep going"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	var compacted *Event
+	for i := range events {
+		if events[i].Type == EventClaudeCodeCompacted {
+			compacted = &events[i]
+		}
+	}
+	if compacted == nil {
+		t.Fatal("no EventClaudeCodeCompacted was emitted")
+	}
+	if !compacted.CompactStartedAt.IsZero() {
+		t.Errorf(`EventClaudeCodeCompacted.CompactStartedAt = %v, want zero (no preceding "compacting" status was ever observed)`, compacted.CompactStartedAt)
+	}
+}

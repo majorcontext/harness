@@ -218,6 +218,19 @@ type Event struct {
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
 
+	// CompactStartedAt is carried on EventHistoryCompacted AND
+	// EventClaudeCodeCompacted alike, unlike every other Compact*/
+	// ClaudeCodeCompact* field here — "when did this compaction begin"
+	// means the same thing in both lanes, so it gets one shared field
+	// rather than a lane-specific pair. Native sets it to the same instant
+	// Session.Compact captures right after EventCompactionStarted's
+	// synchronous OnEvent returns (see compactRecord.StartedAt); delegated
+	// sets it to consumeClaudeCodeStream's own compact_boundary
+	// observation, zero when no preceding "compacting" status was seen in
+	// the same turn (see recClaudeCodeCompact.ClaudeCodeCompactStartedAt)
+	// — a real, honest absence, not a bug.
+	CompactStartedAt time.Time `json:"compact_started_at,omitzero"`
+
 	// ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
 	// ClaudeCodeCompactPostTokens are carried by EventClaudeCodeCompacted
 	// only — see that constant's own doc comment. They are the CLI's own

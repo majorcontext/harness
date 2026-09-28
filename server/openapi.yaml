@@ -2057,7 +2057,9 @@ components:
             message ids), compact_turns_folded, and compact_summary_id — the
             summary message itself always arrives first, as an ordinary
             `message` event, so this is the reconciliation signal telling a
-            replaying tailer which prefix that summary replaced.
+            replaying tailer which prefix that summary replaced. It also
+            carries compact_started_at, the instant the summarization call
+            began.
             compaction.failed is compaction's fire-and-forget failure
             counterpart (never journaled — a failed compaction never mutates
             durable state), carrying the failure detail in `error`.
@@ -2077,11 +2079,14 @@ components:
             history is a passive mirror, never itself compacted. It carries
             none of history.compacted's fold-boundary fields (no harness
             message ids are folded), only `trigger`, `pre_tokens`, and
-            `post_tokens`, mirrored from the CLI's own report. `text` is
-            also present, a human-readable one-line summary for logs only —
-            never parse it; read the typed fields instead. `trigger`,
-            `pre_tokens`, and `post_tokens` are each ABSENT (the key is
-            missing, not present with a zero value) whenever the CLI's own
+            `post_tokens`, mirrored from the CLI's own report, plus
+            compact_started_at (see that field's own description for its
+            own absent case, distinct from the pre_tokens/post_tokens
+            caveat below). `text` is also present, a human-readable
+            one-line summary for logs only — never parse it; read the
+            typed fields instead. `trigger`, `pre_tokens`, and `post_tokens`
+            are each ABSENT (the key is missing, not present with a zero
+            value) whenever the CLI's own
             output omitted that data — `pre_tokens`/`post_tokens` in
             particular are indistinguishable, on the wire, from a genuine
             report of 0: a consumer must render "unknown", never "0", for
@@ -2376,6 +2381,20 @@ components:
             The id of the summary message that replaced the folded range —
             already delivered via a preceding `message` event
             (history.compacted).
+        compact_started_at:
+          type: string
+          format: date-time
+          description: >
+            When this compaction began, on BOTH durable compaction events —
+            history.compacted and compaction.claude_code alike, since
+            duration means the same thing in either lane. Derive duration
+            as this event's own delivery time minus this field, without
+            holding open the live stream that preceded it. ABSENT — the
+            key is missing, never an explicit zero-value timestamp — on a
+            legacy record predating this field, and on a compaction.
+            claude_code event whose delegated turn observed no preceding
+            "compacting" status of its own: a real, honest absence, not a
+            bug.
         trigger:
           type: string
           enum: [auto, manual]

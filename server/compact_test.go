@@ -772,3 +772,90 @@ func TestCompactEndpointSummaryEventBeforeHistoryCompactedEvent(t *testing.T) {
 		t.Fatal("never saw the summary's message event")
 	}
 }
+
+// TestCompactStartedAtWireEncodingDistinguishesAbsentFromSet: compact_
+// started_at must omit its key entirely for a zero time (never encode
+// the zero-time string, indistinguishable on the wire from a real start)
+// and must round-trip a genuinely recorded one unchanged.
+func TestCompactStartedAtWireEncodingDistinguishesAbsentFromSet(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	tests := []struct {
+		name        string
+		startedAt   time.Time
+		wantPresent bool
+	}{
+		{"zero omits the key", time.Time{}, false},
+		{"set round-trips", when, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(Event{Type: evtHistoryCompacted, SessionID: "ses_x", CompactStartedAt: tt.startedAt})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if present := bytes.Contains(data, []byte(`"compact_started_at"`)); present != tt.wantPresent {
+				t.Errorf("marshaled event = %s, compact_started_at present = %v, want %v", data, present, tt.wantPresent)
+			}
+			var out Event
+			if err := json.Unmarshal(data, &out); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !out.CompactStartedAt.Equal(tt.startedAt) {
+				t.Errorf("CompactStartedAt round-tripped as %v, want %v", out.CompactStartedAt, tt.startedAt)
+			}
+		})
+	}
+}
+
+// TestCompactEndpointHistoryCompactedCarriesCompactStartedAt: the durable
+// history.compacted server event must carry when compaction began, not
+// just when the summary settled — see docs/design/context-compaction.md
+// §4. Without this, a fleet-wide question about compaction duration
+// cannot be answered from the event stream alone.
+func TestCompactEndpointHistoryCompactedCarriesCompactStartedAt(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("two", provider.Usage{InputTokens: 10}),
+		compactAsstTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	h := newHarness(t, prov)
+	id := h.createSession("test/m1")
+	h.promptAndWaitIdle(id, "go1")
+	h.promptAndWaitIdle(id, "go2")
+
+	sse := h.openSSE("?from=0", "")
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{"keep_turns": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact status %d: %s", resp.StatusCode, data)
+	}
+
+	ev := sse.waitFor(t, "history.compacted")
+	if ev.CompactStartedAt.IsZero() {
+		t.Error("history.compacted CompactStartedAt is zero, want the instant the summarization call began")
+	}
+}
+
+// TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt mirrors the
+// native-lane test above for the delegated compaction.claude_code event.
+func TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T) {
+	bin := buildFakeClaudeForServer(t)
+	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
+	t.Setenv("FAKE_CLAUDE_LOG", filepath.Join(t.TempDir(), "invocations.jsonl"))
+
+	claudeModel := message.ModelRef{Provider: engine.ClaudeCodeProviderFamily, Model: "sonnet"}
+	nativeProv := &scriptedProvider{name: "test"}
+	h := claudeCodeSwitchHarness(t, claudeModel, engine.ClaudeCodeConfig{BinaryPath: bin}, nativeProv)
+	id := h.createSession("")
+	sse := h.openSSE("", "")
+
+	resp, data := h.do("POST", "/session/"+id+"/compact", map[string]any{})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("compact on a claude-code-delegated session status = %d, want 200: %s", resp.StatusCode, data)
+	}
+
+	sse.waitFor(t, "compaction.started")
+	ev := sse.waitFor(t, "compaction.claude_code")
+	if ev.CompactStartedAt.IsZero() {
+		t.Error(`compaction.claude_code CompactStartedAt is zero, want the instant this stream observed the preceding "compacting" status`)
+	}
+}

@@ -152,13 +152,28 @@ type Event struct {
 	CompactLastID      string `json:"compact_last_id,omitempty"`
 	CompactTurnsFolded int    `json:"compact_turns_folded,omitempty"`
 	CompactSummaryID   string `json:"compact_summary_id,omitempty"`
+	// CompactStartedAt is carried by BOTH durable compaction records,
+	// evtHistoryCompacted and evtClaudeCodeCompacted alike — mirrors
+	// engine.Event.CompactStartedAt (see that field's own doc comment for
+	// why duration means the same thing on both lanes and gets one shared
+	// field, never a lane-specific pair). A consumer derives duration as
+	// RecordedAt minus this field, without holding open the live stream
+	// that preceded the durable record. time.Time+omitzero, not a
+	// pointer: the zero time is never a legitimate real start, so it
+	// alone already tells "absent" from "measured", the same idiom
+	// RecordedAt above and engine.JournalRecord.CompactStartedAt already
+	// use. Zero on evtClaudeCodeCompacted when the delegated turn
+	// observed no preceding "compacting" status — a real, honest
+	// absence, not a bug.
+	CompactStartedAt time.Time `json:"compact_started_at,omitzero"`
 
 	// Trigger/PreTokens/PostTokens are carried by the durable
 	// evtClaudeCodeCompacted record only — mirrors
 	// engine.Event.ClaudeCodeCompactTrigger/ClaudeCodeCompactPreTokens/
 	// ClaudeCodeCompactPostTokens (see that field's own doc comment for
-	// what each means and the PostTokens/omitted-vs-zero caveat). Typed so
-	// a consumer reads exact numbers instead of parsing Text.
+	// what each means and the PostTokens/omitted-vs-zero caveat, left
+	// unaddressed here — a separate change). Typed so a consumer reads
+	// exact numbers instead of parsing Text.
 	Trigger    string `json:"trigger,omitempty"`
 	PreTokens  int    `json:"pre_tokens,omitempty"`
 	PostTokens int    `json:"post_tokens,omitempty"`
@@ -499,12 +514,13 @@ func (s *Server) Publish(ev engine.Event) {
 		// this differs from evtCompactionFailed/evtCompactionStarted just
 		// above, which stay live-only.
 		s.emitDurable(Event{
-			Type:       evtClaudeCodeCompacted,
-			SessionID:  ev.SessionID,
-			Text:       ev.Text,
-			Trigger:    ev.ClaudeCodeCompactTrigger,
-			PreTokens:  ev.ClaudeCodeCompactPreTokens,
-			PostTokens: ev.ClaudeCodeCompactPostTokens,
+			Type:             evtClaudeCodeCompacted,
+			SessionID:        ev.SessionID,
+			Text:             ev.Text,
+			Trigger:          ev.ClaudeCodeCompactTrigger,
+			PreTokens:        ev.ClaudeCodeCompactPreTokens,
+			PostTokens:       ev.ClaudeCodeCompactPostTokens,
+			CompactStartedAt: ev.CompactStartedAt,
 		})
 	case engine.EventCommand:
 		// commandSeen is not marked here: loadJournal rebuilds it from the
@@ -528,6 +544,7 @@ func (s *Server) publishHistoryCompacted(ev engine.Event) {
 		CompactLastID:      ev.CompactLastID,
 		CompactTurnsFolded: ev.CompactTurnsFolded,
 		CompactSummaryID:   ev.CompactSummaryID,
+		CompactStartedAt:   ev.CompactStartedAt,
 	})
 }
 

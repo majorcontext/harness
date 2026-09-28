@@ -2931,3 +2931,51 @@ func TestSetModelClearsForceCompactionCheckOnSwitchBackToDelegated(t *testing.T)
 		t.Error("forceCompactionCheck still true after switching BACK to claude-code delegation, want it cleared — nothing to force-check while delegated")
 	}
 }
+
+// TestEventHistoryCompactedCarriesCompactStartedAt: the durable
+// EventHistoryCompacted must carry the same StartedAt instant the
+// persisted compact record does, so a downstream consumer can derive
+// compaction duration from the live/durable event alone, without
+// cross-referencing the session journal.
+func TestEventHistoryCompactedCarriesCompactStartedAt(t *testing.T) {
+	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
+		compactTurn("one", provider.Usage{InputTokens: 10}),
+		compactTurn("two", provider.Usage{InputTokens: 10}),
+		compactSummaryTurn("gist", provider.Usage{InputTokens: 5}),
+	}}
+	dir := t.TempDir()
+	var evs []Event
+	s := NewSession(Config{
+		Providers:  provider.Registry{"test": prov},
+		Model:      message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir: dir,
+		OnEvent:    func(ev Event) { evs = append(evs, ev) },
+	})
+	runTurns(t, s, 2)
+	evs = nil
+
+	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	var compacted *Event
+	for i := range evs {
+		if evs[i].Type == EventHistoryCompacted {
+			compacted = &evs[i]
+		}
+	}
+	if compacted == nil {
+		t.Fatal("no EventHistoryCompacted was emitted")
+	}
+	if compacted.CompactStartedAt.IsZero() {
+		t.Error("EventHistoryCompacted.CompactStartedAt is zero, want the instant the summarization call began")
+	}
+
+	rec := findCompactRecord(readSessionRecords(t, dir, s.ID))
+	if rec == nil {
+		t.Fatal("no compact record found in the session log")
+	}
+	if !compacted.CompactStartedAt.Equal(rec.Compact.StartedAt) {
+		t.Errorf("EventHistoryCompacted.CompactStartedAt = %v, want it to match the persisted record's StartedAt %v", compacted.CompactStartedAt, rec.Compact.StartedAt)
+	}
+}

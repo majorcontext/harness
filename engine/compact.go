@@ -569,6 +569,7 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 		CompactLastID:      journaledLastID,
 		CompactTurnsFolded: foldTurns,
 		CompactSummaryID:   summary.ID,
+		CompactStartedAt:   startedAt,
 	})
 
 	return CompactResult{
