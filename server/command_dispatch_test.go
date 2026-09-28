@@ -89,6 +89,7 @@ func TestCommandTerminalWritesLandOnLiveSessionAfterEviction(t *testing.T) {
 	if !raced {
 		t.Fatal("commandDispatchRace never ran; this test proves nothing")
 	}
+	h.srv.wg.Wait() // runCommand's releaseSess defer fires before its wg.Done
 
 	h.srv.mu.Lock()
 	st := h.srv.sessions[id]
@@ -124,6 +125,7 @@ func TestMutableSessionPinReleasedAfterCommand(t *testing.T) {
 	}
 	sse.waitFor(t, "command") // accepted
 	sse.waitFor(t, "command") // succeeded (terminal)
+	h.srv.wg.Wait()           // runCommand's releaseSess defer fires before its wg.Done
 
 	h.srv.mu.Lock()
 	pins := h.srv.sessions[id].pins
