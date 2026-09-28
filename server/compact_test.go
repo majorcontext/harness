@@ -860,11 +860,6 @@ func TestCompactEndpointClaudeCodeCompactedCarriesCompactStartedAt(t *testing.T)
 	}
 }
 
-// TestCompactEndpointHistoryCompactedCarriesContextFields is the red-first
-// test for the console gauge gap: a live SSE consumer must learn the
-// post-fold context size the instant history.compacted fires, without
-// waiting for the next turn.end. Before this fix, ContextUsedTokens/
-// ContextWindowTokens were carried by turn.end only.
 func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactAsstTurn("one", provider.Usage{InputTokens: 10}),
@@ -888,10 +883,6 @@ func TestCompactEndpointHistoryCompactedCarriesContextFields(t *testing.T) {
 	}
 }
 
-// TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens is the
-// red-first test for the same gauge gap on the delegated lane: the CLI's
-// own reported post_tokens must also land in context_used_tokens, so a
-// console consumer never needs a separate field for the same number.
 func TestCompactEndpointClaudeCodeCompactedCarriesContextUsedTokens(t *testing.T) {
 	bin := buildFakeClaudeForServer(t)
 	t.Setenv("FAKE_CLAUDE_MODE", "compact_turn")
