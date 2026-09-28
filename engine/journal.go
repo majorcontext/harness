@@ -160,9 +160,13 @@ type JournalRecord struct {
 	// CompactStartedAt/CompactFoldedTokensEst mirror compactRecord's own
 	// fields: when the blocking summarization call began, and an estimate
 	// of the folded range's own size. CreatedAt (the embedded field above)
-	// is when that call returned.
+	// is when that call returned. CompactFoldedTokensEst is a pointer for
+	// the same reason compactRecord's own field is: this struct is shared
+	// by every record type, so nil must mean both "not a compact record"
+	// and "a compact record predating this field", never collide with a
+	// measured zero.
 	CompactStartedAt       time.Time `json:"compact_started_at,omitzero"`
-	CompactFoldedTokensEst int       `json:"compact_folded_tokens_est,omitempty"`
+	CompactFoldedTokensEst *int      `json:"compact_folded_tokens_est,omitempty"`
 
 	// Retained tool result pointer (Type == recToolResultRetained).
 	ToolResultHandle string `json:"tool_result_handle,omitempty"`

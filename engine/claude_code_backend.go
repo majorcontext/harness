@@ -224,11 +224,13 @@ func (s *Session) applyClaudeCodeUsage(usage, last provider.Usage, windowTokens 
 // CLI's own stream-json protocol reported settled — see
 // consumeClaudeCodeStream's "compact_boundary" case. It carries no Session
 // state to fold (unlike applyClaudeCodeUsage above): a pure observational
-// trace, so this only journals.
-func (s *Session) recordClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt time.Time) {
+// trace, so this only journals. createdAt is the caller's own pre-lock
+// boundary-observation instant, passed through rather than resampled once
+// s.mu is held.
+func (s *Session) recordClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt, createdAt time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.persistClaudeCodeCompact(trigger, preTokens, postTokens, startedAt)
+	s.persistClaudeCodeCompact(trigger, preTokens, postTokens, startedAt, createdAt)
 }
 
 // claudeCodeLastUsage returns a recClaudeCodeUsage record's final API call
@@ -1209,6 +1211,11 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 					s.emit(Event{Type: EventCompactionFailed, Text: env.CompactResultStatus})
 				}
 			case "compact_boundary":
+				// Captured before anything else below touches s.mu or does
+				// any work: the true end-of-compaction observation, not
+				// the instant recordClaudeCodeCompact eventually gets
+				// around to writing it.
+				boundaryObservedAt := time.Now().UTC()
 				compactBoundarySeen = true
 				compactUnsettled = false
 				// The CLI just compacted its OWN internal context — see
@@ -1237,7 +1244,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 						text += fmt.Sprintf(" post_tokens=%d", postTokens)
 					}
 				}
-				s.recordClaudeCodeCompact(trigger, preTokens, postTokens, compactStartedAt)
+				s.recordClaudeCodeCompact(trigger, preTokens, postTokens, compactStartedAt, boundaryObservedAt)
 				compactStartedAt = time.Time{}
 				s.emit(Event{
 					Type:                        EventClaudeCodeCompacted,

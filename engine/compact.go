@@ -445,20 +445,21 @@ func (s *Session) Compact(ctx context.Context, opts CompactOptions) (CompactResu
 	// Past this point Compact is committed to attempting a summary: every
 	// early-return skip (not-enough-turns, lone-existing-summary) and every
 	// journal-boundary error above have already returned. Emit the started
-	// signal now, immediately before the blocking summary call, so a live
-	// client can show a "compacting now" indicator — see
-	// EventCompactionStarted's doc comment for why this is always paired
-	// with a following EventHistoryCompacted or EventCompactionFailed.
-	// startedAt is captured at the same instant, for the durable record
-	// below: the one wall-clock signal that answers how long the blocking
-	// call actually took (see compactRecord.StartedAt's own doc comment).
-	startedAt := time.Now().UTC()
+	// signal here, so a live client can show a "compacting" indicator —
+	// see EventCompactionStarted's doc comment for why this is always
+	// paired with a following EventHistoryCompacted or
+	// EventCompactionFailed.
 	s.emit(Event{
 		Type:               EventCompactionStarted,
 		CompactFirstID:     journaledFirstID,
 		CompactLastID:      journaledLastID,
 		CompactTurnsFolded: foldTurns,
 	})
+	// startedAt is captured here, immediately before the blocking summary
+	// call: emit runs OnEvent synchronously, so capturing it any earlier
+	// would fold event-delivery time into the durable created_at -
+	// started_at duration (see compactRecord.StartedAt's own doc comment).
+	startedAt := time.Now().UTC()
 
 	summaryText, usage, err := s.runCompactionSummary(ctx, model, folded)
 	if err != nil {

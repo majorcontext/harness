@@ -454,8 +454,11 @@ type compactRecord struct {
 	// is bounded by fold size, not history size. It is the one signal that
 	// correlates a compaction's duration with what it actually compacted;
 	// TurnsFolded alone cannot (a two-turn fold can carry one giant tool
-	// result or almost nothing).
-	FoldedTokensEst int `json:"folded_tokens_est,omitempty"`
+	// result or almost nothing). A pointer, not a plain int: a fold of only
+	// zero-byte parts estimates to a real, measured zero, which nil alone
+	// (never &0) must distinguish from a record written before this field
+	// existed.
+	FoldedTokensEst *int `json:"folded_tokens_est,omitempty"`
 }
 
 // goalRecord carries the durable payload of a goal.* record (see goal.go).
@@ -845,8 +848,11 @@ func (s *Session) persistClaudeCodeUsage(usage, last provider.Usage, windowToken
 
 // persistClaudeCodeCompact appends a claude_code.compact record to the
 // session log. It mirrors persistClaudeCodeUsage exactly: a no-op until
-// the log exists (lazy creation), caller holds s.mu.
-func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt time.Time) {
+// the log exists (lazy creation), caller holds s.mu. createdAt is the
+// instant consumeClaudeCodeStream observed "compact_boundary", captured
+// before it ever contends for s.mu or reaches ensureLog — never resampled
+// here, where lock wait and first-log setup would inflate it.
+func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt, createdAt time.Time) {
 	if s.cfg.SessionDir == "" || !s.logStarted {
 		return
 	}
@@ -856,7 +862,7 @@ func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens
 	}
 	if err := s.writeRecord(record{
 		Type:                        recClaudeCodeCompact,
-		CreatedAt:                   time.Now().UTC(),
+		CreatedAt:                   createdAt,
 		ClaudeCodeCompactTrigger:    trigger,
 		ClaudeCodeCompactPreTokens:  preTokens,
 		ClaudeCodeCompactPostTokens: postTokens,
@@ -1037,7 +1043,7 @@ func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, 
 			TurnsFolded:     turnsFolded,
 			Summary:         summary,
 			StartedAt:       startedAt,
-			FoldedTokensEst: foldedTokensEst,
+			FoldedTokensEst: &foldedTokensEst,
 		},
 	}
 	if err := s.writeRecord(rec); err != nil {

@@ -50,6 +50,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	dir := t.TempDir()
 	id := newID("ses")
 	createdAt := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	foldedTokensEst := 512
 
 	recs := []record{
 		{Type: recSession, ID: id, CreatedAt: createdAt, WorkDir: "/repo", ParentSession: "ses_parent", TaskParentID: "ses_taskparent", TaskAgentType: "reviewer", TaskDepth: 2, Model: message.ModelRef{Provider: "anthropic", Model: "m1"}, Effort: message.Effort("high")},
@@ -69,7 +70,7 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 		}},
 		{Type: recChildTurnSettled},
 		{Type: recTaskOutcomeCommitted, TaskNotify: &taskNotifyRecord{ChildID: "ses_child1", Agent: "reviewer", Status: StatusDone, Result: "ok"}},
-		{Type: recCompact, CreatedAt: createdAt, Compact: &compactRecord{FirstID: "msg_1", LastID: "msg_2", TurnsFolded: 4, Summary: message.Message{ID: "msg_summary"}, StartedAt: createdAt.Add(-5 * time.Second), FoldedTokensEst: 512}},
+		{Type: recCompact, CreatedAt: createdAt, Compact: &compactRecord{FirstID: "msg_1", LastID: "msg_2", TurnsFolded: 4, Summary: message.Message{ID: "msg_summary"}, StartedAt: createdAt.Add(-5 * time.Second), FoldedTokensEst: &foldedTokensEst}},
 		{Type: recToolResultRetained, ToolResult: &toolResultRecord{Handle: "trh_1", Tool: "bash", Bytes: 4096, Lines: 100}},
 	}
 	writeRawJournal(t, dir, id, recs)
@@ -156,7 +157,8 @@ func TestLoadJournal_ProjectsAllRecordTypes(t *testing.T) {
 	compactRec := got[11]
 	if compactRec.CompactFirstID != "msg_1" || compactRec.CompactLastID != "msg_2" ||
 		compactRec.CompactTurnsFolded != 4 || !compactRec.CreatedAt.Equal(createdAt) ||
-		!compactRec.CompactStartedAt.Equal(createdAt.Add(-5*time.Second)) || compactRec.CompactFoldedTokensEst != 512 {
+		!compactRec.CompactStartedAt.Equal(createdAt.Add(-5*time.Second)) ||
+		compactRec.CompactFoldedTokensEst == nil || *compactRec.CompactFoldedTokensEst != 512 {
 		t.Errorf("compact record = %+v", compactRec)
 	}
 

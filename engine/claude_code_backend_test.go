@@ -466,6 +466,37 @@ func TestClaudeCodeCompactBoundaryJournalsDurableRecord(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeCompactRecordUsesPassedCreatedAt: persistClaudeCodeCompact
+// must record its caller's own createdAt argument — the instant
+// consumeClaudeCodeStream observed "compact_boundary" — not a value
+// resampled after taking s.mu and finishing ensureLog, where lock wait or
+// slow first-log setup would inflate it past the true boundary.
+func TestClaudeCodeCompactRecordUsesPassedCreatedAt(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "compact_turn")
+	if _, err := s.RunCompactCommand(context.Background(), CompactOptions{}); err != nil {
+		t.Fatalf("RunCompactCommand: %v", err)
+	}
+
+	wantCreatedAt := time.Now().Add(-time.Hour).UTC()
+	s.mu.Lock()
+	s.persistClaudeCodeCompact("unit-test-direct-call", 1, 2, time.Time{}, wantCreatedAt)
+	s.mu.Unlock()
+
+	recs := readSessionRecords(t, s.cfg.SessionDir, s.ID)
+	var rec *record
+	for i := range recs {
+		if recs[i].Type == recClaudeCodeCompact && recs[i].ClaudeCodeCompactTrigger == "unit-test-direct-call" {
+			rec = &recs[i]
+		}
+	}
+	if rec == nil {
+		t.Fatal("no claude_code.compact record found for the direct persistClaudeCodeCompact call")
+	}
+	if !rec.CreatedAt.Equal(wantCreatedAt) {
+		t.Errorf("CreatedAt = %v, want the passed createdAt %v unchanged", rec.CreatedAt, wantCreatedAt)
+	}
+}
+
 // TestClaudeCodeCompactBoundaryWithoutPrecedingStatusOmitsStartedAt: a
 // boundary with no preceding "compacting" status must still journal
 // (trigger/pre_tokens are known) but must leave StartedAt zero rather than
