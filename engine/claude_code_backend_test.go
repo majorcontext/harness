@@ -432,6 +432,18 @@ func TestClaudeCodeCompactTurn(t *testing.T) {
 // TestClaudeCodeCompactBoundaryJournalsDurableRecord: a delegated
 // compaction must leave a durable trace — trigger, token counts, and a
 // start time when this same turn observed a preceding "compacting" status.
+// lastClaudeCodeCompactRecord returns the most recently written
+// recClaudeCodeCompact record among recs, or nil.
+func lastClaudeCodeCompactRecord(recs []record) *record {
+	var rec *record
+	for i := range recs {
+		if recs[i].Type == recClaudeCodeCompact {
+			rec = &recs[i]
+		}
+	}
+	return rec
+}
+
 func TestClaudeCodeCompactBoundaryJournalsDurableRecord(t *testing.T) {
 	s, _ := claudeCodeTestSession(t, "compact_turn")
 
@@ -439,13 +451,7 @@ func TestClaudeCodeCompactBoundaryJournalsDurableRecord(t *testing.T) {
 		t.Fatalf("RunCompactCommand: %v", err)
 	}
 
-	recs := readSessionRecords(t, s.cfg.SessionDir, s.ID)
-	var rec *record
-	for i := range recs {
-		if recs[i].Type == recClaudeCodeCompact {
-			rec = &recs[i]
-		}
-	}
+	rec := lastClaudeCodeCompactRecord(readSessionRecords(t, s.cfg.SessionDir, s.ID))
 	if rec == nil {
 		t.Fatal("no claude_code.compact record found in the session log")
 	}
@@ -482,15 +488,9 @@ func TestClaudeCodeCompactRecordUsesPassedCreatedAt(t *testing.T) {
 	s.persistClaudeCodeCompact("unit-test-direct-call", 1, 2, time.Time{}, wantCreatedAt)
 	s.mu.Unlock()
 
-	recs := readSessionRecords(t, s.cfg.SessionDir, s.ID)
-	var rec *record
-	for i := range recs {
-		if recs[i].Type == recClaudeCodeCompact && recs[i].ClaudeCodeCompactTrigger == "unit-test-direct-call" {
-			rec = &recs[i]
-		}
-	}
-	if rec == nil {
-		t.Fatal("no claude_code.compact record found for the direct persistClaudeCodeCompact call")
+	rec := lastClaudeCodeCompactRecord(readSessionRecords(t, s.cfg.SessionDir, s.ID))
+	if rec == nil || rec.ClaudeCodeCompactTrigger != "unit-test-direct-call" {
+		t.Fatalf("no claude_code.compact record found for the direct persistClaudeCodeCompact call, got %+v", rec)
 	}
 	if !rec.CreatedAt.Equal(wantCreatedAt) {
 		t.Errorf("CreatedAt = %v, want the passed createdAt %v unchanged", rec.CreatedAt, wantCreatedAt)
@@ -516,13 +516,7 @@ func TestClaudeCodeCompactBoundaryWithoutPrecedingStatusOmitsStartedAt(t *testin
 		t.Fatalf("Prompt: %v", err)
 	}
 
-	recs := readSessionRecords(t, dir, s.ID)
-	var rec *record
-	for i := range recs {
-		if recs[i].Type == recClaudeCodeCompact {
-			rec = &recs[i]
-		}
-	}
+	rec := lastClaudeCodeCompactRecord(readSessionRecords(t, dir, s.ID))
 	if rec == nil {
 		t.Fatal("no claude_code.compact record found in the session log")
 	}
@@ -550,10 +544,8 @@ func TestClaudeCodeCompactFailureNotJournaled(t *testing.T) {
 		t.Fatal("RunCompactCommand succeeded, want the no-assistant-message error")
 	}
 
-	for _, rec := range readSessionRecords(t, s.cfg.SessionDir, s.ID) {
-		if rec.Type == recClaudeCodeCompact {
-			t.Fatalf("claude_code.compact record journaled for a failed compaction: %+v", rec)
-		}
+	if rec := lastClaudeCodeCompactRecord(readSessionRecords(t, s.cfg.SessionDir, s.ID)); rec != nil {
+		t.Fatalf("claude_code.compact record journaled for a failed compaction: %+v", rec)
 	}
 }
 
