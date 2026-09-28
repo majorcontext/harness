@@ -1,6 +1,15 @@
-# harness
+```text
+██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗
+██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝
+███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗
+██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║
+██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║
+╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝
+```
 
 A fast, extensible, composable agent harness in Go.
+
+[![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 - **Fast** — millisecond startup, CI-enforced budgets
 - **Extensible** — language-agnostic process plugins with a Go SDK
@@ -87,6 +96,10 @@ An unrecognized `type`, an `openai-compat` or `openai` entry missing
 adapter, fails config loading loudly rather than silently registering
 nothing.
 
-## License
+---
 
-Harness is licensed under the [MIT License](LICENSE).
+Part of [Major Context](https://majorcontext.com).
+
+[Moat](https://github.com/majorcontext/moat) · [Keep](https://github.com/majorcontext/keep) · [Gatekeeper](https://github.com/majorcontext/gatekeeper) · [Bailey](https://github.com/majorcontext/bailey) · **Harness**
+
+MIT licensed. See [LICENSE](LICENSE).
