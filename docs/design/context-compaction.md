@@ -672,10 +672,11 @@ through `GET /session/{id}/journal`'s projection, matching the sibling
 records, none of which do either.
 
 **The context-window gauge.** `Session.context` (`used_tokens`,
-`window_tokens`) and the mirrored `turn.end`, `history.compacted`, and
-`compaction.claude_code` event fields
-(`context_used_tokens`/`context_window_tokens`) expose the same two numbers
-this section's trigger check compares: `used_tokens` is
+`window_tokens`) and the mirrored `turn.end` and `history.compacted` event
+fields (`context_used_tokens`/`context_window_tokens`) expose the same two
+numbers this section's trigger check compares. `compaction.claude_code` is
+the exception: its `context_used_tokens` is the CLI's own `post_tokens`.
+`used_tokens` is
 `InputTokens + CacheReadTokens + CacheWriteTokens` from the most recent
 completed turn, the identical expression `maybeAutoCompact` evaluates
 against `window_tokens`, so a console gauge and automatic compaction agree
