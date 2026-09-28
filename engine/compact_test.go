@@ -1356,13 +1356,11 @@ func TestCompactJournalsStartAndFoldedSize(t *testing.T) {
 
 // TestCompactStartedAtExcludesEventFanout: StartedAt must be captured after
 // EventCompactionStarted's synchronous OnEvent callback returns, not before
-// it, so a slow callback (or the server's event fanout it drives) never
+// it, so a blocked callback (or the server's event fanout it drives) never
 // counts toward the created_at - started_at duration a reader derives. The
-// callback below manufactures a real, fixed delay to stand in for that slow
-// fanout — large enough that ordinary clock jitter cannot produce a false
-// pass or a false failure.
+// callback below blocks on a channel the test controls, so the ordering is
+// proved by a happens-before edge rather than by outrunning clock jitter.
 func TestCompactStartedAtExcludesEventFanout(t *testing.T) {
-	const fanoutDelay = 50 * time.Millisecond
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactTurn("one", provider.Usage{InputTokens: 10}),
 		compactTurn("two", provider.Usage{InputTokens: 20}),
@@ -1370,32 +1368,40 @@ func TestCompactStartedAtExcludesEventFanout(t *testing.T) {
 		compactSummaryTurn("SUMMARY", provider.Usage{InputTokens: 40}),
 	}}
 	dir := t.TempDir()
-	var handlerEnteredAt time.Time
+	entered := make(chan struct{})
+	release := make(chan struct{})
 	s := NewSession(Config{
 		Providers:  provider.Registry{"test": prov},
 		Model:      message.ModelRef{Provider: "test", Model: "m1"},
 		SessionDir: dir,
 		OnEvent: func(ev Event) {
 			if ev.Type == EventCompactionStarted {
-				handlerEnteredAt = time.Now()
-				time.Sleep(fanoutDelay)
+				close(entered)
+				<-release
 			}
 		},
 	})
 	runTurns(t, s, 3)
 
-	if _, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1}); err != nil {
+	compactDone := make(chan error, 1)
+	go func() {
+		_, err := s.Compact(context.Background(), CompactOptions{KeepTurns: 1})
+		compactDone <- err
+	}()
+
+	<-entered
+	releasedAt := time.Now()
+	close(release)
+	if err := <-compactDone; err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
-	if handlerEnteredAt.IsZero() {
-		t.Fatal("sanity: OnEvent never observed EventCompactionStarted")
-	}
+
 	rec := findCompactRecord(readSessionRecords(t, dir, s.ID))
 	if rec == nil {
 		t.Fatal("no compact record found in the session log")
 	}
-	if elapsed := rec.Compact.StartedAt.Sub(handlerEnteredAt); elapsed < fanoutDelay {
-		t.Errorf("StartedAt is only %v after the OnEvent callback entered, want >= %v: event-delivery time leaked out of the recorded start", elapsed, fanoutDelay)
+	if rec.Compact.StartedAt.Before(releasedAt) {
+		t.Errorf("StartedAt = %v, want >= %v: event-delivery time leaked into the recorded start", rec.Compact.StartedAt, releasedAt)
 	}
 }
 
