@@ -703,15 +703,14 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 	// A missing real index leaves tmpIndex unwritten, which git reads as a
 	// fresh empty index: right for an unborn repository. With a commit, an
 	// empty index would make every tracked file look deleted or untracked,
-	// so seed it from HEAD instead, as `git reset --mixed` would. read-tree
-	// writes no stat data and the diffs never refresh it, so refresh once
-	// here (filters neutralized, since refresh hashes working-tree files).
+	// so seed it from HEAD instead, as `git reset --mixed` would.
 	if indexMissing && head != "" {
-		noSplit := []string{"-c", "core.splitIndex=false"}
-		if _, err := gitOut(ctx, repoRoot, env, append(noSplit, "read-tree", "HEAD")...); err != nil {
+		if _, err := gitOut(ctx, repoRoot, env, "-c", "core.splitIndex=false", "read-tree", "HEAD"); err != nil {
 			return nil, "", false, err
 		}
-		if _, err := gitOut(ctx, repoRoot, diffEnv, append(noSplit, "update-index", "-q", "--refresh")...); err != nil {
+	}
+	if head != "" {
+		if _, err := gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--refresh"); err != nil {
 			return nil, "", false, err
 		}
 	}

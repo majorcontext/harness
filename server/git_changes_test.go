@@ -906,6 +906,16 @@ func listObjectFiles(t *testing.T, dir string) []string {
 	return files
 }
 
+func TestHandleGitChangesUncommittedIgnoresStaleIndexStat(t *testing.T) {
+	dir := newGitRepo(t)
+	if err := os.Chtimes(filepath.Join(dir, "seed.txt"), time.Now().Add(time.Hour), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitChangesUncommitted(t, dir); len(got.Files) != 0 {
+		t.Fatalf("Files = %+v, want none", got.Files)
+	}
+}
+
 // TestHandleGitChangesIndexNeverWritten: .git/index and .git/objects are both unchanged.
 func TestHandleGitChangesIndexNeverWritten(t *testing.T) {
 	dir := newGitRepo(t)
