@@ -394,10 +394,21 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	release1 := make(chan struct{})
 	childProv := &twoStageBlockingProvider{name: "child", release1: release1, secondCall: make(chan struct{})}
 	cfg := managedConfig("root", scriptedTurns("root", nil), childProv)
-	var dequeues []Event
+	var (
+		dequeuesMu sync.Mutex
+		dequeues   []Event
+		bOnce      sync.Once
+	)
+	bDequeued := make(chan struct{})
 	cfg.OnEvent = func(ev Event) {
-		if ev.Type == EventPromptDequeued {
-			dequeues = append(dequeues, ev)
+		if ev.Type != EventPromptDequeued {
+			return
+		}
+		dequeuesMu.Lock()
+		dequeues = append(dequeues, ev)
+		dequeuesMu.Unlock()
+		if ev.QueueText == "message B" {
+			bOnce.Do(func() { close(bDequeued) })
 		}
 	}
 	mgr := NewSessionManager(context.Background(), 0, 0)
@@ -444,6 +455,9 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	// before the sweep removes the node, so its queue stays readable
 	// after collection.
 	waitForReap(t, mgr, 1, time.Second, "canceled child never became reapable, so drainQueueAndPrompt never returned")
+	// finalizeTurnFrom marks the node reapable under m.mu, but emits B's
+	// "orphaned" dequeue from the deferred flush after m.mu releases.
+	<-bDequeued
 
 	pending := child.QueuedPrompts()
 	if len(pending) != 0 {
@@ -455,6 +469,8 @@ func TestDrainQueueAndPromptStopsDequeuingOnCancelMidDrain(t *testing.T) {
 	// journaled "delivered" by drainQueueAndPrompt's own loop — both
 	// leave QueuedPrompts empty. Pin the actual mechanism: find B's own
 	// prompt.dequeued event and require its reason to be "orphaned".
+	dequeuesMu.Lock()
+	defer dequeuesMu.Unlock()
 	var reasonB string
 	var sawB bool
 	for _, ev := range dequeues {
