@@ -1,14 +1,5 @@
 # Harness
 
-```text
-██╗  ██╗ █████╗ ██████╗ ███╗   ██╗███████╗███████╗███████╗
-██║  ██║██╔══██╗██╔══██╗████╗  ██║██╔════╝██╔════╝██╔════╝
-███████║███████║██████╔╝██╔██╗ ██║█████╗  ███████╗███████╗
-██╔══██║██╔══██║██╔══██╗██║╚██╗██║██╔══╝  ╚════██║╚════██║
-██║  ██║██║  ██║██║  ██║██║ ╚████║███████╗███████║███████║
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝╚══════╝╚══════╝
-```
-
 A fast, extensible, composable agent harness in Go.
 
 [![CI](https://github.com/majorcontext/harness/actions/workflows/ci.yml/badge.svg)](https://github.com/majorcontext/harness/actions/workflows/ci.yml) [![Go Reference](https://pkg.go.dev/badge/github.com/majorcontext/harness.svg)](https://pkg.go.dev/github.com/majorcontext/harness) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -24,22 +15,55 @@ A fast, extensible, composable agent harness in Go.
 go install github.com/majorcontext/harness/cmd/harness@latest
 ```
 
-## Use the CLI
+## Get started
+
+The default model is Anthropic's. Set its key:
 
 ```bash
 export ANTHROPIC_API_KEY=...
+```
+
+Run a prompt in your project:
+
+```bash
 harness run -p "Find the TODOs in this repo and fix the easy ones"
-harness run -c -p "Now write a test for each fix"                        # continue the last session
-OPENAI_API_KEY=... harness run -model openai/gpt-5 -p "Review the diff"  # any provider/model
-harness run -goal "go test ./... passes"                                 # needs goal_evaluator_model in config
-harness serve                                                            # HTTP+SSE session API
+```
+
+Continue the most recent session:
+
+```bash
+harness run -c -p "Now write a test for each fix"
+```
+
+Use another provider's model. Set that provider's key first, for example `OPENAI_API_KEY`:
+
+```bash
+harness run -model openai/gpt-5 -p "Review the diff"
+```
+
+Pursue a goal until an independent evaluator judges it met. This needs `goal_evaluator_model` in your config:
+
+```bash
+harness run -goal "go test ./... passes"
+```
+
+Serve the HTTP+SSE session API on `localhost:4096`:
+
+```bash
+harness serve
 ```
 
 Run `harness --help` for all commands and flags.
 
 ## Use the library
 
-The engine is a Go package. The CLI and server are clients of it.
+The engine is a Go package. The CLI and server are clients of it. Add it to your module:
+
+```bash
+go get github.com/majorcontext/harness/engine@latest
+```
+
+Then create a session and send it a prompt:
 
 ```go
 s := engine.NewSession(engine.Config{
@@ -65,17 +89,26 @@ everything else.
 
 ## Configuration
 
-Config lives at `~/.harness/config.json` (override with `$HARNESS_CONFIG`),
-optionally overlaid by a per-project `.harness.json`. It's a flat JSON file;
-see `config.Config` for the full field list. Model refs are `provider/model`,
-and `provider` is either a built-in family (`anthropic`, `openai`) or a name
-from `providers`.
+Config lives at `~/.harness/config.json`. Set `$HARNESS_CONFIG` to use another
+file. A per-project `.harness.json` overlays it. See `config.Config` for every
+field.
 
-Any OpenAI-compatible chat-completions endpoint — OpenRouter, Ollama, vLLM,
-LM Studio, and the like — is a two-line `providers` entry, no code required:
+Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
+`openai`, `openrouter`) or a key from `providers`.
+
+Harness refuses to run a model whose context window it does not know, because
+automatic compaction needs that size. Models outside its built-in catalog,
+including every OpenRouter and local model, need `context_window_tokens`. It
+applies to every session.
+
+### OpenAI-compatible endpoints
+
+Ollama, vLLM, LM Studio, and other chat-completions endpoints take one
+`providers` entry:
 
 ```json
 {
+  "context_window_tokens": 131072,
   "providers": {
     "ollama": {
       "type": "openai-compat",
@@ -86,10 +119,31 @@ LM Studio, and the like — is a two-line `providers` entry, no code required:
 }
 ```
 
-The map key becomes the provider name for model refs, e.g.
-`"model": "ollama/llama3.1"`. Optional fields: `family` (the wire-quirk /
-`ProviderData` tag, defaults to the map key) and `extra_headers` (sent
-verbatim on every request, e.g. OpenRouter's attribution headers):
+The key becomes the provider name, so the model ref is `ollama/llama3.1`.
+Optional fields: `family` (the wire-quirk tag, defaults to the key) and
+`extra_headers` (sent on every request).
+
+### OpenRouter
+
+Harness registers an `openrouter` provider when `providers` has none, so you
+only need a key and a context window:
+
+```bash
+export OPENROUTER_API_KEY=...
+```
+
+```json
+{
+  "context_window_tokens": 200000
+}
+```
+
+```bash
+harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
+```
+
+An `openrouter` entry in `providers` replaces the built-in one entirely. Use
+one to send attribution headers:
 
 ```json
 {
@@ -104,17 +158,11 @@ verbatim on every request, e.g. OpenRouter's attribution headers):
 }
 ```
 
-OpenRouter itself needs *no* config at all: if `providers` has no
-`openrouter` entry, harness registers one automatically with the base URL
-and `api_key_env` above, so `"model": "openrouter/anthropic/claude-sonnet-5"`
-works as soon as `OPENROUTER_API_KEY` is set. Any `openrouter` entry in
-config — even a partial one — overrides the built-in default entirely.
+### OpenAI Responses endpoints
 
-An endpoint that speaks the OpenAI **Responses** API rather than
-chat-completions uses `type: "openai"`, which builds the same native adapter
-the built-in `openai` family uses. It works under any map key, so a second
-Responses endpoint can sit beside the built-in one, and `responses_path`
-points it at an endpoint that does not serve `/v1/responses`:
+An endpoint that speaks the OpenAI Responses API uses `type: "openai"`, under
+any key. `responses_path` points it at an endpoint that does not serve
+`/v1/responses`:
 
 ```json
 {
@@ -129,15 +177,12 @@ points it at an endpoint that does not serve `/v1/responses`:
 }
 ```
 
-`"model": "vendor/some-model"` then routes there, passing `some-model`
-through as the model id. `responses_path` defaults to `/v1/responses` and is
-also accepted on the built-in `openai` entry; it is rejected on any other
-kind of entry, since no other adapter reads it.
+The model ref `vendor/some-model` sends `some-model` as the model ID.
+`responses_path` is also valid on the built-in `openai` entry, and nowhere
+else.
 
-An unrecognized `type`, an `openai-compat` or `openai` entry missing
-`base_url`, or a `responses_path` on an entry that builds neither Responses
-adapter, fails config loading loudly rather than silently registering
-nothing.
+An unknown `type`, a missing `base_url`, or a misplaced `responses_path` fails
+config loading with an error that names the entry.
 
 ## Contributing
 
@@ -149,6 +194,6 @@ technical documentation.
 
 Part of [Major Context](https://majorcontext.com).
 
-[Moat](https://github.com/majorcontext/moat) · [Keep](https://github.com/majorcontext/keep) · [Gatekeeper](https://github.com/majorcontext/gatekeeper) · [Bailey](https://github.com/majorcontext/bailey) · **Harness**
+[Moat](https://github.com/majorcontext/moat) · [Keep](https://github.com/majorcontext/keep) · [Gatekeeper](https://github.com/majorcontext/gatekeeper) · Bailey · **Harness**
 
 MIT licensed. See [LICENSE](LICENSE).
