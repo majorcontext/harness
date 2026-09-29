@@ -920,9 +920,9 @@ func TestHandleGitChangesUncommittedIncludesUnmergedFiles(t *testing.T) {
 	runTestGit(t, dir, "commit", "-q", "-m", "main")
 	cmd := exec.Command("git", "merge", "conflict")
 	cmd.Dir = dir
-	output, err := cmd.CombinedOutput()
-	if err == nil || !strings.Contains(string(output), "CONFLICT") {
-		t.Fatalf("merge output = %s, error = %v, want conflict", output, err)
+	_, _ = cmd.CombinedOutput()
+	if output := runTestGit(t, dir, "ls-files", "-u"); output == "" {
+		t.Fatal("merge did not leave unmerged index entries")
 	}
 
 	got := gitChangesUncommitted(t, dir)

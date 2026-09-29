@@ -709,10 +709,8 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 			return nil, "", false, err
 		}
 	}
-	if head != "" {
-		if _, err := gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--unmerged", "--refresh"); err != nil {
-			return nil, "", false, err
-		}
+	if _, err := gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--unmerged", "--refresh"); err != nil {
+		return nil, "", false, err
 	}
 
 	// ls-files reads the private index too, so it agrees with the diffs on
