@@ -96,13 +96,14 @@ field.
 Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
 `openai`, `openrouter`) or a key from `providers`.
 
-The CLI and server refuse to run a model whose context window they do not
-know, because automatic compaction needs that size. Models outside the built-in
-catalog, including every OpenRouter and local model, need
-`context_window_tokens`. It applies to every session. To run such a model
-without a window, set `context_window_required: false`; automatic compaction
-is then off. The library requires a window only when
-`engine.Config.RequireContextWindow` is set.
+The CLI and server refuse to run a model that is missing from the built-in
+context-window catalog, because automatic compaction needs its size. That
+includes every OpenRouter and local model: set `context_window_tokens`, which
+applies to every session. To run such a model without a window, set
+`context_window_required: false`; automatic compaction is then off.
+`claude-code` models are the exception: the Claude Code CLI reports its own
+window after each turn, so do not set one for them. The library requires a
+window only when `engine.Config.RequireContextWindow` is set.
 
 ### OpenAI-compatible endpoints
 
