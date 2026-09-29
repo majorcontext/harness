@@ -1,4 +1,3 @@
-// Package engine runs headless agent sessions.
 package engine
 
 import (

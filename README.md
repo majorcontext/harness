@@ -29,10 +29,10 @@ go install github.com/majorcontext/harness/cmd/harness@latest
 ```bash
 export ANTHROPIC_API_KEY=...
 harness run -p "Find the TODOs in this repo and fix the easy ones"
-harness run -c -p "Now write a test for each fix"   # continue the last session
-harness run -model openai/gpt-5 -p "Review the diff"  # any provider/model
-harness run -goal "go test ./... passes"             # needs goal_evaluator_model in config
-harness serve                                         # HTTP+SSE session API
+harness run -c -p "Now write a test for each fix"                        # continue the last session
+OPENAI_API_KEY=... harness run -model openai/gpt-5 -p "Review the diff"  # any provider/model
+harness run -goal "go test ./... passes"                                 # needs goal_evaluator_model in config
+harness serve                                                            # HTTP+SSE session API
 ```
 
 Run `harness --help` for all commands and flags.
