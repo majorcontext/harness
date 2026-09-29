@@ -96,15 +96,23 @@ field.
 Model refs are `provider/model`. `provider` is a built-in family (`anthropic`,
 `openai`, `openrouter`) or a key from `providers`.
 
-Harness refuses to run a model whose context window it does not know, because
-automatic compaction needs that size. Models outside its built-in catalog,
-including every OpenRouter and local model, need `context_window_tokens`. It
-applies to every session.
+The CLI and server refuse to run a model whose context window they do not
+know, because automatic compaction needs that size. Models outside the built-in
+catalog, including every OpenRouter and local model, need
+`context_window_tokens`. It applies to every session. To run such a model
+without a window, set `context_window_required: false`; automatic compaction
+is then off. The library requires a window only when
+`engine.Config.RequireContextWindow` is set.
 
 ### OpenAI-compatible endpoints
 
 Ollama, vLLM, LM Studio, and other chat-completions endpoints take one
-`providers` entry:
+`providers` entry. The adapter sends a key on every request, so set one even
+if your server does not check it:
+
+```bash
+export OLLAMA_API_KEY=ollama
+```
 
 ```json
 {
