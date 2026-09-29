@@ -115,6 +115,14 @@ if your server does not check it:
 export OLLAMA_API_KEY=ollama
 ```
 
+Start Ollama with the context window Harness will assume:
+
+```bash
+OLLAMA_CONTEXT_LENGTH=131072 ollama serve
+```
+
+Then add the entry:
+
 ```json
 {
   "context_window_tokens": 131072,
@@ -128,9 +136,9 @@ export OLLAMA_API_KEY=ollama
 }
 ```
 
-Set `context_window_tokens` to the context length your server runs the model
-with, not the model's maximum. If the server's window is smaller, it drops
-context before Harness compacts.
+Keep `context_window_tokens` equal to the server's window, not the model's
+maximum. If the server's window is smaller, it drops context before Harness
+compacts.
 
 The key becomes the provider name, so the model ref is `ollama/llama3.1`.
 Optional fields: `family` (the wire-quirk tag, defaults to the key) and
