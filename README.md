@@ -125,8 +125,8 @@ Optional fields: `family` (the wire-quirk tag, defaults to the key) and
 
 ### OpenRouter
 
-Harness registers an `openrouter` provider when `providers` has none, so you
-only need a key and a context window:
+Harness registers an `openrouter` provider when `providers` has no
+`openrouter` entry, so you only need a key and a context window:
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -142,16 +142,15 @@ export OPENROUTER_API_KEY=...
 harness run -model openrouter/anthropic/claude-sonnet-5 -p "Review the diff"
 ```
 
-An `openrouter` entry in `providers` replaces the built-in one entirely. Use
-one to send attribution headers:
+An `openrouter` entry takes `type`, `base_url`, and `api_key_env` from those
+defaults when you leave them out. To send attribution headers, set only
+`extra_headers`:
 
 ```json
 {
+  "context_window_tokens": 200000,
   "providers": {
     "openrouter": {
-      "type": "openai-compat",
-      "base_url": "https://openrouter.ai/api/v1",
-      "api_key_env": "OPENROUTER_API_KEY",
       "extra_headers": {"HTTP-Referer": "https://example.com", "X-Title": "my-app"}
     }
   }
@@ -166,6 +165,7 @@ any key. `responses_path` points it at an endpoint that does not serve
 
 ```json
 {
+  "context_window_tokens": 128000,
   "providers": {
     "vendor": {
       "type": "openai",
@@ -177,12 +177,14 @@ any key. `responses_path` points it at an endpoint that does not serve
 }
 ```
 
-The model ref `vendor/some-model` sends `some-model` as the model ID.
+The model ref `vendor/some-model` sends `some-model` as the model ID. Set
+`context_window_tokens` to your model's context window.
 `responses_path` is also valid on the built-in `openai` entry, and nowhere
 else.
 
-An unknown `type`, a missing `base_url`, or a misplaced `responses_path` fails
-config loading with an error that names the entry.
+These fail config loading with an error that names the entry: an unknown
+`type`, an `openai-compat` or `openai` entry with no `base_url` (except
+`openrouter`, which has a default), and a misplaced `responses_path`.
 
 ## Contributing
 
