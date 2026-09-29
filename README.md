@@ -128,6 +128,10 @@ export OLLAMA_API_KEY=ollama
 }
 ```
 
+Set `context_window_tokens` to the context length your server runs the model
+with, not the model's maximum. If the server's window is smaller, it drops
+context before Harness compacts.
+
 The key becomes the provider name, so the model ref is `ollama/llama3.1`.
 Optional fields: `family` (the wire-quirk tag, defaults to the key) and
 `extra_headers` (sent on every request).
