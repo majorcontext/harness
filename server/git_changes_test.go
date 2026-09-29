@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -904,6 +905,30 @@ func listObjectFiles(t *testing.T, dir string) []string {
 	})
 	sort.Strings(files)
 	return files
+}
+
+func TestHandleGitChangesUncommittedIncludesUnmergedFiles(t *testing.T) {
+	dir := newGitRepo(t)
+	branch := strings.TrimSpace(runTestGit(t, dir, "branch", "--show-current"))
+	runTestGit(t, dir, "checkout", "-q", "-b", "conflict")
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "side\n")
+	runTestGit(t, dir, "add", "seed.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "side")
+	runTestGit(t, dir, "checkout", "-q", branch)
+	writeTestFile(t, filepath.Join(dir, "seed.txt"), "main\n")
+	runTestGit(t, dir, "add", "seed.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "main")
+	cmd := exec.Command("git", "merge", "conflict")
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "CONFLICT") {
+		t.Fatalf("merge output = %s, error = %v, want conflict", output, err)
+	}
+
+	got := gitChangesUncommitted(t, dir)
+	if _, ok := filesByPath(got.Files)["seed.txt"]; !ok {
+		t.Fatalf("Files = %+v, want seed.txt", got.Files)
+	}
 }
 
 func TestHandleGitChangesUncommittedIgnoresStaleIndexStat(t *testing.T) {

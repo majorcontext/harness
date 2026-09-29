@@ -710,7 +710,7 @@ func gitChangeSet(ctx context.Context, repoRoot, head, baseTreeish string, patch
 		}
 	}
 	if head != "" {
-		if _, err := gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--refresh"); err != nil {
+		if _, err := gitOut(ctx, repoRoot, diffEnv, "-c", "core.splitIndex=false", "update-index", "-q", "--unmerged", "--refresh"); err != nil {
 			return nil, "", false, err
 		}
 	}
