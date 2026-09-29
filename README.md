@@ -54,7 +54,9 @@ s := engine.NewSession(engine.Config{
 		}
 	},
 })
-reply, err := s.Prompt(ctx, "List the files in this directory.")
+if _, err := s.Prompt(context.Background(), "List the files in this directory."); err != nil {
+	log.Fatal(err)
+}
 ```
 
 See [examples/](examples) for programs that run, and the
