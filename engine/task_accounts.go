@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 
@@ -61,12 +62,27 @@ func (s *Session) accountRoutingContext(ctx context.Context, providerName string
 	return provider.WithAccountRouting(ctx, provider.AccountRouting{ProxyURL: proxyURL}), nil
 }
 
+type selectedAccountError struct {
+	accountID string
+	err       error
+}
+
+func (e *selectedAccountError) Error() string {
+	return fmt.Sprintf("subscription account %q: %v", e.accountID, e.err)
+}
+
+func (e *selectedAccountError) Unwrap() error { return e.err }
+
 func (s *Session) withSelectedAccountError(providerName string, err error) error {
 	if err == nil {
 		return nil
 	}
+	var accountErr *selectedAccountError
+	if errors.As(err, &accountErr) {
+		return err
+	}
 	if accountID := s.accountIDForProvider(providerName); accountID != nil {
-		return fmt.Errorf("subscription account %q: %w", *accountID, err)
+		return &selectedAccountError{accountID: *accountID, err: err}
 	}
 	return err
 }

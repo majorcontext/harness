@@ -254,12 +254,12 @@ func claudeCodeLastUsage(usage, last *provider.Usage) *provider.Usage {
 // transcript behind; only the (*message.Message, error) return itself
 // reports the failure, exactly like the native path's
 // interruptedTurnError partial-append behavior (engine.go).
-func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, error) {
-	msg, err := s.runClaudeCodeTurnUnwrapped(ctx)
-	return msg, s.withSelectedAccountError(ClaudeCodeProviderFamily, err)
+func (s *Session) runClaudeCodeTurn(ctx context.Context, model message.ModelRef) (*message.Message, error) {
+	msg, err := s.runClaudeCodeTurnUnwrapped(ctx, model)
+	return msg, s.withSelectedAccountError(model.Provider, err)
 }
 
-func (s *Session) runClaudeCodeTurnUnwrapped(ctx context.Context) (*message.Message, error) {
+func (s *Session) runClaudeCodeTurnUnwrapped(ctx context.Context, model message.ModelRef) (*message.Message, error) {
 	history := s.History()
 	text, blobs := lastUserMessageContent(history)
 	if text == "" && len(blobs) == 0 {
@@ -305,7 +305,6 @@ func (s *Session) runClaudeCodeTurnUnwrapped(ctx context.Context) (*message.Mess
 	if binary == "" {
 		binary = defaultClaudeCodeBinaryPath
 	}
-	model := s.Model()
 
 	appendPrompt, haveAppendPrompt := claudeCodeAppendSystemPrompt(s.cfg.AppendSystemPrompt)
 	if haveAppendPrompt {

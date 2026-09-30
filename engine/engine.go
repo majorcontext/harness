@@ -2948,8 +2948,8 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	if backend, ok := s.delegatedBackend(); ok {
-		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
+	if backend, model, ok := s.delegatedBackend(); ok {
+		return s.dispatchClaudeCodeTurn(ctx, backend, model, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -3023,17 +3023,18 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 // and carries the result forward, rather than each re-resolving s.Model()
 // on its own: SetModel is allowed mid-turn, so a second, later lookup could
 // disagree with the first and abort a turn a concurrent switch already
-// committed to running.
-func (s *Session) delegatedBackend() (DelegatedBackend, bool) {
-	b, err := delegatedBackends.For(s.Model())
+// committed to running. It returns the same model snapshot used for lookup.
+func (s *Session) delegatedBackend() (DelegatedBackend, message.ModelRef, bool) {
+	model := s.Model()
+	b, err := delegatedBackends.For(model)
 	if err != nil {
-		return nil, false
+		return nil, model, false
 	}
-	return b, true
+	return b, model, true
 }
 
 // dispatchClaudeCodeTurn appends text and runs it through backend.
-func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
+func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, model message.ModelRef, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
 		Role:          message.RoleUser,
@@ -3046,17 +3047,17 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedB
 		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
 	}
 	s.append(msg)
-	return s.runDelegatedTurn(ctx, backend)
+	return s.runDelegatedTurn(ctx, backend, model)
 }
 
 // runDelegatedTurn runs one turn through backend, resolved by the caller's
 // own delegatedBackend() call — see that method's own doc comment for why
 // this never re-resolves the model itself.
-func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend) (*message.Message, error) {
+func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend, model message.ModelRef) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()
-	msg, err := backend.RunTurn(ctx, s)
+	msg, err := backend.RunTurn(ctx, s, model)
 	if err != nil {
 		s.requeueTaskNotifications()
 		s.emitSessionError(err)
@@ -3100,8 +3101,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend
 // entirely, so THIS is the one choke point every route into the agentic
 // loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
-	if backend, ok := s.delegatedBackend(); ok {
-		return s.runDelegatedTurn(ctx, backend)
+	if backend, model, ok := s.delegatedBackend(); ok {
+		return s.runDelegatedTurn(ctx, backend, model)
 	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")

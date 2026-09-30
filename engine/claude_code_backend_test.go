@@ -828,6 +828,7 @@ func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
 	}
 	root := mgr.NewRoot(cfg)
 	accounts := []string{"acct_a", "acct_b"}
+	claudeRoute := cfg.AccountRouting["claude-code"]
 	for _, account := range accounts {
 		raw, err := json.Marshal(map[string]any{
 			"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": account,
@@ -847,17 +848,32 @@ func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
 	}
 
 	for i, tc := range []struct {
-		baseURL     string
-		noProxy     string
-		wantFailure string
+		baseURL      string
+		noProxy      string
+		protocol     string
+		missingProxy bool
+		wantFailure  string
 	}{
 		{baseURL: "https://gateway.example/v1", noProxy: "gateway.example", wantFailure: "unsupported account-routed Anthropic endpoint"},
 		{baseURL: "https://api.anthropic.com/v1", noProxy: "api.anthropic.com", wantFailure: "cannot use the configured proxy"},
 		{baseURL: "http://api.anthropic.com", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
 		{baseURL: "https://api.anthropic.com:8443", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "", noProxy: "localhost", protocol: "future", wantFailure: "unsupported account-routing protocol"},
+		{baseURL: "", noProxy: "localhost", missingProxy: true, wantFailure: `environment variable "HTTPS_PROXY" is missing or invalid`},
 	} {
 		t.Setenv("ANTHROPIC_BASE_URL", tc.baseURL)
 		t.Setenv("NO_PROXY", tc.noProxy)
+		route := claudeRoute
+		if tc.protocol != "" {
+			route.Protocol = tc.protocol
+		}
+		if tc.missingProxy {
+			route.ProxyURL = ""
+			route.ProxyURLResolver = func() (string, error) {
+				return "", errors.New("proxy URL containing secret")
+			}
+		}
+		cfg.AccountRouting["claude-code"] = route
 		account := "acct_blocked" + strconv.Itoa(i)
 		raw, err := json.Marshal(map[string]any{"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": account})
 		if err != nil {
@@ -875,6 +891,9 @@ func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
 		info, ok := mgr.Info(blocked.SessionID)
 		if !ok || !strings.Contains(info.FailReason, tc.wantFailure) {
 			t.Fatalf("Claude route failure = %q, want %q", info.FailReason, tc.wantFailure)
+		}
+		if strings.Count(info.FailReason, "subscription account") != 1 || strings.Contains(info.FailReason, "secret") {
+			t.Fatalf("Claude route error has duplicated account prefix or proxy secret: %q", info.FailReason)
 		}
 	}
 	if got := len(readInvocations(t, invocationLog)); got != 2 {

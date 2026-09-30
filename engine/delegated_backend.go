@@ -15,7 +15,7 @@ import (
 type DelegatedBackend interface {
 	// SpecificationVersion mirrors the AI SDK's specificationVersion field.
 	SpecificationVersion() string
-	RunTurn(ctx context.Context, s *Session) (*message.Message, error)
+	RunTurn(ctx context.Context, s *Session, model message.ModelRef) (*message.Message, error)
 }
 
 // DelegatedBackendRegistry maps a provider to its backend, mirroring provider.Registry.
@@ -40,6 +40,6 @@ var _ DelegatedBackend = claudeCodeBackend{}
 
 func (claudeCodeBackend) SpecificationVersion() string { return "v1" }
 
-func (claudeCodeBackend) RunTurn(ctx context.Context, s *Session) (*message.Message, error) {
-	return s.runClaudeCodeTurn(ctx)
+func (claudeCodeBackend) RunTurn(ctx context.Context, s *Session, model message.ModelRef) (*message.Message, error) {
+	return s.runClaudeCodeTurn(ctx, model)
 }
