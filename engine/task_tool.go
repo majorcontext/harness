@@ -318,6 +318,9 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 	if accountModel.IsZero() {
 		accountModel = s.Model()
 	}
+	if len(in.Account) > 0 && model.IsZero() {
+		model = accountModel
+	}
 	accountSelection, err := resolveTaskAccountSelection(in.Account, accountModel.Provider, s.accountSelectionSnapshot(), s.cfg.AccountRouting)
 	if err != nil {
 		return nil, fmt.Errorf("task: %w", err)

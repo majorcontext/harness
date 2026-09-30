@@ -206,6 +206,9 @@ func TestRunTaskToolSpawnSelectionFromEmptyParent(t *testing.T) {
 			if !ok || !reflect.DeepEqual(child.accountSelectionSnapshot(), tc.want) {
 				t.Fatalf("child selection = %#v, want %#v", child.accountSelectionSnapshot(), tc.want)
 			}
+			if got := child.Model(); got != modelFor("codex") {
+				t.Fatalf("child model = %v, want %v", got, modelFor("codex"))
+			}
 			waitForStatus(t, mgr, result.SessionID, StatusDone, time.Second)
 			reloaded, err := LoadSession(Config{Providers: cfg.Providers, AccountRouting: cfg.AccountRouting, SessionDir: cfg.SessionDir, Model: modelFor("codex")}, result.SessionID)
 			if err != nil {
