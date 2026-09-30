@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,8 +28,7 @@ type accountRouteProxy struct {
 func newAccountRouteProxy(t *testing.T) *accountRouteProxy {
 	t.Helper()
 	proxy := &accountRouteProxy{authorizations: make(chan string, 4)}
-	proxy.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxy.authorizations <- r.Header.Get("Proxy-Authorization")
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Upgrade") == "" {
 			w.Header().Set("Content-Type", "text/event-stream")
 			for _, frame := range wsCannedFrames {
@@ -50,14 +51,54 @@ func newAccountRouteProxy(t *testing.T) *accountRouteProxy {
 			}
 		}
 	}))
+	t.Cleanup(origin.Close)
+	proxy.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxy.authorizations <- r.Header.Get("Proxy-Authorization")
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			return
+		}
+		clientConn, buffered, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		upstream, err := net.Dial("tcp", origin.Listener.Addr().String())
+		if err != nil {
+			clientConn.Close()
+			return
+		}
+		_, _ = fmt.Fprint(buffered, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		if err := buffered.Flush(); err != nil {
+			clientConn.Close()
+			upstream.Close()
+			return
+		}
+		done := make(chan struct{})
+		go func() {
+			_, _ = io.Copy(upstream, clientConn)
+			upstream.Close()
+			close(done)
+		}()
+		_, _ = io.Copy(clientConn, upstream)
+		clientConn.Close()
+		upstream.Close()
+		<-done
+	}))
 	t.Cleanup(proxy.Close)
 	return proxy
 }
 
+func accountRouteHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	return &http.Client{Transport: transport}
+}
+
 func TestAccountRoutingProductionEntrypoints(t *testing.T) {
+	t.Setenv("NO_PROXY", "")
 	for _, transport := range []string{"http", "ws_stream", "ws_prewarm"} {
 		t.Run(transport, func(t *testing.T) {
-			client := &Client{APIKey: "placeholder", BaseURL: "http://codex.invalid", Family: CodexFamily, UseWebSocketTransport: transport != "http"}
+			client := &Client{HTTPClient: accountRouteHTTPClient(), APIKey: "placeholder", BaseURL: "https://chatgpt.com", Family: CodexFamily, UseWebSocketTransport: transport != "http"}
 			for _, account := range []string{"acct_a", "acct_b"} {
 				proxy := newAccountRouteProxy(t)
 				selector := base64.RawURLEncoding.EncodeToString([]byte(`{"codex":"` + account + `"}`))
@@ -94,11 +135,40 @@ func TestAccountRoutingProductionEntrypoints(t *testing.T) {
 	}
 }
 
+func TestCodexAccountRoutingRejectsHTTPAndWrongOriginBeforeProxy(t *testing.T) {
+	for _, target := range []string{"http://chatgpt.com/backend-api/codex", "https://api.openai.com/v1"} {
+		t.Run(target, func(t *testing.T) {
+			proxy := newAccountRouteProxy(t)
+			proxyURL, err := url.Parse(proxy.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proxyURL.User = url.UserPassword("subject|box|accounts-v1=eyJjb2RleCI6ImFjY3RfYSJ9", "password")
+			client := &Client{APIKey: "placeholder", BaseURL: target, Family: CodexFamily}
+			ctx := provider.WithAccountRouting(context.Background(), provider.AccountRouting{ProxyURL: proxyURL.String()})
+			stream, err := client.Stream(ctx, wsRequest("same-session"))
+			if err == nil {
+				_ = stream.Close()
+				t.Fatal("unsupported Codex origin reached the proxy")
+			}
+			select {
+			case <-proxy.authorizations:
+				t.Fatal("unsupported Codex origin sent proxy authorization")
+			default:
+			}
+		})
+	}
+}
+
 func TestAccountRoutingIsolatesOpenAIHTTPAndWebSocketSessions(t *testing.T) {
 	baseTransport := http.DefaultTransport.(*http.Transport).Clone()
 	baseTransport.TLSClientConfig = &tls.Config{ServerName: "api.example"}
-	baseClient := &http.Client{Transport: baseTransport, Timeout: 3 * time.Second}
-	client := &Client{HTTPClient: baseClient, BaseURL: "http://codex.invalid", UseWebSocketTransport: true}
+	baseJar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseClient := &http.Client{Transport: baseTransport, Timeout: 3 * time.Second, Jar: baseJar}
+	client := &Client{HTTPClient: baseClient, BaseURL: "https://chatgpt.com", UseWebSocketTransport: true}
 	request := &provider.Request{SessionKey: "child-session"}
 	ctxA := provider.WithAccountRouting(context.Background(), provider.AccountRouting{ProxyURL: "http://subject%7Cbox%7Caccounts-v1=YQ:password@proxy.example"})
 	ctxB := provider.WithAccountRouting(context.Background(), provider.AccountRouting{ProxyURL: "http://subject%7Cbox%7Caccounts-v1=Yg:password@proxy.example"})
@@ -113,6 +183,9 @@ func TestAccountRoutingIsolatesOpenAIHTTPAndWebSocketSessions(t *testing.T) {
 	}
 	if httpA == httpB || httpA.Transport == httpB.Transport {
 		t.Fatal("sibling account selections share an HTTP client or transport")
+	}
+	if httpA.Jar != nil || httpB.Jar != nil || httpA.Jar == baseClient.Jar || httpB.Jar == baseClient.Jar {
+		t.Fatal("routed clients share the base cookie jar")
 	}
 	if httpA.Timeout != baseClient.Timeout || httpB.Timeout != baseClient.Timeout {
 		t.Fatal("account client did not preserve timeout")
@@ -129,27 +202,12 @@ func TestAccountRoutingIsolatesOpenAIHTTPAndWebSocketSessions(t *testing.T) {
 	}
 }
 
-func TestAccountRoutingPreservesNoProxyAndRejectsBypassingRedirect(t *testing.T) {
-	t.Setenv("NO_PROXY", "example.com")
-	client := &Client{}
+func TestAccountRoutingRejectsCodexEndpointExcludedByNoProxy(t *testing.T) {
+	t.Setenv("NO_PROXY", "chatgpt.com")
+	client := &Client{BaseURL: "https://chatgpt.com"}
 	ctx := provider.WithAccountRouting(context.Background(), provider.AccountRouting{ProxyURL: "http://subject%7Cbox:password@proxy.example"})
-	httpClient, _, err := client.httpClientForAccount(ctx, &provider.Request{SessionKey: "session"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	transport := httpClient.Transport.(*http.Transport)
-	direct := httptest.NewRequest(http.MethodGet, "https://api.example.com/path", nil)
-	if proxy, err := transport.Proxy(direct); proxy != nil || err == nil || !strings.Contains(err.Error(), "excluded by NO_PROXY") {
-		t.Fatalf("NO_PROXY destination proxy = (%v, %v), want a closed error", proxy, err)
-	}
-	proxied := httptest.NewRequest(http.MethodGet, "https://api.other.test/path", nil)
-	proxy, err := transport.Proxy(proxied)
-	if err != nil || proxy == nil || proxy.Host != "proxy.example" {
-		t.Fatalf("account destination proxy = (%v, %v)", proxy, err)
-	}
-	redirect := httpClient.CheckRedirect
-	if err := redirect(direct, []*http.Request{proxied}); err == nil || !strings.Contains(err.Error(), "would bypass the proxy") {
-		t.Fatalf("account-routed redirect error = %v", err)
+	if _, _, err := client.httpClientForAccount(ctx, &provider.Request{SessionKey: "session"}); err == nil {
+		t.Fatal("account-routed Codex endpoint was silently excluded by NO_PROXY")
 	}
 	for _, tc := range []struct {
 		pattern string
@@ -168,8 +226,25 @@ func TestAccountRoutingPreservesNoProxyAndRejectsBypassingRedirect(t *testing.T)
 	}
 }
 
+func TestAccountRoutingRedirectStaysOnCodexOrigin(t *testing.T) {
+	t.Setenv("NO_PROXY", "")
+	client := &Client{BaseURL: "https://chatgpt.com"}
+	ctx := provider.WithAccountRouting(context.Background(), provider.AccountRouting{ProxyURL: "http://subject%7Cbox:password@proxy.example"})
+	httpClient, _, err := client.httpClientForAccount(ctx, &provider.Request{SessionKey: "session"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	via := []*http.Request{httptest.NewRequest(http.MethodGet, "https://chatgpt.com/start", nil)}
+	if err := httpClient.CheckRedirect(httptest.NewRequest(http.MethodGet, "https://chatgpt.com/next", nil), via); err != nil {
+		t.Fatalf("same-origin redirect was rejected: %v", err)
+	}
+	if err := httpClient.CheckRedirect(httptest.NewRequest(http.MethodGet, "https://evil.example/next", nil), via); err == nil {
+		t.Fatal("cross-origin redirect retained brokered account authorization")
+	}
+}
+
 func TestAccountHTTPClientCacheIsBoundedAndRouteSensitive(t *testing.T) {
-	client := &Client{BaseURL: "http://codex.invalid"}
+	client := &Client{BaseURL: "https://chatgpt.com"}
 	request := &provider.Request{SessionKey: "same-session"}
 	firstKey := ""
 	lastKey := ""

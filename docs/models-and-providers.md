@@ -590,8 +590,9 @@ Selection never changes the box account.
 
 Enable routing with `account_routing: {vendor: "codex",
 proxy_url_env: "HTTPS_PROXY", protocol: "boxes-v1"}`. Codex routing is valid
-only for the `codex` OpenAI Responses provider. Claude routing is valid only for
-the `claude-code` CLI provider. The environment variable must hold a proxy URL
+only for the `codex` OpenAI Responses provider. It accepts only HTTPS
+`chatgpt.com` URLs on port 443. Claude routing is valid only for the
+`claude-code` CLI provider. The environment variable must hold a proxy URL
 with a non-empty password and a `subject|box_id` username.
 
 Harness encodes selected IDs in the proxy username. It does not store vendor

@@ -30,6 +30,64 @@ type brokerErrorStream struct{}
 func (brokerErrorStream) Next() (provider.Event, error) { return provider.Event{}, errBrokerResolution }
 func (brokerErrorStream) Close() error                  { return nil }
 
+func TestSelectedAccountResolvesProxyEnvironmentOnlyWhenUsed(t *testing.T) {
+	resolveCalls := 0
+	route := AccountRoutingConfig{
+		Vendor:      "codex",
+		ProxyURLEnv: "HTTPS_PROXY",
+		Protocol:    "boxes-v1",
+		ProxyURLResolver: func() (string, error) {
+			resolveCalls++
+			return "", errors.New("http://actor:secret@proxy.invalid")
+		},
+	}
+	selectedProvider := &scriptedProvider{name: "codex", turns: doneTurn("unused")}
+	selected := NewSession(Config{
+		Providers:      provider.Registry{"codex": selectedProvider},
+		Model:          message.ModelRef{Provider: "codex", Model: "gpt-6.1-sol"},
+		AccountRouting: map[string]AccountRoutingConfig{"codex": route},
+	})
+	selected.accountSelection = map[string]string{"codex": "acct_child"}
+	if resolveCalls != 0 {
+		t.Fatal("proxy environment resolved before a selected route was used")
+	}
+	if _, err := selected.Prompt(context.Background(), "go"); err == nil || !strings.Contains(err.Error(), `subscription account "acct_child"`) || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("selected route error = %v", err)
+	}
+	if resolveCalls != 1 || selectedProvider.call != 0 {
+		t.Fatalf("route resolutions=%d provider calls=%d, want 1 and 0", resolveCalls, selectedProvider.call)
+	}
+
+	defaultProvider := &scriptedProvider{name: "codex", turns: doneTurn("ok")}
+	defaultSession := NewSession(Config{
+		Providers:      provider.Registry{"codex": defaultProvider},
+		Model:          message.ModelRef{Provider: "codex", Model: "gpt-6.1-sol"},
+		AccountRouting: map[string]AccountRoutingConfig{"codex": route},
+	})
+	if _, err := defaultSession.Prompt(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("default session resolved proxy environment %d times, want 1 total", resolveCalls)
+	}
+
+	badProtocol := route
+	badProtocol.Protocol = "future"
+	badProvider := &scriptedProvider{name: "codex", turns: doneTurn("unused")}
+	invalid := NewSession(Config{
+		Providers:      provider.Registry{"codex": badProvider},
+		Model:          message.ModelRef{Provider: "codex", Model: "gpt-6.1-sol"},
+		AccountRouting: map[string]AccountRoutingConfig{"codex": badProtocol},
+	})
+	invalid.accountSelection = map[string]string{"codex": "acct_child"}
+	if _, err := invalid.Prompt(context.Background(), "go"); err == nil || !strings.Contains(err.Error(), `subscription account "acct_child"`) || !strings.Contains(err.Error(), "unsupported account-routing protocol") {
+		t.Fatalf("unsupported direct-engine protocol error = %v", err)
+	}
+	if badProvider.call != 0 || resolveCalls != 1 {
+		t.Fatalf("invalid protocol reached resolver/provider: calls=%d provider=%d", resolveCalls, badProvider.call)
+	}
+}
+
 func TestAuxiliarySubscriptionErrorsNameOnlyExplicitSelection(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

@@ -11,10 +11,11 @@ import (
 )
 
 type AccountRoutingConfig struct {
-	Vendor      string
-	ProxyURLEnv string
-	Protocol    string
-	ProxyURL    string
+	Vendor           string
+	ProxyURLEnv      string
+	Protocol         string
+	ProxyURL         string
+	ProxyURLResolver func() (string, error)
 }
 
 var subscriptionAccountIDPattern = regexp.MustCompile(`^acct_[A-Za-z0-9]{1,64}$`)
@@ -39,9 +40,23 @@ func (s *Session) accountRoutingContext(ctx context.Context, providerName string
 	if _, ok := selection[route.Vendor]; !ok {
 		return ctx, nil
 	}
-	proxyURL, err := accountProxyURL(route.ProxyURL, selection)
+	if route.Protocol != "boxes-v1" {
+		return nil, s.withSelectedAccountError(providerName, fmt.Errorf("engine: unsupported account-routing protocol"))
+	}
+	proxyBaseURL := route.ProxyURL
+	if route.ProxyURLResolver != nil {
+		var err error
+		proxyBaseURL, err = route.ProxyURLResolver()
+		if err != nil {
+			return nil, s.withSelectedAccountError(providerName, fmt.Errorf("engine: account-routing environment variable %q is missing or invalid", route.ProxyURLEnv))
+		}
+	}
+	if proxyBaseURL == "" {
+		return nil, s.withSelectedAccountError(providerName, fmt.Errorf("engine: account-routing proxy URL is unavailable"))
+	}
+	proxyURL, err := accountProxyURL(proxyBaseURL, selection)
 	if err != nil {
-		return nil, fmt.Errorf("engine: invalid account-routing configuration for provider %q", providerName)
+		return nil, s.withSelectedAccountError(providerName, fmt.Errorf("engine: invalid account-routing configuration for provider %q", providerName))
 	}
 	return provider.WithAccountRouting(ctx, provider.AccountRouting{ProxyURL: proxyURL}), nil
 }

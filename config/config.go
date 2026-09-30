@@ -957,7 +957,15 @@ func validateAccountRouting(name string, p Provider) error {
 	if r.Vendor == "codex" && (name != "codex" || !buildsResponsesAdapter(name, p)) {
 		return fmt.Errorf("providers.%s.account_routing vendor %q requires the native codex Responses provider", name, r.Vendor)
 	}
+	if r.Vendor == "codex" && !validCodexAccountOrigin(p.BaseURL) {
+		return fmt.Errorf("providers.%s.account_routing requires an HTTPS chatgpt.com base_url on port 443", name)
+	}
 	return nil
+}
+
+func validCodexAccountOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u != nil && u.Scheme == "https" && strings.EqualFold(u.Hostname(), "chatgpt.com") && u.User == nil && (u.Port() == "" || u.Port() == "443")
 }
 
 func validEnvironmentName(name string) bool {
@@ -1312,18 +1320,19 @@ func LoadProject(dir string) (*Config, error) {
 	return cfg, err
 }
 
-// LoadInfo describes which config file LoadProjectWithInfo actually found
-// (if any) and summarizes the resulting merged config, for the one boot-
-// time observability log line `harness serve`/`harness run` emit (see
-// config/AGENTS.md's "Layering and merge" section). It carries no
-// behavior — Path is purely which file to report to an operator, never
-// re-parsed or re-read.
+// AccountRouting configures subscription account proxy routing for one provider.
 type AccountRouting struct {
 	Vendor      string `json:"vendor,omitempty"`
 	ProxyURLEnv string `json:"proxy_url_env,omitempty"`
 	Protocol    string `json:"protocol,omitempty"`
 }
 
+// LoadInfo describes which config file LoadProjectWithInfo actually found
+// (if any) and summarizes the resulting merged config, for the one boot-
+// time observability log line `harness serve`/`harness run` emit (see
+// config/AGENTS.md's "Layering and merge" section). It carries no
+// behavior — Path is purely which file to report to an operator, never
+// re-parsed or re-read.
 type LoadInfo struct {
 	// Path is the effective config file path to report: the project
 	// override (<dir>/.harness.json) when it exists, otherwise the user

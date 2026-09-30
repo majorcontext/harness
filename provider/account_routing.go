@@ -35,6 +35,36 @@ func AccountRoutingProxyFunc(raw string) (func(*url.URL) (*url.URL, error), erro
 	}, nil
 }
 
+func CodexAccountRoutingProxyFunc(raw string) (func(*url.URL) (*url.URL, error), error) {
+	proxyFunc, err := AccountRoutingProxyFunc(raw)
+	if err != nil {
+		return nil, err
+	}
+	return func(target *url.URL) (*url.URL, error) {
+		if !isCodexAccountOrigin(target) {
+			return nil, errors.New("provider: unsupported Codex account-routing origin")
+		}
+		return proxyFunc(target)
+	}, nil
+}
+
+func ValidateCodexAccountRoutingTarget(proxyURL, targetURL string) error {
+	proxyFunc, err := CodexAccountRoutingProxyFunc(proxyURL)
+	if err != nil {
+		return err
+	}
+	target, err := url.Parse(targetURL)
+	if err != nil || !isCodexAccountOrigin(target) {
+		return errors.New("provider: unsupported Codex account-routing origin")
+	}
+	_, err = proxyFunc(target)
+	return err
+}
+
+func isCodexAccountOrigin(target *url.URL) bool {
+	return target != nil && target.Scheme == "https" && strings.EqualFold(target.Hostname(), "chatgpt.com") && target.User == nil && (target.Port() == "" || target.Port() == "443")
+}
+
 func ValidateAccountRoutingTarget(proxyURL, targetURL string) error {
 	proxyFunc, err := AccountRoutingProxyFunc(proxyURL)
 	if err != nil {

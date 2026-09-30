@@ -1105,15 +1105,24 @@ func accountRoutingFor(cfg *config.Config) (map[string]engine.AccountRoutingConf
 			continue
 		}
 		envName := p.AccountRouting.ProxyURLEnv
-		proxyURL, ok := os.LookupEnv(envName)
-		if !ok || engine.ValidateAccountProxyURL(proxyURL) != nil {
-			return nil, fmt.Errorf("providers.%s.account_routing: environment variable %q is missing or invalid", name, envName)
-		}
+		var once sync.Once
+		var proxyURL string
+		var resolveErr error
 		routing[name] = engine.AccountRoutingConfig{
 			Vendor:      p.AccountRouting.Vendor,
 			ProxyURLEnv: envName,
 			Protocol:    p.AccountRouting.Protocol,
-			ProxyURL:    proxyURL,
+			ProxyURLResolver: func() (string, error) {
+				once.Do(func() {
+					value, ok := os.LookupEnv(envName)
+					if !ok || engine.ValidateAccountProxyURL(value) != nil {
+						resolveErr = fmt.Errorf("providers.%s.account_routing: environment variable %q is missing or invalid", name, envName)
+						return
+					}
+					proxyURL = value
+				})
+				return proxyURL, resolveErr
+			},
 		}
 	}
 	return routing, nil

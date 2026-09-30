@@ -167,11 +167,11 @@ func (c *Client) httpClientForAccount(ctx context.Context, req *provider.Request
 	if !ok {
 		return nil, "", errors.New("openai: account routing requires a cloneable HTTP transport")
 	}
-	proxyFunc, err := provider.AccountRoutingProxyFunc(route.ProxyURL)
+	proxyFunc, err := provider.CodexAccountRoutingProxyFunc(route.ProxyURL)
 	if err != nil {
 		return nil, "", err
 	}
-	if err := provider.ValidateAccountRoutingTarget(route.ProxyURL, responsesURL(c.BaseURL, c.ResponsesPath)); err != nil {
+	if err := provider.ValidateCodexAccountRoutingTarget(route.ProxyURL, responsesURL(c.BaseURL, c.ResponsesPath)); err != nil {
 		return nil, "", errors.New("openai: account-routed provider endpoint cannot use the configured proxy")
 	}
 	routeHash := sha256.Sum256([]byte(route.ProxyURL))
@@ -205,7 +205,7 @@ func (c *Client) httpClientForAccount(ctx context.Context, req *provider.Request
 			}
 			return nil
 		},
-		Jar:     baseClient.Jar,
+		Jar:     nil,
 		Timeout: baseClient.Timeout,
 	}
 	if len(c.accountHTTPClients) >= accountHTTPClientCacheLimit {
