@@ -810,6 +810,7 @@ func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
 	invocationLog := filepath.Join(t.TempDir(), "invocations.jsonl")
 	t.Setenv("FAKE_CLAUDE_LOG", invocationLog)
 	t.Setenv("FAKE_CLAUDE_PROXY_LOG", logPath)
+	t.Setenv("ANTHROPIC_BASE_URL", "")
 	t.Setenv("HOME", home)
 	t.Setenv("NO_PROXY", "localhost,.internal")
 	t.Setenv("HTTP_PROXY", "http://ambient.example")
@@ -845,22 +846,39 @@ func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
 		waitForStatus(t, mgr, result.SessionID, StatusDone, time.Second)
 	}
 
-	t.Setenv("NO_PROXY", "api.anthropic.com")
-	raw, err := json.Marshal(map[string]any{"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": "acct_blocked"})
-	if err != nil {
-		t.Fatal(err)
+	for i, tc := range []struct {
+		baseURL     string
+		noProxy     string
+		wantFailure string
+	}{
+		{baseURL: "https://gateway.example/v1", noProxy: "gateway.example", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "https://api.anthropic.com/v1", noProxy: "api.anthropic.com", wantFailure: "cannot use the configured proxy"},
+		{baseURL: "http://api.anthropic.com", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "https://api.anthropic.com:8443", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
+	} {
+		t.Setenv("ANTHROPIC_BASE_URL", tc.baseURL)
+		t.Setenv("NO_PROXY", tc.noProxy)
+		account := "acct_blocked" + strconv.Itoa(i)
+		raw, err := json.Marshal(map[string]any{"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": account})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts, err := runTaskTool(root, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var blocked taskToolResult
+		if err := json.Unmarshal([]byte(parts.Text()), &blocked); err != nil {
+			t.Fatal(err)
+		}
+		waitForStatus(t, mgr, blocked.SessionID, StatusFailed, time.Second)
+		info, ok := mgr.Info(blocked.SessionID)
+		if !ok || !strings.Contains(info.FailReason, tc.wantFailure) {
+			t.Fatalf("Claude route failure = %q, want %q", info.FailReason, tc.wantFailure)
+		}
 	}
-	parts, err := runTaskTool(root, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var blocked taskToolResult
-	if err := json.Unmarshal([]byte(parts.Text()), &blocked); err != nil {
-		t.Fatal(err)
-	}
-	waitForStatus(t, mgr, blocked.SessionID, StatusFailed, time.Second)
 	if got := len(readInvocations(t, invocationLog)); got != 2 {
-		t.Fatalf("fake Claude process count after NO_PROXY refusal = %d, want 2", got)
+		t.Fatalf("fake Claude process count after account-route refusals = %d, want 2", got)
 	}
 
 	data, err := os.ReadFile(logPath)

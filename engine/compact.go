@@ -732,7 +732,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 	}
 	stream, err := prov.Stream(routeCtx, req)
 	if err != nil {
-		return "", provider.Usage{}, watch.explain(err)
+		return "", provider.Usage{}, s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 	}
 	defer stream.Close()
 
@@ -751,7 +751,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 			break
 		}
 		if err != nil {
-			return "", provider.Usage{}, watch.explain(err)
+			return "", provider.Usage{}, s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:

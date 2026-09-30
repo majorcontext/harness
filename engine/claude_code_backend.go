@@ -447,8 +447,8 @@ func (s *Session) runClaudeCodeTurnUnwrapped(ctx context.Context) (*message.Mess
 	}
 	var accountID *string
 	if route, ok := provider.AccountRoutingFromContext(routeCtx); ok {
-		if err := provider.ValidateAccountRoutingTarget(route.ProxyURL, "https://api.anthropic.com"); err != nil {
-			return nil, errors.New("engine: claude-code: account-routed Anthropic endpoint cannot use the configured proxy")
+		if err := validateClaudeAccountTarget(cmd.Env, route.ProxyURL); err != nil {
+			return nil, err
 		}
 		cmd.Env = proxyEnvironment(cmd.Env, route.ProxyURL)
 		accountID = s.accountIDForProvider(model.Provider)

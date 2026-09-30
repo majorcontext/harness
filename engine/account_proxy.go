@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+
+	"github.com/majorcontext/harness/provider"
 )
 
 func proxyEnvironment(env []string, proxyURL string) []string {
@@ -18,6 +20,28 @@ func proxyEnvironment(env []string, proxyURL string) []string {
 		}
 	}
 	return append(out, "HTTP_PROXY="+proxyURL, "http_proxy="+proxyURL, "HTTPS_PROXY="+proxyURL, "https_proxy="+proxyURL)
+}
+
+func validateClaudeAccountTarget(env []string, proxyURL string) error {
+	target := "https://api.anthropic.com"
+	for i := len(env) - 1; i >= 0; i-- {
+		name, value, ok := strings.Cut(env[i], "=")
+		if !ok || name != "ANTHROPIC_BASE_URL" {
+			continue
+		}
+		if value != "" {
+			target = value
+		}
+		break
+	}
+	endpoint, err := url.Parse(target)
+	if err != nil || endpoint == nil || endpoint.Scheme != "https" || !strings.EqualFold(endpoint.Hostname(), "api.anthropic.com") || endpoint.User != nil || (endpoint.Port() != "" && endpoint.Port() != "443") {
+		return errors.New("engine: claude-code: unsupported account-routed Anthropic endpoint")
+	}
+	if err := provider.ValidateAccountRoutingTarget(proxyURL, endpoint.String()); err != nil {
+		return errors.New("engine: claude-code: account-routed Anthropic endpoint cannot use the configured proxy")
+	}
+	return nil
 }
 
 func ValidateAccountProxyURL(raw string) error {
