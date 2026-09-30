@@ -375,9 +375,10 @@ const (
 
 // Config configures a Session.
 type Config struct {
-	Providers provider.Registry
-	Model     message.ModelRef // initial model; swap any time with SetModel
-	Effort    message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
+	Providers      provider.Registry
+	AccountRouting map[string]AccountRoutingConfig
+	Model          message.ModelRef // initial model; swap any time with SetModel
+	Effort         message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
 	// ServiceTier is the initial Codex speed-tier value; swap with
 	// SetServiceTier (zero = provider default). An opaque, unvalidated
 	// string forwarded verbatim — harness does not gate which tiers a
@@ -1068,10 +1069,11 @@ type Session struct {
 	cfg   Config
 	tools map[string]Tool
 
-	mu          sync.Mutex
-	model       message.ModelRef
-	effort      message.Effort // reasoning-effort level; swap with SetEffort
-	serviceTier string         // Codex speed-tier value; swap with SetServiceTier
+	mu               sync.Mutex
+	model            message.ModelRef
+	effort           message.Effort // reasoning-effort level; swap with SetEffort
+	accountSelection map[string]string
+	serviceTier      string // Codex speed-tier value; swap with SetServiceTier
 	// ambientPins is runtime-only: never journaled, snapshotted, or in s.history.
 	ambientPins []ambientPin
 	history     []message.Message
@@ -2437,6 +2439,10 @@ func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 	if s.subscriptionUsage != nil {
 		cp = *s.subscriptionUsage
 		cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
+		if s.subscriptionUsage.AccountID != nil {
+			accountID := *s.subscriptionUsage.AccountID
+			cp.AccountID = &accountID
+		}
 		if s.subscriptionUsage.Overage != nil {
 			// Deep-copy Overage too, not just Windows: the struct copy
 			// above (cp := *s.subscriptionUsage) only copies the pointer
@@ -2457,6 +2463,9 @@ func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 			Provider:   "claude",
 			Windows:    []message.SubscriptionUsageWindow{},
 			CapturedAt: s.cfg.Now().Unix(),
+		}
+		if id, ok := s.accountSelection["claude"]; ok {
+			cp.AccountID = &id
 		}
 	}
 	if s.haveClaudeCodeCost {
@@ -3473,9 +3482,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// captured immediately before the provider dial, mirroring where
 	// OnRequest above already hands the same req to an observer.
 	sentAt := s.cfg.Now()
-	stream, err := prov.Stream(ctx, req)
+	routeCtx, err := s.accountRoutingContext(ctx, req.Model.Provider)
 	if err != nil {
-		return nil, "", provider.Usage{}, watch.explain(err)
+		return nil, "", provider.Usage{}, err
+	}
+	stream, err := prov.Stream(routeCtx, req)
+	if err != nil {
+		return nil, "", provider.Usage{}, s.withSelectedAccountError(params.Model.Provider, watch.explain(err))
 	}
 	defer stream.Close()
 
@@ -3509,7 +3522,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			// cancellation; explain converts it into the classified
 			// idle-timeout error (and passes every other failure — parent
 			// aborts included — through untouched).
-			err = watch.explain(err)
+			err = s.withSelectedAccountError(params.Model.Provider, watch.explain(err))
 			if len(toolCalls) == 0 {
 				// No tool call was ever recorded this turn: nothing can
 				// be orphaned, so this is an ordinary turn failure —
@@ -3597,11 +3610,9 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				ChainRefusalItem:     chainRefusalItem,
 			})
 			if ev.SubscriptionUsage != nil {
-				// See provider.Event.SubscriptionUsage's own doc comment:
-				// only a subscription-lane adapter (provider/openai's codex
-				// family today) ever sets this, and only when its own
-				// response actually carried the signal.
-				s.applySubscriptionUsage(*ev.SubscriptionUsage)
+				usage := *ev.SubscriptionUsage
+				usage.AccountID = s.accountIDForProvider(params.Model.Provider)
+				s.applySubscriptionUsage(usage)
 			}
 			return ev.Message, ev.StopReason, ev.Usage, nil
 		}

@@ -125,6 +125,29 @@ func main() {
 		}
 	}
 
+	if logPath := os.Getenv("FAKE_CLAUDE_PROXY_LOG"); logPath != "" {
+		entries := []string{}
+		for _, entry := range os.Environ() {
+			name, _, ok := strings.Cut(entry, "=")
+			if ok && (name == "HTTP_PROXY" || name == "http_proxy" || name == "HTTPS_PROXY" || name == "https_proxy") {
+				entries = append(entries, entry)
+			}
+		}
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			_ = json.NewEncoder(f).Encode(map[string]any{
+				"http_proxy":        os.Getenv("HTTP_PROXY"),
+				"http_proxy_lower":  os.Getenv("http_proxy"),
+				"https_proxy":       os.Getenv("HTTPS_PROXY"),
+				"https_proxy_lower": os.Getenv("https_proxy"),
+				"no_proxy":          os.Getenv("NO_PROXY"),
+				"home":              os.Getenv("HOME"),
+				"proxy_entries":     entries,
+			})
+			_ = f.Close()
+		}
+	}
+
 	// stdinR is kept OPEN and read line-by-line for the rest of main(),
 	// instead of the one-shot read-to-EOF this file used before the
 	// driver started keeping its own stdin open across a whole turn (see

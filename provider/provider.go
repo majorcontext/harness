@@ -38,6 +38,21 @@ type ToolDef struct {
 	DeferLoading bool
 }
 
+type accountRoutingContextKey struct{}
+
+type AccountRouting struct {
+	ProxyURL string
+}
+
+func WithAccountRouting(ctx context.Context, route AccountRouting) context.Context {
+	return context.WithValue(ctx, accountRoutingContextKey{}, route)
+}
+
+func AccountRoutingFromContext(ctx context.Context) (AccountRouting, bool) {
+	route, ok := ctx.Value(accountRoutingContextKey{}).(AccountRouting)
+	return route, ok
+}
+
 // Request is one model call. System and Messages are canonical; the adapter
 // owns all wire-format concerns, including prompt-cache markers (injected at
 // transcode time, never stored).

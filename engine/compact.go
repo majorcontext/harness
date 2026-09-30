@@ -726,7 +726,11 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 	// very turn it was trying to protect.
 	ctx, watch, release := s.armIdleWatchdog(ctx)
 	defer release()
-	stream, err := prov.Stream(ctx, req)
+	routeCtx, err := s.accountRoutingContext(ctx, req.Model.Provider)
+	if err != nil {
+		return "", provider.Usage{}, err
+	}
+	stream, err := prov.Stream(routeCtx, req)
 	if err != nil {
 		return "", provider.Usage{}, watch.explain(err)
 	}

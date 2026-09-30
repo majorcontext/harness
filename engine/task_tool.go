@@ -54,12 +54,13 @@ var taskActionNames = []string{taskActionSpawn, taskActionCancel, taskActionStat
 // required for it — see runTaskTool's dispatch and each action's own
 // runTask* function.
 type taskToolArgs struct {
-	Action    string `json:"action"`
-	Agent     string `json:"agent"`
-	Prompt    string `json:"prompt"`
-	Model     string `json:"model"`
-	Effort    string `json:"effort"`
-	SessionID string `json:"session_id"`
+	Action    string          `json:"action"`
+	Agent     string          `json:"agent"`
+	Prompt    string          `json:"prompt"`
+	Model     string          `json:"model"`
+	Effort    string          `json:"effort"`
+	Account   json.RawMessage `json:"account"`
+	SessionID string          `json:"session_id"`
 	// Tail is the log action's entry count: omitted (0) means
 	// taskLogDefaultTail, a value over taskLogMaxTail is clamped, and a
 	// NEGATIVE value is an error rather than a silent reinterpretation
@@ -74,9 +75,10 @@ type taskToolArgs struct {
 // the design doc's "queue-or-resume delivery" and its "non-blocking
 // execution" locked decision.
 type taskToolResult struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent"`
-	Note      string `json:"note"`
+	SessionID string            `json:"session_id"`
+	Agent     string            `json:"agent"`
+	Account   map[string]string `json:"account,omitempty"`
+	Note      string            `json:"note"`
 }
 
 // taskCancelResult is the cancel action's return: targetID's status
@@ -108,8 +110,9 @@ type taskStatusResult struct {
 	// than parse prose — "provider_exhausted" means the account, not the
 	// child, is the problem: preserve the child and resume it with the
 	// send action later, never spawn a replacement.
-	FailKind string         `json:"fail_kind,omitempty"`
-	Usage    provider.Usage `json:"usage"`
+	FailKind string            `json:"fail_kind,omitempty"`
+	Usage    provider.Usage    `json:"usage"`
+	Account  map[string]string `json:"account,omitempty"`
 }
 
 // taskSendResult is the send action's return. Queued distinguishes the
@@ -154,13 +157,14 @@ func taskTool() Tool {
 			Name: taskToolName,
 			Description: "Delegate work to a child session, or manage one you already spawned (directly or transitively). action selects the " +
 				"operation and defaults to \"spawn\" if omitted. " +
-				"spawn(agent, prompt, model?, effort?): starts a child session that runs independently in the background and returns immediately with its " +
+				"spawn(agent, prompt, model?, effort?, account?): starts a child session that runs independently in the background and returns immediately with its " +
 				"session id — it does NOT wait for the child to finish, and you do not need to poll for the result. The child's outcome arrives " +
 				"later as engine context on one of your own future turns. agent selects the child's tool set and persona: built-in types are " +
 				"\"general-purpose\" (full tool set, can itself spawn children), \"explore\" (read-only, for fast code search), and \"plan\" " +
 				"(read-only, returns an implementation plan instead of edits) — a project's .agents/*.md files may define more, and this project's " +
 				"current full roster (built-ins plus any custom types) is listed in the error if you call this tool with an agent name it does " +
 				"not recognize. model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
+				"account optionally selects a configured Claude or Codex subscription account; omission inherits the parent's explicit selections. " +
 				"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 				"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
 				"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered at its " +
@@ -178,6 +182,7 @@ func taskTool() Tool {
 					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
 					"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high; omitted means the provider default"},
+					"account": {"oneOf": [{"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, {"type": "object", "properties": {"claude": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, "codex": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}}, "additionalProperties": false}], "description": "spawn only: optional subscription account id or vendor-to-account map"},
 					"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 					"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 				}
@@ -309,15 +314,24 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 	if !model.IsZero() && !s.ModelSupported(model) {
 		return nil, fmt.Errorf("task: provider %q is not configured (%s)", model.Provider, s.modelChoicesHint())
 	}
+	accountModel := model
+	if accountModel.IsZero() {
+		accountModel = s.Model()
+	}
+	accountSelection, err := resolveTaskAccountSelection(in.Account, accountModel.Provider, s.accountSelectionSnapshot(), s.cfg.AccountRouting)
+	if err != nil {
+		return nil, fmt.Errorf("task: %w", err)
+	}
 
 	childID, err := m.Spawn(SpawnOptions{
-		ParentID:     s.ID,
-		Prompt:       in.Prompt,
-		Model:        model,
-		Effort:       effort,
-		SystemAppend: def.SystemAppend,
-		ToolNames:    def.Tools,
-		AgentType:    in.Agent,
+		ParentID:         s.ID,
+		Prompt:           in.Prompt,
+		Model:            model,
+		Effort:           effort,
+		SystemAppend:     def.SystemAppend,
+		ToolNames:        def.Tools,
+		AgentType:        in.Agent,
+		AccountSelection: accountSelection,
 	})
 	if err != nil {
 		return nil, classifyTaskToolError(err)
@@ -325,6 +339,7 @@ func runTaskSpawn(s *Session, in taskToolArgs) (message.Parts, error) {
 	return jsonResult(taskToolResult{
 		SessionID: childID,
 		Agent:     in.Agent,
+		Account:   accountSelection,
 		Note:      "spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it",
 	})
 }
@@ -388,6 +403,7 @@ func runTaskStatus(s *Session, in taskToolArgs) (message.Parts, error) {
 		FailReason: node.FailReason,
 		FailKind:   node.FailKind,
 		Usage:      usage,
+		Account:    node.AccountSelection,
 	})
 }
 

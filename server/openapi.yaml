@@ -532,6 +532,11 @@ components:
         captured_at:
           type: integer
           description: When this snapshot was captured, Unix seconds.
+        account_id:
+          type: string
+          description: >
+            Explicit subscription account selected for this task when the
+            signal was captured. The empty string is a valid account id.
         session_cost_usd:
           type: number
           nullable: true

@@ -255,6 +255,11 @@ func claudeCodeLastUsage(usage, last *provider.Usage) *provider.Usage {
 // reports the failure, exactly like the native path's
 // interruptedTurnError partial-append behavior (engine.go).
 func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, error) {
+	msg, err := s.runClaudeCodeTurnUnwrapped(ctx)
+	return msg, s.withSelectedAccountError(ClaudeCodeProviderFamily, err)
+}
+
+func (s *Session) runClaudeCodeTurnUnwrapped(ctx context.Context) (*message.Message, error) {
 	history := s.History()
 	text, blobs := lastUserMessageContent(history)
 	if text == "" && len(blobs) == 0 {
@@ -435,9 +440,19 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 
 	cmd := exec.Command(binary, args...) //nolint:gosec // binary/args are operator config, not request input
 	cmd.Dir = s.cfg.WorkDir
-	// This code does not manage authentication. It does not set
-	// ANTHROPIC_API_KEY or read or write ~/.claude/.credentials.json.
-	// A nil cmd.Env makes the child inherit the Harness environment.
+	cmd.Env = os.Environ()
+	routeCtx, err := s.accountRoutingContext(ctx, model.Provider)
+	if err != nil {
+		return nil, err
+	}
+	var accountID *string
+	if route, ok := provider.AccountRoutingFromContext(routeCtx); ok {
+		if err := provider.ValidateAccountRoutingTarget(route.ProxyURL, "https://api.anthropic.com"); err != nil {
+			return nil, errors.New("engine: claude-code: account-routed Anthropic endpoint cannot use the configured proxy")
+		}
+		cmd.Env = proxyEnvironment(cmd.Env, route.ProxyURL)
+		accountID = s.accountIDForProvider(model.Provider)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -662,7 +677,7 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 		_ = proc.Kill()
 	}()
 
-	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStream(stdout, model)
+	finalMsg, started, turnErr, zeroMessageOK := s.consumeClaudeCodeStreamWithAccountID(stdout, model, accountID)
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
 	// goroutine's own doc comment above): signal it to stop, THEN close
@@ -987,7 +1002,11 @@ func claudeCodeHistoryDirectiveArgs(history []message.Message, watermark int) []
 // child's process group: that would kill the very background session
 // --bg exists to keep alive. See runClaudeCodeTurn's own comment on why
 // its subsequent cmd.Wait() does not reintroduce this wait.
-func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
+func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (*message.Message, bool, error, bool) {
+	return s.consumeClaudeCodeStreamWithAccountID(r, model, nil)
+}
+
+func (s *Session) consumeClaudeCodeStreamWithAccountID(r io.Reader, model message.ModelRef, accountID *string) (finalMsg *message.Message, started bool, turnErr error, zeroMessageOK bool) {
 	var compactBoundarySeen, compactUnsettled bool
 	// compactStartedAt is the wall-clock instant this stream observed the
 	// CLI's own "compacting" status, reset to zero once consumed by the
@@ -1500,6 +1519,10 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef) (
 			// it arrives, and to every occurrence, not only the first: a
 			// long-running turn can see its own limits shift mid-turn.
 			if usage, ok := mapClaudeCodeRateLimit(env.RateLimitInfo); ok {
+				if accountID != nil {
+					id := *accountID
+					usage.AccountID = &id
+				}
 				s.applySubscriptionUsage(usage)
 			}
 		}

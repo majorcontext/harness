@@ -723,7 +723,8 @@ type Provider struct {
 	// provider/anthropic.DefaultCacheTTL for the cost reasoning. Valid
 	// ONLY on the native "anthropic" entry: no other adapter reads it, so
 	// validateProviders rejects it elsewhere rather than ignoring it.
-	CacheTTL string `json:"cache_ttl,omitempty"`
+	CacheTTL       string          `json:"cache_ttl,omitempty"`
+	AccountRouting *AccountRouting `json:"account_routing,omitempty"`
 
 	// BinaryPath is the executable this entry's Claude Code CLI child
 	// process is spawned from — resolved via PATH like any exec, exactly
@@ -880,6 +881,9 @@ func validateProviders(providers map[string]Provider) error {
 		default:
 			return fmt.Errorf("providers.%s: unknown type %q (valid types: \"\" (native anthropic/openai override), %q, %q, %q)", name, p.Type, TypeOpenAICompat, TypeOpenAI, TypeClaudeCodeCLI)
 		}
+		if err := validateAccountRouting(name, p); err != nil {
+			return err
+		}
 		if err := validateCacheTTL(name, p); err != nil {
 			return err
 		}
@@ -931,6 +935,38 @@ func validateClaudeCodeFields(name string, p Provider) error {
 		return fmt.Errorf("providers.%s: permission_mode is only valid on a %q entry", name, TypeClaudeCodeCLI)
 	}
 	return nil
+}
+
+func validateAccountRouting(name string, p Provider) error {
+	if p.AccountRouting == nil {
+		return nil
+	}
+	r := p.AccountRouting
+	if r.Vendor != "claude" && r.Vendor != "codex" {
+		return fmt.Errorf("providers.%s.account_routing.vendor must be %q or %q", name, "claude", "codex")
+	}
+	if r.ProxyURLEnv == "" || !validEnvironmentName(r.ProxyURLEnv) {
+		return fmt.Errorf("providers.%s.account_routing.proxy_url_env must name an environment variable", name)
+	}
+	if r.Protocol != "boxes-v1" {
+		return fmt.Errorf("providers.%s.account_routing.protocol must be %q", name, "boxes-v1")
+	}
+	if r.Vendor == "claude" && (name != "claude-code" || p.Type != TypeClaudeCodeCLI) {
+		return fmt.Errorf("providers.%s.account_routing vendor %q requires the Claude Code CLI provider", name, r.Vendor)
+	}
+	if r.Vendor == "codex" && (name != "codex" || !buildsResponsesAdapter(name, p)) {
+		return fmt.Errorf("providers.%s.account_routing vendor %q requires the native codex Responses provider", name, r.Vendor)
+	}
+	return nil
+}
+
+func validEnvironmentName(name string) bool {
+	for i, r := range name {
+		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return name != ""
 }
 
 // buildsResponsesAdapter reports whether a providers entry builds the
@@ -1282,6 +1318,12 @@ func LoadProject(dir string) (*Config, error) {
 // config/AGENTS.md's "Layering and merge" section). It carries no
 // behavior — Path is purely which file to report to an operator, never
 // re-parsed or re-read.
+type AccountRouting struct {
+	Vendor      string `json:"vendor,omitempty"`
+	ProxyURLEnv string `json:"proxy_url_env,omitempty"`
+	Protocol    string `json:"protocol,omitempty"`
+}
+
 type LoadInfo struct {
 	// Path is the effective config file path to report: the project
 	// override (<dir>/.harness.json) when it exists, otherwise the user
@@ -1552,6 +1594,10 @@ func merge(base, over *Config) *Config {
 			if len(v.ExtraArgs) > 0 {
 				v.ExtraArgs = append([]string(nil), v.ExtraArgs...)
 			}
+			if v.AccountRouting != nil {
+				routing := *v.AccountRouting
+				v.AccountRouting = &routing
+			}
 			m[k] = v
 		}
 		for k, v := range over.Providers {
@@ -1570,6 +1616,10 @@ func merge(base, over *Config) *Config {
 				}
 				if v.CacheTTL != "" {
 					ex.CacheTTL = v.CacheTTL
+				}
+				if v.AccountRouting != nil {
+					routing := *v.AccountRouting
+					ex.AccountRouting = &routing
 				}
 				if v.ResponsesPath != "" {
 					ex.ResponsesPath = v.ResponsesPath
@@ -1619,6 +1669,10 @@ func merge(base, over *Config) *Config {
 				}
 				if len(v.ExtraArgs) > 0 {
 					v.ExtraArgs = append([]string(nil), v.ExtraArgs...)
+				}
+				if v.AccountRouting != nil {
+					routing := *v.AccountRouting
+					v.AccountRouting = &routing
 				}
 				m[k] = v
 			}

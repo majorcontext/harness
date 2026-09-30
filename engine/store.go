@@ -281,9 +281,10 @@ type record struct {
 	// predating this field, in which case LoadSession leaves Config's own
 	// TaskDepth (also 0 — no caller ever pre-populates it) untouched
 	// rather than claiming a false "depth 0".
-	TaskDepth int              `json:"task_depth,omitempty"`
-	Message   *message.Message `json:"message,omitempty"`
-	Model     message.ModelRef `json:"model,omitzero"`
+	TaskDepth        int               `json:"task_depth,omitempty"`
+	AccountSelection map[string]string `json:"account_selection,omitempty"`
+	Message          *message.Message  `json:"message,omitempty"`
+	Model            message.ModelRef  `json:"model,omitzero"`
 	// ContextWindowTokens carries s.cfg.ContextWindowTokens on a recModel
 	// record. A *int: nil means a legacy record, distinct from a real disarm.
 	ContextWindowTokens *int `json:"context_window_tokens,omitempty"`
@@ -1234,7 +1235,7 @@ func (s *Session) ensureLog() error {
 		var buf bytes.Buffer
 		windowTokens := s.cfg.ContextWindowTokens
 		headerRecs := []record{
-			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
+			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier, AccountSelection: cloneAccountSelection(s.accountSelection)},
 			{Type: recModel, Model: s.model, ContextWindowTokens: &windowTokens},
 		}
 		// A selection made before the log existed has no other durable
@@ -2140,6 +2141,9 @@ func (s *Session) applySessionHeader(rec record) {
 	// TaskToolNames's own doc comment.
 	if rec.TaskAgentType != "" {
 		s.cfg.TaskAgentType = rec.TaskAgentType
+	}
+	if rec.AccountSelection != nil {
+		s.accountSelection = cloneAccountSelection(rec.AccountSelection)
 	}
 	if rec.TaskToolNames != nil {
 		s.cfg.TaskToolNames = *rec.TaskToolNames

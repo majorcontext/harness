@@ -5,7 +5,8 @@ package message
 type SubscriptionUsage struct {
 	// Provider names which lane captured this snapshot: "claude" or
 	// "codex" — see this type's own doc comment.
-	Provider string `json:"provider"`
+	Provider  string  `json:"provider"`
+	AccountID *string `json:"account_id,omitempty"`
 	// Plan is the subscription tier exactly as the provider reports it --
 	// codex sends it in the x-codex-plan-type header on the HTTP lane and
 	// in the codex.rate_limits event's plan_type on the websocket lane, and
