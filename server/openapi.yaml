@@ -2543,6 +2543,7 @@ components:
             - task.notify_queued
             - task.notify_delivered
             - child_turn.settled
+            - turn.resumed
             - task.outcome_committed
             - command
         created_at:
@@ -2672,6 +2673,9 @@ components:
         task_canceled:
           type: boolean
           description: Only on the same records as task_status.
+        turn_resumes:
+          type: integer
+          description: Only on `turn.resumed` records.
         compact_first_id:
           type: string
           description: Only on compact.
