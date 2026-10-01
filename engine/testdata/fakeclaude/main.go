@@ -342,6 +342,13 @@ func main() {
 	if mode == "per_call_usage" {
 		initEvent["model"] = "claude-opus-5-5[1m]"
 	}
+	if raw, ok := os.LookupEnv("FAKE_CLAUDE_INIT_TOOLS"); ok {
+		initEvent["tools"] = json.RawMessage(raw)
+	}
+	if envLog := os.Getenv("FAKE_CLAUDE_ENV_LOG"); envLog != "" {
+		b, _ := json.Marshal(os.Environ())
+		_ = os.WriteFile(envLog, b, 0o644)
+	}
 	emit(initEvent)
 
 	switch mode {

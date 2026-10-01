@@ -88,6 +88,11 @@ type ClaudeCodeConfig struct {
 	// nothing answers strands the session, so the tool stays absent unless
 	// this is set.
 	AskUserQuestion bool
+	// DisableBuiltinTools adds --tools "" and fails the turn unless the
+	// init event lists no tool outside the mcp__ namespace.
+	DisableBuiltinTools bool
+	// Env entries ("K=V") are appended to the child's inherited environment.
+	Env []string
 }
 
 // ErrNoPendingQuestion is AnswerQuestion's error when callID does not name
@@ -242,6 +247,10 @@ func claudeCodeControlResponse(requestID string, decision map[string]any) []byte
 	})
 	return data
 }
+
+// ErrClaudeCodeBuiltinTools is returned when DisableBuiltinTools is set and
+// the CLI reports a built-in tool, or no tool list at all.
+var ErrClaudeCodeBuiltinTools = errors.New("engine: claude-code: built-in tools enabled")
 
 // claudeCodeToolsServerName is the synthetic --mcp-config server name
 // claudeCodeMCPConfigFile registers for the harness-hosted MCP server
@@ -485,6 +494,14 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 	}
 
+	if cfg.DisableBuiltinTools {
+		for _, arg := range cfg.ExtraArgs {
+			if claudeCodeToolsArg(arg) {
+				return nil, fmt.Errorf("engine: claude-code: Config.ClaudeCode.ExtraArgs contains %q, which conflicts with DisableBuiltinTools", arg)
+			}
+		}
+	}
+
 	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
 	// written before the args slice below so its path can be included, and
 	// removed unconditionally on every return path via cleanupMCPConfig —
@@ -586,6 +603,9 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 		args = append(args, "--permission-prompt-tool", "stdio", "--settings", claudeCodeQuestionSettings(passCallID))
 	}
+	if cfg.DisableBuiltinTools {
+		args = append(args, "--tools", "")
+	}
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
 	}
@@ -624,6 +644,9 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 	// This code does not manage authentication. It does not set
 	// ANTHROPIC_API_KEY or read or write ~/.claude/.credentials.json.
 	// A nil cmd.Env makes the child inherit the Harness environment.
+	if len(cfg.Env) > 0 {
+		cmd.Env = append(os.Environ(), cfg.Env...)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -870,6 +893,9 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 	}
 	finalMsg, started, turnErr, zeroMessageOK, dismissed := s.consumeClaudeCodeStream(stdout, model, res, respond)
+	if errors.Is(turnErr, ErrClaudeCodeBuiltinTools) && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
 	// No more input is coming for this child (mirrors the single-string
 	// SDK path's own endInput()-on-first-"result" call — see the pump
 	// goroutine's own doc comment above): signal it to stop, THEN close
@@ -1431,6 +1457,11 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 			started = true
 			switch env.Subtype {
 			case "init":
+				if s.cfg.ClaudeCode.DisableBuiltinTools {
+					if err := claudeCodeCheckNoBuiltinTools(env.Tools); err != nil {
+						return nil, false, err, false, false
+					}
+				}
 				s.recordClaudeCodeSessionID(env.SessionID)
 				mainModel = env.Model
 			case "status":
@@ -1843,6 +1874,7 @@ type claudeCodeEnvelope struct {
 	// Model is a "system"/"init" envelope's model id, the key of the
 	// main model's entry in a "result" envelope's ModelUsage.
 	Model      string                          `json:"model,omitempty"`
+	Tools      []string                        `json:"tools"`
 	ModelUsage map[string]claudeCodeModelUsage `json:"modelUsage,omitempty"`
 	StopReason string                          `json:"stop_reason,omitempty"`
 	RequestID  string                          `json:"request_id,omitempty"`
@@ -2275,6 +2307,31 @@ func claudeCodeAppendPromptArg(arg string) bool {
 		strings.HasPrefix(arg, "--append-system-prompt-file=")
 }
 
+func claudeCodeCheckNoBuiltinTools(tools []string) error {
+	if tools == nil {
+		return fmt.Errorf("%w: init event has no tools list", ErrClaudeCodeBuiltinTools)
+	}
+	var bad []string
+	for _, name := range tools {
+		if !strings.HasPrefix(name, "mcp__") {
+			bad = append(bad, name)
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("%w: %s", ErrClaudeCodeBuiltinTools, strings.Join(bad, ", "))
+	}
+	return nil
+}
+
+func claudeCodeToolsArg(arg string) bool {
+	name, _, _ := strings.Cut(arg, "=")
+	switch name {
+	case "--tools", "--allowedTools", "--allowed-tools":
+		return true
+	}
+	return false
+}
+
 // claudeCodeThinkingDisplayArg reports whether an ExtraArgs entry sets the
 // engine-owned --thinking-display option, in either the separate-value or
 // the `=` form — see runClaudeCodeTurn's rejection of it.
@@ -2420,6 +2477,15 @@ func claudeCodeMCPServerEnv(env []string) map[string]string {
 	return out
 }
 
+func (s *Session) claudeCodeHarnessToolsAllowed() bool {
+	for _, name := range []string{"get_conversation_history", ProcessToolName, TaskToolName, ModelToolName} {
+		if s.toolAllowed(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // claudeCodeMCPConfigFile writes s's configured MCP servers (if any) to a
 // fresh temp file in the CLI's own --mcp-config JSON shape, returning its
 // path plus a cleanup func that removes it (always non-nil, a no-op when
@@ -2439,6 +2505,9 @@ func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err er
 	noop := func() {}
 	servers := claudeCodeMCPServers(s.cfg.MCP)
 	historyURL := s.claudeCodeHistoryServerURL()
+	if !s.claudeCodeHarnessToolsAllowed() {
+		historyURL = ""
+	}
 	if len(servers) == 0 && historyURL == "" {
 		return "", noop, nil
 	}

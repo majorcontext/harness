@@ -1916,6 +1916,9 @@ func (s *Session) toolAllowed(name string) bool {
 	return s.cfg.AllowedTools == nil || slices.Contains(s.cfg.AllowedTools, name)
 }
 
+// ToolAllowed reports whether Config.AllowedTools permits name.
+func (s *Session) ToolAllowed(name string) bool { return s.toolAllowed(name) }
+
 // reapplyAllowedTools removes every tool the allowlist excludes. Adoption
 // and resume re-add tools after newSession; they call it afterward.
 func (s *Session) reapplyAllowedTools() {
@@ -3052,6 +3055,10 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
+	if err := s.ConfigErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	if backend, ok := s.delegatedBackend(); ok {
 		// A pending question must be dismissed before the new user message
 		// joins history: the dismissal compares the CLI history watermark
@@ -3061,10 +3068,6 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 			return nil, err
 		}
 		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
-	}
-	if err := s.ConfigErr(); err != nil {
-		s.emitSessionError(err)
-		return nil, err
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -3168,6 +3171,10 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedB
 // own delegatedBackend() call — see that method's own doc comment for why
 // this never re-resolves the model itself.
 func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend) (*message.Message, error) {
+	if err := s.ConfigErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()

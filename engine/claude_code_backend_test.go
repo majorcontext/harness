@@ -3386,3 +3386,188 @@ func TestEventClaudeCodeCompactedOmitsCompactStartedAtWithoutPrecedingStatus(t *
 		t.Errorf(`EventClaudeCodeCompacted.CompactStartedAt = %v, want zero (no preceding "compacting" status was ever observed)`, compacted.CompactStartedAt)
 	}
 }
+
+func claudeCodeNoToolsSession(t *testing.T, mode, initTools string) (*Session, string) {
+	t.Helper()
+	s, logPath := claudeCodeTestSession(t, mode)
+	s.cfg.ClaudeCode.DisableBuiltinTools = true
+	if initTools != "" {
+		t.Setenv("FAKE_CLAUDE_INIT_TOOLS", initTools)
+	}
+	return s, logPath
+}
+
+func TestClaudeCodeDisableBuiltinToolsArgs(t *testing.T) {
+	s, logPath := claudeCodeNoToolsSession(t, "normal", `[]`)
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	argv := readInvocations(t, logPath)[0]
+	got, ok := argvValueAfter(argv, "--tools")
+	if !ok || got != "" {
+		t.Fatalf("--tools value = %q, present = %v; argv %v", got, ok, argv)
+	}
+}
+
+func TestClaudeCodeInitWithMCPOnlyToolsRuns(t *testing.T) {
+	s, _ := claudeCodeNoToolsSession(t, "normal", `["mcp__harness-tools__get_conversation_history"]`)
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+}
+
+func TestClaudeCodeInitWithBuiltinToolRefuses(t *testing.T) {
+	s, _ := claudeCodeNoToolsSession(t, "hang", `["Bash","mcp__x__y"]`)
+	_, err := s.Prompt(context.Background(), "hi")
+	if !errors.Is(err, ErrClaudeCodeBuiltinTools) {
+		t.Fatalf("Prompt error = %v, want ErrClaudeCodeBuiltinTools", err)
+	}
+	if !strings.Contains(err.Error(), "Bash") {
+		t.Errorf("error %q does not name Bash", err)
+	}
+	for _, m := range s.History() {
+		if m.Role == message.RoleAssistant {
+			t.Errorf("assistant message journaled after refusal: %+v", m)
+		}
+	}
+	if id := s.claudeCodeSessionID(); id != "" {
+		t.Errorf("refused turn recorded CLI session id %q", id)
+	}
+}
+
+func TestClaudeCodeInitWithoutToolsFieldRefuses(t *testing.T) {
+	s, _ := claudeCodeNoToolsSession(t, "hang", "")
+	_, err := s.Prompt(context.Background(), "hi")
+	if !errors.Is(err, ErrClaudeCodeBuiltinTools) {
+		t.Fatalf("Prompt error = %v, want ErrClaudeCodeBuiltinTools", err)
+	}
+}
+
+func TestClaudeCodeInitWithNullToolsRefuses(t *testing.T) {
+	s, _ := claudeCodeNoToolsSession(t, "hang", `null`)
+	_, err := s.Prompt(context.Background(), "hi")
+	if !errors.Is(err, ErrClaudeCodeBuiltinTools) {
+		t.Fatalf("Prompt error = %v, want ErrClaudeCodeBuiltinTools", err)
+	}
+}
+
+func TestClaudeCodeExtraArgsToolsConflict(t *testing.T) {
+	for _, args := range [][]string{
+		{"--allowedTools", "Bash"},
+		{"--allowed-tools=Bash"},
+		{"--tools", "Bash"},
+		{"--tools=default"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			s, logPath := claudeCodeNoToolsSession(t, "normal", `[]`)
+			s.cfg.ClaudeCode.ExtraArgs = args
+			_, err := s.Prompt(context.Background(), "hi")
+			if err == nil || !strings.Contains(err.Error(), args[0][:strings.IndexAny(args[0]+"=", "=")]) {
+				t.Fatalf("Prompt error = %v, want a tools conflict naming %q", err, args[0])
+			}
+			if _, statErr := os.Stat(logPath); statErr == nil {
+				t.Error("child was spawned despite the conflict")
+			}
+		})
+	}
+}
+
+func TestClaudeCodeEnvAppended(t *testing.T) {
+	s, _ := claudeCodeTestSession(t, "normal")
+	envLog := filepath.Join(t.TempDir(), "env.json")
+	t.Setenv("FAKE_CLAUDE_ENV_LOG", envLog)
+	t.Setenv("HARNESS_TEST_INHERITED", "yes")
+	s.cfg.ClaudeCode.Env = []string{"ANTHROPIC_BASE_URL=http://127.0.0.1:1"}
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	data, err := os.ReadFile(envLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env []string
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatal(err)
+	}
+	if !argvContains(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:1") {
+		t.Errorf("child env lacks the configured ANTHROPIC_BASE_URL")
+	}
+	if !argvContains(env, "HARNESS_TEST_INHERITED=yes") {
+		t.Errorf("child env lacks the inherited variable")
+	}
+}
+
+func TestClaudeCodeDefaultUnchanged(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if argvContains(readInvocations(t, logPath)[0], "--tools") {
+		t.Error("argv has --tools without DisableBuiltinTools")
+	}
+}
+
+func TestClaudeCodeDelegatedTurnRefusesConfigErr(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.cfg.AllowedTools = []string{"no_such_tool"}
+	s.configErr = s.applyAllowedTools()
+	if s.ConfigErr() == nil {
+		t.Fatal("setup: ConfigErr is nil")
+	}
+	_, err := s.Prompt(context.Background(), "hi")
+	if !errors.Is(err, s.ConfigErr()) {
+		t.Fatalf("Prompt error = %v, want ConfigErr %v", err, s.ConfigErr())
+	}
+	if _, statErr := os.Stat(logPath); statErr == nil {
+		t.Error("child was spawned for a session with a config error")
+	}
+	if n := len(s.History()); n != 0 {
+		t.Errorf("history has %d messages after a refused turn", n)
+	}
+}
+
+func claudeCodeMCPServerNames(t *testing.T, s *Session) []string {
+	t.Helper()
+	path, cleanup, err := s.claudeCodeMCPConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg claudeCodeMCPConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for n := range cfg.MCPServers {
+		names = append(names, n)
+	}
+	return names
+}
+
+func TestClaudeCodeMCPConfigHonorsAllowedTools(t *testing.T) {
+	newSess := func(allowed []string) *Session {
+		return NewSession(Config{
+			SessionDir:   t.TempDir(),
+			Model:        message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+			ModelTool:    true,
+			AllowedTools: allowed,
+			ClaudeCode:   ClaudeCodeConfig{HTTPBaseURL: "http://127.0.0.1:1"},
+		})
+	}
+	if got := claudeCodeMCPServerNames(t, newSess(nil)); !slices.Equal(got, []string{claudeCodeToolsServerName}) {
+		t.Errorf("nil allowlist servers = %v, want [%s]", got, claudeCodeToolsServerName)
+	}
+	if got := claudeCodeMCPServerNames(t, newSess([]string{})); len(got) != 0 {
+		t.Errorf("empty allowlist servers = %v, want none", got)
+	}
+	if got := claudeCodeMCPServerNames(t, newSess([]string{ModelToolName})); !slices.Equal(got, []string{claudeCodeToolsServerName}) {
+		t.Errorf("allowlist [model] servers = %v, want [%s]", got, claudeCodeToolsServerName)
+	}
+}

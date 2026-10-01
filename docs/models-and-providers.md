@@ -699,3 +699,28 @@ host. Outside `bypassPermissions`, an ordinary tool such as Bash can send
 `can_use_tool` and block until the host answers. Without the flag, a
 print-mode CLI denies these itself. Harness answers each such request with
 `deny`, which keeps the same behavior.
+
+## The claude-code backend without built-in tools
+
+`ClaudeCodeConfig.DisableBuiltinTools` adds `--tools ""` to the `claude`
+command line. This turns off every built-in tool of the CLI. MCP tools stay
+reachable and appear as `mcp__<server>__<tool>`.
+
+The check fails closed. After the `system`/`init` event, every entry in its
+`tools` list must start with `mcp__`. If one entry does not, or if the event
+has no `tools` list, the engine kills the child and the turn returns an error
+that wraps `ErrClaudeCodeBuiltinTools`. The error names the tools. The engine
+journals no assistant message for the turn.
+
+`ClaudeCodeConfig.ExtraArgs` cannot hold `--tools`, `--allowedTools`, or
+`--allowed-tools` when this option is on. The turn is refused before the child
+starts.
+
+`ClaudeCodeConfig.Env` holds `K=V` entries. The engine appends them to the
+environment that the child inherits.
+
+A delegated session also follows `Config.AllowedTools` and `Session.ConfigErr`.
+A session with a configuration error refuses a delegated turn before the child
+starts. The synthetic `harness-tools` MCP server offers only the tools that the
+allowlist permits. The engine omits the server when no tool is allowed.
+`get_conversation_history` is allowed only when `AllowedTools` is nil.
