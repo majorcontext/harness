@@ -43,6 +43,9 @@ func SessionExistsIn(store SessionStore, id string) bool {
 	if !ValidSessionID(id) {
 		return false
 	}
+	if dir, ok := diskStoreOf(store); ok {
+		return SessionExists(dir, id)
+	}
 	n, err := store.Len(id)
 	return err == nil && n > 0
 }

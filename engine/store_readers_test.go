@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -196,5 +198,20 @@ func TestSessionExistsIn(t *testing.T) {
 				t.Errorf("%s: SessionExistsIn(%q) = true", name, bad)
 			}
 		}
+	}
+}
+
+func TestSessionExistsInDiskMatchesSessionExistsForDamagedJournal(t *testing.T) {
+	dir := t.TempDir()
+	st := engine.NewDiskStore(dir, engine.DiskStoreOptions{})
+	id := engine.NewSession(engine.Config{}).ID
+	if err := os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(`{"type":"sess`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !engine.SessionExists(dir, id) {
+		t.Fatal("SessionExists = false for a journal with a torn first record")
+	}
+	if !engine.SessionExistsIn(st, id) {
+		t.Errorf("SessionExistsIn = false, want true to match SessionExists")
 	}
 }
