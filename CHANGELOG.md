@@ -18,4 +18,5 @@ First tagged release.
 - **MCP** (`mcp`, `mcpserver`) — an MCP client with deferred tool loading, and a Streamable HTTP MCP server.
 - **Context management** — automatic and manual compaction, project `AGENTS.md` instructions, and [Agent Skills](https://agentskills.io/specification) (`skill`).
 - **Deferred goals** — `POST /session/{id}/goal` accepts `defer: true` to arm a goal without posting its condition as a standalone turn. The loop starts after the next prompt turn and evaluates that turn first; on NOT MET the guidance turn carries the condition.
+- **Context-window refresh** (`modelmeta`) — `go generate` rewrites the context-window tables from models.dev, and a daily workflow opens a pull request when they change. A new point release is recognized without a hand edit. Session creation still makes no network call.
 - **Documentation** — package docs on pkg.go.dev, `engine` examples, and runnable programs in [`examples/`](examples).

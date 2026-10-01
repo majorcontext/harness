@@ -1,0 +1,207 @@
+// Command genctx generates modelmeta's context-window tables from the
+// models.dev catalog. Run it through "go generate" in package modelmeta.
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"go/format"
+	"io"
+	"net/http"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+const defaultSource = "https://models.dev/api.json"
+
+type table struct {
+	varName  string
+	provider string
+	doc      string
+	// key maps a models.dev model ID to the table key, or "" to skip it.
+	key func(id string) string
+}
+
+var tables = []table{
+	{"anthropicContextWindows", "anthropic", "models.dev \"anthropic\" entries, keyed by model ID.", identityKey},
+	{"openaiContextWindows", "openai", "models.dev \"openai\" entries, keyed by model ID.", identityKey},
+	{"bedrockAnthropicContextWindows", "amazon-bedrock", "models.dev \"amazon-bedrock\" anthropic.* entries, keyed by model ID without region prefix, \"anthropic.\" family segment, or version suffix. Bedrock can report a different window than the first-party route for the same model, and lookup keeps that divergence.", bedrockKey},
+	{"bifrostFireworksContextWindows", "fireworks-ai", "models.dev \"fireworks-ai\" entries, keyed by the last path segment.", lastSegmentKey},
+	{"bifrostVertexContextWindows", "google-vertex", "models.dev \"google-vertex\" Gemini entries, keyed by model ID.", geminiKey},
+}
+
+var bedrockPrefixPattern = regexp.MustCompile(`^(?:[a-z]+\.)?anthropic\.`)
+var bedrockVersionSuffixPattern = regexp.MustCompile(`-v\d+(:\d+)?$`)
+
+// isChat reports whether an entry is a text-output model with a chat
+// capability flag. Embedding entries carry a positive context but set none.
+func isChat(output []string, toolCall, reasoning, temperature bool) bool {
+	return len(output) == 1 && output[0] == "text" && (toolCall || reasoning || temperature)
+}
+
+func identityKey(id string) string { return id }
+
+func lastSegmentKey(id string) string {
+	if i := strings.LastIndexByte(id, '/'); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
+func bedrockKey(id string) string {
+	loc := bedrockPrefixPattern.FindStringIndex(id)
+	if loc == nil {
+		return ""
+	}
+	return bedrockVersionSuffixPattern.ReplaceAllString(id[loc[1]:], "")
+}
+
+func geminiKey(id string) string {
+	if strings.HasPrefix(id, "gemini-") {
+		return id
+	}
+	return ""
+}
+
+type catalog map[string]struct {
+	Models map[string]struct {
+		Limit struct {
+			Context int `json:"context"`
+		} `json:"limit"`
+		Modalities struct {
+			Output []string `json:"output"`
+		} `json:"modalities"`
+		ToolCall    bool `json:"tool_call"`
+		Reasoning   bool `json:"reasoning"`
+		Temperature bool `json:"temperature"`
+	} `json:"models"`
+}
+
+// overrideEntry is one hand-written entry for a model that models.dev lacks
+// or reports wrongly. Note is documentation for maintainers only.
+type overrideEntry struct {
+	Context int    `json:"context"`
+	Note    string `json:"note"`
+}
+
+type overrides map[string]map[string]overrideEntry
+
+func main() {
+	src := flag.String("in", defaultSource, "models.dev catalog: URL or file path")
+	ovr := flag.String("overrides", "overrides.json", "hand-written overrides file")
+	out := flag.String("out", "context_windows_gen.go", "generated Go file")
+	flag.Parse()
+	if err := run(*src, *ovr, *out); err != nil {
+		fmt.Fprintln(os.Stderr, "genctx:", err)
+		os.Exit(1)
+	}
+}
+
+func run(src, ovrPath, outPath string) error {
+	cat, err := readSource(src)
+	if err != nil {
+		return err
+	}
+	ovrData, err := os.ReadFile(ovrPath)
+	if err != nil {
+		return err
+	}
+	code, notes, err := generate(cat, ovrData)
+	if err != nil {
+		return err
+	}
+	for _, n := range notes {
+		fmt.Fprintln(os.Stderr, "genctx: note:", n)
+	}
+	return os.WriteFile(outPath, code, 0o644)
+}
+
+func readSource(src string) ([]byte, error) {
+	if !strings.HasPrefix(src, "http://") && !strings.HasPrefix(src, "https://") {
+		return os.ReadFile(src)
+	}
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(src)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: %s", src, resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// generate renders the Go source for catalogJSON merged with ovrJSON. Equal
+// inputs give byte-identical output. The returned notes name overrides that
+// shadow a different models.dev value or repeat the same one.
+func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err error) {
+	var cat catalog
+	if err := json.Unmarshal(catalogJSON, &cat); err != nil {
+		return nil, nil, fmt.Errorf("decode catalog: %w", err)
+	}
+	var ovr overrides
+	if err := json.Unmarshal(ovrJSON, &ovr); err != nil {
+		return nil, nil, fmt.Errorf("decode overrides: %w", err)
+	}
+	known := map[string]bool{}
+	for _, t := range tables {
+		known[t.varName] = true
+	}
+	for name := range ovr {
+		if !known[name] {
+			return nil, nil, fmt.Errorf("overrides name unknown table %q", name)
+		}
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("// Code generated by go generate; DO NOT EDIT.\n\npackage modelmeta\n")
+	for _, t := range tables {
+		prov, ok := cat[t.provider]
+		if !ok {
+			return nil, nil, fmt.Errorf("catalog has no provider %q", t.provider)
+		}
+		vals := map[string]int{}
+		for id, m := range prov.Models {
+			k := t.key(id)
+			// Zero context marks a non-chat model; it must stay unknown to callers.
+			if k == "" || m.Limit.Context <= 0 || !isChat(m.Modalities.Output, m.ToolCall, m.Reasoning, m.Temperature) {
+				continue
+			}
+			// Several IDs can share a key; the smallest window compacts earliest.
+			if cur, dup := vals[k]; !dup || m.Limit.Context < cur {
+				vals[k] = m.Limit.Context
+			}
+		}
+		for k, e := range ovr[t.varName] {
+			if e.Context <= 0 {
+				return nil, nil, fmt.Errorf("override %s[%q] needs a positive context", t.varName, k)
+			}
+			switch cur, ok := vals[k]; {
+			case ok && cur == e.Context:
+				notes = append(notes, fmt.Sprintf("%s[%q] override repeats models.dev value %d", t.varName, k, cur))
+			case ok:
+				notes = append(notes, fmt.Sprintf("%s[%q] override %d shadows models.dev value %d", t.varName, k, e.Context, cur))
+			}
+			vals[k] = e.Context
+		}
+		keys := make([]string, 0, len(vals))
+		for k := range vals {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		fmt.Fprintf(&buf, "\n// %s holds %s\nvar %s = map[string]int{\n", t.varName, t.doc, t.varName)
+		for _, k := range keys {
+			fmt.Fprintf(&buf, "\t%q: %d,\n", k, vals[k])
+		}
+		buf.WriteString("}\n")
+	}
+	sort.Strings(notes)
+	code, err = format.Source(buf.Bytes())
+	return code, notes, err
+}

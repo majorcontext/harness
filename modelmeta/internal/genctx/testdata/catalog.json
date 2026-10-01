@@ -1,0 +1,32 @@
+{
+  "anthropic": {"models": {
+    "claude-a-1": {"limit": {"context": 200000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "claude-a-2": {"limit": {"context": 1000000}, "tool_call": true, "modalities": {"output": ["text"]}}
+  }},
+  "openai": {"models": {
+    "gpt-x": {"limit": {"context": 400000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "gpt-x-new": {"limit": {"context": 1050000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "gpt-image-x": {"limit": {"context": 0}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "text-embed-x": {"limit": {"context": 8191}, "tool_call": false, "reasoning": false, "temperature": false, "modalities": {"output": ["text"]}},
+    "gpt-image-pos": {"limit": {"context": 8000}, "tool_call": false, "temperature": true, "modalities": {"output": ["image"]}}
+  }},
+  "amazon-bedrock": {"models": {
+    "anthropic.claude-a-1-20250101-v1:0": {"limit": {"context": 200000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "us.anthropic.claude-a-1-20250101-v1:0": {"limit": {"context": 200000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "global.anthropic.claude-a-2": {"limit": {"context": 1000000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "anthropic.claude-a-3-v1": {"limit": {"context": 900000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "eu.anthropic.claude-a-3": {"limit": {"context": 800000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "amazon.titan-x-v1:0": {"limit": {"context": 8000}, "tool_call": true, "modalities": {"output": ["text"]}}
+  }},
+  "fireworks-ai": {"models": {
+    "accounts/fireworks/models/open-a": {"limit": {"context": 262144}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "accounts/fireworks/routers/open-a": {"limit": {"context": 131072}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "accounts/fireworks/models/open-b": {"limit": {"context": 512000}, "tool_call": true, "modalities": {"output": ["text"]}}
+  }},
+  "google-vertex": {"models": {
+    "gemini-x-flash": {"limit": {"context": 1048576}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "gemini-x-embedding": {"limit": {"context": 0}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "claude-a-2@default": {"limit": {"context": 1000000}, "tool_call": true, "modalities": {"output": ["text"]}},
+    "gemini-x-tts": {"limit": {"context": 8192}, "tool_call": true, "modalities": {"output": ["audio"]}}
+  }}
+}

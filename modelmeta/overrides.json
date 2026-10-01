@@ -1,0 +1,24 @@
+{
+  "bifrostFireworksContextWindows": {
+    "firerouter": {
+      "context": 1000000,
+      "note": "No models.dev entry. Smallest window among the open-source targets the router can redirect to."
+    },
+    "kimi-k2p7-code": {
+      "context": 262000,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    },
+    "glm-5p2": {
+      "context": 1048575,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    },
+    "deepseek-v4-pro-0813": {
+      "context": 1000000,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    },
+    "deepseek-v4-flash-0731": {
+      "context": 1000000,
+      "note": "Absent from models.dev; a Bifrost deployment can still serve it."
+    }
+  }
+}
