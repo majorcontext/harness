@@ -33,6 +33,10 @@ type DiskStore struct {
 
 	mu      sync.Mutex
 	handles map[string]*diskHandle
+	// dirPending holds ids whose directory entry may not be durable. A
+	// failed sync_dir leaves its records landed, so Append cannot report
+	// the failure as a lost write; Sync retries it instead.
+	dirPending map[string]bool
 }
 
 type diskHandle struct {
@@ -42,7 +46,7 @@ type diskHandle struct {
 }
 
 func NewDiskStore(dir string, opts DiskStoreOptions) *DiskStore {
-	return &DiskStore{dir: dir, opts: opts, handles: map[string]*diskHandle{}}
+	return &DiskStore{dir: dir, opts: opts, handles: map[string]*diskHandle{}, dirPending: map[string]bool{}}
 }
 
 func (d *DiskStore) Dir() string { return d.dir }
@@ -241,15 +245,28 @@ func (d *DiskStore) Append(id string, at int, records ...[]byte) error {
 	// file the entry only just appeared, so Sync alone would not make the
 	// first records durable on some filesystems.
 	if first && d.opts.Sync != SessionSyncVolume {
-		if err := d.phase("ensure_log", "sync_dir", func() error {
-			return syncDir(d.dir)
-		}); err != nil {
-			d.dropLocked(id, h)
+		d.dirPending[id] = true
+		if err := d.syncDirPending(id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
+
+func (d *DiskStore) syncDirPending(id string) error {
+	if !d.dirPending[id] {
+		return nil
+	}
+	if err := d.phase("ensure_log", "sync_dir", func() error {
+		return syncDirFn(d.dir)
+	}); err != nil {
+		return err
+	}
+	delete(d.dirPending, id)
+	return nil
+}
+
+var syncDirFn = syncDir
 
 func (d *DiskStore) Sync(id string) error {
 	if err := checkStoreName("id", id); err != nil {
@@ -257,6 +274,9 @@ func (d *DiskStore) Sync(id string) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if err := d.syncDirPending(id); err != nil {
+		return err
+	}
 	if h := d.handles[id]; h != nil {
 		return h.f.Sync()
 	}

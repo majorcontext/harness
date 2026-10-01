@@ -177,6 +177,7 @@ func TestIndexRecoveryCountsARecordTheFoldNeverSaw(t *testing.T) {
 	s.diskStore().Release(s.ID)
 	s.mu.Lock()
 	s.logOpen = false
+	s.logLen++
 	s.mu.Unlock()
 
 	// The next turn reopens, repairs (case 2: the record is kept), and
@@ -358,5 +359,67 @@ func TestSessionSettlesAmbiguousAppendWithLen(t *testing.T) {
 		if land && n != 2 {
 			t.Errorf("landed write: log holds %d records, want header and model", n)
 		}
+	}
+}
+
+func TestSessionFencedWhenAnotherWriterAppendsWhileReleased(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSession(Config{SessionDir: dir})
+	if err := s.Persist(); err != nil {
+		t.Fatal(err)
+	}
+	s.ReleaseFiles()
+	other := NewDiskStore(dir, DiskStoreOptions{})
+	if err := other.Append(s.ID, 2, []byte(`{"type":"effort"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.RegisterGoal("a goal")
+	if err := s.PersistErr(); !errors.Is(err, ErrAppendConflict) {
+		t.Fatalf("PersistErr after a foreign append = %v, want ErrAppendConflict", err)
+	}
+	if n, _ := other.Len(s.ID); n != 3 {
+		t.Fatalf("store holds %d records, want 3 (the session must write nothing)", n)
+	}
+}
+
+func TestDiskStoreSyncDirFailureIsRetriedBySync(t *testing.T) {
+	failing := true
+	calls := 0
+	old := syncDirFn
+	syncDirFn = func(string) error {
+		calls++
+		if failing {
+			return errors.New("injected sync_dir failure")
+		}
+		return nil
+	}
+	t.Cleanup(func() { syncDirFn = old })
+
+	d, id := diskJournal(t, "")
+	if err := d.Append(id, 0, []byte(`{"n":1}`)); err == nil {
+		t.Fatal("Append with a failing sync_dir succeeded")
+	}
+	if err := d.Sync(id); err == nil {
+		t.Fatal("Sync claimed durability while the directory entry is unsynced")
+	}
+	failing = false
+	if err := d.Sync(id); err != nil {
+		t.Fatalf("Sync after the directory fsync recovers: %v", err)
+	}
+	before := calls
+	if err := d.Sync(id); err != nil || calls != before {
+		t.Fatalf("Sync repeated the directory fsync after it succeeded: err=%v calls %d->%d", err, before, calls)
+	}
+	assertLoaded(t, d, id, `{"n":1}`)
+}
+
+func TestDurableEnqueueFailsWhenFirstSyncDirFails(t *testing.T) {
+	old := syncDirFn
+	syncDirFn = func(string) error { return errors.New("injected sync_dir failure") }
+	t.Cleanup(func() { syncDirFn = old })
+
+	s := NewSession(Config{SessionDir: t.TempDir()})
+	if _, _, err := s.EnqueuePromptDurable("first", "", 1, PromptProvenance{}); err == nil {
+		t.Fatal("EnqueuePromptDurable claimed durability with an unsynced directory entry")
 	}
 }

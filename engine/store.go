@@ -1145,6 +1145,10 @@ func (s *Session) ensureLog() error {
 	if err != nil {
 		return err
 	}
+	if s.logStarted && n != s.logLen {
+		s.fenced = fmt.Errorf("%w: session holds %d records, store holds %d", ErrAppendConflict, s.logLen, n)
+		return s.fenced
+	}
 	s.logLen = n
 	if n == 0 {
 		// Header plus a model record for the session's current model, so
