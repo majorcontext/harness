@@ -113,7 +113,7 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit b
 		c.CreatedAt = now
 		c.AfterMessageID = s.lastDurableMessageIDLocked()
 	}
-	if s.cfg.SessionDir != "" {
+	if s.store != nil {
 		if err := s.ensureLog(); err != nil {
 			s.lastPersistErr = err
 			return err
@@ -125,7 +125,7 @@ func (s *Session) recordCommandLocked(c message.CommandRecord, seq int64, emit b
 			return err
 		}
 		if !s.volumeSync() {
-			if err := s.logFile.Sync(); err != nil {
+			if err := s.store.Sync(s.ID); err != nil {
 				s.lastPersistErr = err
 				return err
 			}
@@ -154,7 +154,7 @@ func (s *Session) RecordCommand(c message.CommandRecord) error {
 
 // RecordCommandDurable is RecordCommand's durable, idempotent-by-seq
 // sibling: seq at or below the current high-water mark is a clean duplicate
-// no-op. seq < 1 and Config.SessionDir == "" are errors.
+// no-op. seq < 1 and a session without a store are errors.
 func (s *Session) RecordCommandDurable(c message.CommandRecord, seq int64) (duplicate bool, err error) {
 	if seq < 1 {
 		return false, errors.New("engine: RecordCommandDurable requires seq >= 1")
@@ -164,8 +164,8 @@ func (s *Session) RecordCommandDurable(c message.CommandRecord, seq int64) (dupl
 	if seq <= s.enqueueSeq {
 		return true, nil
 	}
-	if s.cfg.SessionDir == "" {
-		return false, errors.New("engine: RecordCommandDurable requires Config.SessionDir")
+	if s.store == nil {
+		return false, errors.New("engine: RecordCommandDurable requires Config.SessionDir or Config.SessionStore")
 	}
 	if err := s.recordCommandLocked(c, seq, true); err != nil {
 		return false, err

@@ -688,12 +688,12 @@ func (s *Session) PersistErr() error {
 // the log lazily, so a session that is created but never prompted has no
 // on-disk backing; callers that must be able to reload such a session — the
 // serve API, which may evict an idle session from memory — call Persist to give
-// it durable state. It is a no-op when SessionDir is empty or the log already
+// it durable state. It is a no-op when the session has no store or the log already
 // exists, and is safe to call repeatedly.
 func (s *Session) Persist() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return nil
 	}
 	if err := s.ensureLog(); err != nil {
@@ -707,7 +707,7 @@ func (s *Session) Persist() error {
 // usage (nil for every message except the assistant message ending a model
 // turn — see appendWithUsage). Caller holds s.mu.
 func (s *Session) persistMessage(m *message.Message, usage *provider.Usage) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -723,7 +723,7 @@ func (s *Session) persistMessage(m *message.Message, usage *provider.Usage) {
 // until the log exists (lazy creation: nothing is written before the first
 // message append). Caller holds s.mu.
 func (s *Session) persistModel(ref message.ModelRef) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -749,7 +749,7 @@ func (s *Session) persistMCPToolsSelected(names []string) {
 	if len(names) == 0 {
 		return
 	}
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -765,7 +765,7 @@ func (s *Session) persistMCPToolsSelected(names []string) {
 // persistModel exactly: a no-op until the log exists (lazy creation), caller
 // holds s.mu.
 func (s *Session) persistEffort(e message.Effort) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -781,7 +781,7 @@ func (s *Session) persistEffort(e message.Effort) {
 // mirrors persistEffort exactly: a no-op until the log exists (lazy
 // creation), caller holds s.mu.
 func (s *Session) persistServiceTier(tier string) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -797,7 +797,7 @@ func (s *Session) persistServiceTier(tier string) {
 // session log. It mirrors persistModel/persistEffort exactly: a no-op
 // until the log exists (lazy creation), caller holds s.mu.
 func (s *Session) persistClaudeCodeSessionID(id string) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -814,7 +814,7 @@ func (s *Session) persistClaudeCodeSessionID(id string) {
 // persistClaudeCodeSessionID exactly: a no-op until the log exists (lazy
 // creation), caller holds s.mu.
 func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -847,7 +847,7 @@ func (s *Session) persistClaudeCodeQuestion(callID string) {
 // persistEffort exactly: a no-op until the log exists (lazy creation),
 // caller holds s.mu.
 func (s *Session) persistClaudeCodeUsage(usage, last provider.Usage, windowTokens int, costUSD float64) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -872,7 +872,7 @@ func (s *Session) persistClaudeCodeUsage(usage, last provider.Usage, windowToken
 // before it ever contends for s.mu or reaches ensureLog — never resampled
 // here, where lock wait and first-log setup would inflate it.
 func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens int, startedAt, createdAt time.Time) {
-	if s.cfg.SessionDir == "" || !s.logStarted {
+	if s.store == nil || !s.logStarted {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -895,7 +895,7 @@ func (s *Session) persistClaudeCodeCompact(trigger string, preTokens, postTokens
 // log to exist (a goal.set may be the first thing written to a fresh session).
 // Caller holds s.mu.
 func (s *Session) persistGoalLocked(recType string, g goalRecord) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -927,7 +927,7 @@ func (s *Session) persistPromptQueueLocked(recType string, p promptRecord) {
 // persistPromptQueueLocked and flushQueueRecordsLocked write through, so a
 // drain can never recurse into another drain. Caller holds s.mu.
 func (s *Session) writePromptQueueRecordLocked(recType string, p promptRecord) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -944,7 +944,7 @@ func (s *Session) writePromptQueueRecordLocked(recType string, p promptRecord) {
 // persistPromptQueueLocked exactly, on the PARENT's log. Caller holds
 // s.mu.
 func (s *Session) persistTaskSpawnLocked(childID, agent string) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -995,7 +995,7 @@ func (s *Session) persistTaskSpawnLocked(childID, agent string) {
 // to stall any OTHER session's Info/Reap/Spawn/finalize call to begin
 // with.
 func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -1017,7 +1017,7 @@ func (s *Session) persistTaskNotifyLocked(recType string, n taskNotification) {
 // sidecar file is already written and the only cost of a lost record is a
 // handle that a FUTURE process cannot resolve. Caller holds s.mu.
 func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -1045,7 +1045,7 @@ func (s *Session) persistToolResultRetainedLocked(m toolResultMeta) {
 // degrades to "compaction never happened", never a partially-spliced or
 // ambiguous history). Caller holds s.mu and has already spliced s.history.
 func (s *Session) persistCompactLocked(firstID, lastID string, turnsFolded int, summary message.Message, usage provider.Usage, startedAt time.Time, foldedTokensEst int) {
-	if s.cfg.SessionDir == "" {
+	if s.store == nil {
 		return
 	}
 	if err := s.ensureLog(); err != nil {
@@ -1124,133 +1124,38 @@ func (s *Session) volumeSync() bool {
 	return s.cfg.SessionSync == SessionSyncVolume
 }
 
-// ensureLog opens the session log, creating the directory and file — and
-// writing the header — on first use. Caller holds s.mu. The fast path (log
-// already open) reports no phases.
+// ensureLog makes the session journal exist in the store, writing the header
+// on first use. Caller holds s.mu. The fast path (log already open) reports
+// no phases.
 func (s *Session) ensureLog() error {
-	if s.logFile != nil {
+	if s.fenced != nil {
+		return s.fenced
+	}
+	if s.logOpen {
 		return nil
 	}
-	const op = "ensure_log"
-	if err := s.timedStorePhase(op, "mkdir", func() error {
-		return os.MkdirAll(s.cfg.SessionDir, 0o755)
-	}); err != nil {
-		return err
-	}
-	// O_RDWR, not O_WRONLY: the torn-tail repair below needs to ReadAt the
-	// file's own last byte. O_APPEND still governs every Write (here and in
-	// writeRecord) regardless of the file's read/write position, so this
-	// adds read capability without changing append semantics at all.
-	var f *os.File
-	if err := s.timedStorePhase(op, "open", func() error {
+	var size int64
+	if ds := s.diskStore(); ds != nil {
 		var err error
-		f, err = os.OpenFile(sessionPath(s.cfg.SessionDir, s.ID), os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o644)
-		return err
-	}); err != nil {
-		return err
-	}
-	var fi os.FileInfo
-	if err := s.timedStorePhase(op, "stat", func() error {
-		var err error
-		fi, err = f.Stat()
-		return err
-	}); err != nil {
-		f.Close()
-		return err
-	}
-	s.logFile = f
-	size := fi.Size()
-	// A prior process can have crashed mid-write, leaving the file not
-	// ending in '\n'. Resuming WRITES onto that file is hazardous in a way
-	// resuming READS is not: appending a new record directly after it, with
-	// no separating newline, concatenates the two into ONE line ("{{"...),
-	// which is itself unparseable — silently dropping the new record for as
-	// long as it stays the last line (despite EnqueuePromptDurable having
-	// returned a nil, durability-attesting error for it — an attestation
-	// hole this closes), and then becoming a HARD load error the moment any
-	// later record makes it no longer last (scanLog below only tolerates a
-	// corrupt FINAL line; a corrupt non-final one is an error, never a
-	// silent drop), poisoning the whole session. This was reachable even
-	// when the missing-newline tail was the very first (and only) bytes
-	// ever written — e.g. a crash after 1 byte of this function's own
-	// header+model write below, before this repair existed.
-	//
-	// A missing trailing '\n' has TWO different honest causes, and they
-	// need opposite repairs:
-	//
-	//  1. The write was torn mid-record (crash before the content itself
-	//     finished landing) — the tail is not valid JSON. scanLog's
-	//     documented tolerance already decided such a tail "never happened"
-	//     (a corrupt/incomplete FINAL line is silently dropped), so the
-	//     correct repair is to TRUNCATE back to just after the last '\n'
-	//     (0 if there is none at all), making the file ON DISK agree
-	//     byte-for-byte with what a load already treats it as meaning.
-	//  2. The record content itself completed and is valid JSON, but the
-	//     single trailing '\n' that terminates it never landed (e.g. a
-	//     crash between the content write and the newline, or — as the
-	//     rapid model test's TornCrashReload found — a byte-exact
-	//     truncation that happens to land exactly on that newline). This
-	//     tail is NOT what scanLog's tolerance is for: scanLog decides
-	//     "torn" purely by whether the line parses, so it loads this record
-	//     just fine despite the missing newline. Truncating it away here
-	//     would silently destroy an already-durable, already-loadable
-	//     record — a worse violation than the one being fixed. The correct
-	//     repair is to APPEND the missing '\n', preserving the record and
-	//     terminating it so the next write cannot concatenate onto it.
-	//
-	// Distinguishing the two means replicating scanLog's own rule — attempt
-	// to parse the tail — rather than a cheaper newline-only heuristic.
-	if size > 0 {
-		var last [1]byte
-		if _, err := f.ReadAt(last[:], size-1); err != nil {
-			f.Close()
-			s.logFile = nil
+		if size, err = ds.openForEngine(s.ID); err != nil {
 			return err
 		}
-		if last[0] != '\n' {
-			if err := s.timedStorePhase(op, "tail_repair", func() error {
-				data, err := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID))
-				if err != nil {
-					return err
-				}
-				tailStart := bytes.LastIndexByte(data, '\n') + 1 // 0 if no newline at all
-				tail := bytes.TrimSpace(data[tailStart:])
-				var rec record
-				if len(tail) > 0 && json.Unmarshal(tail, &rec) == nil {
-					// Case 2: complete, valid record — just terminate it.
-					if _, err := f.Write([]byte("\n")); err != nil {
-						return err
-					}
-					size++
-				} else {
-					// Case 1: genuinely torn (or trailing whitespace with no
-					// record at all) — truncate the incomplete tail away.
-					if err := f.Truncate(int64(tailStart)); err != nil {
-						return err
-					}
-					size = int64(tailStart)
-				}
-				return nil
-			}); err != nil {
-				f.Close()
-				s.logFile = nil
-				return err
-			}
-		}
 	}
-	if size == 0 {
+	n, err := s.store.Len(s.ID)
+	if err != nil {
+		return err
+	}
+	s.logLen = n
+	if n == 0 {
 		// Header plus a model record for the session's current model, so
 		// every persisted session names its model explicitly — a SetModel
 		// before the first append would otherwise be silently lost and
 		// LoadSession would wrongly fall back to Config.Model.
 		//
-		// Both records go out in ONE Write call: written separately, a
-		// transient failure after the header would leave a non-empty file
-		// that retries (gated on size == 0) never complete, permanently
-		// dropping the model record. With a single write the worst case
-		// under a mid-write crash is a truncated final line, which
-		// LoadSession already tolerates.
-		var buf bytes.Buffer
+		// Both records go out in ONE Append call: written separately, a
+		// transient failure after the header would leave a non-empty
+		// journal that retries (gated on n == 0) never complete,
+		// permanently dropping the model record.
 		windowTokens := s.cfg.ContextWindowTokens
 		headerRecs := []record{
 			{Type: recSession, ID: s.ID, CreatedAt: s.createdAt, WorkDir: s.cfg.WorkDir, ParentSession: s.cfg.ParentSession, TaskParentID: s.cfg.TaskParentID, TaskAgentType: s.cfg.TaskAgentType, TaskToolNames: taskToolNamesPtr(s.cfg.TaskToolNames), TaskDepth: s.cfg.TaskDepth, Effort: s.effort, ServiceTier: s.serviceTier},
@@ -1269,29 +1174,22 @@ func (s *Session) ensureLog() error {
 			sort.Strings(names)
 			headerRecs = append(headerRecs, record{Type: recMCPToolsSelected, MCPTools: names})
 		}
-		for _, rec := range headerRecs {
-			b, err := json.Marshal(rec)
-			if err != nil {
-				f.Close()
-				s.logFile = nil
+		encoded := make([][]byte, len(headerRecs))
+		for i, rec := range headerRecs {
+			if encoded[i], err = json.Marshal(rec); err != nil {
 				return err
 			}
-			buf.Write(b)
-			buf.WriteByte('\n')
 		}
-		if err := s.timedStorePhase(op, "header_write", func() error {
-			_, err := f.Write(buf.Bytes())
-			return err
-		}); err != nil {
-			f.Close()
-			s.logFile = nil
+		if err := s.appendRecords(encoded...); err != nil {
 			return err
 		}
-		// The header records bypass writeRecord (they go out in ONE Write,
+		// The header records bypass writeRecord (they go out in ONE Append,
 		// see above), so fold them here — the metadata index must see
 		// every record the journal holds, starting with the header that
 		// names the session at all.
-		size += int64(buf.Len())
+		for _, b := range encoded {
+			size += int64(len(b)) + 1
+		}
 		for _, rec := range headerRecs {
 			s.index.applyIndexRecordBestEffort(indexRecordOf(rec), false)
 		}
@@ -1299,68 +1197,28 @@ func (s *Session) ensureLog() error {
 		// writeRecord, so the snapshot anchor must count them here or every
 		// seq this session ever takes is short by the header's length.
 		s.recordsWritten += int64(len(headerRecs))
-		// A file fsync (as EnqueuePromptDurable does before attesting
-		// durability — see queue.go) commits the file's *contents* but not
-		// its directory entry: POSIX leaves the entry itself up to the
-		// containing directory's own fsync. On a fresh log file, that entry
-		// only just got created above, so without this the durable-enqueue
-		// attestation is a lie on the first record after creation — the
-		// enqueue's file fsync can return clean, the response go out, and a
-		// crash before the directory entry is committed can lose both the
-		// message and the watermark on some filesystems (e.g. ext4). Doing
-		// it here, once per file creation rather than once per record, is
-		// enough: later records reuse this already-linked file.
-		//
-		// This syncs the log file's entry within SessionDir, not SessionDir's
-		// own entry in its parent — SessionDir is assumed to be a preexisting
-		// mount (e.g. a volume) at boot, so that entry predates the process
-		// and isn't this code's concern. See syncDir for why this is a
-		// build-tagged no-op off unix.
-		//
-		// Skipped entirely in volume mode (see volumeSync): a continuously-
-		// synced network volume's own commit layer is the documented
-		// durability boundary there, so this fsync would add nothing except
-		// the risk of joining it on a transport where fsync(dirfd) deadlocks
-		// the mount permanently — see Config.SessionSync's doc comment.
-		// Skipping the call is not enough on its own if it never returns; the
-		// point is not issuing the syscall at all. No phase event fires
-		// either, so the watchdog never carries a misleading sync_dir entry
-		// for a phase that, in this mode, does not exist.
-		if !s.volumeSync() {
-			if err := s.timedStorePhase(op, "sync_dir", func() error {
-				return syncDir(s.cfg.SessionDir)
-			}); err != nil {
-				f.Close()
-				s.logFile = nil
-				return err
-			}
-		}
 	}
+	s.logOpen = true
 	s.logStarted = true
 	// A fold marked broken by a failed record write is RE-SEEDED here, from
-	// the journal as the repair above left it. Without this, one transient
+	// the journal as the repair left it. Without this, one transient
 	// write failure disabled the index for the rest of the session object's
 	// life: every later read of that session refolded the whole journal,
-	// which is the cost the index exists to remove. A review caught it.
+	// which is the cost the index exists to remove.
 	//
 	// Re-seed, never merely clear the flag. That distinction is the whole
 	// correctness argument, and a maintainer who "simplifies" this to
 	// `s.index.broken = false` reintroduces a silent wrong-index bug. A
-	// failed Write can land the record's bytes and not its trailing
-	// newline. The tail repair above then takes its case-2 branch: the tail
-	// parses, so it terminates the record and KEEPS it. The fold never saw
-	// that record. Clearing the flag would resume flushing a sidecar that
-	// is short by one message while claiming, through logSize, to cover the
-	// whole file — a stale index that reads as current. Folding the file
-	// again is what makes the fold agree with the bytes on disk, whichever
-	// branch the repair took.
-	//
-	// This runs on a reopen, which a failed write forces (see writeRecord),
-	// so it costs one slim fold per failure rather than per record. A fold
-	// that fails again leaves broken set, exactly as before.
+	// failed write can land the record's bytes and not its trailing
+	// newline. The tail repair then keeps that record. The fold never saw
+	// it. Clearing the flag would resume flushing a sidecar that is short
+	// by one message while claiming, through logSize, to cover the whole
+	// file — a stale index that reads as current. Folding the journal again
+	// is what makes the fold agree with the bytes on disk, whichever branch
+	// the repair took.
 	if s.index.broken {
-		if data, rerr := os.ReadFile(sessionPath(s.cfg.SessionDir, s.ID)); rerr == nil {
-			if reseeded, ferr := foldJournalBytes(data); ferr == nil {
+		if recs, rerr := s.store.Load(s.ID); rerr == nil {
+			if reseeded, ferr := foldJournalBytes(bytes.Join(recs, []byte("\n"))); ferr == nil {
 				s.index = reseeded
 			}
 		}
@@ -1369,18 +1227,18 @@ func (s *Session) ensureLog() error {
 	// in place from then on (see writeIndexTo). A failure to open it is
 	// never a session failure: the index is a cache, and a reader that
 	// cannot find one refolds the journal.
-	if s.indexFile == nil {
-		if idxf, err := os.OpenFile(sessionIndexPath(s.cfg.SessionDir, s.ID), os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+	if dir := s.sidecarDir(); dir != "" && s.indexFile == nil {
+		if idxf, err := os.OpenFile(sessionIndexPath(dir, s.ID), os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			s.indexFile = idxf
 		} else {
 			s.lastIndexErr = err
 		}
 	}
-	// size is the journal length after any tail repair above, which is
-	// exactly the bytes the index fold covers: a repair that TRUNCATED a
-	// torn tail dropped a record scanLog never folded either, and a repair
-	// that only terminated a complete record added one byte to a record
-	// the fold already holds.
+	// size is the journal length after any tail repair, which is exactly
+	// the bytes the index fold covers: a repair that TRUNCATED a torn tail
+	// dropped a record the fold never saw either, and a repair that only
+	// terminated a complete record added one byte to a record the fold
+	// already holds.
 	s.logSize = size
 	// Flush now, not only after the first record: a session that is
 	// created and persisted but never prompted (Session.Persist, which the
@@ -1390,7 +1248,7 @@ func (s *Session) ensureLog() error {
 	return nil
 }
 
-// ReleaseFiles closes the session's log and sidecar-index handles and drops
+// ReleaseFiles releases the session's journal and sidecar-index handles and drops
 // them. The session stays fully usable: the next persist call re-enters
 // ensureLog, which reopens both, repairs a torn tail if one is there, and
 // continues appending. Nothing in memory changes, so a caller can release a
@@ -1416,10 +1274,10 @@ func (s *Session) ReleaseFiles() {
 	// no-op when nothing has been written since the last snapshot — see
 	// snapshot.go.
 	s.snapshotIdleLocked()
-	if s.logFile != nil {
-		s.logFile.Close()
-		s.logFile = nil
+	if s.store != nil {
+		s.store.Release(s.ID)
 	}
+	s.logOpen = false
 	if s.indexFile != nil {
 		s.indexFile.Close()
 		s.indexFile = nil
@@ -1440,27 +1298,20 @@ func (s *Session) writeRecord(rec record) error {
 	if err != nil {
 		return err
 	}
-	n, err := s.logFile.Write(append(b, '\n'))
-	if err != nil {
-		// The file may have grown by a partial line. Two things follow.
+	if err := s.appendRecords(b); err != nil {
+		// The journal may have grown by a partial line. The fold and
+		// logSize both stay put, and the fold is marked broken, so this
+		// session never again writes a sidecar that could claim to
+		// summarize a record it did not see. Readers refold.
 		//
-		// The fold and logSize both stay put, and the fold is marked
-		// broken, so this session never again writes a sidecar that could
-		// claim to summarize a record it did not see. Readers refold.
-		//
-		// The handle is closed, so the next persist call re-enters
-		// ensureLog instead of returning at its fast path. That is what
-		// runs the torn-tail repair over the partial line. Without it the
-		// next append concatenates onto that line with no separator, and
-		// the pair becomes a hard load error as soon as any later record
-		// makes it non-final — a retry of a failed EnqueuePromptDurable
-		// could poison the whole session log.
+		// logOpen is cleared so the next persist call re-enters ensureLog
+		// instead of returning at its fast path, which re-seeds the fold
+		// from the repaired journal.
 		s.index.broken = true
-		s.logFile.Close()
-		s.logFile = nil
+		s.logOpen = false
 		return err
 	}
-	s.logSize += int64(n)
+	s.logSize += int64(len(b)) + 1
 	// The journal head advanced by exactly one record, so the snapshot
 	// anchor does too (see Session.recordsWritten). Only a record that
 	// actually landed counts: the failed-write branch above returns before
@@ -1487,18 +1338,19 @@ func (s *Session) writeRecord(rec record) error {
 // is a memoized fold, and a reader that finds it missing, torn, or stale
 // refolds the journal instead. Caller holds s.mu.
 func (s *Session) flushIndexLocked() {
-	if s.indexFile == nil || s.logFile == nil {
+	ds := s.diskStore()
+	if s.indexFile == nil || !s.logOpen || ds == nil {
 		return
 	}
 	// The journal's modification time is half the staleness key (see
 	// SessionIndex.LogModTime), and it must be read AFTER the record write
-	// this flush follows. One fstat on a handle already open.
-	fi, err := s.logFile.Stat()
+	// this flush follows.
+	modTime, err := ds.modTime(s.ID)
 	if err != nil {
 		s.lastIndexErr = err
 		return
 	}
-	ix, ok := s.index.snapshot(s.logSize, fi.ModTime())
+	ix, ok := s.index.snapshot(s.logSize, modTime)
 	if !ok {
 		return
 	}
@@ -1548,20 +1400,24 @@ var ErrInvalidSessionID = errors.New("engine: invalid session id")
 // A corrupt or incomplete final line (crash mid-write) is ignored; a corrupt
 // line anywhere else is an error.
 func LoadSession(cfg Config, id string) (*Session, error) {
-	if cfg.SessionDir == "" {
-		return nil, errors.New("engine: LoadSession requires Config.SessionDir")
+	st := cfg.journalStore()
+	if st == nil {
+		return nil, errors.New("engine: LoadSession requires Config.SessionDir or Config.SessionStore")
 	}
 	if !ValidSessionID(id) {
 		return nil, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
 	}
-	data, err := os.ReadFile(sessionPath(cfg.SessionDir, id))
+	records, err := st.Load(id)
 	if err != nil {
 		return nil, err
 	}
+	data := bytes.Join(records, []byte("\n"))
 
+	cfg.SessionStore = st
 	s := newSession(cfg)
 	s.ID = id
 	s.logStarted = true
+	s.logLen = len(records)
 
 	// The journal head, in LINES. It is the domain the snapshot anchor
 	// lives in (see Session.recordsWritten) and it costs a byte scan, no
@@ -1578,7 +1434,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// replay and exactly the behavior this function had before snapshots
 	// existed. snapshotStartAfter has already applied the session header
 	// and restored the snapshot's state by the time it returns non-zero.
-	startAfter := s.snapshotStartAfter(cfg.SessionDir, id, data, head)
+	startAfter := s.snapshotStartAfter(s.sidecarDir(), id, data, head)
 	if startAfter > 0 {
 		s.snapshotSeq = startAfter
 		// The metadata index (index.go) is a fold of EVERY record, and

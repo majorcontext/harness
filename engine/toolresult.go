@@ -138,7 +138,7 @@ func toolResultCapHeader(tool string, totalBytes, previewBytes int) string {
 // up, in config.Config.ToolResultInlineBytesValue (config/config.go), the
 // sole authoritative source.
 func (s *Session) toolResultInlineLimit() int {
-	if s.cfg.SessionDir == "" {
+	if s.sidecarDir() == "" {
 		return 0
 	}
 	return s.cfg.ToolResultInlineBytes
@@ -154,7 +154,7 @@ func (s *Session) toolResultRetainedLimit() int {
 // toolResultsDir is this session's sidecar directory. Per session, so a
 // handle minted in one session can never name another session's bytes.
 func (s *Session) toolResultsDir() string {
-	return filepath.Join(s.cfg.SessionDir, toolResultsDirName, s.ID)
+	return filepath.Join(s.sidecarDir(), toolResultsDirName, s.ID)
 }
 
 // toolResultPath is the sidecar file for one handle. One flat file per

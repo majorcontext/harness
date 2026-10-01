@@ -421,8 +421,14 @@ type Config struct {
 	ClaudeCode ClaudeCodeConfig
 
 	// SessionDir is where session logs are persisted, one JSONL file per
-	// session. Empty disables persistence entirely.
+	// session. Empty disables persistence entirely unless SessionStore is
+	// set.
 	SessionDir string
+
+	// SessionStore persists the session journal. It wins over SessionDir;
+	// nil keeps the SessionDir behavior. The index sidecar, snapshots, and
+	// tool-result retention work only when the store is a *DiskStore.
+	SessionStore SessionStore
 
 	// SessionSync selects the durability mechanism ensureLog and
 	// EnqueuePromptDurable use for attested session-store writes (see
@@ -1269,8 +1275,11 @@ type Session struct {
 	// children for exactly this case.
 	spawnedChildIDs []string
 
-	logFile        *os.File // session log; nil until first write (see store.go)
-	logStarted     bool     // the log file exists on disk
+	store          SessionStore // nil disables persistence
+	logOpen        bool         // ensureLog has run since the last release or failed write
+	logLen         int          // records the store holds for this session; the position of the next append
+	fenced         error        // set when another writer owns the log: persistence stops
+	logStarted     bool         // the journal exists in the store
 	lastPersistErr error
 
 	// recordsWritten is the journal's head SEQ: the count of records this
@@ -1778,6 +1787,7 @@ func newSession(cfg Config) *Session {
 	contextWindowErr := requiredContextWindowErr(cfg, cfg.Model, contextWindowMiss, "session_start")
 	s := &Session{
 		cfg:                   cfg,
+		store:                 cfg.journalStore(),
 		model:                 cfg.Model,
 		effort:                cfg.Effort,
 		serviceTier:           cfg.ServiceTier,
@@ -1826,7 +1836,7 @@ func newSession(cfg Config) *Session {
 		s.tools[taskToolName] = taskTool()
 	}
 	// read_tool_result is registered only when retention can actually mint a
-	// handle — a positive inline limit AND a SessionDir, the same condition
+	// handle — a positive inline limit AND a disk store, the same condition
 	// toolResultInlineLimit resolves. A session that can never produce a
 	// handle must not advertise a tool whose only required argument is one.
 	if s.toolResultInlineLimit() > 0 {
@@ -2207,7 +2217,7 @@ func (s *Session) markTurnSettled() {
 // released (see that method's own doc comment).
 func (s *Session) persistTurnSettled() {
 	s.mu.Lock()
-	if s.cfg.SessionDir != "" {
+	if s.store != nil {
 		if err := s.ensureLog(); err != nil {
 			s.lastPersistErr = err
 		} else if err := s.writeRecord(record{Type: recChildTurnSettled}); err != nil {

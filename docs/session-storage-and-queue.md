@@ -4,6 +4,43 @@ This document describes session persistence, paging, prompt queues, and
 managed-process invariants. Read the matching section before changing those
 paths.
 
+## Session store
+
+The engine reads and writes a session journal through `engine.SessionStore`.
+The journal is an ordered list of JSON records. A record has no trailing
+newline. `Config.SessionStore` wins over `Config.SessionDir`. With only
+`SessionDir`, the session uses a `DiskStore` that keeps `<id>.jsonl` files in
+that directory, byte for byte as before.
+
+The index sidecar, snapshots, and tool-result retention are disk caches. They
+work only when the store is a `*DiskStore`.
+
+Every store keeps these invariants:
+
+1. Appends are ordered. The caller serializes `Append` calls for one id
+   (`Session.mu`). A record is visible only after every earlier record is.
+2. One `Append` call with several records is atomic. `ensureLog` writes the
+   header and model records in one call.
+3. A torn trailing record never happened. `Load` never returns it. The next
+   `Append` repairs the tail first. A complete valid tail record that lost
+   only its newline is kept and terminated.
+4. A failed `Append` leaves no visible partial record. The next call on the
+   same id recovers.
+5. `Sync` makes every record appended so far survive a crash. `Append` alone
+   does not promise this.
+6. `Append` is a compare-and-append. It succeeds only when the log holds
+   exactly `at` records. Otherwise it returns an error that wraps
+   `ErrAppendConflict` and writes nothing.
+
+`Session` tracks the record count (`logLen`) and passes it as `at`. After an
+`Append` error that is not `ErrAppendConflict`, the engine calls `Len` once.
+If `Len` equals `logLen` plus the record count, the write landed, and the call
+succeeds. After `ErrAppendConflict`, another writer owns the log. The session
+stops persisting. The engine never retries an append.
+
+`engine/storetest` is the conformance suite. Run `storetest.Run` against each
+store implementation.
+
 ## Session metadata index
 
 `GET /session` and `GET /session/{id}` do not replay a session journal. Each

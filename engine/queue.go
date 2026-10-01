@@ -509,8 +509,8 @@ func (s *Session) EnqueuePromptDurable(text string, messageID string, seq int64,
 	if seq <= s.enqueueSeq {
 		return 0, true, nil
 	}
-	if s.cfg.SessionDir == "" {
-		return 0, false, errors.New("engine: EnqueuePromptDurable requires Config.SessionDir")
+	if s.store == nil {
+		return 0, false, errors.New("engine: EnqueuePromptDurable requires Config.SessionDir or Config.SessionStore")
 	}
 	// Burn the ID now, before any I/O is attempted, so every failure path
 	// below advances the counter past it — see the doc comment above.
@@ -555,7 +555,7 @@ func (s *Session) EnqueuePromptDurable(text string, messageID string, seq int64,
 	// permanently on it.
 	if !s.volumeSync() {
 		if err := s.timedStorePhase(op, "fsync", func() error {
-			return s.logFile.Sync()
+			return s.store.Sync(s.ID)
 		}); err != nil {
 			// The record may or may not have reached stable storage — torn
 			// state. Nothing in memory moved, so a retry with the same seq is

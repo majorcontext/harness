@@ -329,7 +329,7 @@ func (s *Session) snapshotEvery() int64 {
 // snapshotEnabled reports whether this session can write a snapshot at all:
 // it needs a cadence and somewhere to put the file.
 func (s *Session) snapshotEnabled() bool {
-	return s.snapshotEvery() > 0 && s.cfg.SessionDir != ""
+	return s.snapshotEvery() > 0 && s.sidecarDir() != ""
 }
 
 // snapshotSafeLocked reports whether memory currently AGREES with the
@@ -425,7 +425,7 @@ func (s *Session) startSnapshotLocked() {
 	snap := s.captureSnapshotLocked()
 	s.snapshotting = true
 	s.snapshotSeq = snap.Seq
-	dir, id, sync := s.cfg.SessionDir, s.ID, !s.volumeSync()
+	dir, id, sync := s.sidecarDir(), s.ID, !s.volumeSync()
 	done := make(chan struct{})
 	s.snapshotDone = done
 	go func() {
@@ -664,6 +664,9 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 // snapshot's own "the header is replayed separately" premise does not
 // hold).
 func (s *Session) snapshotStartAfter(dir, id string, data []byte, head int64) int64 {
+	if dir == "" {
+		return 0
+	}
 	snap := readSessionSnapshot(dir, id)
 	if snap == nil || snap.Seq > head {
 		return 0

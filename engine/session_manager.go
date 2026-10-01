@@ -8,12 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"bufio"
 	"encoding/json"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"log/slog"
-	"os"
 )
 
 // SessionStatus is a session's lifecycle state as tracked by a
@@ -3619,29 +3617,23 @@ func durableAncestorChainHas(cfg Config, startParentID, callerID string, maxHops
 }
 
 // loadSessionTaskParent reads a session log's durable TaskParentID from its
-// header record alone — the first line of the file — without replaying the
-// log. A file whose first record is not a recSession header (impossible for
-// a log this engine wrote, ensureLog's single-write ordering) reports an
-// error rather than guessing.
+// header record alone, without replaying the log. A journal whose first
+// record is not a recSession header (impossible for a log this engine wrote,
+// ensureLog's single-append ordering) reports an error rather than guessing.
 func loadSessionTaskParent(cfg Config, id string) (string, error) {
 	if !ValidSessionID(id) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
 	}
-	f, err := os.Open(sessionPath(cfg.SessionDir, id))
+	st := cfg.journalStore()
+	if st == nil {
+		return "", errors.New("engine: loadSessionTaskParent requires Config.SessionDir or Config.SessionStore")
+	}
+	line, err := st.Header(id)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	// One bounded line: headers are small (a recSession record), but a
-	// generous cap keeps a pathological first line from slurping a huge
-	// log into memory.
-	r := bufio.NewReaderSize(f, 64*1024)
-	line, err := r.ReadString('\n')
-	if err != nil && line == "" {
-		return "", err
-	}
 	var rec record
-	if err := json.Unmarshal([]byte(line), &rec); err != nil {
+	if err := json.Unmarshal(line, &rec); err != nil {
 		return "", fmt.Errorf("session %s: unparseable header line: %w", id, err)
 	}
 	if rec.Type != recSession {

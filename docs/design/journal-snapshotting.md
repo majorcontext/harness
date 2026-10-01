@@ -86,7 +86,7 @@ capturing exactly the fold-produced replayable state at seq N, plus the anchor
 crash-recovery signals (`turnUnsettled`, `committedOutcome`).
 
 **Exclude (runtime-only / deliberately non-durable — re-created on load exactly
-as a full replay does):** `mu`, `logFile`/`logStarted`/`lastPersistErr`,
+as a full replay does):** `mu`, `store`/`logOpen`/`logStarted`/`lastPersistErr`,
 `tools`, `cfg` (carries live callbacks + the `SessionManager` pointer +
 `ProcessRegistry`), and the fields harness already documents as never-persisted:
 `goalGen`, `goalParked*`, `compactHysteresis`.
