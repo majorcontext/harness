@@ -1026,6 +1026,7 @@ func (m *SessionManager) adoptRootLocked(s *Session) *sessionNode {
 	s.tools[taskToolName] = taskTool()
 	n := m.adoptLocked(s, "", 0)
 	m.installTaskToolLocked(s, 0)
+	s.reapplyAllowedTools()
 	// Unconditional, regardless of whichever caller reached adoptRootLocked
 	// (AdoptRoot directly, or adoptReloadedLocked's recover=false and
 	// recover=true branches alike): recoverInterruptedTurnLocked's own
@@ -1208,6 +1209,7 @@ func (m *SessionManager) adoptReloadedLocked(s *Session, recover bool) *sessionN
 	n.agentType = s.TaskAgentType()
 	m.installTaskToolLocked(s, depth)
 	m.restoreTaskToolRestrictionLocked(s, depth)
+	s.reapplyAllowedTools()
 	if recover {
 		m.recoverInterruptedTurnLocked(n, s)
 		// Restores n.status/n.result/n.failReason for the case

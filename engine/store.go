@@ -1986,7 +1986,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// the model has every reason to try reading, and every attempt fails
 	// with "unknown tool" — not even the tool's own clean "unknown handle"
 	// error, because the tool was never registered to receive the call.
-	if _, ok := s.tools[readToolResultToolName]; !ok && len(s.toolResults) > 0 {
+	if _, ok := s.tools[readToolResultToolName]; !ok && len(s.toolResults) > 0 && s.toolAllowed(readToolResultToolName) {
 		s.tools[readToolResultToolName] = readToolResultTool()
 	}
 	return s, nil

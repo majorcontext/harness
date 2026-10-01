@@ -37,6 +37,9 @@ type startupPrewarmResolution struct {
 }
 
 func (s *Session) startStartupPrewarm() {
+	if s.configErr != nil {
+		return
+	}
 	// Avoid all early discovery and hook work when the configured provider has
 	// no startup capability. Hooks still run inside the shared assembly helper
 	// for capable providers.

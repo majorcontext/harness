@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1861,10 +1862,54 @@ func newSession(cfg Config) *Session {
 		if mcpConfiguredCount(cfg.MCP) > 0 {
 			s.configErr = errors.New("engine: AllowedTools cannot be combined with MCP servers: MCP tools register after session start")
 		} else {
-			s.configErr = restrictTools(s, cfg.AllowedTools)
+			s.configErr = s.applyAllowedTools()
 		}
 	}
 	return s
+}
+
+// applyAllowedTools restricts s.tools to Config.AllowedTools. A name that
+// matches a plugin tool is valid but removes nothing here: plugin defs are
+// filtered per request by toolAllowed.
+func (s *Session) applyAllowedTools() error {
+	names := make([]string, 0, len(s.cfg.AllowedTools))
+	for _, name := range s.cfg.AllowedTools {
+		if _, native := s.tools[name]; !native && s.hasPluginTool(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	return restrictTools(s, names)
+}
+
+func (s *Session) hasPluginTool(name string) bool {
+	if s.cfg.Hooks == nil {
+		return false
+	}
+	for _, d := range s.cfg.Hooks.Tools() {
+		if d.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// toolAllowed reports whether Config.AllowedTools permits name.
+func (s *Session) toolAllowed(name string) bool {
+	return s.cfg.AllowedTools == nil || slices.Contains(s.cfg.AllowedTools, name)
+}
+
+// reapplyAllowedTools removes every tool the allowlist excludes. Adoption
+// and resume re-add tools after newSession; they call it afterward.
+func (s *Session) reapplyAllowedTools() {
+	if s.cfg.AllowedTools == nil || s.configErr != nil {
+		return
+	}
+	for name := range s.tools {
+		if !s.toolAllowed(name) {
+			delete(s.tools, name)
+		}
+	}
 }
 
 // ConfigErr reports why this session refuses every turn, or nil. It is
@@ -2999,6 +3044,10 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 		}
 		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
 	}
+	if err := s.ConfigErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
 	if err := s.consumeStartupPrewarm(ctx); err != nil {
@@ -3013,10 +3062,6 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	// running with NO context management at all, which ends in "context
 	// exhausted" rather than a compaction — see Config.RequireContextWindow.
 	// A rejected Prompt still records no user message.
-	if err := s.ConfigErr(); err != nil {
-		s.emitSessionError(err)
-		return nil, err
-	}
 	if err := s.ContextWindowErr(); err != nil {
 		s.emitSessionError(err)
 		return nil, err
@@ -4190,6 +4235,9 @@ func (s *Session) toolDefsWithCatalog(ctx context.Context) ([]provider.ToolDef, 
 	defs = append(defs, plan.defs...)
 	if s.cfg.Hooks != nil {
 		for _, d := range s.cfg.Hooks.Tools() {
+			if !s.toolAllowed(d.Name) {
+				continue
+			}
 			defs = append(defs, provider.ToolDef{
 				Name:        d.Name,
 				Description: d.Description,
@@ -4335,7 +4383,7 @@ func (s *Session) executeTool(ctx context.Context, tc *message.ToolCall, args js
 		}
 		return out, isErr
 	}
-	if s.cfg.Hooks != nil {
+	if s.cfg.Hooks != nil && s.toolAllowed(tc.Name) {
 		resp, err := s.cfg.Hooks.ExecuteTool(ctx, &plugin.ToolExecuteRequest{
 			SessionID: s.ID, CallID: tc.CallID, Tool: tc.Name, Args: args,
 		})
