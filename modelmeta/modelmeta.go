@@ -2,8 +2,11 @@
 //
 // The tables are curated snapshots of models.dev's limit.context field for
 // the model families that Harness serves. They remain static so session
-// creation does not depend on a network request.
+// creation does not depend on a network request. "go generate" refreshes
+// them from models.dev; overrides.json holds the entries models.dev lacks.
 package modelmeta
+
+//go:generate go run ./internal/genctx
 
 import (
 	"regexp"
@@ -11,135 +14,6 @@ import (
 
 	"github.com/majorcontext/harness/message"
 )
-
-// anthropicContextWindows is models.dev's "anthropic" provider entries'
-// limit.context field, snapshotted 2026-08-20. Keyed by the model ID exactly
-// as it appears after "anthropic/" in a message.ModelRef (matches
-// config.DefaultModel's "anthropic/claude-fable-5" form).
-var anthropicContextWindows = map[string]int{
-	"claude-fable-5":             1_000_000,
-	"claude-haiku-4-5":           200_000,
-	"claude-haiku-4-5-20251001":  200_000,
-	"claude-opus-4-5":            200_000,
-	"claude-opus-4-5-20251101":   200_000,
-	"claude-opus-4-6":            1_000_000,
-	"claude-opus-4-7":            1_000_000,
-	"claude-opus-4-8":            1_000_000,
-	"claude-opus-5":              1_000_000,
-	"claude-sonnet-4-5":          1_000_000,
-	"claude-sonnet-4-5-20250929": 1_000_000,
-	"claude-sonnet-4-6":          1_000_000,
-	"claude-sonnet-5":            1_000_000,
-}
-
-// openaiContextWindows is models.dev's "openai" provider entries'
-// limit.context field, snapshotted 2026-08-20. Image and embedding models
-// (limit.context == 0 in the source catalog — they are not chat models) are
-// deliberately omitted, since a zero entry here would be indistinguishable
-// from "not found" and this table only needs to answer "what is the CHAT
-// context window for this ref".
-var openaiContextWindows = map[string]int{
-	"gpt-3.5-turbo":       16_385,
-	"gpt-4":               8_192,
-	"gpt-4-turbo":         128_000,
-	"gpt-4.1":             1_047_576,
-	"gpt-4.1-mini":        1_047_576,
-	"gpt-4.1-nano":        1_047_576,
-	"gpt-4o":              128_000,
-	"gpt-4o-2024-05-13":   128_000,
-	"gpt-4o-2024-08-06":   128_000,
-	"gpt-4o-2024-11-20":   128_000,
-	"gpt-4o-mini":         128_000,
-	"gpt-5":               400_000,
-	"gpt-5-mini":          400_000,
-	"gpt-5-nano":          400_000,
-	"gpt-5-pro":           400_000,
-	"gpt-5.1":             400_000,
-	"gpt-5.2":             400_000,
-	"gpt-5.2-chat-latest": 128_000,
-	"gpt-5.2-pro":         400_000,
-	"gpt-5.3-chat-latest": 128_000,
-	"gpt-5.3-codex":       400_000,
-	"gpt-5.3-codex-spark": 128_000,
-	"gpt-5.4":             1_050_000,
-	"gpt-5.4-mini":        400_000,
-	"gpt-5.4-nano":        400_000,
-	"gpt-5.4-pro":         1_050_000,
-	"gpt-5.5":             1_050_000,
-	"gpt-5.5-pro":         1_050_000,
-	"gpt-5.6":             1_050_000,
-	"gpt-5.6-luna":        1_050_000,
-	"gpt-5.6-sol":         1_050_000,
-	"gpt-5.6-terra":       1_050_000,
-	"gpt-6-astra":         1_050_000,
-	"gpt-6-luna":          1_050_000,
-	"gpt-6-sol":           1_050_000,
-	"gpt-realtime-2.1":    128_000,
-	"o1":                  200_000,
-	"o1-pro":              200_000,
-	"o3":                  200_000,
-	"o3-mini":             200_000,
-	"o3-pro":              200_000,
-	"o4-mini":             200_000,
-}
-
-// bedrockAnthropicContextWindows is models.dev's "amazon-bedrock" provider
-// entries' limit.context field for the anthropic.* model family,
-// snapshotted 2026-08-20, keyed by the model ID with any region prefix
-// ("us.", "eu.", "au.", "jp.", "global.") AND the leading "anthropic." family
-// segment already stripped (see stripBedrockAnthropicPrefix) — every region
-// variant of a given model reports the same limit.context in the source
-// catalog, so one entry covers all of them.
-//
-// Every key here is bare: a trailing bedrock version suffix ("-vN" or
-// "-vN:M", e.g. "-v1" or "-v1:0") is stripped before lookup (see
-// stripBedrockVersionSuffix) rather than encoded in the key. models.dev's
-// raw IDs are themselves inconsistent about carrying this suffix — some
-// entries have it (e.g. the source ID behind "claude-sonnet-4-5-20250929"
-// is "claude-sonnet-4-5-20250929-v1:0"), some don't (e.g. "claude-opus-4-8"
-// has no suffixed form at all) — so a table keyed verbatim on the source ID
-// silently misses whichever form (bare vs. suffixed) a caller happens to
-// query with. Verified against https://models.dev/api.json 2026-08-20: the
-// amazon-bedrock claude-sonnet-4-5-20250929-v1:0 entry genuinely reports
-// limit.context == 200_000, distinct from (and NOT a snapshot error next
-// to) the first-party anthropic/claude-sonnet-4-5 entry's 1_000_000 — the
-// two routes report different windows for what is otherwise the same
-// model family, and this table intentionally preserves that divergence.
-var bedrockAnthropicContextWindows = map[string]int{
-	"claude-fable-5":             1_000_000,
-	"claude-haiku-4-5-20251001":  200_000,
-	"claude-opus-4-1-20250805":   200_000,
-	"claude-opus-4-5-20251101":   200_000,
-	"claude-opus-4-6":            1_000_000,
-	"claude-opus-4-7":            1_000_000,
-	"claude-opus-4-8":            1_000_000,
-	"claude-opus-5":              1_000_000,
-	"claude-sonnet-4-5-20250929": 200_000,
-	"claude-sonnet-4-6":          1_000_000,
-	"claude-sonnet-5":            1_000_000,
-}
-
-// bifrostFireworksContextWindows is models.dev's "fireworks-ai" limit.context
-// for the Fireworks models a Bifrost deployment ships, keyed by the last
-// path segment. firerouter has no models.dev entry; its value is the
-// smallest window among the open-source targets it can redirect to.
-var bifrostFireworksContextWindows = map[string]int{
-	"firerouter":             1_000_000,
-	"kimi-k3":                1_048_576,
-	"kimi-k2p7-code":         262_000,
-	"glm-5p2":                1_048_575,
-	"deepseek-v4-pro-0813":   1_000_000,
-	"deepseek-v4-flash-0731": 1_000_000,
-}
-
-// bifrostVertexContextWindows is models.dev's "google-vertex" limit.context
-// for the Vertex Gemini models a Bifrost deployment ships.
-var bifrostVertexContextWindows = map[string]int{
-	"gemini-3.1-pro-preview": 1_048_576,
-	"gemini-3.5-flash-lite":  1_048_576,
-	"gemini-3.7-flash":       1_048_576,
-	"gemini-3.8-flash":       1_048_576,
-}
 
 // ContextWindow reports ref's advertised context window in tokens. It returns
 // false for an unrecognized provider or model, and 0 with true for a

@@ -1,0 +1,9 @@
+{
+  "openaiContextWindows": {
+    "gpt-x": {"context": 300000, "note": "shadows models.dev"},
+    "gpt-missing": {"context": 128000, "note": "absent from models.dev"}
+  },
+  "bifrostFireworksContextWindows": {
+    "open-b": {"context": 512000, "note": "repeats models.dev"}
+  }
+}

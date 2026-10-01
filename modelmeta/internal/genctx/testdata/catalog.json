@@ -1,0 +1,29 @@
+{
+  "anthropic": {"models": {
+    "claude-a-1": {"limit": {"context": 200000}},
+    "claude-a-2": {"limit": {"context": 1000000}}
+  }},
+  "openai": {"models": {
+    "gpt-x": {"limit": {"context": 400000}},
+    "gpt-x-new": {"limit": {"context": 1050000}},
+    "gpt-image-x": {"limit": {"context": 0}}
+  }},
+  "amazon-bedrock": {"models": {
+    "anthropic.claude-a-1-20250101-v1:0": {"limit": {"context": 200000}},
+    "us.anthropic.claude-a-1-20250101-v1:0": {"limit": {"context": 200000}},
+    "global.anthropic.claude-a-2": {"limit": {"context": 1000000}},
+    "anthropic.claude-a-3-v1": {"limit": {"context": 900000}},
+    "eu.anthropic.claude-a-3": {"limit": {"context": 800000}},
+    "amazon.titan-x-v1:0": {"limit": {"context": 8000}}
+  }},
+  "fireworks-ai": {"models": {
+    "accounts/fireworks/models/open-a": {"limit": {"context": 262144}},
+    "accounts/fireworks/routers/open-a": {"limit": {"context": 131072}},
+    "accounts/fireworks/models/open-b": {"limit": {"context": 512000}}
+  }},
+  "google-vertex": {"models": {
+    "gemini-x-flash": {"limit": {"context": 1048576}},
+    "gemini-x-embedding": {"limit": {"context": 0}},
+    "claude-a-2@default": {"limit": {"context": 1000000}}
+  }}
+}

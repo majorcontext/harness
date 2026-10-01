@@ -21,6 +21,7 @@ func TestContextWindowOpenAI(t *testing.T) {
 	}{
 		{"gpt-5", 400_000},
 		{"gpt-6-astra", 1_050_000},
+		{"gpt-6.1-sol", 1_050_000},
 	}
 	for _, c := range cases {
 		tokens, ok := ContextWindow(message.ModelRef{Provider: "openai", Model: c.model})
@@ -274,6 +275,19 @@ func TestContextWindowClaudeCodeReportsNoWindow(t *testing.T) {
 		tokens, ok := ContextWindow(message.ModelRef{Provider: "claude-code", Model: model})
 		if !ok || tokens != 0 {
 			t.Errorf("ContextWindow(claude-code/%s) = %d, %v; want 0, true", model, tokens, ok)
+		}
+	}
+}
+
+// TestBedrockTableKeysAreNormalized keeps the generator's key rules aligned
+// with lookup: a key that normalization would rewrite can never match.
+func TestBedrockTableKeysAreNormalized(t *testing.T) {
+	for key := range bedrockAnthropicContextWindows {
+		if got := stripBedrockVersionSuffix(key); got != key {
+			t.Errorf("bedrock key %q carries a version suffix", key)
+		}
+		if _, isBedrock := stripBedrockAnthropicPrefix(key); isBedrock {
+			t.Errorf("bedrock key %q carries a family prefix", key)
 		}
 	}
 }

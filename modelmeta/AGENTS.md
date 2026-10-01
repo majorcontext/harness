@@ -10,6 +10,10 @@ root guidance is not active, locate the Git root and read
 Keep model metadata static and deterministic. This package must not perform a
 network request or refresh in the background.
 
+Never edit `context_windows_gen.go` by hand. Run `go generate ./modelmeta/`.
+Put an entry that models.dev lacks in `overrides.json`. The generator runs only
+by hand or in the `modelmeta-refresh` workflow, never at session creation.
+
 Curate context-window values from the documented source. Keep zero unavailable
 for non-chat models because zero also means unknown to callers.
 
