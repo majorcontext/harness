@@ -132,3 +132,13 @@ func TestToolCallIDEmptyOutsideToolCall(t *testing.T) {
 		t.Errorf("ToolCallID(Background) = %q, want empty", got)
 	}
 }
+
+func TestToolCallIDEmptyInRunTool(t *testing.T) {
+	rec := &idRecorder{}
+	cfg := idTestConfig(scriptedTurns("p", doneTurn("a")))
+	cfg.Tools = []Tool{rec.tool()}
+	if _, err := NewSession(cfg).RunTool(context.Background(), "probe", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("RunTool: %v", err)
+	}
+	rec.wantOnly(t, "")
+}

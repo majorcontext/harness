@@ -4321,7 +4321,9 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 // existed and neither did the unbalanced pair.
 func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall, id string, createdAt time.Time) (out message.Parts, isErr bool) {
 	s.emit(Event{Type: EventToolStart, ToolCall: tc, ID: id, CreatedAt: createdAt})
-	ctx = context.WithValue(ctx, toolCallIDKey{}, tc.CallID)
+	if id != "" {
+		ctx = context.WithValue(ctx, toolCallIDKey{}, tc.CallID)
+	}
 
 	execEndOwed, toolEndEmitted := false, false
 	defer func() {
@@ -4485,6 +4487,9 @@ func (s *Session) ToolDef(name string) (def provider.ToolDef, ok bool) {
 // dispatch at all (there isn't one today; s.tools falls back to an
 // "unknown tool" text result, not a panic or an error return) are both
 // reported the same, simple way.
+//
+// The synthesized CallID is random and never repeats, so RunTool does not
+// expose it through ToolCallID: a tool run here sees the empty string.
 func (s *Session) RunTool(ctx context.Context, name string, args json.RawMessage) (message.Parts, error) {
 	tc := &message.ToolCall{
 		CallID:    newID("call"),
