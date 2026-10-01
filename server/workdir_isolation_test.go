@@ -255,6 +255,7 @@ func TestWorktreeIsolationDirtyKeptAndJournaled(t *testing.T) {
 // construction: the clean one is removed, the dirty one is kept and
 // journaled.
 func TestServeStartSweepsStaleWorktrees(t *testing.T) {
+	requireDiskStore(t)
 	repo := newGitRepo(t)
 	sessDir := t.TempDir()
 	base := filepath.Join(sessDir, "worktrees")
@@ -326,6 +327,7 @@ func TestServeStartSweepsStaleWorktrees(t *testing.T) {
 // resumable — so the startup sweep must leave the worktree completely
 // alone.
 func TestSweepLeavesResumableSessionWorktreeAloneOnRestart(t *testing.T) {
+	requireDiskStore(t)
 	repo := newGitRepo(t)
 	sessDir := t.TempDir()
 	prov := &scriptedProvider{name: "test"}

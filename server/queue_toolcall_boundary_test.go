@@ -58,15 +58,17 @@ func newGatedHarness(t *testing.T, dir string, prov provider.Provider, entered, 
 			m = model
 		}
 		return engine.Config{
-			Providers:  provider.Registry{prov.Name(): prov},
-			Model:      m,
-			SessionDir: dir,
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
-			Tools:      []engine.Tool{gate},
+			Providers:    provider.Registry{prov.Name(): prov},
+			Model:        m,
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
+			Tools:        []engine.Tool{gate},
 		}
 	}
 	opts := Options{
 		SessionDir:        dir,
+		Store:             testStore(dir),
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,

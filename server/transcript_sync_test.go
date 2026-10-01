@@ -266,10 +266,11 @@ func TestTranscriptStreamFrom_CompactionDuringSnapshotStaysRecoverable(t *testin
 		compactAsstTurn("three", provider.Usage{InputTokens: 30}),
 	}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{seedProv.name: seedProv},
-		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{seedProv.name: seedProv},
+		Model:        message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i, text := range []string{"go1", "go2", "go3"} {
 		if _, err := seed.Prompt(context.Background(), text); err != nil {
@@ -478,6 +479,7 @@ func TestTranscriptStreamFrom_RejectsCombinationWithBeforeSeq(t *testing.T) {
 // fail this test on reconcile()'s behavior instead of the code this test
 // exists to cover.
 func TestTranscriptStreamFrom_SyntheticOrphanRepairNeverJournaled(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
 

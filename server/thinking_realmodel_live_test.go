@@ -86,15 +86,17 @@ func newRealModelHarness(t *testing.T) *harness {
 	var srv *Server
 	mkCfg := func(m message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:  reg,
-			Model:      m,
-			SessionDir: dir,
-			MaxTokens:  20000,
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+			Providers:    reg,
+			Model:        m,
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
+			MaxTokens:    20000,
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
 		}
 	}
 	opts := Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   liveToken,
 		Version:    "live",
 		NewSession: func(m message.ModelRef, workDir, parent string) (*engine.Session, error) {

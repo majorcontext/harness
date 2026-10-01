@@ -98,6 +98,7 @@ func TestPercentEncodedSlashIDIsNotFound(t *testing.T) {
 // hex ID must be gettable, listable, and promptable through the server, not
 // just through the engine package directly.
 func TestLegacySessionIDOverHTTP(t *testing.T) {
+	requireDiskStore(t)
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("done")}}
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, prov)

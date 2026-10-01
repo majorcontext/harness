@@ -75,15 +75,17 @@ func newLiveHarness(t *testing.T, base string) *harness {
 	var srv *Server
 	mkCfg := func(m message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:  reg,
-			Model:      m,
-			SessionDir: dir,
-			MaxTokens:  20000, // room above the high thinking budget
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
+			Providers:    reg,
+			Model:        m,
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
+			MaxTokens:    20000, // room above the high thinking budget
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
 		}
 	}
 	opts := Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   liveToken,
 		Version:    "live",
 		NewSession: func(m message.ModelRef, workDir, parent string) (*engine.Session, error) {

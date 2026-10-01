@@ -22,10 +22,11 @@ func coldSession(t *testing.T, dir string, cfgMutate func(*engine.Config)) *engi
 	t.Helper()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("cold reply")}}
 	cfg := engine.Config{
-		Providers:  provider.Registry{prov.name: prov},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{prov.name: prov},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	}
 	if cfgMutate != nil {
 		cfgMutate(&cfg)
@@ -85,6 +86,7 @@ func decodeSession(t *testing.T, data []byte) sessionJSON {
 // GET /session/{id} for a session this process does not hold live never
 // replays the journal.
 func TestGetSessionColdAnswersFromIndex(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	sess := coldSession(t, dir, nil)
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
@@ -121,6 +123,7 @@ func TestGetSessionColdAnswersFromIndex(t *testing.T) {
 // TestListSessionsColdAnswersFromIndex is the same claim for the list
 // endpoint, which used to pay one full replay per non-resident session.
 func TestListSessionsColdAnswersFromIndex(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	first := coldSession(t, dir, nil)
 	second := coldSession(t, dir, nil)
@@ -150,6 +153,7 @@ func TestListSessionsColdAnswersFromIndex(t *testing.T) {
 // the cold read must still report it — the same durable-only block a
 // disk-loaded session reported before, now sourced from the index.
 func TestGetSessionColdReportsLineage(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	child := coldSession(t, dir, func(cfg *engine.Config) {
 		cfg.TaskParentID = "ses_0123456789abcdef"
@@ -183,6 +187,7 @@ func TestGetSessionColdReportsLineage(t *testing.T) {
 // from Options.Plugins. Without that seam a cold read would silently
 // report no plugins for a process that has them.
 func TestGetSessionColdReportsConfiguredPlugins(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	sess := coldSession(t, dir, nil)
 	want := []plugin.Info{{Name: "guard", Tools: []string{"scan"}}}
@@ -249,6 +254,7 @@ func TestGetSessionPrefersLiveObjectOverIndex(t *testing.T) {
 // required, so an empty value is not a smaller answer, it is an invalid
 // one.
 func TestGetSessionColdFallsBackForLegacyJournal(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	id := "ses_0123456789abcdef"
 	// A crash between the header write and the model record beside it: the
@@ -388,6 +394,7 @@ func openDescriptors(t *testing.T) int {
 // write the sidecar back. A listing that resolves residency first never
 // touches it, so the sidecar stays absent.
 func TestListDoesNotReadIndexesForLiveSessions(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one")}}
 	h := newHarnessDir(t, dir, prov)
@@ -477,6 +484,7 @@ func TestListAndGetAgreeOnLiveness(t *testing.T) {
 // for a journal that exists but cannot be read, because a damaged session
 // is still a session that exists.
 func TestSessionExistenceCheckIsOneStat(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	sess := coldSession(t, dir, nil)
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
@@ -505,6 +513,7 @@ func TestSessionExistenceCheckIsOneStat(t *testing.T) {
 // ids first and then take the same index-then-scan path, so a session whose
 // fold breaks — no usable index, a readable journal — appears in both.
 func TestStatusAndListAgreeOnWhichSessionsExist(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	healthy := coldSession(t, dir, nil)
 	const broken = "ses_fedcba9876543210"
@@ -554,6 +563,7 @@ func TestStatusAndListAgreeOnWhichSessionsExist(t *testing.T) {
 // verified directly against main, where the same journal is absent from
 // GET /session and present in GET /session/status.
 func TestListOmitsWhatItCannotRenderWhileStatusReportsIt(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	healthy := coldSession(t, dir, nil)
 	const broken = "ses_fedcba9876543210"

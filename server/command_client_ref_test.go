@@ -177,6 +177,7 @@ func assertClientRefNowhere(t *testing.T, h *harness, id, clientRef string) {
 }
 
 func TestClientRefDroppedForOrdinaryPrompt(t *testing.T) {
+	requireDiskStore(t)
 	const clientRef = "pd_ordinary"
 	parts := []map[string]string{{"type": "text", "text": "hello"}}
 

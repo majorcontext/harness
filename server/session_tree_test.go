@@ -45,6 +45,7 @@ func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef,
 	}
 	opts := Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   "secret-run-token",
 		Version:    "9.9.9",
 		NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
@@ -57,6 +58,7 @@ func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef,
 				WorkDir:       workDir,
 				ParentSession: parentSession,
 				SessionDir:    dir,
+				SessionStore:  testStore(dir),
 			}), nil
 		},
 		LoadSession: func(id string) (*engine.Session, error) {
@@ -557,6 +559,7 @@ func TestColdChildlessLineageChildrenIsUnknownNotZero(t *testing.T) {
 // harness, then adopt only its reload into a second harness's fresh
 // SessionManager via ReportTurnStart, and GET it there.
 func TestWarmOrphanChildLineageKeepsDurableParentID(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("the answer is 42")}}
 	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
@@ -1701,6 +1704,7 @@ func TestGenericTurnRoutesUnifiedSendAllowsManagedChild(t *testing.T) {
 // stays untracked there, so adoptReloadedLocked takes its
 // durable-TaskDepth branch (attachTo never set, info.ParentID empty).
 func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	childProv := &scriptedProvider{name: "child", turns: [][]provider.Event{asstTurn("child done")}}
 	h1 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,

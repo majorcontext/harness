@@ -35,6 +35,7 @@ func newRequestHarness(t *testing.T, prov provider.Provider, mutate ...func(*eng
 			Model:        m,
 			System:       []string{"base"},
 			SessionDir:   dir,
+			SessionStore: testStore(dir),
 			Instructions: &engine.InstructionsConfig{Disabled: true},
 			SkillsDirs:   []string{},
 			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
@@ -58,6 +59,7 @@ func newRequestHarness(t *testing.T, prov provider.Provider, mutate ...func(*eng
 	}
 	opts := Options{
 		SessionDir:        dir,
+		Store:             testStore(dir),
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,

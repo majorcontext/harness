@@ -159,11 +159,12 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 			m = model
 		}
 		return engine.Config{
-			Providers:  provider.Registry{prov.Name(): prov},
-			Model:      m,
-			SessionDir: dir,
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
-			GoalTool:   !opts.GoalEvaluator.IsZero(),
+			Providers:    provider.Registry{prov.Name(): prov},
+			Model:        m,
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
+			GoalTool:     !opts.GoalEvaluator.IsZero(),
 			// Processes mirrors production's own mkCfg (cmd/harness/main.go):
 			// every session gets the SAME Options.Processes a mutate func
 			// may have set, so a session created live (handleCreate) or
@@ -175,6 +176,7 @@ func newServer(t *testing.T, dir string, prov provider.Provider, maxResident int
 	}
 	opts = Options{
 		SessionDir:        dir,
+		Store:             testStore(dir),
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,
@@ -700,6 +702,7 @@ func TestEmptyRunTokenFailsClosedWithoutUnauthenticated(t *testing.T) {
 	dir := t.TempDir()
 	_, err := New(Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   "",
 		NewSession: func(m message.ModelRef, workDir string, parentSession string) (*engine.Session, error) {
 			return nil, errors.New("not reached")
@@ -1217,9 +1220,10 @@ func TestAbortColdSessionIsIdempotent(t *testing.T) {
 	// Seed a session on disk only (a prior process wrote its log).
 	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{"test": seedProv},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
+		Providers:    provider.Registry{"test": seedProv},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
 	})
 	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
 		t.Fatal(err)
@@ -1250,9 +1254,10 @@ func TestColdSessionResumes(t *testing.T) {
 	// prior process). This writes <id>.jsonl but no events.jsonl.
 	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("cold-1")}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{"test": seedProv},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
+		Providers:    provider.Registry{"test": seedProv},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
 	})
 	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
 		t.Fatal(err)
@@ -1292,14 +1297,16 @@ func TestColdSessionResumes(t *testing.T) {
 }
 
 func TestBootReconcileAppendsMissingMessages(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 
 	// Seed a session log with messages but no events journal.
 	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{"test": seedProv},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
+		Providers:    provider.Registry{"test": seedProv},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
 	})
 	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
 		t.Fatal(err)
@@ -1544,16 +1551,12 @@ func TestModelOverridePersists(t *testing.T) {
 
 // TestListStatusErrorOnBadSessionDir verifies that a disk failure enumerating
 // sessions surfaces as a 500, not an empty listing. SessionDir is repointed at
-// a regular file so engine.ListSessions fails (ENOTDIR) — a real error a caller
-// must not mistake for "no sessions".
+// a store whose List fails — a real error a caller must not mistake for "no
+// sessions".
 func TestListStatusErrorOnBadSessionDir(t *testing.T) {
 	h := newHarness(t, &scriptedProvider{name: "test"})
 
-	bad := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	h.srv.opts.SessionDir = bad
+	h.srv.store = listFailStore{engine.NewMemStore()}
 
 	for _, path := range []string{"/session", "/session/status"} {
 		resp, data := h.do("GET", path, nil)
@@ -1692,6 +1695,7 @@ func TestMaxResidentEvictsLongestIdle(t *testing.T) {
 // is not closed until Drain returns. Run inside a synctest bubble so the Drain
 // deadline fires on fake time; handlers are driven directly (no real socket).
 func TestDrainAbortsInFlightPromptBeforeClose(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	synctest.Test(t, func(t *testing.T) {
 		prov := newBlockingProvider("test")
@@ -1740,7 +1744,7 @@ func TestDrainAbortsInFlightPromptBeforeClose(t *testing.T) {
 				aborted = true
 			}
 		}
-		fileOpen := srv.jf != nil
+		fileOpen := srv.store != nil
 		srv.mu.Unlock()
 		if !aborted {
 			t.Fatal("Drain returned without journaling session.aborted")
@@ -2054,6 +2058,7 @@ func TestMaxResidentEvictsOnCreate(t *testing.T) {
 //     proves draining is set) gets 503 or a connection error — never a
 //     lost-record 202.
 func TestShutdownConcurrentDrainAndAdmissionGate(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	prov := newBlockingProvider("test")
 	t.Cleanup(prov.releaseAll)
@@ -2216,7 +2221,7 @@ func TestShutdownConcurrentDrainAndAdmissionGate(t *testing.T) {
 			terminal = true
 		}
 	}
-	fileOpen = srv.jf != nil
+	fileOpen = srv.store != nil
 	srv.mu.Unlock()
 	if !terminal {
 		t.Fatal("in-flight prompt terminal record not journaled by shutdown")
@@ -2329,9 +2334,10 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	diskSess, err := engine.LoadSession(engine.Config{
-		Providers:  provider.Registry{"test": &scriptedProvider{name: "test"}},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
+		Providers:    provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
 	}, idA)
 	if err != nil {
 		t.Fatal(err)
@@ -2346,3 +2352,7 @@ func TestClaimForPromptSurvivesEvictionRace(t *testing.T) {
 		}
 	}
 }
+
+type listFailStore struct{ engine.SessionStore }
+
+func (listFailStore) List() ([]string, error) { return nil, errors.New("list failed") }

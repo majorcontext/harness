@@ -53,6 +53,7 @@ func TestLineageChildrenSurvivesReapViaDurableUnion(t *testing.T) {
 		var srv *Server
 		opts := Options{
 			SessionDir: dir,
+			Store:      testStore(dir),
 			RunToken:   "secret-run-token",
 			Version:    "9.9.9",
 			NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
@@ -62,6 +63,7 @@ func TestLineageChildrenSurvivesReapViaDurableUnion(t *testing.T) {
 					WorkDir:        workDir,
 					ParentSession:  parentSession,
 					SessionDir:     dir,
+					SessionStore:   testStore(dir),
 					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 					SessionManager: srv.sessMgr,
 				}), nil
@@ -70,6 +72,7 @@ func TestLineageChildrenSurvivesReapViaDurableUnion(t *testing.T) {
 				return engine.LoadSession(engine.Config{
 					Providers:      reg,
 					SessionDir:     dir,
+					SessionStore:   testStore(dir),
 					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 					SessionManager: srv.sessMgr,
 				}, id)

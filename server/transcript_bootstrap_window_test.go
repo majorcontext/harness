@@ -312,6 +312,7 @@ func TestColdWindowedBootstrap_ManagedChildSession(t *testing.T) {
 // change the windowed bootstrap's answer at all, only (invisibly) its
 // cost.
 func TestColdWindowedBootstrap_StaleIndexStillCorrect(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test"})
 	sess := coldMessages(t, dir, 3) // 6 messages
@@ -416,10 +417,11 @@ func TestColdWindowedBootstrap_AfterCompaction(t *testing.T) {
 		compactAsstTurn("summary", provider.Usage{InputTokens: 5}),
 	}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{seedProv.name: seedProv},
-		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{seedProv.name: seedProv},
+		Model:        message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i, text := range []string{"go1", "go2", "go3"} {
 		if _, err := seed.Prompt(context.Background(), text); err != nil {
@@ -508,10 +510,11 @@ func TestColdWindowedBootstrap_StreamFromParityAfterSeededJournal(t *testing.T) 
 		compactAsstTurn("summary", provider.Usage{InputTokens: 5}),
 	}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{seedProv.name: seedProv},
-		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{seedProv.name: seedProv},
+		Model:        message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i, text := range []string{"go1", "go2", "go3"} {
 		if _, err := seed.Prompt(context.Background(), text); err != nil {
@@ -583,10 +586,11 @@ func TestColdWindowedBootstrap_ParityWithFullRead_CompactedPartialWindow(t *test
 		compactAsstTurn("summary", provider.Usage{InputTokens: 5}),
 	}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{seedProv.name: seedProv},
-		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{seedProv.name: seedProv},
+		Model:        message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i, text := range []string{"go1", "go2", "go3"} {
 		if _, err := seed.Prompt(context.Background(), text); err != nil {
@@ -736,10 +740,11 @@ func TestColdWindowedBootstrap_MultiCompactionNeverExceedsTrueTip(t *testing.T) 
 		compactAsstTurn("summary2", provider.Usage{InputTokens: 5}),
 	}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{seedProv.name: seedProv},
-		Model:      message.ModelRef{Provider: seedProv.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{seedProv.name: seedProv},
+		Model:        message.ModelRef{Provider: seedProv.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i, text := range []string{"go1", "go2", "go3"} {
 		if _, err := seed.Prompt(context.Background(), text); err != nil {

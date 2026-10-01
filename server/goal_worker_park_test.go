@@ -60,9 +60,10 @@ func TestTurnEndOutcomeWorkerParked(t *testing.T) {
 			workerErr:  permanentWorkerErr(),
 		}
 		cfg := engine.Config{
-			Providers:  provider.Registry{prov.Name(): prov},
-			Model:      message.ModelRef{Provider: prov.Name(), Model: "m1"},
-			SessionDir: dir,
+			Providers:    provider.Registry{prov.Name(): prov},
+			Model:        message.ModelRef{Provider: prov.Name(), Model: "m1"},
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
 		}
 		s := engine.NewSession(cfg)
 		_, err = s.PursueGoal(context.Background(), "cond", engine.GoalOptions{

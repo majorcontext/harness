@@ -214,6 +214,7 @@ func TestTranscriptSeqs_PagesAdjacentToRealBeforeSeq(t *testing.T) {
 // entries, 5 with a durable ordinal (1..5) and one (the synthetic) with
 // none.
 func TestTranscriptSeqs_PagesAdjacentAcrossCompaction(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{
 		compactAsstTurn("SUMMARY of turns 1-2", provider.Usage{InputTokens: 5}),

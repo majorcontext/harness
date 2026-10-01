@@ -90,6 +90,7 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 		var srv *Server
 		opts := Options{
 			SessionDir:  dir,
+			Store:       testStore(dir),
 			RunToken:    "secret-run-token",
 			Version:     "9.9.9",
 			MaxResident: 1,
@@ -100,6 +101,7 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 					WorkDir:       workDir,
 					ParentSession: parentSession,
 					SessionDir:    dir,
+					SessionStore:  testStore(dir),
 					OnEvent:       func(ev engine.Event) { srv.Publish(ev) },
 					// SessionManager, not just Options.SessionManager below:
 					// newSession only installs the `task` tool when THIS
@@ -112,6 +114,7 @@ func TestChildJournaledAfterParentIdleEvictedAndReloaded(t *testing.T) {
 				return engine.LoadSession(engine.Config{
 					Providers:      reg,
 					SessionDir:     dir,
+					SessionStore:   testStore(dir),
 					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 					SessionManager: srv.sessMgr,
 				}, id)

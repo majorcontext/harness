@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -64,6 +65,12 @@ type Options struct {
 	// journal) lives here alongside the per-session <id>.jsonl logs. Empty
 	// keeps the journal in memory only (no durability).
 	SessionDir string
+	// Store wins over SessionDir. Nil with SessionDir set builds a disk
+	// store on SessionDir.
+	Store engine.SessionStore
+	// EventLogID is the events log id in the store. Default "events". It
+	// must not be a valid session id.
+	EventLogID string
 	// RunToken authenticates every request except /health, compared in
 	// constant time.
 	RunToken string
@@ -422,7 +429,9 @@ type Server struct {
 	draining   bool                     // set once by Drain; gates prompt admission
 	seq        int64                    // global monotonic durable sequence
 	journal    []Event                  // in-memory durable records, for replay
-	jf         *os.File                 // events.jsonl handle (nil when disabled)
+	store      engine.SessionStore      // nil when persistence is disabled
+	eventLen   int                      // records in the events log
+	journalErr error                    // set when the events log is fenced or a write failed fatally
 	lastErr    error                    // most recent journal write failure
 	subs       map[*subscriber]struct{} // connected SSE clients
 	sinkCursor int64                    // highest seq the receiver has confirmed applied
@@ -889,6 +898,15 @@ func New(opts Options) (*Server, error) {
 	if opts.NewSession == nil || opts.LoadSession == nil {
 		return nil, errors.New("server: NewSession and LoadSession are required")
 	}
+	if opts.EventLogID == "" {
+		opts.EventLogID = defaultEventLogID
+	}
+	if engine.ValidSessionID(opts.EventLogID) {
+		return nil, fmt.Errorf("server: EventLogID %q is a valid session id", opts.EventLogID)
+	}
+	if opts.Store == nil && opts.SessionDir != "" {
+		opts.Store = engine.NewDiskStore(opts.SessionDir, engine.DiskStoreOptions{Sync: opts.SessionSync})
+	}
 	if opts.Version == "" {
 		opts.Version = "0.1.0"
 	}
@@ -901,6 +919,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts:              opts,
+		store:             opts.Store,
 		sinkTypes:         eventSinkTypeSet(opts.EventSinkIncludeTypes),
 		subs:              make(map[*subscriber]struct{}),
 		seen:              make(map[string]map[string]bool),
@@ -959,14 +978,14 @@ func New(opts Options) (*Server, error) {
 	// reconcile's journal replay as paused/restart, and journal that
 	// observation, before the server is reachable by any client.
 	s.pauseArmedGoalsAtBoot()
-	if opts.SessionDir != "" {
+	if dir := s.diskDir(); dir != "" {
 		// Fixed, predictable path (rather than worktreeBaseDir's lazy
 		// temp-dir fallback) so a crashed predecessor's worktrees — created
 		// under this exact path — are always found here on restart. An
 		// ephemeral (SessionDir == "") server has nothing durable to sweep:
 		// its own worktreeBase is a fresh temp directory every run.
-		s.worktreeBase = filepath.Join(opts.SessionDir, "worktrees")
-		sweepWorktrees(s.worktreeBase, opts.SessionDir, func(sessionID, path string) {
+		s.worktreeBase = filepath.Join(dir, "worktrees")
+		sweepWorktrees(s.worktreeBase, dir, func(sessionID, path string) {
 			s.emitDurable(Event{Type: evtWorktreeKept, SessionID: sessionID, WorktreePath: path})
 		})
 	}
@@ -980,7 +999,7 @@ func New(opts Options) (*Server, error) {
 	// SessionDir empty means persistence is disabled entirely, so there is
 	// no durable journal to replicate and forwarding it would offer a
 	// receiver a "replica" of records that never reach disk.
-	if opts.EventSink != nil && opts.SessionDir != "" {
+	if opts.EventSink != nil && s.store != nil {
 		s.sinkWake = make(chan struct{}, 1)
 		s.sinkCtx, s.sinkCancel = context.WithCancel(context.Background())
 		go s.runEventSink()
@@ -1006,6 +1025,20 @@ func New(opts Options) (*Server, error) {
 // integration).
 func (s *Server) SessionManager() *engine.SessionManager {
 	return s.sessMgr
+}
+
+func (s *Server) readStore() engine.SessionStore {
+	if s.store == nil {
+		return engine.NewMemStore()
+	}
+	return s.store
+}
+
+func (s *Server) diskDir() string {
+	if d, ok := s.store.(*engine.DiskStore); ok {
+		return d.Dir()
+	}
+	return ""
 }
 
 // worktreeBaseDir returns the directory 'worktree'-isolation sessions create
@@ -1259,8 +1292,8 @@ func (s *Server) Close() error {
 	s.stopEventSink(ctx)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.jf != nil {
-		return s.jf.Close()
+	if s.store != nil {
+		s.store.Release(s.opts.EventLogID)
 	}
 	return nil
 }

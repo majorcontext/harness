@@ -69,6 +69,7 @@ func (p *engineContextCaptureProv) Stream(_ context.Context, req *provider.Reque
 //     adoptRootLocked), proven by the notification showing up as ambient
 //     [tasks:] context in that very turn's own request.
 func TestRestartRecoveryEngagesWithoutTouchingCrashedChildDirectly(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	rootProv := &scriptedProvider{name: "root", turns: [][]provider.Event{}}
 	childProv := newBlockingProvider("child")

@@ -27,6 +27,7 @@ import (
 // done-channel + select against time.After, so a regression makes this test
 // FAIL within the bound instead of hanging the test binary (and CI) forever.
 func TestGoalEmitVsSyncMessagesNoDeadlock(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test"}
 	coll := newErrCollector()

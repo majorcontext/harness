@@ -25,6 +25,7 @@ import (
 // The assertion is the specific behavior — at most ONE cold load per
 // session across N list calls — not a raw total.
 func TestListDoesNotReplayNonResidentSessionsRepeatedly(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	// A legacy-shaped journal: a session header with no workdir, so its
 	// metadata index is usable but INCOMPLETE, which is exactly the case

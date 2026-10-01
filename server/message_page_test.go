@@ -36,10 +36,11 @@ func coldMessages(t *testing.T, dir string, n int) *engine.Session {
 	}
 	prov := &scriptedProvider{name: "test", turns: turns}
 	sess := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{prov.name: prov},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{prov.name: prov},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	for i := 0; i < n; i++ {
 		if _, err := sess.Prompt(context.Background(), fmt.Sprintf("ask %d", i)); err != nil {
@@ -234,6 +235,7 @@ func TestMessagePageBeforeSeqOne(t *testing.T) {
 // sends an operator looking for a session id that is on disk in front of
 // them.
 func TestMessagePageDistinguishesMissingFromUnreadable(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	id := "ses_0123456789abcdef"
 	// A journal whose SECOND record is corrupt: scanLog's tolerance covers
@@ -280,6 +282,7 @@ func TestMessagePageRejectsRepeatedParameters(t *testing.T) {
 // journal became readable would see its pages renumbered. An unreadable
 // journal is therefore a 500, even for a session this process holds live.
 func TestMessagePageKeepsTheDurableContractWhenAJournalIsUnreadable(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}})
 	id := h.createSession("")
@@ -319,6 +322,7 @@ func TestMessagePageKeepsTheDurableContractWhenAJournalIsUnreadable(t *testing.T
 // live session whose journal is gone — the only case the fallback serves —
 // and checks the page carries the durable seqs, not a memory-only count.
 func TestMessagePageFallbackNumbersTheDurableSequence(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one")}})
 	id := h.createSession("")
@@ -406,6 +410,7 @@ func TestMessagePageRejectsAnOversizedLimit(t *testing.T) {
 // engine.MessagePageWindow, and this pins the observable half — the same
 // request against the same session yields the same window either way.
 func TestMessagePageWindowIsSharedWithTheJournalPath(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("a"), asstTurn("b"), asstTurn("c")}})
 	id := h.createSession("")

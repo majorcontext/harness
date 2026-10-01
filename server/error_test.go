@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -51,24 +53,15 @@ func (c *errCollector) last() error {
 // — which today only sets s.lastErr and vanishes — is forwarded to
 // Options.OnError, wrapped with "journal write: %w".
 //
-// The failure is injected deterministically by closing the journal file
-// handle (srv.jf, opened by New) directly: any subsequent write to a closed
-// *os.File returns a stable "file already closed" error, with no dependence
-// on filesystem permissions (which behave inconsistently across sandboxes,
-// e.g. running as root).
+// The failure is injected deterministically by a store whose events-log
+// Append fails, with no dependence on filesystem permissions.
 func TestJournalWriteFailureInvokesOnError(t *testing.T) {
 	dir := t.TempDir()
 	coll := newErrCollector()
 	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) {
 		o.OnError = coll.onError
+		o.Store = &failingEventStore{SessionStore: engine.NewMemStore(), id: defaultEventLogID, err: errors.New("disk gone")}
 	})
-
-	if srv.jf == nil {
-		t.Fatal("journal file was not opened by New")
-	}
-	if err := srv.jf.Close(); err != nil {
-		t.Fatal(err)
-	}
 
 	// Creating a session emits a durable session.created record, which
 	// exercises writeJournalLocked.
@@ -89,14 +82,9 @@ func TestJournalWriteFailureInvokesOnError(t *testing.T) {
 // "usually don't hit it", is the contract.
 func TestNilOnErrorIsSafe(t *testing.T) {
 	dir := t.TempDir()
-	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0) // no OnError
-
-	if srv.jf == nil {
-		t.Fatal("journal file was not opened by New")
-	}
-	if err := srv.jf.Close(); err != nil {
-		t.Fatal(err)
-	}
+	srv := newServer(t, dir, &scriptedProvider{name: "test"}, 0, func(o *Options) { // no OnError
+		o.Store = &failingEventStore{SessionStore: engine.NewMemStore(), id: defaultEventLogID, err: errors.New("disk gone")}
+	})
 
 	// Must not panic, despite the journal write failing.
 	createSessionDirect(t, srv, "")
@@ -112,6 +100,7 @@ func TestNilOnErrorIsSafe(t *testing.T) {
 // as a directory, so the engine's OpenFile(..., O_WRONLY) on first append
 // fails with a stable "is a directory" error every time it retries.
 func TestSessionPersistErrForwardedOnce(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{
 		asstTurn("one"), asstTurn("two"),
@@ -160,4 +149,17 @@ func TestSessionPersistErrForwardedOnce(t *testing.T) {
 	if got := coll.count(); got != 1 {
 		t.Fatalf("after second prompt, OnError called %d times, want 1 (not re-forwarded)", got)
 	}
+}
+
+type failingEventStore struct {
+	engine.SessionStore
+	id  string
+	err error
+}
+
+func (f *failingEventStore) Append(id string, at int, records ...[]byte) error {
+	if id == f.id {
+		return f.err
+	}
+	return f.SessionStore.Append(id, at, records...)
 }

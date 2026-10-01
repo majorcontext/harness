@@ -71,7 +71,7 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	records, err := engine.LoadJournal(s.opts.SessionDir, id)
+	records, err := engine.LoadJournalFrom(s.readStore(), id)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			writeJSON(w, http.StatusOK, JournalResponse{SessionID: id, Records: []engine.JournalRecord{}})

@@ -516,6 +516,7 @@ func newTaskModelHarness(t *testing.T, reg provider.Registry, defaultModel messa
 	var srv *Server
 	opts := Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   token,
 		Version:    "9.9.9",
 		NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
@@ -528,6 +529,7 @@ func newTaskModelHarness(t *testing.T, reg provider.Registry, defaultModel messa
 				WorkDir:        workDir,
 				ParentSession:  parentSession,
 				SessionDir:     dir,
+				SessionStore:   testStore(dir),
 				OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 				SessionManager: srv.sessMgr,
 				ModelTool:      true,
@@ -537,6 +539,7 @@ func newTaskModelHarness(t *testing.T, reg provider.Registry, defaultModel messa
 			return engine.LoadSession(engine.Config{
 				Providers:      reg,
 				SessionDir:     dir,
+				SessionStore:   testStore(dir),
 				OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 				SessionManager: srv.sessMgr,
 				ModelTool:      true,
@@ -850,6 +853,7 @@ func TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult(t *testi
 		var srv *Server
 		opts := Options{
 			SessionDir: dir,
+			Store:      testStore(dir),
 			RunToken:   "secret-run-token",
 			Version:    "9.9.9",
 			NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
@@ -859,6 +863,7 @@ func TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult(t *testi
 					WorkDir:        workDir,
 					ParentSession:  parentSession,
 					SessionDir:     dir,
+					SessionStore:   testStore(dir),
 					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 					SessionManager: srv.sessMgr,
 					ModelTool:      true,
@@ -868,6 +873,7 @@ func TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult(t *testi
 				return engine.LoadSession(engine.Config{
 					Providers:      reg,
 					SessionDir:     dir,
+					SessionStore:   testStore(dir),
 					OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 					SessionManager: srv.sessMgr,
 					ModelTool:      true,

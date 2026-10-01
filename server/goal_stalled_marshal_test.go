@@ -22,6 +22,7 @@ import (
 // through engine.LoadSession (see server/handlers.go's lookup), which
 // tolerates exactly this shape.
 func TestMessageEndpointTruncatedGoalStalledTail(t *testing.T) {
+	requireDiskStore(t)
 	prov := &scriptedProvider{name: "test"}
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, prov)

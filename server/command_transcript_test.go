@@ -90,10 +90,11 @@ func coldThreeCommandFixture(t *testing.T) (h *harness, id string, c0, c1, c2 me
 	dir := t.TempDir()
 	prov := fourTurnProvider()
 	sess := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{prov.name: prov},
-		Model:      message.ModelRef{Provider: prov.name, Model: "m1"},
-		SessionDir: dir,
-		WorkDir:    dir,
+		Providers:    provider.Registry{prov.name: prov},
+		Model:        message.ModelRef{Provider: prov.name, Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
+		WorkDir:      dir,
 	})
 	c0 = newTestCommandRecord("status")
 	if err := sess.RecordCommand(c0); err != nil {
@@ -211,6 +212,7 @@ func TestMessagePageCarriesCommands(t *testing.T) {
 }
 
 func TestMessagePageFallbackCarriesCommands(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	h := newHarnessDir(t, dir, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one")}})
 	id := h.createSession("")

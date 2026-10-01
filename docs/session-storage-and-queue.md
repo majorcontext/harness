@@ -48,6 +48,26 @@ If `Len` equals `logLen` plus the record count, the write landed, and the call
 succeeds. After `ErrAppendConflict`, another writer owns the log. The session
 stops persisting. The engine never retries an append.
 
+### Server events log
+
+`server.Options.Store` wins over `server.Options.SessionDir`. With only
+`SessionDir`, the server builds a disk store on it. The server reads sessions
+only through the store. It keeps worktrees only when the store is a
+`*engine.DiskStore`.
+
+The server events log is the store log with id `Options.EventLogID`. The
+default is `events`, which is `<dir>/events.jsonl` on a disk store. The id must
+not be a valid session id. At construction the server loads the log, restores
+the replay ring and the highest `seq`, and tracks the record count. Each
+durable event is one `Append` at that count. A server on the same store
+therefore continues the `seq`, and `Last-Event-ID` replay works there.
+
+One server writes an events log. If `Append` returns `ErrAppendConflict`,
+another writer owns the log. The server reports the error through
+`Options.OnError` and stops writing the log. After another `Append` error, the
+server calls `Len` once. If `Len` equals the count plus one, the write landed.
+The server never retries.
+
 ### Claude-code mirror log
 
 With `ClaudeCodeConfig.MirrorCLISession`, the backend keeps the CLI transcript

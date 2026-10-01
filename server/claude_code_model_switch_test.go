@@ -77,6 +77,7 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 	var srv *Server
 	opts := Options{
 		SessionDir: dir,
+		Store:      testStore(dir),
 		RunToken:   "secret-run-token",
 		Version:    "9.9.9",
 		NewSession: func(m message.ModelRef, workDir, parentSession string) (*engine.Session, error) {
@@ -89,6 +90,7 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 				WorkDir:             workDir,
 				ParentSession:       parentSession,
 				SessionDir:          dir,
+				SessionStore:        testStore(dir),
 				ClaudeCode:          claudeCode,
 				ContextWindowTokens: windowTokens,
 				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },
@@ -99,6 +101,7 @@ func claudeCodeSwitchHarness(t *testing.T, claudeModel message.ModelRef, claudeC
 				Providers:           reg,
 				Model:               claudeModel,
 				SessionDir:          dir,
+				SessionStore:        testStore(dir),
 				ClaudeCode:          claudeCode,
 				ContextWindowTokens: windowTokens,
 				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },

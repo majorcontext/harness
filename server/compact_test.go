@@ -877,6 +877,7 @@ func contextWindowHarness(t *testing.T, prov provider.Provider, windowTokens int
 				Providers:           provider.Registry{prov.Name(): prov},
 				Model:               m,
 				SessionDir:          dir,
+				SessionStore:        testStore(dir),
 				WorkDir:             workDir,
 				ParentSession:       parentSession,
 				OnEvent:             func(ev engine.Event) { srv.Publish(ev) },

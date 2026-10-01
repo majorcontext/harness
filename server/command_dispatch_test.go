@@ -213,6 +213,7 @@ func doneChildHarness(t *testing.T) (h *harness, childID string) {
 			return engine.NewSession(engine.Config{
 				Providers: reg, Model: m, WorkDir: workDir, ParentSession: parentSession,
 				SessionDir: dir, OnEvent: func(ev engine.Event) { srv.Publish(ev) },
+				SessionStore: testStore(dir),
 			}), nil
 		}
 		o.LoadSession = func(id string) (*engine.Session, error) {

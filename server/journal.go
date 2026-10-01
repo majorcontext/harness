@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -363,7 +361,10 @@ const (
 	evtCommand = "command"
 )
 
-const journalName = "events.jsonl"
+const (
+	defaultEventLogID = "events"
+	journalName       = defaultEventLogID + ".jsonl"
+)
 
 // outcomeMaxTurnsExceeded is the turn.end outcome recorded when a goal loop
 // exhausts GoalOptions.MaxTurns without the evaluator ever returning MET
@@ -1633,11 +1634,11 @@ func (s *Server) fanoutLocked(ev Event) {
 	}
 }
 
-// writeJournalLocked appends one record to events.jsonl. Write failures are
+// writeJournalLocked appends one record to the events log. Write failures are
 // recorded in s.lastErr and, when Options.OnError is set, forwarded (wrapped
 // with "journal write: %w") — never fatal either way. Caller holds s.mu.
 func (s *Server) writeJournalLocked(ev Event) {
-	if s.jf == nil {
+	if s.store == nil || s.journalErr != nil {
 		return
 	}
 	b, err := json.Marshal(ev)
@@ -1646,10 +1647,19 @@ func (s *Server) writeJournalLocked(ev Event) {
 		s.reportError(fmt.Errorf("journal write: %w", err))
 		return
 	}
-	if _, err := s.jf.Write(append(b, '\n')); err != nil {
-		s.lastErr = err
-		s.reportError(fmt.Errorf("journal write: %w", err))
+	err = s.store.Append(s.opts.EventLogID, s.eventLen, b)
+	if err == nil {
+		s.eventLen++
+		return
 	}
+	if errors.Is(err, engine.ErrAppendConflict) {
+		s.journalErr = err
+	} else if n, lerr := s.store.Len(s.opts.EventLogID); lerr == nil && n == s.eventLen+1 {
+		s.eventLen = n
+		return
+	}
+	s.lastErr = err
+	s.reportError(fmt.Errorf("journal write: %w", err))
 }
 
 // checkPersistErrLocked folds an already-read sess.PersistErr() value (see
@@ -1724,30 +1734,21 @@ func (s *Server) sessionSeqLocked(sessionID string) int64 {
 // path for a process that died between the engine's session-log append and the
 // server's journal append. Runs once, at New, before any client connects.
 func (s *Server) reconcile() error {
-	if s.opts.SessionDir == "" {
+	if s.store == nil {
 		return nil // in-memory only; nothing to reconcile
 	}
-	path := filepath.Join(s.opts.SessionDir, journalName)
-	data, err := os.ReadFile(path)
+	recs, err := s.store.Load(s.opts.EventLogID)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	s.loadJournal(data)
-
-	if err := os.MkdirAll(s.opts.SessionDir, 0o755); err != nil {
-		return err
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	s.jf = f
+	s.eventLen = len(recs)
+	s.loadJournal(bytes.Join(recs, []byte("\n")))
 
 	// Ids only. This pass loads every session in full anyway, so reading
 	// each session's metadata index first would be pure waste — and it
 	// would refold and rewrite a stale sidecar for every session in the
 	// directory before the load that supersedes it.
-	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
+	ids, err := engine.ListSessionIDsFrom(s.readStore())
 	if err != nil {
 		return err
 	}

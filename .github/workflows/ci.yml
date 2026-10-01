@@ -43,6 +43,9 @@ jobs:
 
       - run: go test -race ./...
 
+      - name: Server tests on the memory session store
+        run: HARNESS_TEST_STORE=mem go test -race ./server/...
+
       - run: go vet ./...
 
       - name: Startup budget

@@ -31,6 +31,7 @@ func requireWindowHarness(t *testing.T) *harness {
 				Providers:            provider.Registry{"openai": known, "openrouter": unknown},
 				Model:                m,
 				SessionDir:           dir,
+				SessionStore:         testStore(dir),
 				WorkDir:              workDir,
 				ParentSession:        parentSession,
 				RequireContextWindow: true,

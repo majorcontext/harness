@@ -851,6 +851,7 @@ func journalLineSeq(t *testing.T, dir string, seq int64) []byte {
 // absent on disk and zero in the delivered batch, so Boxes reads every fresh
 // record as infinitely old.
 func TestDurableEventStampsRecordedAtFromTheInjectedClock(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	f := newFakeSink()
 	s := newServer(t, dir, &scriptedProvider{name: "test"}, 4, func(o *Options) {
@@ -927,6 +928,7 @@ func TestLiveEventCarriesNoRecordedAt(t *testing.T) {
 // Failure with a backfill in loadJournal: the restored record reaches the sink
 // carrying the restart instant instead of the zero time.
 func TestLegacyEventKeepsAZeroRecordedAtOnReload(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	// One events.jsonl line exactly as a harness without recorded_at wrote it.
 	const legacy = `{"type":"session.status","session_id":"ses_old","seq":1,"status":"idle"}`

@@ -399,9 +399,10 @@ func TestWaitColdSessionDoesNotLoad(t *testing.T) {
 	// Seed a session on disk only (a prior process wrote its log).
 	seedProv := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("hi")}}
 	seed := engine.NewSession(engine.Config{
-		Providers:  provider.Registry{"test": seedProv},
-		Model:      message.ModelRef{Provider: "test", Model: "m1"},
-		SessionDir: dir,
+		Providers:    provider.Registry{"test": seedProv},
+		Model:        message.ModelRef{Provider: "test", Model: "m1"},
+		SessionDir:   dir,
+		SessionStore: testStore(dir),
 	})
 	if _, err := seed.Prompt(context.Background(), "seed"); err != nil {
 		t.Fatal(err)

@@ -61,15 +61,17 @@ func newGatedMultiProviderHarness(t *testing.T, entered, release chan struct{}, 
 	var srv *Server
 	mkCfg := func(m message.ModelRef) engine.Config {
 		return engine.Config{
-			Providers:  reg,
-			Model:      m,
-			SessionDir: dir,
-			OnEvent:    func(ev engine.Event) { srv.Publish(ev) },
-			Tools:      []engine.Tool{gate},
+			Providers:    reg,
+			Model:        m,
+			SessionDir:   dir,
+			SessionStore: testStore(dir),
+			OnEvent:      func(ev engine.Event) { srv.Publish(ev) },
+			Tools:        []engine.Tool{gate},
 		}
 	}
 	opts := Options{
 		SessionDir:        dir,
+		Store:             testStore(dir),
 		RunToken:          token,
 		Version:           "9.9.9",
 		HeartbeatInterval: 20 * time.Millisecond,

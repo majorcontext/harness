@@ -1037,7 +1037,7 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 	// object needs no index at all, and reading one for it is work thrown
 	// away — and a stale sidecar would be refolded and written back here
 	// while that session's own writer holds it.
-	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
+	ids, err := engine.ListSessionIDsFrom(s.readStore())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
 		return
@@ -1057,7 +1057,7 @@ func (s *Server) handleList(w http.ResponseWriter, _ *http.Request) {
 			out = append(out, s.buildSession(lv))
 			continue
 		}
-		ix, ixErr := engine.ReadSessionIndex(s.opts.SessionDir, id)
+		ix, ixErr := engine.ReadSessionIndexFrom(s.readStore(), id)
 		// A session neither the index nor a load can render is omitted
 		// here, while GET /session/status still reports its usage from a
 		// direct journal scan. That asymmetry predates this index — see
@@ -1105,7 +1105,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.buildSession(lv))
 		return
 	}
-	ix, err := engine.ReadSessionIndex(s.opts.SessionDir, id)
+	ix, err := engine.ReadSessionIndexFrom(s.readStore(), id)
 	if body, ok := s.coldSessionJSON(id, ix, err == nil && ix.Complete); ok {
 		writeJSON(w, http.StatusOK, body)
 		return
@@ -1352,7 +1352,7 @@ func (s *Server) coldWindowedBootstrap(id string, limit int) (transcriptJSON, bo
 	// and live-event-tip-cursor.md §4 for why tipAtStart must precede the
 	// history snapshot it will be maxed against.
 	tipAtStart := s.currentSeq()
-	page, err := engine.ReadMessagePage(s.opts.SessionDir, id, 0, limit) // beforeSeq<=0: newest page
+	page, err := engine.ReadMessagePageFrom(s.readStore(), id, 0, limit) // beforeSeq<=0: newest page
 	if err != nil {
 		return transcriptJSON{}, false
 	}
@@ -1516,7 +1516,7 @@ func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id s
 		writeErr(w, http.StatusBadRequest, fmt.Sprintf("limit must be at most %d", engine.MaxMessagePageLimit))
 		return
 	}
-	page, err := engine.ReadMessagePage(s.opts.SessionDir, id, beforeSeq, limit)
+	page, err := engine.ReadMessagePageFrom(s.readStore(), id, beforeSeq, limit)
 	if err != nil {
 		s.messagePageFallback(w, id, beforeSeq, limit, err)
 		return
@@ -1554,7 +1554,7 @@ func (s *Server) handleMessagePage(w http.ResponseWriter, query url.Values, id s
 func (s *Server) messagePageFallback(w http.ResponseWriter, id string, beforeSeq, limit int, cause error) {
 	// A session dir the process never configured has no durable sequence
 	// for ANY session, so resident history is the only answer there is.
-	noJournal := errors.Is(cause, fs.ErrNotExist) || s.opts.SessionDir == ""
+	noJournal := errors.Is(cause, fs.ErrNotExist) || s.store == nil
 	if !noJournal {
 		writeErr(w, http.StatusInternalServerError, "cannot read session messages")
 		return
@@ -1722,7 +1722,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	// session already answered from memory above needs no index, and
 	// reading one for it would refold and rewrite the sidecar of a session
 	// this process holds live, racing that session's own writer.
-	ids, err := engine.ListSessionIDs(s.opts.SessionDir)
+	ids, err := engine.ListSessionIDsFrom(s.readStore())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "cannot list sessions")
 		return
@@ -1734,7 +1734,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		// The same index-then-scan path a listing takes, so this endpoint
 		// and GET /session never disagree about which sessions exist: a
 		// session whose fold breaks appears in both, from its journal.
-		info, err := engine.ReadSessionInfo(s.opts.SessionDir, id)
+		info, err := engine.ReadSessionInfoFrom(s.readStore(), id)
 		if err != nil {
 			continue // unreadable or not a session journal: not listable
 		}
@@ -4168,7 +4168,7 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 // sessionOnDisk reports whether a session log for id exists in the session
 // directory, without loading the session.
 func (s *Server) sessionOnDisk(id string) bool {
-	return engine.SessionExists(s.opts.SessionDir, id)
+	return engine.SessionExistsIn(s.readStore(), id)
 }
 
 // lookup resolves a session for read endpoints and returns its whole
