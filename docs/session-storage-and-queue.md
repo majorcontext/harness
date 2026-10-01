@@ -13,7 +13,9 @@ newline. `Config.SessionStore` wins over `Config.SessionDir`. With only
 that directory, byte for byte as before.
 
 The index sidecar, snapshots, and tool-result retention are disk caches. They
-work only when the store is a `*DiskStore`.
+work only when the store is a `*DiskStore`. A session on any other store
+loads by full replay and keeps every tool result inline. `engine.NewMemStore`
+is an in-memory store for tests and for embedders that own durability.
 
 Every store keeps these invariants:
 
