@@ -813,6 +813,14 @@ type Config struct {
 	Tools       []Tool
 	BashTimeout time.Duration // defaults to 2m
 
+	// AllowedTools restricts the session's tool registry to these names,
+	// after built-ins and Config.Tools register. Nil keeps every tool. A
+	// non-nil slice keeps only the named tools; an empty one keeps none.
+	// An unknown name, a conditionally registered tool that this session
+	// did not register, or a non-nil list with MCP servers configured
+	// fails every turn: see Session.ConfigErr.
+	AllowedTools []string
+
 	// BashOutputCap bounds the bytes of combined stdout+stderr the bash tool
 	// keeps from one command, truncating (head + tail, marker in between)
 	// before the output ever reaches the message log. Zero/negative means
@@ -1570,6 +1578,10 @@ type Session struct {
 	// Every Prompt returns it before appending anything. Guarded by mu.
 	contextWindowErr error
 
+	// configErr is the Config.AllowedTools refusal, set once by newSession
+	// and never changed.
+	configErr error
+
 	// toolConcurrency is the resolved (never-zero, never-negative) cap on
 	// how many of one batch's tool calls run at once — see
 	// Config.ToolConcurrency and resolveToolConcurrency (toolexec.go). Set
@@ -1845,7 +1857,21 @@ func newSession(cfg Config) *Session {
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
 	}
+	if cfg.AllowedTools != nil {
+		if mcpConfiguredCount(cfg.MCP) > 0 {
+			s.configErr = errors.New("engine: AllowedTools cannot be combined with MCP servers: MCP tools register after session start")
+		} else {
+			s.configErr = restrictTools(s, cfg.AllowedTools)
+		}
+	}
 	return s
+}
+
+// ConfigErr reports why this session refuses every turn, or nil. It is
+// non-nil when Config.AllowedTools names an unknown tool or is combined
+// with MCP servers. Prompt returns the same error.
+func (s *Session) ConfigErr() error {
+	return s.configErr
 }
 
 // SetModel swaps the model for subsequent requests. History transcodes
@@ -2987,6 +3013,10 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 	// running with NO context management at all, which ends in "context
 	// exhausted" rather than a compaction — see Config.RequireContextWindow.
 	// A rejected Prompt still records no user message.
+	if err := s.ConfigErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	if err := s.ContextWindowErr(); err != nil {
 		s.emitSessionError(err)
 		return nil, err

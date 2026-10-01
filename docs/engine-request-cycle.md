@@ -287,6 +287,17 @@ never written to the session log — a resumed session rediscovers them. Config
 `skills_dirs` (array; a non-empty project value overrides the user value
 entirely) and the repeatable `-skills-dir` run/serve flag drive it.
 
+## Top-level tool allowlist
+
+`Config.AllowedTools` limits a session to the named tools. `newSession`
+applies it last, after built-ins and `Config.Tools`, with the same
+`restrictTools` that subagents use. A nil slice keeps every tool. An empty
+non-nil slice keeps none. An unknown name fails loudly: `Session.ConfigErr`
+returns the error, and every `Prompt` returns it before the provider sees a
+request. A tool that registers only under some conditions (`process` without
+`Config.Processes`) is unknown when absent. A non-nil list with `Config.MCP`
+servers is also an error, because MCP tools register after session start.
+
 ## Tool-batching guidance
 
 The engine executes one assistant message's tool calls concurrently
