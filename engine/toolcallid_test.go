@@ -142,3 +142,36 @@ func TestToolCallIDEmptyInRunTool(t *testing.T) {
 	}
 	rec.wantOnly(t, "")
 }
+
+func emptyIDAssistantTurn() [][]provider.Event {
+	turns := callThenDone("probe")
+	turns[0][0].Message.ID = ""
+	return turns
+}
+
+func TestToolCallIDWithEmptyAssistantMessageID(t *testing.T) {
+	rec := &idRecorder{}
+	prov := &scriptedProvider{name: "p", turns: emptyIDAssistantTurn()}
+	cfg := idTestConfig(prov)
+	cfg.Tools = []Tool{rec.tool()}
+	s := NewSession(cfg)
+	if _, err := s.Prompt(context.Background(), "go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	rec.wantOnly(t, "call_1")
+}
+
+func TestToolCallIDStableAcrossResumeWithEmptyMessageID(t *testing.T) {
+	st := NewMemStore()
+	rec := &idRecorder{}
+	prov := scriptedTurns("p", doneTurn("a")).(*scriptedProvider)
+	cfg := resumeConfig(st, prov, 3, rec.tool())
+	cfg.ResumeRerunTools = true
+	id := crashAfter(t, st, cfg, userMsg("u1", "q"), toolUseMsg("", "call_1"))
+
+	s := reloadSession(t, st, cfg, id)
+	if _, err := s.ResumeTurn(context.Background()); err != nil {
+		t.Fatalf("ResumeTurn: %v", err)
+	}
+	rec.wantOnly(t, "call_1")
+}

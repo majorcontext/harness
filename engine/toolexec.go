@@ -171,7 +171,7 @@ func (s *Session) admitAndRun(ctx context.Context, tc *message.ToolCall, id stri
 	if ctx.Err() != nil {
 		return message.Parts{&message.Text{Text: toolCallCanceledText}}, true
 	}
-	return s.runToolCall(ctx, tc, id, createdAt)
+	return s.runToolCall(context.WithValue(ctx, toolCallIDKey{}, tc.CallID), tc, id, createdAt)
 }
 
 // runOneGuarded is the single execution wrapper every path uses. It turns a
