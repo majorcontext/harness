@@ -72,6 +72,11 @@ type Options struct {
 	// calls Acquire before it first loads or creates a session, and Release
 	// on eviction and Close. A lost ownership cancels the session's turn
 	// without settling it and answers 409 afterwards. Nil: no ownership.
+	// The embedder must own every session in the store before New: boot
+	// reconcile loads them all without Acquire. Release means this server
+	// is done with the residency, not necessarily that the lease must drop;
+	// an embedder that holds one lease for the server's life may make it a
+	// no-op.
 	SessionOwner SessionOwner
 	// EventLogID is the events log id in the store. Default "events". It
 	// must not be a valid session id.
@@ -440,6 +445,7 @@ type Server struct {
 	owned      map[string]*ownerEntry   // held or pending session ownership, by id
 	refused    map[string]struct{}      // ids whose ownership was lost
 	ownerWG    sync.WaitGroup           // one per ownership watcher
+	fencedCh   chan struct{}            // closed once, when journalErr is first set
 	lastErr    error                    // most recent journal write failure
 	subs       map[*subscriber]struct{} // connected SSE clients
 	sinkCursor int64                    // highest seq the receiver has confirmed applied
@@ -935,6 +941,7 @@ func New(opts Options) (*Server, error) {
 		sessions:          make(map[string]*sessionState),
 		commandColdLoads:  make(map[string]int),
 		lastRequest:       make(map[string]*requestSnapshot),
+		fencedCh:          make(chan struct{}),
 		owned:             make(map[string]*ownerEntry),
 		refused:           make(map[string]struct{}),
 		lastReqHash:       make(map[string]string),
@@ -983,6 +990,12 @@ func New(opts Options) (*Server, error) {
 	sessMgr.SetChildSpawnObserver(s.onChildSpawn)
 	if err := s.reconcile(); err != nil {
 		return nil, err
+	}
+	s.mu.Lock()
+	bootFenceErr := s.journalErr
+	s.mu.Unlock()
+	if bootFenceErr != nil {
+		return nil, fmt.Errorf("server: events log fenced at boot: %w", bootFenceErr)
 	}
 	// Deliverable 2(a): mark every goal restored active-but-unattended by
 	// reconcile's journal replay as paused/restart, and journal that
@@ -1291,6 +1304,11 @@ func Shutdown(ctx context.Context, httpSrv *http.Server, srv *Server) error {
 	<-drained
 	return err
 }
+
+// Fenced returns a channel that closes when an events-log append conflict
+// fences the server. A fenced server serves nothing: see the session
+// ownership section of docs/session-storage-and-queue.md.
+func (s *Server) Fenced() <-chan struct{} { return s.fencedCh }
 
 // Close releases the journal file, if any.
 func (s *Server) Close() error {

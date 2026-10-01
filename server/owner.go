@@ -32,6 +32,7 @@ type ownerEntry struct {
 	own   Ownership
 	stop  chan struct{}
 	users int
+	keep  bool
 }
 
 func noopDone() {}
@@ -100,7 +101,7 @@ func (s *Server) endUse(id string, e *ownerEntry) func() {
 	return func() {
 		s.mu.Lock()
 		e.users--
-		if e.users == 0 && s.owned[id] == e && s.sessions[id] == nil {
+		if e.users == 0 && !e.keep && s.owned[id] == e && s.sessions[id] == nil {
 			s.releaseOwnershipLocked(id)
 		}
 		s.mu.Unlock()
@@ -127,14 +128,18 @@ func (s *Server) watchOwnership(id string, e *ownerEntry) {
 	}
 }
 
-// ownershipLost cancels id's run context without settling the turn, so the
-// next holder resumes it, then evicts id and refuses it from now on.
+// ownershipLost suspends id's whole lineage without settling any turn, so
+// the next holder resumes them, then evicts id and refuses it from now on.
 func (s *Server) ownershipLost(id string, e *ownerEntry) {
+	lineage := s.sessMgr.Subtree(id)
 	s.mu.Lock()
 	if s.owned[id] == e {
 		delete(s.owned, id)
 	}
 	s.refused[id] = struct{}{}
+	for _, c := range lineage {
+		s.refused[c] = struct{}{}
+	}
 	var cancel context.CancelFunc
 	var sess *engine.Session
 	if st := s.sessions[id]; st != nil {
@@ -147,15 +152,22 @@ func (s *Server) ownershipLost(id string, e *ownerEntry) {
 	if cancel != nil {
 		cancel()
 	}
+	s.sessMgr.Suspend(id)
 	if sess != nil {
 		sess.ReleaseFiles()
 	}
 }
 
 // fenceLocked stops this server from serving after an events-log append
-// conflict: another writer owns the log. Running turns are canceled without
-// a settle record, and every held session is evicted. Caller holds s.mu.
+// conflict: another writer owns the log. Running turns, children included,
+// are canceled without a settle record, and every held session is evicted.
+// Caller holds s.mu.
 func (s *Server) fenceLocked() {
+	select {
+	case <-s.fencedCh:
+	default:
+		close(s.fencedCh)
+	}
 	var evicted []*engine.Session
 	for id, st := range s.sessions {
 		if st.cancel != nil {
@@ -168,7 +180,19 @@ func (s *Server) fenceLocked() {
 	for id := range s.owned {
 		s.releaseOwnershipLocked(id)
 	}
-	go releaseEvicted(evicted)
+	go func() {
+		s.sessMgr.SuspendAll()
+		releaseEvicted(evicted)
+	}()
+}
+
+// keepOwnership stops the end of the current request from releasing id.
+func (s *Server) keepOwnership(id string) {
+	s.mu.Lock()
+	if e := s.owned[id]; e != nil {
+		e.keep = true
+	}
+	s.mu.Unlock()
 }
 
 func (s *Server) releaseAllOwnership() {

@@ -756,6 +756,10 @@ type sessionNode struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// suspended is set by Suspend: the node's turn was interrupted by
+	// its caller handing the session off, so it stays unsettled.
+	suspended bool
+
 	// result/failReason hold a CHILD's spawning-turn outcome once status is
 	// done or failed (see SessionStatus's doc comment) — result the child's
 	// final assistant text, failReason a classified (#82-rule) short error
@@ -4803,7 +4807,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// turn open for the next holder to resume. AbortTurn and Cancel set
 	// alreadyCanceled and still settle.
 	keepOpen := !alreadyCanceled && errors.Is(perr, context.Canceled) &&
-		n.session.cfg.MaxTurnResumes > 0 && !n.session.hasTaskParent()
+		(n.suspended || n.session.cfg.MaxTurnResumes > 0 && !n.session.hasTaskParent())
 	if !keepOpen {
 		n.session.markTurnSettled()
 		settledSess := n.session
@@ -5023,6 +5027,63 @@ func (m *SessionManager) Cancel(id string) error {
 	}
 	m.cancelSubtreeLocked(n)
 	return nil
+}
+
+// Suspend cancels the contexts of id and its whole subtree and records no
+// outcome. Each interrupted turn leaves its settle marker unwritten, so the
+// next holder of the session log can resume it. Use it when this process
+// stops serving id; Cancel and AbortTurn settle instead. A no-op for an
+// untracked id.
+func (m *SessionManager) Suspend(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.nodes[id]
+	if !ok {
+		return
+	}
+	m.suspendSubtreeLocked(n)
+	n.cancel()
+}
+
+// SuspendAll suspends every root and its subtree. See Suspend.
+func (m *SessionManager) SuspendAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, n := range m.nodes {
+		if n.parentID == "" {
+			m.suspendSubtreeLocked(n)
+			n.cancel()
+		}
+	}
+}
+
+// Subtree returns id and the ids of every tracked descendant.
+func (m *SessionManager) Subtree(id string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	var walk func(string)
+	walk = func(id string) {
+		n, ok := m.nodes[id]
+		if !ok {
+			return
+		}
+		ids = append(ids, id)
+		for _, c := range n.children {
+			walk(c)
+		}
+	}
+	walk(id)
+	return ids
+}
+
+func (m *SessionManager) suspendSubtreeLocked(n *sessionNode) {
+	n.suspended = true
+	for _, cid := range n.children {
+		if c, ok := m.nodes[cid]; ok {
+			m.suspendSubtreeLocked(c)
+		}
+	}
 }
 
 // AbortTurn cancels id's OWN turn — via cancelOneNodeLocked, the SAME

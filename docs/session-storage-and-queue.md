@@ -82,11 +82,23 @@ session. A child session that a parent spawned runs under the parent. If
 by this server` and does not load the session. The server calls `Release` when
 it evicts the session and on `Close`.
 
-When `Ownership.Lost` closes, the server cancels the session run context. It
-does not call `AbortTurn`, so the turn gets no settle record and the next
-holder can resume it (see `Config.MaxTurnResumes`). The server then evicts the
-session, makes no more durable emits for it, and answers every later request
-for it with `409`.
+When `Ownership.Lost` closes, the server cancels the session run context and
+suspends the whole lineage in the `SessionManager` (`Suspend`). It does not
+call `AbortTurn` or `Cancel`, so no turn of the session or of its spawned
+children gets a settle record and the next holder can resume them (see
+`Config.MaxTurnResumes`). The server then evicts the session, makes no more
+durable emits for the session or its children, and answers every later request
+for it with `409`. The spawn route and the task-notification resume path also
+call `Acquire` before they load a session.
+
+The embedder must own every session in the store before it calls `New`: boot
+reconcile loads all of them without `Acquire`. `Release` means this server is
+done with the residency. It does not require the embedder to drop the lease.
+An embedder that holds one lease for the whole life of the server can make
+`Release` a no-op.
+
+`Server.Fenced` returns a channel that closes when an events-log conflict
+fences the server. `New` returns an error if boot reconcile itself fenced.
 
 ### Claude-code mirror log
 

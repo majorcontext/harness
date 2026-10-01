@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -95,11 +96,17 @@ func (s *loadRecordingStore) loaded(id string) bool {
 }
 
 type cancelWatchProvider struct {
+	name     string
 	started  chan struct{}
 	canceled chan struct{}
 }
 
-func (p *cancelWatchProvider) Name() string { return "test" }
+func (p *cancelWatchProvider) Name() string {
+	if p.name == "" {
+		return "test"
+	}
+	return p.name
+}
 
 func (p *cancelWatchProvider) Stream(ctx context.Context, _ *provider.Request) (provider.Stream, error) {
 	return &cancelWatchStream{p: p, ctx: ctx}, nil
@@ -275,6 +282,11 @@ func TestEventsLogConflictFencesServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	select {
+	case <-h.srv.Fenced():
+		t.Fatal("Fenced() closed before the conflict")
+	default:
+	}
 	snapshot := func() (int64, int) {
 		h.srv.mu.Lock()
 		defer h.srv.mu.Unlock()
@@ -283,6 +295,11 @@ func TestEventsLogConflictFencesServer(t *testing.T) {
 	seq0, ring0 := snapshot()
 	for range 2 {
 		h.srv.emitDurable(Event{Type: evtSessionCreated, SessionID: id})
+		select {
+		case <-h.srv.Fenced():
+		default:
+			t.Fatal("Fenced() still open after the conflict")
+		}
 		if seq, ring := snapshot(); seq != seq0 || ring != ring0 {
 			t.Fatalf("after fenced emit seq=%d ring=%d, want seq=%d ring=%d", seq, ring, seq0, ring0)
 		}
@@ -295,5 +312,134 @@ func TestEventsLogConflictFencesServer(t *testing.T) {
 	resp, body = h.do("POST", "/session", nil)
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("POST /session after fence = %d %s, want 409", resp.StatusCode, body)
+	}
+}
+
+func hasSettled(t *testing.T, store engine.SessionStore, id string) bool {
+	t.Helper()
+	recs, err := store.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range recs {
+		if bytes.Contains(r, []byte(`"child_turn.settled"`)) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEventsLogConflictCancelsTurnUnsettled(t *testing.T) {
+	store := engine.NewMemStore()
+	prov := &cancelWatchProvider{started: make(chan struct{}), canceled: make(chan struct{})}
+	h := newOwnerServer(t, store, prov)
+	id := h.createSession("")
+	if resp, body := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status = %d: %s", resp.StatusCode, body)
+	}
+	<-prov.started
+
+	n, err := store.Len(defaultEventLogID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(defaultEventLogID, n, []byte(`{"type":"other.writer"}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.emitDurable(Event{Type: evtSessionCreated, SessionID: id})
+	<-prov.canceled
+	h.srv.wg.Wait()
+
+	if hasSettled(t, store, id) {
+		t.Error("fenced turn was settled")
+	}
+	reloaded, err := engine.LoadSession(engine.Config{
+		Providers:      provider.Registry{"test": prov},
+		Model:          message.ModelRef{Provider: "test", Model: "m1"},
+		SessionStore:   store,
+		MaxTurnResumes: 3,
+	}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.ResumableTurn() {
+		t.Error("ResumableTurn() = false; the next holder cannot resume the turn")
+	}
+}
+
+func TestOwnershipLostSuspendsChildren(t *testing.T) {
+	dir, err := os.MkdirTemp("", "owner-children")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	rootProv := &scriptedProvider{name: "root"}
+	childProv := &cancelWatchProvider{name: "child", started: make(chan struct{}), canceled: make(chan struct{})}
+	owner := newFakeOwner()
+	h := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, func(o *Options) { o.SessionOwner = owner }, rootProv, childProv)
+	t.Cleanup(func() { h.srv.Close() })
+	root := h.createSession("root/m1")
+	resp, data := h.do("POST", "/session", map[string]string{
+		"parent_id": root, "agent": engine.AgentExplore, "prompt": "wait", "model": "child/m1",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("spawn status = %d: %s", resp.StatusCode, data)
+	}
+	var child struct {
+		ID string `json:"id"`
+	}
+	mustUnmarshal(t, data, &child)
+	<-childProv.started
+
+	h.srv.mu.Lock()
+	lostSeq := h.srv.seq
+	h.srv.mu.Unlock()
+	owner.loseOwnership(root)
+	<-childProv.canceled
+
+	mgr := h.srv.SessionManager()
+	for {
+		changed := mgr.Changed()
+		if _, info, ok := mgr.SessionAndInfo(child.ID); ok && info.Status != engine.StatusRunning {
+			break
+		}
+		<-changed
+	}
+
+	store := h.srv.store
+	for _, id := range []string{root, child.ID} {
+		if hasSettled(t, store, id) {
+			t.Errorf("session %s has a settle record", id)
+		}
+	}
+	h.srv.mu.Lock()
+	defer h.srv.mu.Unlock()
+	for _, ev := range h.srv.journal {
+		if ev.SessionID == child.ID && ev.Seq > lostSeq {
+			t.Errorf("durable emit for child after loss: %s seq %d", ev.Type, ev.Seq)
+		}
+	}
+}
+
+func TestRefusingOwnerBlocksSpawnAndClaimLoads(t *testing.T) {
+	store := &loadRecordingStore{SessionStore: engine.NewMemStore()}
+	seed := newOwnerServer(t, store, &scriptedProvider{name: "test"})
+	id := seed.createSession("")
+	owner := newFakeOwner()
+	owner.err = errors.New("lease held elsewhere")
+	h := newOwnerServer(t, store, &scriptedProvider{name: "test"}, func(o *Options) { o.SessionOwner = owner })
+	store.mu.Lock()
+	store.loadIDs = nil
+	store.mu.Unlock()
+
+	resp, body := h.do("POST", "/session", map[string]string{"parent_id": id, "agent": engine.AgentExplore, "prompt": "go"})
+	if resp.StatusCode != http.StatusConflict || !bytes.Contains(body, []byte("session not owned by this server")) {
+		t.Errorf("spawn = %d %s, want 409 session not owned by this server", resp.StatusCode, body)
+	}
+	if _, _, _, code, _ := h.srv.claimForPrompt(id); code != http.StatusConflict {
+		t.Errorf("claimForPrompt code = %d, want 409", code)
+	}
+	if store.loaded(id) {
+		t.Errorf("Load(%q) ran although Acquire refused", id)
 	}
 }

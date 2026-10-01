@@ -772,7 +772,7 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.ParentID != nil && strings.TrimSpace(*body.ParentID) != "" {
-		s.handleSpawnChild(w, *body.ParentID, body.Agent, body.Prompt, body.Model)
+		s.handleSpawnChild(w, r.Context(), *body.ParentID, body.Agent, body.Prompt, body.Model)
 		return
 	}
 	parentSession, err := validateParentSession(body.ParentSession)
@@ -4337,6 +4337,11 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 	if st == nil {
 		// Not resident: load from disk with the lock released, then re-acquire.
 		s.mu.Unlock()
+		done, oerr := s.admitSession(context.Background(), id)
+		if oerr != nil {
+			return nil, nil, 0, http.StatusConflict, ""
+		}
+		defer done()
 		sess, err := s.opts.LoadSession(id)
 		if err != nil {
 			return nil, nil, 0, http.StatusNotFound, ""

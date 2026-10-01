@@ -19,7 +19,24 @@ import (
 // worktree/residency machinery below that branch — a child's workdir,
 // provider, and persistence all come from its parent's already-resolved
 // Config, via SessionManager.Spawn, never from this request.
-func (s *Server) handleSpawnChild(w http.ResponseWriter, parentID, agent, prompt string, model message.ModelRef) {
+func (s *Server) handleSpawnChild(w http.ResponseWriter, ctx context.Context, parentID, agent, prompt string, model message.ModelRef) {
+	if engine.ValidSessionID(parentID) {
+		done, err := s.admitSession(ctx, parentID)
+		if err != nil {
+			writeNotOwned(w)
+			return
+		}
+		defer func() {
+			if _, managed := s.sessMgr.Session(parentID); managed {
+				s.keepOwnership(parentID)
+			}
+			done()
+		}()
+	}
+	s.spawnChild(w, parentID, agent, prompt, model)
+}
+
+func (s *Server) spawnChild(w http.ResponseWriter, parentID, agent, prompt string, model message.ModelRef) {
 	if agent == "" || prompt == "" {
 		writeErr(w, http.StatusBadRequest, "agent and prompt are required when parent_id is set")
 		return
