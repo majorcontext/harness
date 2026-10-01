@@ -4321,6 +4321,7 @@ func (s *Session) runToolCalls(ctx context.Context, asst *message.Message) messa
 // existed and neither did the unbalanced pair.
 func (s *Session) runToolCall(ctx context.Context, tc *message.ToolCall, id string, createdAt time.Time) (out message.Parts, isErr bool) {
 	s.emit(Event{Type: EventToolStart, ToolCall: tc, ID: id, CreatedAt: createdAt})
+	ctx = context.WithValue(ctx, toolCallIDKey{}, tc.CallID)
 
 	execEndOwed, toolEndEmitted := false, false
 	defer func() {
