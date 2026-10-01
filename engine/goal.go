@@ -2053,9 +2053,13 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 	// the prompt queue never drains.
 	ctx, watch, release := s.armIdleWatchdog(ctx)
 	defer release()
-	stream, err := prov.Stream(ctx, req)
+	routeCtx, err := s.accountRoutingContext(ctx, req.Model.Provider)
 	if err != nil {
-		return "", watch.explain(err)
+		return "", err
+	}
+	stream, err := prov.Stream(routeCtx, req)
+	if err != nil {
+		return "", s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 	}
 	defer stream.Close()
 
@@ -2075,7 +2079,7 @@ func (s *Session) runEvaluator(ctx context.Context, condition string, evaluator 
 			break
 		}
 		if err != nil {
-			return "", watch.explain(err)
+			return "", s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:

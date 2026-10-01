@@ -864,7 +864,8 @@ type sessionNode struct {
 	// failKind is the structured classification of failReason, empty for
 	// an ordinary failure — see FailKindProviderExhausted, the only value
 	// this package produces today.
-	failKind string
+	failKind         string
+	accountSelection map[string]string
 }
 
 // SessionNode is a read-only snapshot of one managed session's lifecycle
@@ -882,20 +883,22 @@ type SessionNode struct {
 	// FailKind classifies FailReason for a caller that must branch rather
 	// than read prose — empty for an ordinary failure. See
 	// FailKindProviderExhausted.
-	FailKind string
+	FailKind         string
+	AccountSelection map[string]string
 }
 
 func (n *sessionNode) snapshot() SessionNode {
 	return SessionNode{
-		ID:         n.id,
-		ParentID:   n.parentID,
-		Depth:      n.depth,
-		Status:     n.status,
-		Children:   append([]string(nil), n.children...),
-		AgentType:  n.agentType,
-		Result:     n.result,
-		FailReason: n.failReason,
-		FailKind:   n.failKind,
+		ID:               n.id,
+		ParentID:         n.parentID,
+		Depth:            n.depth,
+		Status:           n.status,
+		Children:         append([]string(nil), n.children...),
+		AgentType:        n.agentType,
+		Result:           n.result,
+		FailReason:       n.failReason,
+		FailKind:         n.failKind,
+		AccountSelection: cloneAccountSelection(n.accountSelection),
 	}
 }
 
@@ -1481,12 +1484,13 @@ func durableSnapshot(id, parentID string, depth int, sess *Session) SessionNode 
 		children = []string{}
 	}
 	snap := SessionNode{
-		ID:        id,
-		ParentID:  parentID,
-		Depth:     depth,
-		Status:    StatusIdle,
-		Children:  children,
-		AgentType: sess.TaskAgentType(),
+		ID:               id,
+		ParentID:         parentID,
+		Depth:            depth,
+		Status:           StatusIdle,
+		Children:         children,
+		AgentType:        sess.TaskAgentType(),
+		AccountSelection: sess.accountSelectionSnapshot(),
 	}
 	if status, result, failReason, failKind, ok := deriveSettledStatus(sess); ok {
 		snap.Status = status
@@ -2524,14 +2528,15 @@ func (m *SessionManager) adoptLocked(s *Session, parentID string, depth int) *se
 	}
 	ctx, cancel := context.WithCancel(parentCtx)
 	n := &sessionNode{
-		id:       s.ID,
-		session:  s,
-		parentID: parentID,
-		rootID:   root,
-		depth:    depth,
-		status:   StatusIdle,
-		ctx:      ctx,
-		cancel:   cancel,
+		id:               s.ID,
+		session:          s,
+		parentID:         parentID,
+		rootID:           root,
+		depth:            depth,
+		status:           StatusIdle,
+		ctx:              ctx,
+		cancel:           cancel,
+		accountSelection: cloneAccountSelection(s.accountSelection),
 		// See budgetedByChild's own doc comment: seeded from THIS
 		// manager's own per-child credit record, not s.Usage() directly —
 		// zero (the map's own zero value) for both a genuinely fresh
@@ -2866,7 +2871,8 @@ type SpawnOptions struct {
 	// interpreted by Spawn itself. Empty is fine (Send never sets it; a
 	// direct Spawn caller that isn't the `task` tool may leave it empty
 	// too).
-	AgentType string
+	AgentType        string
+	AccountSelection map[string]string
 }
 
 // Spawn creates a child of opts.ParentID, registers it under lineage/depth
@@ -2950,7 +2956,8 @@ func (m *SessionManager) Spawn(opts SpawnOptions) (childID string, err error) {
 	if opts.SystemAppend != "" {
 		childCfg.System = append(append([]string(nil), childCfg.System...), opts.SystemAppend)
 	}
-	child := NewSessionDeferredStartup(childCfg) // restrictions are finalized below before startup prewarm
+	child := NewSessionDeferredStartup(childCfg)
+	child.accountSelection = cloneAccountSelection(opts.AccountSelection)
 
 	// Validate opts.ToolNames against the child's OWN full registry —
 	// BEFORE installTaskToolLocked below can remove "task" from it (a

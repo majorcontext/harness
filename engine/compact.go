@@ -314,11 +314,11 @@ func isCompactCommandText(text string) bool {
 // RunCompactCommand is the engine entry point for a resolved compact
 // command: POST /session/{id}/compact and the serve/run dispatchers.
 func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (CompactResult, error) {
-	if backend, ok := s.delegatedBackend(); ok {
+	if backend, model, ok := s.delegatedBackend(); ok {
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
 			return CompactResult{}, errors.New("engine: keep_turns/model are not applicable to a session delegated to the Claude Code CLI, which owns its own context")
 		}
-		if _, err := s.dispatchClaudeCodeTurn(ctx, backend, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
+		if _, err := s.dispatchClaudeCodeTurn(ctx, backend, model, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
 			return CompactResult{}, err
 		}
 		return CompactResult{ClaudeCodeDelegated: true}, nil
@@ -726,9 +726,13 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 	// very turn it was trying to protect.
 	ctx, watch, release := s.armIdleWatchdog(ctx)
 	defer release()
-	stream, err := prov.Stream(ctx, req)
+	routeCtx, err := s.accountRoutingContext(ctx, req.Model.Provider)
 	if err != nil {
-		return "", provider.Usage{}, watch.explain(err)
+		return "", provider.Usage{}, err
+	}
+	stream, err := prov.Stream(routeCtx, req)
+	if err != nil {
+		return "", provider.Usage{}, s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 	}
 	defer stream.Close()
 
@@ -747,7 +751,7 @@ func (s *Session) runCompactionSummary(ctx context.Context, model message.ModelR
 			break
 		}
 		if err != nil {
-			return "", provider.Usage{}, watch.explain(err)
+			return "", provider.Usage{}, s.withSelectedAccountError(req.Model.Provider, watch.explain(err))
 		}
 		switch ev.Type {
 		case provider.EventTextDelta:

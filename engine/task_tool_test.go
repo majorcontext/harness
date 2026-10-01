@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,9 @@ func TestTaskToolDescriptionPointsAtRosterDiscovery(t *testing.T) {
 			Agent struct {
 				Description string `json:"description"`
 			} `json:"agent"`
+			Account struct {
+				Description string `json:"description"`
+			} `json:"account"`
 		} `json:"properties"`
 	}
 	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
@@ -44,6 +48,9 @@ func TestTaskToolDescriptionPointsAtRosterDiscovery(t *testing.T) {
 	}
 	if !strings.Contains(schema.Properties.Agent.Description, "roster") {
 		t.Errorf("agent property description does not mention the roster: %q", schema.Properties.Agent.Description)
+	}
+	if !strings.Contains(schema.Properties.Account.Description, "list_subscription_accounts") || !strings.Contains(schema.Properties.Account.Description, "calling box creator") {
+		t.Errorf("account property description does not point at the creator's account roster: %q", schema.Properties.Account.Description)
 	}
 }
 
@@ -166,6 +173,81 @@ func TestGrandchildRegistryIsIntersectionNeverWiderThanParent(t *testing.T) {
 		if _, ok := mid.tools[name]; !ok {
 			t.Errorf("grandchild has %q, which its parent mid did not have — registry is wider than the parent's: %v", name, toolNames(grand))
 		}
+	}
+}
+
+func TestRunTaskToolSpawnSelectionFromEmptyParent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		account any
+		want    map[string]string
+	}{
+		{name: "string", account: "acct_first", want: map[string]string{"codex": "acct_first"}},
+		{name: "map", account: map[string]string{"codex": "acct_first"}, want: map[string]string{"codex": "acct_first"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewSessionManager(context.Background(), 0, 0)
+			cfg := managedConfig("codex", scriptedTurns("codex", doneTurn("done")))
+			cfg.SessionDir = t.TempDir()
+			cfg.AccountRouting = map[string]AccountRoutingConfig{
+				"codex": {Vendor: "codex", ProxyURLEnv: "HTTPS_PROXY", Protocol: "boxes-v1", ProxyURL: "http://subject%7Cbox:pass@proxy.example"},
+			}
+			root := mgr.NewRoot(cfg)
+			raw, err := json.Marshal(map[string]any{"agent": AgentExplore, "prompt": "go", "account": tc.account})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parts, err := runTaskTool(root, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result taskToolResult
+			if err := json.Unmarshal([]byte(parts.Text()), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(result.Account, tc.want) {
+				t.Fatalf("spawn account = %#v, want %#v", result.Account, tc.want)
+			}
+			child, ok := mgr.Session(result.SessionID)
+			if !ok || !reflect.DeepEqual(child.accountSelectionSnapshot(), tc.want) {
+				t.Fatalf("child selection = %#v, want %#v", child.accountSelectionSnapshot(), tc.want)
+			}
+			if got := child.Model(); got != modelFor("codex") {
+				t.Fatalf("child model = %v, want %v", got, modelFor("codex"))
+			}
+			waitForStatus(t, mgr, result.SessionID, StatusDone, time.Second)
+			reloaded, err := LoadSession(Config{Providers: cfg.Providers, AccountRouting: cfg.AccountRouting, SessionDir: cfg.SessionDir, Model: modelFor("codex")}, result.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reloaded.accountSelectionSnapshot(), tc.want) {
+				t.Fatalf("reloaded selection = %#v, want %#v", reloaded.accountSelectionSnapshot(), tc.want)
+			}
+			noRoute, err := LoadSession(Config{Providers: cfg.Providers, SessionDir: cfg.SessionDir, Model: modelFor("codex")}, result.SessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := cfg.Providers["codex"].(*scriptedProvider).call
+			if _, err := noRoute.Prompt(context.Background(), "send"); err == nil || !strings.Contains(err.Error(), `account routing for selected vendor "codex" is not configured`) {
+				t.Fatalf("reloaded child without account routing error = %v", err)
+			}
+			if got := cfg.Providers["codex"].(*scriptedProvider).call; got != calls {
+				t.Fatalf("provider calls after missing-route refusal = %d, want %d", got, calls)
+			}
+		})
+	}
+}
+
+func TestRunTaskToolRejectsAccountOnUnconfiguredProviderBeforeSpawn(t *testing.T) {
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	root := mgr.NewRoot(managedConfig("codex", scriptedTurns("codex", doneTurn("done"))))
+	parts, err := runTaskTool(root, json.RawMessage(`{"agent":"explore","prompt":"go","account":"acct_x"}`))
+	if err == nil || parts != nil {
+		t.Fatalf("unsupported account selection returned parts=%v err=%v", parts, err)
+	}
+	info, ok := mgr.Info(root.ID)
+	if !ok || len(info.Children) != 0 {
+		t.Fatalf("unsupported account selection allocated child: %+v", info)
 	}
 }
 

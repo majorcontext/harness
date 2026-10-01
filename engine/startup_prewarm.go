@@ -138,7 +138,11 @@ func (s *Session) runStartupPrewarm(ctx context.Context) error {
 	if !ok || !prewarmer.StartupPrewarmEnabled() {
 		return errStartupPrewarmProviderIneligible
 	}
-	return prewarmer.Prewarm(ctx, assembled.request)
+	routeCtx, err := s.accountRoutingContext(ctx, assembled.request.Model.Provider)
+	if err != nil {
+		return err
+	}
+	return prewarmer.Prewarm(routeCtx, assembled.request)
 }
 
 func (s *Session) consumeStartupPrewarm(ctx context.Context) error {

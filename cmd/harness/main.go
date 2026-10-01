@@ -846,10 +846,15 @@ func runCmd(args []string) error {
 	// SetMaxTreeTokens is opt-in. A zero value disables the check.
 	sessMgr.SetMaxTreeTokens(envInt("HARNESS_MAX_TREE_TOKENS"))
 
+	accountRouting, err := accountRoutingFor(cfg)
+	if err != nil {
+		return err
+	}
 	s, err := resolveSession(engine.Config{
-		Providers: registry(cfg),
-		Model:     model,
-		System:    systemPrompt(workDir, ""),
+		Providers:      registry(cfg),
+		AccountRouting: accountRouting,
+		Model:          model,
+		System:         systemPrompt(workDir, ""),
 		// Config comes first; the per-run flag is the final refinement.
 		AppendSystemPrompt:      appendSystemSegments(cfg, opts.system),
 		MaxTokens:               opts.maxTokens,
@@ -1092,6 +1097,36 @@ func loadConfig() (*config.Config, error) {
 // built-in entry (providerAuth, above) and a configured type:"openai" entry
 // (registerOpenAIProviders) cannot drift to different defaults.
 const defaultOpenAIKeyEnv = "OPENAI_API_KEY"
+
+func accountRoutingFor(cfg *config.Config) (map[string]engine.AccountRoutingConfig, error) {
+	routing := make(map[string]engine.AccountRoutingConfig)
+	for name, p := range cfg.Providers {
+		if p.AccountRouting == nil {
+			continue
+		}
+		envName := p.AccountRouting.ProxyURLEnv
+		var once sync.Once
+		var proxyURL string
+		var resolveErr error
+		routing[name] = engine.AccountRoutingConfig{
+			Vendor:      p.AccountRouting.Vendor,
+			ProxyURLEnv: envName,
+			Protocol:    p.AccountRouting.Protocol,
+			ProxyURLResolver: func() (string, error) {
+				once.Do(func() {
+					value, ok := os.LookupEnv(envName)
+					if !ok || engine.ValidateAccountProxyURL(value) != nil {
+						resolveErr = fmt.Errorf("providers.%s.account_routing: environment variable %q is missing or invalid", name, envName)
+						return
+					}
+					proxyURL = value
+				})
+				return proxyURL, resolveErr
+			},
+		}
+	}
+	return routing, nil
+}
 
 func registry(cfg *config.Config) provider.Registry {
 	if cfg != nil {
@@ -1616,6 +1651,10 @@ func serveCmd(args []string) error {
 		return err
 	}
 	reg := registry(cfg)
+	accountRouting, err := accountRoutingFor(cfg)
+	if err != nil {
+		return err
+	}
 
 	// Every session shares the same MCP client connections; built once here
 	// and closed on exit. Its defer is declared before the plugin host's
@@ -1744,6 +1783,7 @@ func serveCmd(args []string) error {
 	mkCfg := func(model message.ModelRef) engine.Config {
 		return engine.Config{
 			Providers:          reg,
+			AccountRouting:     accountRouting,
 			Model:              model,
 			System:             systemPrompt(workDir, ""),
 			AppendSystemPrompt: appendSystemSegments(cfg, ""),

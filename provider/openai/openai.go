@@ -5,11 +5,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -26,6 +29,8 @@ const defaultBaseURL = "https://api.openai.com"
 // Client.ResponsesPath existed. An empty ResponsesPath resolves to it, so
 // every pre-existing caller's wire is unchanged.
 const defaultResponsesPath = "/v1/responses"
+
+const accountHTTPClientCacheLimit = 64
 
 // Client is a provider.Provider for the OpenAI Responses API. The zero value
 // plus APIKey is usable; nothing touches the network until Stream.
@@ -97,6 +102,10 @@ type Client struct {
 
 	wsPoolOnce sync.Once
 	wsPoolVal  *wsPool
+
+	accountHTTPClientsMu   sync.Mutex
+	accountHTTPClients     map[string]*http.Client
+	accountHTTPClientOrder []string
 }
 
 // wsPoolFor lazily builds this client's websocket pool on first use, one
@@ -144,6 +153,72 @@ func (c *Client) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+func (c *Client) httpClientForAccount(ctx context.Context, req *provider.Request) (*http.Client, string, error) {
+	route, ok := provider.AccountRoutingFromContext(ctx)
+	if !ok {
+		return c.httpClient(), req.SessionKey, nil
+	}
+	baseClient := c.httpClient()
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	transport, ok := baseTransport.(*http.Transport)
+	if !ok {
+		return nil, "", errors.New("openai: account routing requires a cloneable HTTP transport")
+	}
+	proxyFunc, err := provider.CodexAccountRoutingProxyFunc(route.ProxyURL)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := provider.ValidateCodexAccountRoutingTarget(route.ProxyURL, responsesURL(c.BaseURL, c.ResponsesPath)); err != nil {
+		return nil, "", errors.New("openai: account-routed provider endpoint cannot use the configured proxy")
+	}
+	routeHash := sha256.Sum256([]byte(route.ProxyURL))
+	key := req.SessionKey + "\x00" + hex.EncodeToString(routeHash[:])
+	c.accountHTTPClientsMu.Lock()
+	defer c.accountHTTPClientsMu.Unlock()
+	if c.accountHTTPClients == nil {
+		c.accountHTTPClients = make(map[string]*http.Client)
+	}
+	if client := c.accountHTTPClients[key]; client != nil {
+		return client, key, nil
+	}
+	clonedTransport := transport.Clone()
+	clonedTransport.Proxy = func(request *http.Request) (*url.URL, error) {
+		return proxyFunc(request.URL)
+	}
+	checkRedirect := baseClient.CheckRedirect
+	client := &http.Client{
+		Transport: clonedTransport,
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) > 0 {
+				if _, err := proxyFunc(request.URL); err != nil {
+					return errors.New("openai: account-routed redirect would bypass the proxy")
+				}
+			}
+			if checkRedirect != nil {
+				return checkRedirect(request, via)
+			}
+			if len(via) >= 10 {
+				return errors.New("openai: stopped after 10 redirects")
+			}
+			return nil
+		},
+		Jar:     nil,
+		Timeout: baseClient.Timeout,
+	}
+	if len(c.accountHTTPClients) >= accountHTTPClientCacheLimit {
+		oldest := c.accountHTTPClientOrder[0]
+		c.accountHTTPClientOrder = append(c.accountHTTPClientOrder[:0], c.accountHTTPClientOrder[1:]...)
+		c.accountHTTPClients[oldest].CloseIdleConnections()
+		delete(c.accountHTTPClients, oldest)
+	}
+	c.accountHTTPClients[key] = client
+	c.accountHTTPClientOrder = append(c.accountHTTPClientOrder, key)
+	return client, key, nil
+}
+
 type preparedRequest struct {
 	body    []byte
 	url     string
@@ -188,7 +263,15 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	body := prepared.body
 	url := prepared.url
 	headers := prepared.headers
-	hc := prepared.client
+	bc := prepared.client
+	poolSessionKey := req.SessionKey
+	if _, routed := provider.AccountRoutingFromContext(ctx); routed {
+		bc, poolSessionKey, err = c.httpClientForAccount(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+	}
+	hc := bc
 
 	// The websocket transport sends this SAME url/headers/body — the
 	// Authorization header included — so whatever credential injection
@@ -202,7 +285,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	// POST below. Codex HTTP changes only its wire encoding to zstd.
 	if c.UseWebSocketTransport && req.SessionKey != "" {
 		if st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
-			SessionKey: req.SessionKey,
+			SessionKey: poolSessionKey,
 			URL:        url,
 			Headers:    headers,
 			Body:       body,
@@ -258,14 +341,22 @@ func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
 	if err != nil {
 		return err
 	}
+	hc := prepared.client
+	poolSessionKey := req.SessionKey
+	if _, routed := provider.AccountRoutingFromContext(ctx); routed {
+		hc, poolSessionKey, err = c.httpClientForAccount(ctx, req)
+		if err != nil {
+			return err
+		}
+	}
 	st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
-		SessionKey: req.SessionKey,
+		SessionKey: poolSessionKey,
 		URL:        prepared.url,
 		Headers:    prepared.headers,
 		Body:       prepared.body,
 		Model:      req.Model,
 		Family:     c.family(),
-		HTTPClient: prepared.client,
+		HTTPClient: hc,
 		Prewarm:    true,
 	})
 	if !ok {

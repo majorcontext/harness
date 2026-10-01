@@ -375,9 +375,10 @@ const (
 
 // Config configures a Session.
 type Config struct {
-	Providers provider.Registry
-	Model     message.ModelRef // initial model; swap any time with SetModel
-	Effort    message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
+	Providers      provider.Registry
+	AccountRouting map[string]AccountRoutingConfig
+	Model          message.ModelRef // initial model; swap any time with SetModel
+	Effort         message.Effort   // initial reasoning-effort level; swap with SetEffort (zero = provider default)
 	// ServiceTier is the initial Codex speed-tier value; swap with
 	// SetServiceTier (zero = provider default). An opaque, unvalidated
 	// string forwarded verbatim — harness does not gate which tiers a
@@ -1068,10 +1069,11 @@ type Session struct {
 	cfg   Config
 	tools map[string]Tool
 
-	mu          sync.Mutex
-	model       message.ModelRef
-	effort      message.Effort // reasoning-effort level; swap with SetEffort
-	serviceTier string         // Codex speed-tier value; swap with SetServiceTier
+	mu               sync.Mutex
+	model            message.ModelRef
+	effort           message.Effort // reasoning-effort level; swap with SetEffort
+	accountSelection map[string]string
+	serviceTier      string // Codex speed-tier value; swap with SetServiceTier
 	// ambientPins is runtime-only: never journaled, snapshotted, or in s.history.
 	ambientPins []ambientPin
 	history     []message.Message
@@ -2441,6 +2443,10 @@ func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 	if s.subscriptionUsage != nil {
 		cp = *s.subscriptionUsage
 		cp.Windows = append([]message.SubscriptionUsageWindow(nil), s.subscriptionUsage.Windows...)
+		if s.subscriptionUsage.AccountID != nil {
+			accountID := *s.subscriptionUsage.AccountID
+			cp.AccountID = &accountID
+		}
 		if s.subscriptionUsage.Overage != nil {
 			// Deep-copy Overage too, not just Windows: the struct copy
 			// above (cp := *s.subscriptionUsage) only copies the pointer
@@ -2461,6 +2467,9 @@ func (s *Session) SubscriptionUsage() *message.SubscriptionUsage {
 			Provider:   "claude",
 			Windows:    []message.SubscriptionUsageWindow{},
 			CapturedAt: s.cfg.Now().Unix(),
+		}
+		if id, ok := s.accountSelection["claude"]; ok {
+			cp.AccountID = &id
 		}
 	}
 	if s.haveClaudeCodeCost {
@@ -2943,8 +2952,8 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // comment for why this rides only on the attempts that actually append the
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
-	if backend, ok := s.delegatedBackend(); ok {
-		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
+	if backend, model, ok := s.delegatedBackend(); ok {
+		return s.dispatchClaudeCodeTurn(ctx, backend, model, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
 	// prompt mutation. Prompt cancellation also cancels the prewarm task.
@@ -3018,17 +3027,18 @@ func (s *Session) promptWithOrigin(ctx context.Context, text string, origin stri
 // and carries the result forward, rather than each re-resolving s.Model()
 // on its own: SetModel is allowed mid-turn, so a second, later lookup could
 // disagree with the first and abort a turn a concurrent switch already
-// committed to running.
-func (s *Session) delegatedBackend() (DelegatedBackend, bool) {
-	b, err := delegatedBackends.For(s.Model())
+// committed to running. It returns the same model snapshot used for lookup.
+func (s *Session) delegatedBackend() (DelegatedBackend, message.ModelRef, bool) {
+	model := s.Model()
+	b, err := delegatedBackends.For(model)
 	if err != nil {
-		return nil, false
+		return nil, model, false
 	}
-	return b, true
+	return b, model, true
 }
 
 // dispatchClaudeCodeTurn appends text and runs it through backend.
-func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
+func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedBackend, model message.ModelRef, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	msg := message.Message{
 		ID:            ResolveMessageID(id),
 		Role:          message.RoleUser,
@@ -3041,17 +3051,17 @@ func (s *Session) dispatchClaudeCodeTurn(ctx context.Context, backend DelegatedB
 		msg.Source, msg.SourceID, msg.SourceLabel = prov.Source, prov.SourceID, prov.SourceLabel
 	}
 	s.append(msg)
-	return s.runDelegatedTurn(ctx, backend)
+	return s.runDelegatedTurn(ctx, backend, model)
 }
 
 // runDelegatedTurn runs one turn through backend, resolved by the caller's
 // own delegatedBackend() call — see that method's own doc comment for why
 // this never re-resolves the model itself.
-func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend) (*message.Message, error) {
+func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend, model message.ModelRef) (*message.Message, error) {
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
 	defer s.snapshotOnIdle()
-	msg, err := backend.RunTurn(ctx, s)
+	msg, err := backend.RunTurn(ctx, s, model)
 	if err != nil {
 		s.requeueTaskNotifications()
 		s.emitSessionError(err)
@@ -3095,8 +3105,8 @@ func (s *Session) runDelegatedTurn(ctx context.Context, backend DelegatedBackend
 // entirely, so THIS is the one choke point every route into the agentic
 // loop — fresh Prompt call or goal-loop retry alike — actually shares.
 func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) {
-	if backend, ok := s.delegatedBackend(); ok {
-		return s.runDelegatedTurn(ctx, backend)
+	if backend, model, ok := s.delegatedBackend(); ok {
+		return s.runDelegatedTurn(ctx, backend, model)
 	}
 	s.emitStatus("busy")
 	defer s.emitStatus("idle")
@@ -3477,9 +3487,13 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 	// captured immediately before the provider dial, mirroring where
 	// OnRequest above already hands the same req to an observer.
 	sentAt := s.cfg.Now()
-	stream, err := prov.Stream(ctx, req)
+	routeCtx, err := s.accountRoutingContext(ctx, req.Model.Provider)
 	if err != nil {
-		return nil, "", provider.Usage{}, watch.explain(err)
+		return nil, "", provider.Usage{}, err
+	}
+	stream, err := prov.Stream(routeCtx, req)
+	if err != nil {
+		return nil, "", provider.Usage{}, s.withSelectedAccountError(params.Model.Provider, watch.explain(err))
 	}
 	defer stream.Close()
 
@@ -3513,7 +3527,7 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			// cancellation; explain converts it into the classified
 			// idle-timeout error (and passes every other failure — parent
 			// aborts included — through untouched).
-			err = watch.explain(err)
+			err = s.withSelectedAccountError(params.Model.Provider, watch.explain(err))
 			if len(toolCalls) == 0 {
 				// No tool call was ever recorded this turn: nothing can
 				// be orphaned, so this is an ordinary turn failure —
@@ -3601,11 +3615,9 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 				ChainRefusalItem:     chainRefusalItem,
 			})
 			if ev.SubscriptionUsage != nil {
-				// See provider.Event.SubscriptionUsage's own doc comment:
-				// only a subscription-lane adapter (provider/openai's codex
-				// family today) ever sets this, and only when its own
-				// response actually carried the signal.
-				s.applySubscriptionUsage(*ev.SubscriptionUsage)
+				usage := *ev.SubscriptionUsage
+				usage.AccountID = s.accountIDForProvider(params.Model.Provider)
+				s.applySubscriptionUsage(usage)
 			}
 			return ev.Message, ev.StopReason, ev.Usage, nil
 		}

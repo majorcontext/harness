@@ -20,6 +20,7 @@ import (
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/provider/claudecode"
 	"github.com/majorcontext/harness/typeid"
 )
 
@@ -800,6 +801,152 @@ func TestClaudeCodeAbortSignalsChild(t *testing.T) {
 // ordinary ref keeps running the native provider-call path untouched —
 // the same session type, same Prompt call, branching only on
 // claudeCodeDelegated().
+func TestTaskClaudeAccountsUseChildScopedProxyEnvironments(t *testing.T) {
+	bin := buildFakeClaude(t)
+	logPath := filepath.Join(t.TempDir(), "proxy-environments.jsonl")
+	home := t.TempDir()
+	proxyURL := "http://subject%7Cbox:fake-password@proxy.example"
+	t.Setenv("FAKE_CLAUDE_MODE", "normal")
+	invocationLog := filepath.Join(t.TempDir(), "invocations.jsonl")
+	t.Setenv("FAKE_CLAUDE_LOG", invocationLog)
+	t.Setenv("FAKE_CLAUDE_PROXY_LOG", logPath)
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("HOME", home)
+	t.Setenv("NO_PROXY", "localhost,.internal")
+	t.Setenv("HTTP_PROXY", "http://ambient.example")
+	t.Setenv("http_proxy", "http://ambient.example")
+	t.Setenv("HTTPS_PROXY", "http://ambient.example")
+	t.Setenv("https_proxy", "http://ambient.example")
+
+	mgr := NewSessionManager(context.Background(), 0, 0)
+	cfg := managedConfig("codex", scriptedTurns("codex", nil))
+	cfg.Providers[claudecode.Family] = claudecode.Client{}
+	cfg.SessionDir = t.TempDir()
+	cfg.ClaudeCode = ClaudeCodeConfig{BinaryPath: bin}
+	cfg.AccountRouting = map[string]AccountRoutingConfig{
+		"claude-code": {Vendor: "claude", ProxyURLEnv: "HTTPS_PROXY", Protocol: "boxes-v1", ProxyURL: proxyURL},
+	}
+	root := mgr.NewRoot(cfg)
+	accounts := []string{"acct_a", "acct_b"}
+	claudeRoute := cfg.AccountRouting["claude-code"]
+	for _, account := range accounts {
+		raw, err := json.Marshal(map[string]any{
+			"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": account,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts, err := runTaskTool(root, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result taskToolResult
+		if err := json.Unmarshal([]byte(parts.Text()), &result); err != nil {
+			t.Fatal(err)
+		}
+		waitForStatus(t, mgr, result.SessionID, StatusDone, time.Second)
+	}
+
+	for i, tc := range []struct {
+		baseURL      string
+		noProxy      string
+		protocol     string
+		missingProxy bool
+		wantFailure  string
+	}{
+		{baseURL: "https://gateway.example/v1", noProxy: "gateway.example", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "https://api.anthropic.com/v1", noProxy: "api.anthropic.com", wantFailure: "cannot use the configured proxy"},
+		{baseURL: "http://api.anthropic.com", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "https://api.anthropic.com:8443", noProxy: "", wantFailure: "unsupported account-routed Anthropic endpoint"},
+		{baseURL: "", noProxy: "localhost", protocol: "future", wantFailure: "unsupported account-routing protocol"},
+		{baseURL: "", noProxy: "localhost", missingProxy: true, wantFailure: `environment variable "HTTPS_PROXY" is missing or invalid`},
+	} {
+		t.Setenv("ANTHROPIC_BASE_URL", tc.baseURL)
+		t.Setenv("NO_PROXY", tc.noProxy)
+		route := claudeRoute
+		if tc.protocol != "" {
+			route.Protocol = tc.protocol
+		}
+		if tc.missingProxy {
+			route.ProxyURL = ""
+			route.ProxyURLResolver = func() (string, error) {
+				return "", errors.New("proxy URL containing secret")
+			}
+		}
+		cfg.AccountRouting["claude-code"] = route
+		account := "acct_blocked" + strconv.Itoa(i)
+		raw, err := json.Marshal(map[string]any{"agent": AgentExplore, "prompt": "work", "model": "claude-code/sonnet", "account": account})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts, err := runTaskTool(root, raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var blocked taskToolResult
+		if err := json.Unmarshal([]byte(parts.Text()), &blocked); err != nil {
+			t.Fatal(err)
+		}
+		waitForStatus(t, mgr, blocked.SessionID, StatusFailed, time.Second)
+		info, ok := mgr.Info(blocked.SessionID)
+		if !ok || !strings.Contains(info.FailReason, tc.wantFailure) {
+			t.Fatalf("Claude route failure = %q, want %q", info.FailReason, tc.wantFailure)
+		}
+		if strings.Count(info.FailReason, "subscription account") != 1 || strings.Contains(info.FailReason, "secret") {
+			t.Fatalf("Claude route error has duplicated account prefix or proxy secret: %q", info.FailReason)
+		}
+	}
+	if got := len(readInvocations(t, invocationLog)); got != 2 {
+		t.Fatalf("fake Claude process count after account-route refusals = %d, want 2", got)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []struct {
+		HTTPProxy       string   `json:"http_proxy"`
+		HTTPProxyLower  string   `json:"http_proxy_lower"`
+		HTTPSProxy      string   `json:"https_proxy"`
+		HTTPSProxyLower string   `json:"https_proxy_lower"`
+		NoProxy         string   `json:"no_proxy"`
+		Home            string   `json:"home"`
+		ProxyEntries    []string `json:"proxy_entries"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	for {
+		var record struct {
+			HTTPProxy       string   `json:"http_proxy"`
+			HTTPProxyLower  string   `json:"http_proxy_lower"`
+			HTTPSProxy      string   `json:"https_proxy"`
+			HTTPSProxyLower string   `json:"https_proxy_lower"`
+			NoProxy         string   `json:"no_proxy"`
+			Home            string   `json:"home"`
+			ProxyEntries    []string `json:"proxy_entries"`
+		}
+		if err := decoder.Decode(&record); err != nil {
+			break
+		}
+		records = append(records, record)
+	}
+	if len(records) != len(accounts) {
+		t.Fatalf("captured CLI environment count = %d, want %d", len(records), len(accounts))
+	}
+	for i, account := range accounts {
+		want, err := accountProxyURL(proxyURL, map[string]string{"claude": account})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := records[i]
+		if record.HTTPProxy != want || record.HTTPProxyLower != want || record.HTTPSProxy != want || record.HTTPSProxyLower != want {
+			t.Errorf("CLI proxy variables did not select %s", account)
+		}
+		if record.NoProxy != "localhost,.internal" || record.Home != home || len(record.ProxyEntries) != 4 {
+			t.Errorf("CLI environment changed unrelated settings for %s", account)
+		}
+	}
+}
+
 func TestClaudeCodeModelRefSelection(t *testing.T) {
 	t.Run("claude-code ref bypasses the native provider entirely", func(t *testing.T) {
 		bin := buildFakeClaude(t)
