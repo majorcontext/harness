@@ -207,11 +207,17 @@ func TestEventLogIDMustNotBeSessionID(t *testing.T) {
 }
 
 func TestNoWorktreeSweepOnMemStore(t *testing.T) {
-	cwd := t.TempDir()
-	t.Chdir(cwd)
-	newStoreServer(t, engine.NewMemStore(), twoReplies())
-	if _, err := os.Stat(filepath.Join(cwd, "worktrees")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("worktrees path exists after New on a memory store: %v", err)
+	dir := t.TempDir()
+	h := newStoreServer(t, engine.NewMemStore(), twoReplies(), func(o *Options) { o.SessionDir = dir })
+	if h.srv.worktreeBase != "" {
+		t.Fatalf("worktreeBase = %q on a memory store", h.srv.worktreeBase)
+	}
+	id := createSessionDirect(t, h.srv, "test/m1")
+	h.promptAndWaitIdle(id, "one")
+	for _, name := range []string{"worktrees", journalName} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s exists in SessionDir on a memory store: %v", name, err)
+		}
 	}
 }
 
