@@ -66,7 +66,7 @@
 // result — proves the driver forwards the CLI's own internal-compaction
 // marker as harness's EventClaudeCodeCompacted instead of dropping it),
 // "mirror" (replays the transcript_mirror frames of the fixture named by
-// FAKE_CLAUDE_MIRROR_FIXTURE under its own CLAUDE_CONFIG_DIR, appends their
+// FAKE_CLAUDE_MIRROR_FIXTURE in order under its own CLAUDE_CONFIG_DIR, appends their
 // entries to the file each frame names, and records the config dir and the
 // files it found there at start into FAKE_CLAUDE_MIRROR_SEEN; with
 // FAKE_CLAUDE_MIRROR_CRASH_AFTER=n it exits nonzero after n frames),
@@ -340,7 +340,7 @@ func main() {
 		}
 	}
 	if mode == "mirror" {
-		replayMirror(emit, sessionID)
+		replayMirror(emit)
 		return
 	}
 
@@ -1344,7 +1344,7 @@ func main() {
 	})
 }
 
-func replayMirror(emit func(any), sessionID string) {
+func replayMirror(emit func(any)) {
 	cfgDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	files := map[string]string{}
 	_ = filepath.WalkDir(cfgDir, func(p string, d os.DirEntry, err error) error {
@@ -1370,7 +1370,6 @@ func replayMirror(emit func(any), sessionID string) {
 	if v := os.Getenv("FAKE_CLAUDE_MIRROR_CRASH_AFTER"); v != "" {
 		crashAfter, _ = strconv.Atoi(v)
 	}
-	emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
 	frames := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		var frame struct {
@@ -1378,7 +1377,11 @@ func replayMirror(emit func(any), sessionID string) {
 			FilePath string            `json:"filePath"`
 			Entries  []json.RawMessage `json:"entries"`
 		}
-		if json.Unmarshal([]byte(line), &frame) != nil || frame.Type != "transcript_mirror" {
+		if json.Unmarshal([]byte(line), &frame) != nil {
+			continue
+		}
+		if frame.Type != "transcript_mirror" {
+			emit(json.RawMessage(line))
 			continue
 		}
 		if frames == crashAfter {
@@ -1396,6 +1399,4 @@ func replayMirror(emit func(any), sessionID string) {
 		}
 		emit(map[string]any{"type": "transcript_mirror", "filePath": path, "entries": frame.Entries})
 	}
-	emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "ok"}}}})
-	emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "ok", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}})
 }

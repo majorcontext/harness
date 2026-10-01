@@ -1205,6 +1205,9 @@ func (s *Session) promptTurnWithRetry(ctx context.Context, directive string, tur
 			// Concurrently cleared: stop retrying, nothing left to retry for.
 			return attempts, err
 		}
+		if errors.Is(err, errCLIMirror) || errors.Is(err, ErrAppendConflict) {
+			return attempts, err
+		}
 		if provider.IsContextOverflow(err) {
 			// Deterministic failure (issue #62): the request as built
 			// cannot fit the model's context window, and every later

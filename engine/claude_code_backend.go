@@ -40,6 +40,8 @@ const defaultClaudeCodeBinaryPath = "claude"
 // sending the next one — see runClaudeCodeTurn's signal-cascade goroutine.
 // A var, not a const, so a test can shrink it rather than paying the real
 // wall-clock cost.
+var claudeCodeMirrorDrainGrace = 5 * time.Second
+
 var claudeCodeInterruptGrace = 5 * time.Second
 
 // claudeCodeStderrCap bounds how much of the `claude` child's stderr this
@@ -474,6 +476,13 @@ func (s *Session) runClaudeCodeTurn(ctx context.Context) (*message.Message, erro
 // runClaudeCodeChild spawns one `claude` child for runClaudeCodeTurn, or,
 // when res is non-nil, resumes a parked question with no stdin text.
 func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*message.Blob, res *claudeCodeResolution) (*message.Message, error) {
+	s.mu.Lock()
+	fenced := s.fenced
+	s.mu.Unlock()
+	if fenced != nil {
+		return nil, fmt.Errorf("engine: claude-code: session %s is fenced: %w", s.ID, fenced)
+	}
+
 	history := s.History()
 	cfg := s.cfg.ClaudeCode
 	binary := cfg.BinaryPath
@@ -521,9 +530,17 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		if real, err := filepath.EvalSymlinks(scratch); err == nil {
 			scratch = real
 		}
-		mirror = newCLIMirror(s.store, s.ID, scratch)
-		if restoredID, _, err = mirror.restore(); err != nil {
+		mirror = newCLIMirror(s.store, s.ID, scratch, func(err error) {
+			s.mu.Lock()
+			s.fenced = err
+			s.mu.Unlock()
+		})
+		var restored bool
+		if restoredID, restored, err = mirror.restore(); err != nil {
 			return nil, err
+		}
+		if !restored {
+			s.recordClaudeCodeHistoryWatermark(0)
 		}
 		s.claudeCodeMirror = mirror
 		defer func() { s.claudeCodeMirror = nil }()
@@ -639,9 +656,9 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
 	}
-	resumeID := s.claudeCodeSessionID()
-	if resumeID == "" {
-		resumeID = restoredID
+	resumeID := restoredID
+	if mirror == nil {
+		resumeID = s.claudeCodeSessionID()
 	}
 	if resumeID != "" {
 		args = append(args, "--resume", resumeID)
@@ -1048,7 +1065,15 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 	//     left to read that fd, which is the same fate any well-behaved
 	//     detached daemon should already tolerate by redirecting its own
 	//     stdio, not a signal this call sends it.
+	if mirror != nil {
+		mirror.waitDrain(claudeCodeMirrorDrainGrace)
+	}
 	waitErr := cmd.Wait()
+	if mirror != nil {
+		if derr := mirror.joinDrain(); derr != nil && turnErr == nil {
+			turnErr = derr
+		}
+	}
 
 	return claudeCodeTurnResult(claudeCodeTurnOutcome{
 		ctxErr:        ctx.Err(),
@@ -1813,6 +1838,9 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 			// it both times, never after. Nothing observed contradicts the
 			// result as the terminal event.
 			settleCompaction()
+			if m := s.claudeCodeMirror; m != nil {
+				m.startDrain(scanner)
+			}
 			return finalMsg, started, turnErr, zeroMessageOK, dismissed
 		case "control_request":
 			if env.Request == nil || env.Request.Subtype != "can_use_tool" || respond == nil {

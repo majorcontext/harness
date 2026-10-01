@@ -746,11 +746,18 @@ With the option on, each turn:
 3. Passes `--session-mirror`. The CLI then sends `transcript_mirror` frames on
    stdout. The engine appends each entry of each frame as one record to the
    mirror log.
-4. Removes the scratch directory when the turn ends.
+4. Keeps reading stdout after the `result` event, for at most 5 seconds,
+   because the CLI sends its last frames after it. A leaked grandchild that
+   holds the pipe open cannot block the turn longer than this.
+5. Removes the scratch directory when the turn ends.
+
+The restored log is the only source of the `--resume` id. When no log exists,
+the turn starts a fresh CLI session without `--resume`, and the engine resets
+the history watermark so that the history directive seeds the new session.
 
 Every turn uses the same working directory (`Config.WorkDir`), so the stored
 relative path stays valid on every host.
 
 A failed restore or a failed append fails the turn with an error that names the
-session. The engine kills the child on a failed append. It does not retry. The
+session. The engine kills the child on a failed append. It does not retry, and the goal loop does not retry the turn. An append conflict also fences the session, as a journal conflict does: it runs no more turns. The
 harness journal is not changed by the mirror.

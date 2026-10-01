@@ -271,7 +271,7 @@ type mirrorFailStore struct {
 	appendErr error
 }
 
-func (m mirrorFailStore) Append(id string, at int, recs ...[]byte) error {
+func (m *mirrorFailStore) Append(id string, at int, recs ...[]byte) error {
 	if strings.HasSuffix(id, cliLogSuffix) && m.appendErr != nil {
 		return m.appendErr
 	}
@@ -280,7 +280,7 @@ func (m mirrorFailStore) Append(id string, at int, recs ...[]byte) error {
 
 func TestMirrorAppendFailureFailsTurn(t *testing.T) {
 	e := newMirrorEnv(t)
-	s := e.session(mirrorFailStore{SessionStore: NewMemStore(), appendErr: errMirrorBoom})
+	s := e.session(&mirrorFailStore{SessionStore: NewMemStore(), appendErr: errMirrorBoom})
 	_, err := s.Prompt(context.Background(), "hi")
 	if !errors.Is(err, errMirrorBoom) {
 		t.Fatalf("Prompt error = %v, want it to wrap errMirrorBoom", err)
@@ -308,6 +308,51 @@ func TestMirrorAppendConflictFailsTurn(t *testing.T) {
 	_, err := s.Prompt(context.Background(), "hi")
 	if !errors.Is(err, ErrAppendConflict) {
 		t.Fatalf("Prompt error = %v, want it to wrap ErrAppendConflict", err)
+	}
+	s.mu.Lock()
+	fenced := s.fenced
+	s.mu.Unlock()
+	if !errors.Is(fenced, ErrAppendConflict) {
+		t.Fatalf("fenced = %v, want ErrAppendConflict", fenced)
+	}
+	if _, err := s.Prompt(context.Background(), "again"); !errors.Is(err, ErrAppendConflict) {
+		t.Errorf("Prompt on a fenced session = %v, want it to wrap ErrAppendConflict", err)
+	}
+	if n := len(readInvocations(t, e.log)); n != 1 {
+		t.Errorf("CLI spawns = %d, want 1: a fenced session runs no turn", n)
+	}
+}
+
+func TestMirrorGoalLoopDoesNotRetryMirrorFailure(t *testing.T) {
+	e := newMirrorEnv(t)
+	s := e.session(&mirrorFailStore{SessionStore: NewMemStore(), appendErr: errMirrorBoom})
+	_, err := s.PursueGoal(context.Background(), "cond", GoalOptions{Evaluator: message.ModelRef{Provider: "p", Model: "e"}})
+	if !errors.Is(err, errMirrorBoom) {
+		t.Fatalf("PursueGoal error = %v, want it to wrap errMirrorBoom", err)
+	}
+	if n := len(readInvocations(t, e.log)); n != 1 {
+		t.Errorf("CLI spawns = %d, want exactly 1 after a mirror failure", n)
+	}
+}
+
+func TestMirrorFailedFirstAppendLeavesNextTurnFresh(t *testing.T) {
+	e := newMirrorEnv(t)
+	store := &mirrorFailStore{SessionStore: NewMemStore(), appendErr: errMirrorBoom}
+	s := e.session(store)
+	if _, err := s.Prompt(context.Background(), "one"); !errors.Is(err, errMirrorBoom) {
+		t.Fatalf("first Prompt = %v, want errMirrorBoom", err)
+	}
+	if s.claudeCodeSessionID() == "" {
+		t.Fatal("journal holds no CLI session id after init, the premise of this test")
+	}
+	store.appendErr = nil
+	prompt(t, s, "two")
+	argv := readInvocations(t, e.log)[1]
+	if argvContains(argv, "--resume") {
+		t.Errorf("second turn argv has --resume with no mirror log: %v", argv)
+	}
+	if !argvContains(argv, claudeCodeHistoryDirective) {
+		t.Errorf("second turn argv lacks the history directive: %v", argv)
 	}
 }
 

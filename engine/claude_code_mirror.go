@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 var errCLIMirror = errors.New("engine: claude-code: transcript mirror failed")
@@ -36,14 +38,63 @@ type cliMirror struct {
 	scratch string
 	pos     int
 	hasPath bool
+	fence   func(error)
+
+	drainDone chan struct{}
+	drainErr  error
 }
 
-func newCLIMirror(store SessionStore, id, scratch string) *cliMirror {
-	return &cliMirror{store: store, id: id, scratch: scratch}
+func newCLIMirror(store SessionStore, id, scratch string, fence func(error)) *cliMirror {
+	return &cliMirror{store: store, id: id, scratch: scratch, fence: fence}
 }
 
 func (m *cliMirror) fail(err error) error {
+	if errors.Is(err, ErrAppendConflict) && m.fence != nil {
+		m.fence(err)
+	}
 	return fmt.Errorf("%w: session %s: %w", errCLIMirror, m.id, err)
+}
+
+// startDrain keeps reading stdout after the result event: the CLI sends its
+// last transcript frames after it. The caller joins with waitDrain.
+func (m *cliMirror) startDrain(scanner *bufio.Scanner) {
+	m.drainDone = make(chan struct{})
+	go func() {
+		defer close(m.drainDone)
+		for scanner.Scan() {
+			var env claudeCodeEnvelope
+			if json.Unmarshal(scanner.Bytes(), &env) != nil || env.Type != "transcript_mirror" {
+				continue
+			}
+			if err := m.append(claudeCodeMirrorFrame{FilePath: env.FilePath, Entries: env.Entries}); err != nil {
+				m.drainErr = err
+				return
+			}
+		}
+	}()
+}
+
+// waitDrain waits for the drain to see EOF, at most grace. It returns false
+// on timeout; the caller must then close the pipe and call joinDrain.
+func (m *cliMirror) waitDrain(grace time.Duration) bool {
+	if m.drainDone == nil {
+		return true
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-m.drainDone:
+		return true
+	case <-t.C:
+		return false
+	}
+}
+
+func (m *cliMirror) joinDrain() error {
+	if m.drainDone != nil {
+		<-m.drainDone
+	}
+	return m.drainErr
 }
 
 // restore writes the stored CLI transcript under the scratch directory. ok is
