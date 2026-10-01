@@ -1,5 +1,7 @@
 package engine
 
+// Tests in this file replace the package-global delegatedBackends registry.
+
 import (
 	"context"
 	"strings"

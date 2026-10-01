@@ -30,7 +30,7 @@ func TestTaskAccountSelectionAllocatesFirstExplicitSelection(t *testing.T) {
 
 func TestTaskAccountSelectionRejectsInvalidShapesAndIDs(t *testing.T) {
 	routes := map[string]AccountRoutingConfig{"codex": {Vendor: "codex"}}
-	for _, raw := range []string{`null`, `[]`, `1`, `{"codex":null}`, `{"other":"acct_x"}`, `{"codex":"acct_bad-id"}`, `"acct_bad-id"`} {
+	for _, raw := range []string{`null`, `[]`, `1`, `{}`, `{"codex":null}`, `{"other":"acct_x"}`, `{"codex":"acct_bad-id"}`, `"acct_bad-id"`} {
 		if _, err := resolveTaskAccountSelection(json.RawMessage(raw), "codex", nil, routes); err == nil {
 			t.Errorf("resolveTaskAccountSelection(%s) succeeded", raw)
 		}

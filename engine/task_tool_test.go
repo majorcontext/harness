@@ -38,6 +38,9 @@ func TestTaskToolDescriptionPointsAtRosterDiscovery(t *testing.T) {
 			Agent struct {
 				Description string `json:"description"`
 			} `json:"agent"`
+			Account struct {
+				Description string `json:"description"`
+			} `json:"account"`
 		} `json:"properties"`
 	}
 	if err := json.Unmarshal(def.InputSchema, &schema); err != nil {
@@ -45,6 +48,9 @@ func TestTaskToolDescriptionPointsAtRosterDiscovery(t *testing.T) {
 	}
 	if !strings.Contains(schema.Properties.Agent.Description, "roster") {
 		t.Errorf("agent property description does not mention the roster: %q", schema.Properties.Agent.Description)
+	}
+	if !strings.Contains(schema.Properties.Account.Description, "list_subscription_accounts") || !strings.Contains(schema.Properties.Account.Description, "calling box creator") {
+		t.Errorf("account property description does not point at the creator's account roster: %q", schema.Properties.Account.Description)
 	}
 }
 

@@ -182,7 +182,7 @@ func taskTool() Tool {
 					"prompt": {"type": "string", "description": "The task for the child session to perform (spawn), or the message to deliver to it (send)"},
 					"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
 					"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high; omitted means the provider default"},
-					"account": {"oneOf": [{"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, {"type": "object", "properties": {"claude": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, "codex": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}}, "additionalProperties": false}], "description": "spawn only: optional subscription account id or vendor-to-account map"},
+					"account": {"oneOf": [{"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, {"type": "object", "properties": {"claude": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}, "codex": {"type": "string", "pattern": "^acct_[A-Za-z0-9]{1,64}$|^$"}}, "additionalProperties": false}], "description": "spawn only: optional subscription account id or vendor-to-account map; call list_subscription_accounts for the calling box creator's account IDs"},
 					"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 					"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 				}

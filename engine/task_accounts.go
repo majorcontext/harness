@@ -131,6 +131,9 @@ func resolveTaskAccountSelection(raw json.RawMessage, modelProvider string, inhe
 	if err := json.Unmarshal(raw, &requested); err != nil || requested == nil {
 		return nil, fmt.Errorf("account must be a string or vendor map")
 	}
+	if len(requested) == 0 {
+		return nil, fmt.Errorf("account vendor map must not be empty")
+	}
 	for vendor, value := range requested {
 		if vendor != "claude" && vendor != "codex" {
 			return nil, fmt.Errorf("unsupported subscription account vendor %q", vendor)
