@@ -1440,6 +1440,10 @@ type Session struct {
 	// a turn. Runtime-only; guarded by mu.
 	goalDeferred bool
 
+	// goalMaxTurns is the turn cap a server-side auto-arm applies to the
+	// active goal; 0 means unlimited. Runtime-only; guarded by mu.
+	goalMaxTurns int
+
 	// goalParked mirrors the most recent goal.parked record's classified
 	// reason and attempt count (see recordGoalParked/classifyGoalWorkerError
 	// in goal.go) for the ambient status segment goal_parked_status.go

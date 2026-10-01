@@ -554,6 +554,10 @@ type Server struct {
 	// Always nil in production.
 	autoArmRace func()
 
+	// deferArmRace is a test-only seam: armDeferredGoal invokes it while it
+	// still holds the run slot. Always nil in production.
+	deferArmRace func()
+
 	// queueDispatchRace is a test-only seam mirroring autoArmRace: when
 	// non-nil, enqueueOrDispatch (handlePrompt's same-session-busy branch)
 	// and maybeDispatchQueued invoke it right before their own claimForPrompt

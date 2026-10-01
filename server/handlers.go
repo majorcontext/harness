@@ -2859,7 +2859,7 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 	resetGoalPauseLocked(s.goalState[id])
 	s.mu.Unlock()
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
-	go s.runGoal(ctx, id, claimedSt, condition, 0)
+	go s.runGoal(ctx, id, claimedSt, condition, claimedSt.sess.GoalMaxTurns())
 }
 
 // goalPostResponse is POST /session/{id}/goal's success-response body: seq to
@@ -2942,7 +2942,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Defer {
-		s.armDeferredGoal(w, id, st, fromSeq, body.Condition)
+		s.armDeferredGoal(w, id, st, fromSeq, body.Condition, body.MaxTurns)
 		return
 	}
 	// Re-arming a paused/restart (or post-abort) goal. claimForPrompt above
@@ -3021,17 +3021,21 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 // armDeferredGoal registers a goal with defer=true on a session whose run
 // slot handleGoal just claimed, releases the slot, and starts no loop. An
 // already-active goal keeps its state and takes the new condition.
-func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionState, fromSeq int64, condition string) {
+func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionState, fromSeq int64, condition string, maxTurns int) {
 	var err error
 	if existing, active := st.sess.ActiveGoal(); !active {
-		err = st.sess.RegisterGoalDeferred(condition)
+		err = st.sess.RegisterGoalWithMaxTurns(condition, true, maxTurns)
 	} else {
 		if existing != condition {
 			err = st.sess.UpdateGoal(condition)
 		}
 		if err == nil {
 			st.sess.DeferActiveGoal()
+			st.sess.SetGoalMaxTurns(maxTurns)
 		}
+	}
+	if s.deferArmRace != nil {
+		s.deferArmRace()
 	}
 	s.mu.Lock()
 	st.running = false
@@ -3040,6 +3044,7 @@ func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionSt
 	st.lastUsed = time.Now()
 	s.mu.Unlock()
 	s.wg.Done()
+	s.maybeDispatchQueued(id, st)
 	if err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -3083,7 +3088,7 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 	}
 
 	if deferred {
-		if err := sess.RegisterGoalDeferred(condition); err != nil {
+		if err := sess.RegisterGoalWithMaxTurns(condition, true, maxTurns); err != nil {
 			writeErr(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -3102,7 +3107,7 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 	// (which will already have spawned it) — either way the goal starts
 	// exactly once, never zero times, never twice. See maybeAutoArmGoal's
 	// doc comment for the other half of this argument.
-	if err := sess.RegisterGoal(condition); err != nil {
+	if err := sess.RegisterGoalWithMaxTurns(condition, false, maxTurns); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
