@@ -40,6 +40,18 @@ If `Len` equals `logLen` plus the record count, the write landed, and the call
 succeeds. After `ErrAppendConflict`, another writer owns the log. The session
 stops persisting. The engine never retries an append.
 
+### Claude-code mirror log
+
+With `ClaudeCodeConfig.MirrorCLISession`, the backend keeps the CLI transcript
+of a session in the same store, in the log `<session id>.claude-code`. This id
+fails `ValidSessionID`, so session listings skip it. The first record is
+`{"path":"<relative path>"}`: the transcript file, relative to the scratch
+`CLAUDE_CONFIG_DIR`. Every later record is one transcript line. The backend
+appends to this log directly, not through the session journal. It tracks the
+log position itself: from `Load` at restore, or from `Len` when the log is new.
+An `ErrAppendConflict` fails the turn. See "The claude-code transcript mirror"
+in `models-and-providers.md`.
+
 `engine/storetest` is the conformance suite. Run `storetest.Run` against each
 store implementation.
 

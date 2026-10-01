@@ -65,6 +65,11 @@
 // compact_metadata payload, mid-turn, ahead of the turn's own text and
 // result — proves the driver forwards the CLI's own internal-compaction
 // marker as harness's EventClaudeCodeCompacted instead of dropping it),
+// "mirror" (replays the transcript_mirror frames of the fixture named by
+// FAKE_CLAUDE_MIRROR_FIXTURE under its own CLAUDE_CONFIG_DIR, appends their
+// entries to the file each frame names, and records the config dir and the
+// files it found there at start into FAKE_CLAUDE_MIRROR_SEEN; with
+// FAKE_CLAUDE_MIRROR_CRASH_AFTER=n it exits nonzero after n frames),
 // and "per_call_usage" (several API calls in one turn, each with its own
 // usage, and a result carrying their sum plus a modelUsage window).
 package main
@@ -75,6 +80,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -332,6 +338,10 @@ func main() {
 			emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
 			return
 		}
+	}
+	if mode == "mirror" {
+		replayMirror(emit, sessionID)
+		return
 	}
 
 	initEvent := map[string]any{
@@ -1332,4 +1342,60 @@ func main() {
 		"ttft_ms":        50,
 		"duration_ms":    400,
 	})
+}
+
+func replayMirror(emit func(any), sessionID string) {
+	cfgDir := os.Getenv("CLAUDE_CONFIG_DIR")
+	files := map[string]string{}
+	_ = filepath.WalkDir(cfgDir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			b, _ := os.ReadFile(p)
+			rel, _ := filepath.Rel(cfgDir, p)
+			files[rel] = string(b)
+		}
+		return nil
+	})
+	if seenPath := os.Getenv("FAKE_CLAUDE_MIRROR_SEEN"); seenPath != "" {
+		if f, err := os.OpenFile(seenPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			_ = json.NewEncoder(f).Encode(map[string]any{"config_dir": cfgDir, "files": files})
+			f.Close()
+		}
+	}
+	raw, err := os.ReadFile(os.Getenv("FAKE_CLAUDE_MIRROR_FIXTURE"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	crashAfter := -1
+	if v := os.Getenv("FAKE_CLAUDE_MIRROR_CRASH_AFTER"); v != "" {
+		crashAfter, _ = strconv.Atoi(v)
+	}
+	emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
+	frames := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var frame struct {
+			Type     string            `json:"type"`
+			FilePath string            `json:"filePath"`
+			Entries  []json.RawMessage `json:"entries"`
+		}
+		if json.Unmarshal([]byte(line), &frame) != nil || frame.Type != "transcript_mirror" {
+			continue
+		}
+		if frames == crashAfter {
+			os.Exit(1)
+		}
+		frames++
+		path := cfgDir + strings.TrimPrefix(frame.FilePath, "/home/u/cfg")
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			for _, e := range frame.Entries {
+				f.Write(append([]byte(e), '\n'))
+			}
+			f.Close()
+		}
+		emit(map[string]any{"type": "transcript_mirror", "filePath": path, "entries": frame.Entries})
+	}
+	emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "ok"}}}})
+	emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "ok", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}})
 }

@@ -1254,6 +1254,10 @@ type Session struct {
 	// store.go) and restored by LoadSession so --resume survives a process
 	// restart.
 	claudeCodeCLISessionID string
+	// claudeCodeMirror is the running delegated turn's transcript mirror, nil
+	// outside a turn or without ClaudeCodeConfig.MirrorCLISession. Only the
+	// turn goroutine touches it.
+	claudeCodeMirror *cliMirror
 
 	// claudeCodeHistoryWatermark is len(s.history) as of the end of the
 	// most recent delegated turn that actually started (see
@@ -1875,7 +1879,10 @@ func newSession(cfg Config) *Session {
 	for _, t := range cfg.Tools {
 		s.tools[t.Def.Name] = t
 	}
-	if cfg.AllowedTools != nil {
+	if cfg.ClaudeCode.MirrorCLISession && s.store == nil {
+		s.configErr = errors.New("engine: ClaudeCode.MirrorCLISession needs Config.SessionStore or Config.SessionDir")
+	}
+	if cfg.AllowedTools != nil && s.configErr == nil {
 		if mcpConfiguredCount(cfg.MCP) > 0 {
 			s.configErr = errors.New("engine: AllowedTools cannot be combined with MCP servers: MCP tools register after session start")
 		} else {

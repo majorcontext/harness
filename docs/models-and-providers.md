@@ -726,3 +726,31 @@ starts. The synthetic `harness-tools` MCP server always serves
 other tools follow the allowlist. When `DisableBuiltinTools` is on or
 `AllowedTools` is set, the child always runs with `--strict-mcp-config`, so it
 loads no ambient MCP server.
+
+## The claude-code transcript mirror
+
+`--resume` needs the CLI transcript on disk. The embedder can run a session
+on any replica, so the engine keeps the transcript in the session store.
+`ClaudeCodeConfig.MirrorCLISession` turns this on. It needs
+`Config.SessionStore` or `Config.SessionDir`. Without a store,
+`Session.ConfigErr` reports the error and the session refuses every turn.
+
+With the option on, each turn:
+
+1. Creates a fresh scratch directory under `ClaudeCodeConfig.ConfigRoot`
+   (`os.TempDir()` when empty) and sets `CLAUDE_CONFIG_DIR` to it. This entry
+   comes after `ClaudeCodeConfig.Env`, so it wins. The directory holds no
+   credentials. The embedder supplies them through `Env`.
+2. Restores the stored transcript into the scratch directory, if the log
+   exists, and passes `--resume`.
+3. Passes `--session-mirror`. The CLI then sends `transcript_mirror` frames on
+   stdout. The engine appends each entry of each frame as one record to the
+   mirror log.
+4. Removes the scratch directory when the turn ends.
+
+Every turn uses the same working directory (`Config.WorkDir`), so the stored
+relative path stays valid on every host.
+
+A failed restore or a failed append fails the turn with an error that names the
+session. The engine kills the child on a failed append. It does not retry. The
+harness journal is not changed by the mirror.

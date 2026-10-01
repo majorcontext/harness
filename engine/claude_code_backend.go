@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -93,6 +94,13 @@ type ClaudeCodeConfig struct {
 	DisableBuiltinTools bool
 	// Env entries ("K=V") are appended to the child's inherited environment.
 	Env []string
+	// MirrorCLISession adds --session-mirror. The backend stores the CLI
+	// transcript in Config.SessionStore under cliLogID(session id) and
+	// restores it into a per-turn scratch CLAUDE_CONFIG_DIR before --resume.
+	// It needs a session store: Session.ConfigErr reports its absence.
+	MirrorCLISession bool
+	// ConfigRoot is the parent of the scratch dir. Empty uses os.TempDir().
+	ConfigRoot string
 }
 
 // ErrNoPendingQuestion is AnswerQuestion's error when callID does not name
@@ -502,6 +510,25 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 	}
 
+	var restoredID string
+	var mirror *cliMirror
+	if cfg.MirrorCLISession {
+		scratch, err := os.MkdirTemp(cfg.ConfigRoot, "harness-claude-config-")
+		if err != nil {
+			return nil, fmt.Errorf("engine: claude-code: creating scratch config dir: %w", err)
+		}
+		defer os.RemoveAll(scratch)
+		if real, err := filepath.EvalSymlinks(scratch); err == nil {
+			scratch = real
+		}
+		mirror = newCLIMirror(s.store, s.ID, scratch)
+		if restoredID, _, err = mirror.restore(); err != nil {
+			return nil, err
+		}
+		s.claudeCodeMirror = mirror
+		defer func() { s.claudeCodeMirror = nil }()
+	}
+
 	// The --mcp-config file (if s.cfg.MCP has any servers to describe) is
 	// written before the args slice below so its path can be included, and
 	// removed unconditionally on every return path via cleanupMCPConfig —
@@ -603,13 +630,20 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 		args = append(args, "--permission-prompt-tool", "stdio", "--settings", claudeCodeQuestionSettings(passCallID))
 	}
+	if cfg.MirrorCLISession {
+		args = append(args, "--session-mirror")
+	}
 	if cfg.DisableBuiltinTools {
 		args = append(args, "--tools", "")
 	}
 	if model.Model != "" {
 		args = append(args, "--model", model.Model)
 	}
-	if resumeID := s.claudeCodeSessionID(); resumeID != "" {
+	resumeID := s.claudeCodeSessionID()
+	if resumeID == "" {
+		resumeID = restoredID
+	}
+	if resumeID != "" {
 		args = append(args, "--resume", resumeID)
 	}
 	// See claudeCodeHistoryDirectiveArgs's own doc comment: nil (a no-op
@@ -648,6 +682,12 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 	// A nil cmd.Env makes the child inherit the Harness environment.
 	if len(cfg.Env) > 0 {
 		cmd.Env = append(os.Environ(), cfg.Env...)
+	}
+	if mirror != nil {
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = append(cmd.Env, mirror.env())
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -895,7 +935,7 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		}
 	}
 	finalMsg, started, turnErr, zeroMessageOK, dismissed := s.consumeClaudeCodeStream(stdout, model, res, respond)
-	if errors.Is(turnErr, ErrClaudeCodeBuiltinTools) && cmd.Process != nil {
+	if (errors.Is(turnErr, ErrClaudeCodeBuiltinTools) || errors.Is(turnErr, errCLIMirror)) && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
 	// No more input is coming for this child (mirrors the single-string
@@ -1783,6 +1823,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 				decision = res.decision
 			}
 			respond(claudeCodeControlResponse(env.RequestID, decision))
+		case "transcript_mirror":
+			if m := s.claudeCodeMirror; m != nil {
+				if err := m.append(claudeCodeMirrorFrame{FilePath: env.FilePath, Entries: env.Entries}); err != nil {
+					return nil, started, err, false, false
+				}
+			}
 		case "rate_limit_event":
 			// The CLI's own subscription rate-limit/quota signal — see
 			// mapClaudeCodeRateLimit's own doc comment for the wire shape
@@ -1830,14 +1876,16 @@ func reasoningOnlyParts(parts message.Parts) bool {
 // field here is optional so a line missing one just zero-values it) —
 // Unknown fields and missing optional fields are tolerated.
 type claudeCodeEnvelope struct {
-	Type      string           `json:"type"`
-	Subtype   string           `json:"subtype,omitempty"`
-	SessionID string           `json:"session_id,omitempty"`
-	Message   json.RawMessage  `json:"message,omitempty"`
-	IsError   bool             `json:"is_error,omitempty"`
-	Result    string           `json:"result,omitempty"`
-	NumTurns  *int             `json:"num_turns,omitempty"`
-	Usage     *claudeCodeUsage `json:"usage,omitempty"`
+	Type      string            `json:"type"`
+	Subtype   string            `json:"subtype,omitempty"`
+	SessionID string            `json:"session_id,omitempty"`
+	Message   json.RawMessage   `json:"message,omitempty"`
+	IsError   bool              `json:"is_error,omitempty"`
+	Result    string            `json:"result,omitempty"`
+	FilePath  string            `json:"filePath,omitempty"`
+	Entries   []json.RawMessage `json:"entries,omitempty"`
+	NumTurns  *int              `json:"num_turns,omitempty"`
+	Usage     *claudeCodeUsage  `json:"usage,omitempty"`
 	// TotalCostUSD is Claude Code's own dollar-cost accounting for the
 	// whole delegated turn — folded into the session's cumulative
 	// message.SubscriptionUsage.SessionCostUSD by applyClaudeCodeUsage
