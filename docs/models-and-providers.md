@@ -721,6 +721,8 @@ environment that the child inherits.
 
 A delegated session also follows `Config.AllowedTools` and `Session.ConfigErr`.
 A session with a configuration error refuses a delegated turn before the child
-starts. The synthetic `harness-tools` MCP server offers only the tools that the
-allowlist permits. The engine omits the server when no tool is allowed.
-`get_conversation_history` is allowed only when `AllowedTools` is nil.
+starts. The synthetic `harness-tools` MCP server always serves
+`get_conversation_history`, which reads only the session's own journal. Its
+other tools follow the allowlist. When `DisableBuiltinTools` is on or
+`AllowedTools` is set, the child always runs with `--strict-mcp-config`, so it
+loads no ambient MCP server.

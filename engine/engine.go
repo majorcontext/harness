@@ -1916,9 +1916,6 @@ func (s *Session) toolAllowed(name string) bool {
 	return s.cfg.AllowedTools == nil || slices.Contains(s.cfg.AllowedTools, name)
 }
 
-// ToolAllowed reports whether Config.AllowedTools permits name.
-func (s *Session) ToolAllowed(name string) bool { return s.toolAllowed(name) }
-
 // reapplyAllowedTools removes every tool the allowlist excludes. Adoption
 // and resume re-add tools after newSession; they call it afterward.
 func (s *Session) reapplyAllowedTools() {

@@ -951,20 +951,14 @@ func TestHandleSessionMCPTaskToolSpawnIsNonBlockingAndStatusPullsResult(t *testi
 	})
 }
 
-func TestSessionMCPRegistryOmitsHistoryUnderAllowlist(t *testing.T) {
-	list := func(allowed []string) string {
-		sess := engine.NewSession(engine.Config{SessionDir: t.TempDir(), AllowedTools: allowed})
-		reg := newSessionMCPRegistry(sess, "test")
-		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/list"}`))
-		req.Header.Set("Content-Type", "application/json")
-		rec := httptest.NewRecorder()
-		reg.ServeHTTP(rec, req)
-		return rec.Body.String()
-	}
-	if got := list(nil); !strings.Contains(got, historyToolName) {
-		t.Fatalf("nil allowlist tools/list lacks %s: %s", historyToolName, got)
-	}
-	if got := list([]string{}); strings.Contains(got, historyToolName) {
-		t.Errorf("empty allowlist tools/list advertises %s: %s", historyToolName, got)
+func TestSessionMCPRegistryServesHistoryUnderAllowlist(t *testing.T) {
+	sess := engine.NewSession(engine.Config{SessionDir: t.TempDir(), AllowedTools: []string{}})
+	reg := newSessionMCPRegistry(sess, "test")
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"jsonrpc":"2.0","id":"1","method":"tools/list"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	reg.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), historyToolName) {
+		t.Errorf("empty allowlist tools/list lacks %s: %s", historyToolName, rec.Body)
 	}
 }

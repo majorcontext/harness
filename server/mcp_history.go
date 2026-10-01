@@ -214,14 +214,12 @@ func newSessionMCPRegistry(sess *engine.Session, version string) *mcpserver.Regi
 	// uses to reach this endpoint at all.
 	reg := mcpserver.NewRegistry("harness-tools", version)
 	reg.SetInstructions("Call get_conversation_history before responding if you have not already read this session's prior conversation history.")
-	if sess.ToolAllowed(historyToolName) {
-		reg.RegisterTool(mcp.Tool{
-			Name:        historyToolName,
-			Description: historyToolDescription,
-			InputSchema: historyToolInputSchema,
-			Annotations: historyToolAnnotations,
-		}, historyToolHandler(sess))
-	}
+	reg.RegisterTool(mcp.Tool{
+		Name:        historyToolName,
+		Description: historyToolDescription,
+		InputSchema: historyToolInputSchema,
+		Annotations: historyToolAnnotations,
+	}, historyToolHandler(sess))
 
 	// def for process/task below comes from the engine's OWN tool
 	// registration via ToolDef, never a second, hand-duplicated copy of

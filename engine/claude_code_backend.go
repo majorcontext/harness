@@ -636,6 +636,8 @@ func (s *Session) runClaudeCodeChild(ctx context.Context, text string, blobs []*
 		// delegated turn can reach, exactly like the native loop's own
 		// toolDefs assembly.
 		args = append(args, "--mcp-config", mcpConfigPath, "--strict-mcp-config")
+	} else if cfg.DisableBuiltinTools || s.cfg.AllowedTools != nil {
+		args = append(args, "--strict-mcp-config")
 	}
 	args = append(args, cfg.ExtraArgs...)
 
@@ -2477,15 +2479,6 @@ func claudeCodeMCPServerEnv(env []string) map[string]string {
 	return out
 }
 
-func (s *Session) claudeCodeHarnessToolsAllowed() bool {
-	for _, name := range []string{"get_conversation_history", ProcessToolName, TaskToolName, ModelToolName} {
-		if s.toolAllowed(name) {
-			return true
-		}
-	}
-	return false
-}
-
 // claudeCodeMCPConfigFile writes s's configured MCP servers (if any) to a
 // fresh temp file in the CLI's own --mcp-config JSON shape, returning its
 // path plus a cleanup func that removes it (always non-nil, a no-op when
@@ -2505,9 +2498,6 @@ func (s *Session) claudeCodeMCPConfigFile() (path string, cleanup func(), err er
 	noop := func() {}
 	servers := claudeCodeMCPServers(s.cfg.MCP)
 	historyURL := s.claudeCodeHistoryServerURL()
-	if !s.claudeCodeHarnessToolsAllowed() {
-		historyURL = ""
-	}
 	if len(servers) == 0 && historyURL == "" {
 		return "", noop, nil
 	}

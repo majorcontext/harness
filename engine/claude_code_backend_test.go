@@ -3551,23 +3551,63 @@ func claudeCodeMCPServerNames(t *testing.T, s *Session) []string {
 	return names
 }
 
-func TestClaudeCodeMCPConfigHonorsAllowedTools(t *testing.T) {
-	newSess := func(allowed []string) *Session {
-		return NewSession(Config{
-			SessionDir:   t.TempDir(),
-			Model:        message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
-			ModelTool:    true,
-			AllowedTools: allowed,
-			ClaudeCode:   ClaudeCodeConfig{HTTPBaseURL: "http://127.0.0.1:1"},
+func TestClaudeCodeAllowlistedTurnServesOnlyHistoryAndStaysStrict(t *testing.T) {
+	for name, allowed := range map[string][]string{
+		"empty":       {},
+		"native only": {"read_file"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, logPath := claudeCodeTestSession(t, "normal")
+			s.cfg.AllowedTools = allowed
+			s.cfg.ClaudeCode.HTTPBaseURL = "http://127.0.0.1:1"
+			if err := s.applyAllowedTools(); err != nil {
+				t.Fatal(err)
+			}
+			if got := claudeCodeMCPServerNames(t, s); !slices.Equal(got, []string{claudeCodeToolsServerName}) {
+				t.Errorf("servers = %v, want [%s]", got, claudeCodeToolsServerName)
+			}
+			if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+			argv := readInvocations(t, logPath)[0]
+			if !argvContains(argv, "--strict-mcp-config") {
+				t.Errorf("argv lacks --strict-mcp-config: %v", argv)
+			}
 		})
 	}
-	if got := claudeCodeMCPServerNames(t, newSess(nil)); !slices.Equal(got, []string{claudeCodeToolsServerName}) {
-		t.Errorf("nil allowlist servers = %v, want [%s]", got, claudeCodeToolsServerName)
+}
+
+func TestClaudeCodeStrictMCPWithoutConfigFile(t *testing.T) {
+	for name, mutate := range map[string]func(*Session){
+		"allowlist empty":   func(s *Session) { s.cfg.AllowedTools = []string{} },
+		"disable built-ins": func(s *Session) { s.cfg.ClaudeCode.DisableBuiltinTools = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, logPath := claudeCodeTestSession(t, "normal")
+			mutate(s)
+			t.Setenv("FAKE_CLAUDE_INIT_TOOLS", `[]`)
+			if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+			argv := readInvocations(t, logPath)[0]
+			if !argvContains(argv, "--strict-mcp-config") || argvContains(argv, "--mcp-config") {
+				t.Errorf("argv = %v, want --strict-mcp-config without --mcp-config", argv)
+			}
+		})
 	}
-	if got := claudeCodeMCPServerNames(t, newSess([]string{})); len(got) != 0 {
-		t.Errorf("empty allowlist servers = %v, want none", got)
+}
+
+func TestClaudeCodeHistoryDirectiveUnderAllowlist(t *testing.T) {
+	s, logPath := claudeCodeTestSession(t, "normal")
+	s.cfg.AllowedTools = []string{}
+	s.cfg.ClaudeCode.HTTPBaseURL = "http://127.0.0.1:1"
+	s.append(message.Message{ID: "m1", Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "earlier"}}})
+	s.append(message.Message{ID: "m2", Role: message.RoleAssistant, Parts: message.Parts{&message.Text{Text: "reply"}}})
+	if _, err := s.Prompt(context.Background(), "now"); err != nil {
+		t.Fatalf("Prompt: %v", err)
 	}
-	if got := claudeCodeMCPServerNames(t, newSess([]string{ModelToolName})); !slices.Equal(got, []string{claudeCodeToolsServerName}) {
-		t.Errorf("allowlist [model] servers = %v, want [%s]", got, claudeCodeToolsServerName)
+	argv := readInvocations(t, logPath)[0]
+	if !argvContains(argv, claudeCodeHistoryDirective) {
+		t.Errorf("argv lacks the history directive: %v", argv)
 	}
 }
