@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 )
@@ -160,5 +161,67 @@ func TestGoalDeferOnActiveIdleGoalSkipsConditionTurn(t *testing.T) {
 	sse.collectUntilIdle(t)
 	if sent := prov.sent(); len(sent) != 1 || sent[0] == cond {
 		t.Fatalf("turns sent = %q, want only the prompt", sent)
+	}
+}
+
+// A deferred goal with max_turns=2 that is never MET must stop after two
+// worker turns: the auto-armed loop starts with the stored cap.
+func TestGoalDeferHonorsMaxTurns(t *testing.T) {
+	notMet := make([][]provider.Event, 20)
+	worker := make([][]provider.Event, 20)
+	for i := range notMet {
+		notMet[i] = asstTurn("NOT MET: keep going")
+		worker[i] = asstTurn("worked")
+	}
+	prov := &workerLog{goalProv: &goalProv{name: "test", worker: worker, eval: notMet}}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "never met", "defer": true, "max_turns": 2})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilDrained(t, h, id)
+
+	if sent := prov.sent(); len(sent) != 3 {
+		t.Fatalf("worker turns = %d, want the prompt plus 2 goal turns", len(sent))
+	}
+}
+
+// A prompt queued while armDeferredGoal holds the run slot must dispatch when
+// the slot is released, without another poke.
+func TestGoalDeferDispatchesPromptQueuedDuringClaim(t *testing.T) {
+	prov := &workerLog{goalProv: &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("queued done")},
+		eval:   [][]provider.Event{asstTurn("MET: done")},
+	}}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	sess := h.srv.residentSession(id)
+	h.srv.deferArmRace = func() {
+		if _, _, err := sess.EnqueuePrompt("queued during claim", "", engine.PromptProvenance{}); err != nil {
+			t.Error(err)
+		}
+	}
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "c", "defer": true})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	if n := len(sess.QueuedPrompts()); n != 0 {
+		t.Fatalf("queued prompts after slot release = %d, want 0 (dispatched)", n)
+	}
+	sse.collectUntilDrained(t, h, id)
+	if sent := prov.sent(); len(sent) != 1 || sent[0] != "queued during claim" {
+		t.Fatalf("worker turns = %q, want the queued prompt", sent)
 	}
 }

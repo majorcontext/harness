@@ -122,6 +122,7 @@ var snapshotExcludedSessionFields = map[string]string{
 	"skillsErr":                 "lazy discovery cache error, same pattern as instrLoaded",
 	"goalGen":                   "explicitly documented \"Deliberately runtime-only: never persisted ... never restored on LoadSession\"",
 	"goalDeferred":              "runtime-only: one-shot loop-entry flag, never persisted",
+	"goalMaxTurns":              "runtime-only: auto-arm turn cap for the active goal, never persisted",
 	"goalParked":                "explicitly documented \"Deliberately runtime-only: never persisted, never folded by LoadSession\"",
 	"goalParkedReason":          "same explicit exclusion as goalParked, same doc comment",
 	"goalParkedAttempts":        "same explicit exclusion as goalParked, same doc comment",

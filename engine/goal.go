@@ -1646,6 +1646,7 @@ func (s *Session) clearGoal(reason string) bool {
 	s.goalActive = false
 	s.goalCondition = ""
 	s.goalDeferred = false
+	s.goalMaxTurns = 0
 	// A clear (operator DELETE, or PursueGoal's context-overflow branch)
 	// always supersedes any parked signal still standing from an earlier
 	// exit-park episode — see the goalParked field's doc comment: there is
@@ -1676,10 +1677,10 @@ func (s *Session) clearGoal(reason string) bool {
 // cleared or achieved) never mistakes this freshly-registered one for a
 // continuation of it — see goalSnapshot.
 func (s *Session) RegisterGoal(condition string) error {
-	return s.registerGoal(condition, false)
+	return s.registerGoal(condition, false, 0)
 }
 
-func (s *Session) registerGoal(condition string, deferred bool) error {
+func (s *Session) registerGoal(condition string, deferred bool, maxTurns int) error {
 	trimmed := strings.TrimSpace(condition)
 	if trimmed == "" {
 		return errors.New("engine: RegisterGoal requires a non-empty condition")
@@ -1693,6 +1694,7 @@ func (s *Session) registerGoal(condition string, deferred bool) error {
 	s.goalActive = true
 	s.goalCondition = trimmed
 	s.goalDeferred = deferred
+	s.goalMaxTurns = maxTurns
 	s.goalGen++
 	s.persistGoalLocked(recGoalSet, goalRecord{Condition: trimmed})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
@@ -1707,7 +1709,35 @@ func (s *Session) registerGoal(condition string, deferred bool) error {
 // first and sends guidance only on NOT MET. The deferral is runtime-only and
 // covers that one loop entry.
 func (s *Session) RegisterGoalDeferred(condition string) error {
-	return s.registerGoal(condition, true)
+	return s.registerGoal(condition, true, 0)
+}
+
+// RegisterGoalWithMaxTurns is RegisterGoal, or RegisterGoalDeferred when
+// deferred is true, that also records the turn cap for the loop a later
+// auto-arm starts. Zero means unlimited.
+func (s *Session) RegisterGoalWithMaxTurns(condition string, deferred bool, maxTurns int) error {
+	return s.registerGoal(condition, deferred, maxTurns)
+}
+
+// SetGoalMaxTurns replaces the turn cap of an already-active goal and reports
+// whether a goal was active.
+func (s *Session) SetGoalMaxTurns(maxTurns int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.goalActive {
+		s.goalMaxTurns = maxTurns
+	}
+	return s.goalActive
+}
+
+// GoalMaxTurns returns the turn cap recorded for the active goal, or 0.
+func (s *Session) GoalMaxTurns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.goalActive {
+		return 0
+	}
+	return s.goalMaxTurns
 }
 
 // DeferActiveGoal arms the one-shot deferral on an already-active goal and
