@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/majorcontext/harness/engine"
@@ -104,6 +105,7 @@ func roundTrip(t *testing.T, mem *engine.MemStore) (engine.Config, string, *repl
 	if err := s.PersistErr(); err != nil {
 		t.Fatalf("PersistErr = %v", err)
 	}
+	s.WaitSnapshots()
 	return cfg, s.ID, prov
 }
 
@@ -128,6 +130,7 @@ func TestSessionRoundTripOnMemStore(t *testing.T) {
 }
 
 func TestMemStoreSessionHasNoDiskSidecars(t *testing.T) {
+	t.Chdir(t.TempDir())
 	mem := engine.NewMemStore()
 	_, id, prov := roundTrip(t, mem)
 
@@ -141,10 +144,8 @@ func TestMemStoreSessionHasNoDiskSidecars(t *testing.T) {
 	if _, err := engine.LoadSession(memConfig(mem, prov), id); err != nil {
 		t.Fatalf("LoadSession = %v", err)
 	}
-	for _, name := range []string{"snapshot", "index"} {
-		if b, err := mem.GetBlob(id, name); err == nil {
-			t.Errorf("blob %q = %q, want absent", name, b)
-		}
+	if entries, err := os.ReadDir("."); err != nil || len(entries) != 0 {
+		t.Errorf("working directory = %v (err %v), want empty", entries, err)
 	}
 }
 
