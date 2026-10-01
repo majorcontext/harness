@@ -313,6 +313,10 @@ const (
 	// authoritative message still arrives on the turn's final EventMessage.
 	EventTurnRestart = "turn.restart"
 
+	// EventTurnResumed fires when Session.ResumeTurn has durably counted a
+	// resume, before the model call. Event.Text is the decimal count.
+	EventTurnResumed = "turn.resumed"
+
 	// EventModelChanged fires once per SetModel call that actually changes
 	// the session's model (never on a no-op set to the current model). It
 	// carries the new model in Event.Model and is the single observability
@@ -822,6 +826,16 @@ type Config struct {
 	// fails every turn: see Session.ConfigErr.
 	AllowedTools []string
 
+	// MaxTurnResumes bounds how many times a root session resumes one turn
+	// that a process crash left unsettled. Zero disables resume: adoption
+	// closes such a turn as lost to restart. A resumed turn that reaches
+	// the bound closes the same way. See Session.ResumeTurn.
+	MaxTurnResumes int
+
+	// ResumeRerunTools runs, on resume, the tool calls that had no result at
+	// the crash. Otherwise they get synthetic "interrupted" results.
+	ResumeRerunTools bool
+
 	// BashOutputCap bounds the bytes of combined stdout+stderr the bash tool
 	// keeps from one command, truncating (head + tail, marker in between)
 	// before the output ever reaches the message log. Zero/negative means
@@ -1192,6 +1206,9 @@ type Session struct {
 	// or every ordinary root completion would misread as a crash on its
 	// very next reload.
 	turnUnsettled bool
+
+	// turnResumes is the durable resume count of the unsettled turn.
+	turnResumes int
 
 	// committedOutcome is the exact taskNotification finalizeTurn (or
 	// recoverInterruptedTurnLocked itself) computed for s's most recent
@@ -2268,6 +2285,7 @@ func (s *Session) hasUnfinalizedTurn() bool {
 func (s *Session) markTurnSettled() {
 	s.mu.Lock()
 	s.turnUnsettled = false
+	s.turnResumes = 0
 	// committedOutcome deliberately NOT cleared here — see its own doc
 	// comment for why it now does double duty: recovery's own
 	// crash-replay payload WHILE the turn it describes is still

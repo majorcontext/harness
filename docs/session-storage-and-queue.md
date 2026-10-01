@@ -517,6 +517,44 @@ death exactly like a torn fsync can, and the same last-writer-wins fold
 repairs both. See docs/deploy-modal.md for the recommended setting on Modal
 Volume v2 deployments.
 
+## Turn resume
+
+A crash can leave a root session with an unsettled turn: the journal has the
+turn's messages and no `child_turn.settled` record. By default, adoption
+closes such a turn as lost to restart. `Config.MaxTurnResumes` (zero means
+off) lets a root continue the turn instead.
+
+A turn is resumable when all of these are true:
+
+- The session is a root.
+- The turn is unsettled.
+- The resume count is below `Config.MaxTurnResumes`.
+- No outcome was committed, and the journal does not end in a final answer.
+
+Adoption leaves a resumable turn open. The embedder then calls
+`SessionManager.ResumeTurn`, which reserves the session as `Send` does, runs
+`Session.ResumeTurn`, and settles the turn.
+
+`Session.ResumeTurn` first writes and syncs a `turn.resumed` record with the
+new count, and emits `EventTurnResumed`. Only then does it call the model.
+The count is therefore durable even when the resumed call crashes the process.
+At the cap, the next adoption closes the turn with the lost-to-restart marker.
+The count resets when the turn settles.
+
+The partial response of the crashed model call is not in the journal. The call
+is issued again from the last journaled message:
+
+| Journal ends with | Resume does |
+|---|---|
+| A user message or a tool result | Runs the agentic loop. |
+| An assistant message with unresolved tool calls | Appends synthetic "interrupted" results, then runs the loop. With `Config.ResumeRerunTools`, it runs the tools and appends the real results. |
+| Any message, on a claude-code session | Runs the delegated turn. If the last message is not a user message, it first sends the fixed prompt "Your previous turn was interrupted by a restart. Continue from where you left off." |
+
+A stopped turn never resumes: `SessionManager.AbortTurn` settles the turn. A
+root turn that ends because the caller's context was canceled (shutdown
+handoff) stays unsettled when `MaxTurnResumes` is above zero, so the next
+holder of the session resumes it.
+
 ## Command records
 
 A resolved slash command (`docs/design/slash-commands.md`'s "Serve-mode

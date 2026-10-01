@@ -157,6 +157,7 @@ const (
 	// outcome is settled" signal, independent of whatever trailing
 	// message shape resulted.
 	recChildTurnSettled = "child_turn.settled"
+	recTurnResumed      = "turn.resumed"
 	// recTaskOutcomeCommitted carries the EXACT taskNotification payload
 	// (reusing taskNotifyRecord's shape, via record.TaskNotify — the same
 	// field recTaskNotifyQueued/recTaskNotifyDelivered use) that
@@ -382,6 +383,8 @@ type record struct {
 	ClaudeCodeCompactPreTokens  int       `json:"claude_code_compact_pre_tokens,omitempty"`
 	ClaudeCodeCompactPostTokens int       `json:"claude_code_compact_post_tokens,omitempty"`
 	ClaudeCodeCompactStartedAt  time.Time `json:"claude_code_compact_started_at,omitzero"`
+
+	Count int `json:"count,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -1548,8 +1551,11 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			if !isRecoverySyntheticCloser(msg) {
 				s.committedOutcome = nil
 			}
+		case recTurnResumed:
+			s.turnResumes = rec.Count
 		case recChildTurnSettled:
 			s.turnUnsettled = false
+			s.turnResumes = 0
 			// committedOutcome deliberately NOT cleared here — see its own
 			// doc comment (engine.go): once settled, it becomes the last
 			// known terminal outcome a LATER adoption of this node

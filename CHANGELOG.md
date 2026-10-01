@@ -22,5 +22,6 @@ First tagged release.
 - **`engine.SessionStore`** — a pluggable session journal store. The disk store stays the default.
 - **`engine.MemStore`** — an in-memory `SessionStore`. A session on a non-disk store has no index sidecar, no snapshots, and no tool-result retention.
 - **`engine.Config.AllowedTools`** — limits a top-level session to the named tools. Nil keeps every tool, an empty slice keeps none, and an unknown name fails the session at its first turn.
+- **`engine.Config.MaxTurnResumes`** — resumes a root turn that a crash interrupted, up to the given count, instead of closing it as lost to restart. A durable `turn.resumed` record counts each resume. `Config.ResumeRerunTools` re-runs unresolved tool calls.
 - **Documentation** — package docs on pkg.go.dev, `engine` examples, and runnable programs in [`examples/`](examples).
 - **Claude Code structured questions** — `harness serve -ask-user-question` lets a Claude Code session ask the user an `AskUserQuestion` question. The turn ends with outcome `awaiting_input` and a `question_call_id`, and `POST /session/{id}/question/{call_id}/answer` resumes it. Off by default.

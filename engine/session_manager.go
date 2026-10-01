@@ -1835,6 +1835,11 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 //	  4  | + recChildTurnSettled (markTurnSettled)              | false               | nil (cleared)     | never fires again — the guard at the top of
 //	     |                                                       |                     |                   | this method returns immediately.
 //
+// A root at step 0 with resumes left under Config.MaxTurnResumes is the
+// one exception: Session.ResumableTurn is true, this method returns at
+// its first guard, and SessionManager.ResumeTurn continues the turn. A
+// root at the cap, and every child, takes the steps above unchanged.
+//
 // Step 3 only applies to a FAILED outcome (settled successfully-reported
 // turns never append a closing message — see the "Skipped entirely when
 // notify.Status == StatusDone" note below). Every step's own durable
@@ -1845,7 +1850,7 @@ func (m *SessionManager) recoverCrashedChildrenLocked(n *sessionNode) {
 // what makes "step N landed before step N+1 could" a meaningful,
 // checkable property in the first place.
 func (m *SessionManager) recoverInterruptedTurnLocked(n *sessionNode, s *Session) {
-	if !s.hasUnfinalizedTurn() {
+	if !s.hasUnfinalizedTurn() || s.ResumableTurn() {
 		return
 	}
 	n.finalized = true
@@ -3310,6 +3315,36 @@ func (m *SessionManager) Send(ctx context.Context, id, text string) (*message.Me
 	return msg, err
 }
 
+// ResumeTurn continues the interrupted turn of root id: it reserves the
+// session as Send does, runs Session.ResumeTurn, and finalizes the turn.
+// It returns ErrNotResumable, and changes nothing, when the session has no
+// resumable turn.
+func (m *SessionManager) ResumeTurn(ctx context.Context, id string) (*message.Message, error) {
+	m.mu.Lock()
+	n, ok := m.nodes[id]
+	if !ok {
+		m.unlockAndFlushPersist()
+		return nil, fmt.Errorf("%w: %s", ErrUnknownSession, id)
+	}
+	if !n.session.ResumableTurn() {
+		m.unlockAndFlushPersist()
+		return nil, ErrNotResumable
+	}
+	s, nodeCtx, _, err := m.reserveSendLocked(id)
+	m.unlockAndFlushPersist()
+	if err != nil {
+		return nil, err
+	}
+
+	runCtx, stop := mergeCancel(ctx, nodeCtx)
+	defer stop()
+	msg, err := s.ResumeTurn(runCtx)
+	if resume := m.finalizeTurn(id, msg, err); resume != nil {
+		go resume()
+	}
+	return msg, err
+}
+
 // SendOrQueue is Send extended with SendToDescendant's own busy-target
 // queuing (see that method's own doc comment for the full mechanism) —
 // reachable for ANY
@@ -4764,9 +4799,16 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// comment). This call no longer needs to distinguish the two at all,
 	// which is what makes it safe to drop the check here specifically,
 	// rather than switching it from one predicate to the other.
-	n.session.markTurnSettled()
-	settledSess := n.session
-	m.deferPersist(func() { settledSess.persistTurnSettled() })
+	// A root whose caller canceled the run (shutdown handoff) keeps the
+	// turn open for the next holder to resume. AbortTurn and Cancel set
+	// alreadyCanceled and still settle.
+	keepOpen := !alreadyCanceled && errors.Is(perr, context.Canceled) &&
+		n.session.cfg.MaxTurnResumes > 0 && !n.session.hasTaskParent()
+	if !keepOpen {
+		n.session.markTurnSettled()
+		settledSess := n.session
+		m.deferPersist(func() { settledSess.persistTurnSettled() })
+	}
 	m.unlockAndFlushPersist()
 
 	// Deliberately returned, never fired here (no "go resume()"): the

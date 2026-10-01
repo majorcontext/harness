@@ -184,6 +184,7 @@ type sessionSnapshot struct {
 	TaskNotifications []taskNotification `json:"task_notifications,omitempty"`
 
 	TurnUnsettled    bool              `json:"turn_unsettled,omitempty"`
+	TurnResumes      int               `json:"turn_resumes,omitempty"`
 	CommittedOutcome *taskNotification `json:"committed_outcome,omitempty"`
 
 	// ClaudeCodeCLISessionID, ClaudeCodeHistoryWatermark,
@@ -531,6 +532,7 @@ func (s *Session) captureSnapshotLocked() *sessionSnapshot {
 		ToolResultBytes:      s.toolResultBytes,
 		SpawnedChildIDs:      append([]string(nil), s.spawnedChildIDs...),
 		TurnUnsettled:        s.turnUnsettled,
+		TurnResumes:          s.turnResumes,
 
 		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
 		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
@@ -636,6 +638,7 @@ func (s *Session) restoreSnapshot(snap *sessionSnapshot) {
 	s.spawnedChildIDs = append([]string(nil), snap.SpawnedChildIDs...)
 	s.taskNotifications = append([]taskNotification(nil), snap.TaskNotifications...)
 	s.turnUnsettled = snap.TurnUnsettled
+	s.turnResumes = snap.TurnResumes
 	// Mirrors recClaudeCodeSessionID/recClaudeCodeHistoryWatermark/
 	// recClaudeCodeUsage's own unconditional folds (store.go) — an
 	// empty/zero snapshot value (an old snapshot predating these fields,

@@ -64,6 +64,7 @@ var snapshottedSessionFields = map[string]bool{
 	"spawnedChildIDs":            true,
 	"taskNotifications":          true,
 	"turnUnsettled":              true,
+	"turnResumes":                true,
 	"committedOutcome":           true,
 	"claudeCodeCLISessionID":     true,
 	"claudeCodeHistoryWatermark": true,

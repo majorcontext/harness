@@ -171,6 +171,8 @@ type JournalRecord struct {
 	ToolResultTool   string `json:"tool_result_tool,omitempty"`
 	ToolResultBytes  int    `json:"tool_result_bytes,omitempty"`
 
+	TurnResumes int `json:"turn_resumes,omitempty"`
+
 	// recChildTurnSettled carries no payload beyond Type/Seq -- a pure
 	// marker, exactly like its own doc comment (store.go) describes.
 }
@@ -293,6 +295,8 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.ToolResultTool = rec.ToolResult.Tool
 			out.ToolResultBytes = rec.ToolResult.Bytes
 		}
+	case recTurnResumed:
+		out.TurnResumes = rec.Count
 	case recChildTurnSettled:
 		// Pure marker, no payload -- see store.go's own doc comment.
 	}
