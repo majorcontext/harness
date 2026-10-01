@@ -808,6 +808,13 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 		sessionWorkDir = wt.path
 	}
 
+	s.mu.Lock()
+	fenced := s.journalErr != nil
+	s.mu.Unlock()
+	if fenced {
+		writeNotOwned(w)
+		return
+	}
 	phaseStart := time.Now()
 	sess, err := s.opts.NewSession(body.Model, sessionWorkDir, parentSession)
 	if err != nil {
@@ -843,6 +850,15 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		s.reportCreatePhase(sess.ID, "total", time.Since(handlerStart))
 	}()
+	done, err := s.admitSession(r.Context(), sess.ID)
+	if err != nil {
+		if wt != nil {
+			s.discardWorktree(wt)
+		}
+		writeNotOwned(w)
+		return
+	}
+	defer done()
 	if wt != nil {
 		// Record the owning session in the meta BEFORE the session log
 		// becomes durable, and fail creation if it cannot be recorded. The
@@ -3717,6 +3733,9 @@ func (s *Server) evictResidentLocked() (evicted []*engine.Session) {
 		if st.running || st.pins > 0 {
 			continue // busy or pinned sessions must stay resident
 		}
+		if e := s.owned[id]; e != nil && e.users > 0 {
+			continue // a request is using this session's ownership
+		}
 		cands = append(cands, cand{id, st.lastUsed})
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].last.Before(cands[j].last) })
@@ -3725,6 +3744,7 @@ func (s *Server) evictResidentLocked() (evicted []*engine.Session) {
 			evicted = append(evicted, st.sess)
 		}
 		delete(s.sessions, cands[i].id)
+		s.releaseOwnershipLocked(cands[i].id)
 		// Release the request snapshot (it holds a full copy of the
 		// assembled system segments). lastReqHash survives deliberately:
 		// it is small and keeps hash-on-change journaling correct if the
@@ -4309,6 +4329,10 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 		s.mu.Unlock()
 		return nil, nil, 0, http.StatusServiceUnavailable, ""
 	}
+	if _, lost := s.refused[id]; lost || s.journalErr != nil {
+		s.mu.Unlock()
+		return nil, nil, 0, http.StatusConflict, ""
+	}
 	st = s.sessions[id]
 	if st == nil {
 		// Not resident: load from disk with the lock released, then re-acquire.
@@ -4438,6 +4462,7 @@ func (s *Server) handleEnd(w http.ResponseWriter, r *http.Request) {
 	wt := st.worktree
 	delete(s.sessions, id)
 	delete(s.lastRequest, id)
+	s.releaseOwnershipLocked(id)
 	s.mu.Unlock()
 	// id itself is now confirmed idle (the running check above passed) —
 	// safe to cascade-cancel any live children without racing id's own
@@ -4886,4 +4911,11 @@ func decodeBody(r *http.Request, v any) error {
 		return err
 	}
 	return nil
+}
+
+// isManagedChild reports whether id is a Spawn-driven child of a session in
+// this process. A child runs under its parent's ownership.
+func (s *Server) isManagedChild(id string) bool {
+	_, info, ok := s.sessMgr.SessionAndInfo(id)
+	return ok && info.ParentID != ""
 }

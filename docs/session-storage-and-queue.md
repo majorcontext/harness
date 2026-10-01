@@ -64,9 +64,29 @@ therefore continues the `seq`, and `Last-Event-ID` replay works there.
 
 One server writes an events log. If `Append` returns `ErrAppendConflict`,
 another writer owns the log. The server reports the error through
-`Options.OnError` and stops writing the log. After another `Append` error, the
+`Options.OnError` and fences itself. A fenced server makes no more durable
+emits: `seq` and the replay ring stay as they are. It cancels running turns
+without a settle record, evicts its sessions, and answers every later session
+request with `409` and `session not owned by this server`. After another `Append` error, the
 server calls `Len` once. If `Len` equals the count plus one, the write landed.
 The server never retries.
+
+### Session ownership
+
+`server.Options.SessionOwner` lets an embedder decide which process serves a
+session. When it is nil, the server asks nobody.
+
+The server calls `Acquire(ctx, id)` once before it first loads or creates a
+session. A child session that a parent spawned runs under the parent. If
+`Acquire` returns an error, the server answers `409` with `session not owned
+by this server` and does not load the session. The server calls `Release` when
+it evicts the session and on `Close`.
+
+When `Ownership.Lost` closes, the server cancels the session run context. It
+does not call `AbortTurn`, so the turn gets no settle record and the next
+holder can resume it (see `Config.MaxTurnResumes`). The server then evicts the
+session, makes no more durable emits for it, and answers every later request
+for it with `409`.
 
 ### Claude-code mirror log
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -412,6 +413,7 @@ func TestColdChildHasDurableLineage(t *testing.T) {
 	}
 	mustUnmarshal(t, data, &grandchild)
 	waitForLineageStatus(t, h1, grandchild.ID, "done", 2*time.Second)
+	h1.simulateCrash()
 
 	// A SECOND, independent harness against the SAME dir: a fresh
 	// SessionManager that has never seen child.ID — the exact "cold"
@@ -518,6 +520,8 @@ func TestColdChildlessLineageChildrenIsUnknownNotZero(t *testing.T) {
 	// This child never spawns anything of its own (an "explore" leaf) —
 	// SpawnedChildIDs() is genuinely, unambiguously empty.
 
+	h1.simulateCrash()
+
 	// A SECOND, independent harness against the SAME dir: a fresh
 	// SessionManager that has never seen child.ID — the cold-fallback
 	// condition, exactly like TestColdChildHasDurableLineage.
@@ -585,6 +589,7 @@ func TestWarmOrphanChildLineageKeepsDurableParentID(t *testing.T) {
 	}
 	mustUnmarshal(t, data, &child)
 	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+	h1.simulateCrash()
 
 	// Fresh harness, same dir: an empty SessionManager, like a restarted
 	// process. Adopt ONLY the child, the way ReportTurnStart's
@@ -1730,6 +1735,7 @@ func TestGenericTurnRoutesRejectWarmOrphanChild(t *testing.T) {
 	}
 	mustUnmarshal(t, data, &child)
 	waitForLineageStatus(t, h1, child.ID, "done", 2*time.Second)
+	h1.simulateCrash()
 
 	h2 := multiProviderHarnessInDir(t, dir, message.ModelRef{Provider: "root", Model: "m1"}, nil,
 		&scriptedProvider{name: "root"}, childProv)
@@ -2571,4 +2577,16 @@ func TestSelfResumeDoesNotRaceRunSlotRelease(t *testing.T) {
 	if !strings.Contains(string(data), `"origin":"engine"`) {
 		t.Errorf("resume-trigger message missing origin:engine on the wire: %s", data)
 	}
+}
+
+// simulateCrash stops h's server from writing the shared events log, as a
+// dead process would. A test that starts a second server on the same store
+// calls it first, so the first server's late appends cannot conflict with the
+// second server's boot.
+func (h *harness) simulateCrash() {
+	h.t.Helper()
+	h.srv.mu.Lock()
+	defer h.srv.mu.Unlock()
+	h.srv.journalErr = errors.New("test: process gone")
+	h.srv.fenceLocked()
 }

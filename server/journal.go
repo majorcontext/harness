@@ -1581,12 +1581,19 @@ func (s *Server) emitDurable(ev Event) int64 {
 // slow Options.Logger sink can never block the mutex every handler and SSE
 // fanout depends on. Caller holds s.mu.
 func (s *Server) emitDurableLocked(ev *Event) {
-	s.seq++
-	ev.Seq = s.seq
+	if _, lost := s.refused[ev.SessionID]; lost || s.journalErr != nil {
+		return
+	}
+	ev.Seq = s.seq + 1
 	if ev.RecordedAt.IsZero() {
 		ev.RecordedAt = s.now().UTC()
 	}
 	s.writeJournalLocked(*ev)
+	if s.journalErr != nil {
+		s.fenceLocked()
+		return
+	}
+	s.seq = ev.Seq
 	s.journal = append(s.journal, *ev)
 	s.fanoutLocked(*ev)
 	s.notifyWaitersLocked(ev.SessionID)
@@ -1636,7 +1643,8 @@ func (s *Server) fanoutLocked(ev Event) {
 
 // writeJournalLocked appends one record to the events log. Write failures are
 // recorded in s.lastErr and, when Options.OnError is set, forwarded (wrapped
-// with "journal write: %w") — never fatal either way. Caller holds s.mu.
+// with "journal write: %w"). Only ErrAppendConflict is fatal: it sets
+// s.journalErr, and emitDurableLocked then fences the server. Caller holds s.mu.
 func (s *Server) writeJournalLocked(ev Event) {
 	if s.store == nil || s.journalErr != nil {
 		return

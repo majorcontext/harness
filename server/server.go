@@ -68,6 +68,11 @@ type Options struct {
 	// Store wins over SessionDir. Nil with SessionDir set builds a disk
 	// store on SessionDir.
 	Store engine.SessionStore
+	// SessionOwner decides which process may serve each session. The server
+	// calls Acquire before it first loads or creates a session, and Release
+	// on eviction and Close. A lost ownership cancels the session's turn
+	// without settling it and answers 409 afterwards. Nil: no ownership.
+	SessionOwner SessionOwner
 	// EventLogID is the events log id in the store. Default "events". It
 	// must not be a valid session id.
 	EventLogID string
@@ -431,7 +436,10 @@ type Server struct {
 	journal    []Event                  // in-memory durable records, for replay
 	store      engine.SessionStore      // nil when persistence is disabled
 	eventLen   int                      // records in the events log
-	journalErr error                    // set when the events log is fenced or a write failed fatally
+	journalErr error                    // set by an events-log append conflict; fences the server
+	owned      map[string]*ownerEntry   // held or pending session ownership, by id
+	refused    map[string]struct{}      // ids whose ownership was lost
+	ownerWG    sync.WaitGroup           // one per ownership watcher
 	lastErr    error                    // most recent journal write failure
 	subs       map[*subscriber]struct{} // connected SSE clients
 	sinkCursor int64                    // highest seq the receiver has confirmed applied
@@ -927,6 +935,8 @@ func New(opts Options) (*Server, error) {
 		sessions:          make(map[string]*sessionState),
 		commandColdLoads:  make(map[string]int),
 		lastRequest:       make(map[string]*requestSnapshot),
+		owned:             make(map[string]*ownerEntry),
+		refused:           make(map[string]struct{}),
 		lastReqHash:       make(map[string]string),
 		lastPersistErr:    make(map[string]string),
 		goalState:         make(map[string]*goalTracker),
@@ -1290,6 +1300,7 @@ func (s *Server) Close() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	s.stopEventSink(ctx)
+	s.releaseAllOwnership()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.store != nil {
@@ -1304,6 +1315,14 @@ func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 		if !s.authorized(r) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+		if id := r.PathValue("id"); id != "" && engine.ValidSessionID(id) && !s.isManagedChild(id) {
+			done, err := s.admitSession(r.Context(), id)
+			if err != nil {
+				writeNotOwned(w)
+				return
+			}
+			defer done()
 		}
 		h(w, r)
 	}
