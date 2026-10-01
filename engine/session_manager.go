@@ -759,6 +759,9 @@ type sessionNode struct {
 	// suspended is set by Suspend: the node's turn was interrupted by
 	// its caller handing the session off, so it stays unsettled.
 	suspended bool
+	// suspendDrained is set when a suspended node's interrupted turn has
+	// returned. finalizeTurnFrom then writes nothing durable for it.
+	suspendDrained bool
 
 	// result/failReason hold a CHILD's spawning-turn outcome once status is
 	// done or failed (see SessionStatus's doc comment) — result the child's
@@ -885,6 +888,9 @@ type SessionNode struct {
 	// than read prose — empty for an ordinary failure. See
 	// FailKindProviderExhausted.
 	FailKind string
+	// Suspended reports that Suspend interrupted the node's turn and the
+	// turn has returned. Its status and logs are left as they were.
+	Suspended bool
 }
 
 func (n *sessionNode) snapshot() SessionNode {
@@ -898,6 +904,7 @@ func (n *sessionNode) snapshot() SessionNode {
 		Result:     n.result,
 		FailReason: n.failReason,
 		FailKind:   n.failKind,
+		Suspended:  n.suspendDrained,
 	}
 }
 
@@ -4369,6 +4376,15 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// this ends up taking.
 	m.accumulateUsageLocked(n)
 
+	if n.suspended {
+		m.decrementRunningLocked(n)
+		n.finalized = true
+		n.suspendDrained = true
+		m.markChangedLocked()
+		m.mu.Unlock()
+		return nil
+	}
+
 	// A CHILD (depth>0), not already canceled, may have had a message
 	// enqueued to it by a concurrent SendToDescendant call that read
 	// n.status == StatusRunning and enqueued — both under this SAME
@@ -4807,7 +4823,7 @@ func (m *SessionManager) finalizeTurnFrom(id string, msg *message.Message, perr 
 	// turn open for the next holder to resume. AbortTurn and Cancel set
 	// alreadyCanceled and still settle.
 	keepOpen := !alreadyCanceled && errors.Is(perr, context.Canceled) &&
-		(n.suspended || n.session.cfg.MaxTurnResumes > 0 && !n.session.hasTaskParent())
+		n.session.cfg.MaxTurnResumes > 0 && !n.session.hasTaskParent()
 	if !keepOpen {
 		n.session.markTurnSettled()
 		settledSess := n.session

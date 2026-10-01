@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -317,12 +318,17 @@ func TestEventsLogConflictFencesServer(t *testing.T) {
 
 func hasSettled(t *testing.T, store engine.SessionStore, id string) bool {
 	t.Helper()
+	return hasRecord(t, store, id, "child_turn.settled")
+}
+
+func hasRecord(t *testing.T, store engine.SessionStore, id, typ string) bool {
+	t.Helper()
 	recs, err := store.Load(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range recs {
-		if bytes.Contains(r, []byte(`"child_turn.settled"`)) {
+		if bytes.Contains(r, []byte(`"`+typ+`"`)) {
 			return true
 		}
 	}
@@ -400,7 +406,7 @@ func TestOwnershipLostSuspendsChildren(t *testing.T) {
 	mgr := h.srv.SessionManager()
 	for {
 		changed := mgr.Changed()
-		if _, info, ok := mgr.SessionAndInfo(child.ID); ok && info.Status != engine.StatusRunning {
+		if _, info, ok := mgr.SessionAndInfo(child.ID); ok && info.Suspended {
 			break
 		}
 		<-changed
@@ -411,6 +417,12 @@ func TestOwnershipLostSuspendsChildren(t *testing.T) {
 		if hasSettled(t, store, id) {
 			t.Errorf("session %s has a settle record", id)
 		}
+	}
+	if hasRecord(t, store, child.ID, "task.outcome_committed") {
+		t.Error("child log has a committed outcome")
+	}
+	if hasRecord(t, store, root, "task.notify_queued") {
+		t.Error("parent log has a queued task notification")
 	}
 	h.srv.mu.Lock()
 	defer h.srv.mu.Unlock()
@@ -441,5 +453,56 @@ func TestRefusingOwnerBlocksSpawnAndClaimLoads(t *testing.T) {
 	}
 	if store.loaded(id) {
 		t.Errorf("Load(%q) ran although Acquire refused", id)
+	}
+}
+
+type blockingLoadStore struct {
+	engine.SessionStore
+	id      string
+	armed   bool
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingLoadStore) Load(id string) ([][]byte, error) {
+	if s.armed && id == s.id {
+		close(s.reached)
+		<-s.release
+	}
+	return s.SessionStore.Load(id)
+}
+
+func TestOwnershipLostDuringColdLoadRefusesClaim(t *testing.T) {
+	mem := engine.NewMemStore()
+	seed := newOwnerServer(t, mem, &scriptedProvider{name: "test"})
+	id := seed.createSession("")
+	store := &blockingLoadStore{SessionStore: mem, id: id, reached: make(chan struct{}), release: make(chan struct{})}
+	owner := newFakeOwner()
+	h := newOwnerServer(t, store, &scriptedProvider{name: "test"}, func(o *Options) { o.SessionOwner = owner })
+
+	store.armed = true
+	type result struct{ code int }
+	res := make(chan result, 1)
+	go func() {
+		_, _, _, code, _ := h.srv.claimForPrompt(id)
+		res <- result{code}
+	}()
+	<-store.reached
+	owner.loseOwnership(id)
+	for {
+		h.srv.mu.Lock()
+		_, lost := h.srv.refused[id]
+		h.srv.mu.Unlock()
+		if lost {
+			break
+		}
+		runtime.Gosched()
+	}
+	close(store.release)
+	if got := (<-res).code; got != http.StatusConflict {
+		t.Errorf("claimForPrompt code = %d, want 409", got)
+	}
+	if h.srv.residentSession(id) != nil {
+		t.Error("session became resident after loss")
 	}
 }

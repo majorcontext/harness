@@ -4354,6 +4354,10 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 			s.mu.Unlock()
 			return nil, nil, 0, http.StatusServiceUnavailable, ""
 		}
+		if _, lost := s.refused[id]; lost || s.journalErr != nil {
+			s.mu.Unlock()
+			return nil, nil, 0, http.StatusConflict, ""
+		}
 		if ex := s.sessions[id]; ex != nil {
 			st = ex // a resident appeared while we loaded; use the winner
 		} else {
