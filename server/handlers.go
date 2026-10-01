@@ -2868,6 +2868,8 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 //     retry in handleGoalBusy's "not active" branch won the freed slot).
 //   - "armed": the goal is registered, but the run slot is still held by a
 //     plain prompt; maybeAutoArmGoal starts the loop once that prompt ends.
+//     A request with defer=true always answers "armed": it registers the goal
+//     without starting a loop, and the loop starts after the next prompt turn.
 //   - "updated": an already-running loop's condition was rewritten in place;
 //     no new loop, no run-slot claim.
 type goalPostResponse struct {
@@ -2913,6 +2915,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Condition string `json:"condition"`
 		MaxTurns  int    `json:"max_turns"`
+		Defer     bool   `json:"defer"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -2929,12 +2932,16 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		case code == http.StatusConflict && holder != "":
 			writeErr(w, code, fmt.Sprintf("workdir busy: held by session %s", holder))
 		case code == http.StatusConflict:
-			s.handleGoalBusy(w, id, body.Condition, body.MaxTurns)
+			s.handleGoalBusy(w, id, body.Condition, body.MaxTurns, body.Defer)
 		case code == http.StatusServiceUnavailable:
 			writeErr(w, code, "server shutting down")
 		default:
 			writeErr(w, http.StatusNotFound, "no such session")
 		}
+		return
+	}
+	if body.Defer {
+		s.armDeferredGoal(w, id, st, fromSeq, body.Condition)
 		return
 	}
 	// Re-arming a paused/restart (or post-abort) goal. claimForPrompt above
@@ -3010,12 +3017,36 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: fromSeq, Status: "started"})
 }
 
+// armDeferredGoal registers a goal with defer=true on a session whose run
+// slot handleGoal just claimed, releases the slot, and starts no loop. An
+// already-active goal keeps its state and takes the new condition.
+func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionState, fromSeq int64, condition string) {
+	var err error
+	if existing, active := st.sess.ActiveGoal(); !active {
+		err = st.sess.RegisterGoalDeferred(condition)
+	} else if existing != condition {
+		err = st.sess.UpdateGoal(condition)
+	}
+	s.mu.Lock()
+	st.running = false
+	st.cancel = nil
+	st.goalLoop = false
+	st.lastUsed = time.Now()
+	s.mu.Unlock()
+	s.wg.Done()
+	if err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: fromSeq, Status: "armed"})
+}
+
 // handleGoalBusy implements handleGoal's same-session-busy branch:
 // claimForPrompt 409'd with an empty holder, meaning something in THIS
 // session already holds the run slot — either a running goal loop or a
 // plain prompt (the workdir-held-by-ANOTHER-session case is handled inline
 // in handleGoal and never reaches here).
-func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition string, maxTurns int) {
+func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition string, maxTurns int, deferred bool) {
 	sess := s.residentSession(id)
 	if sess == nil {
 		// Reachable, in a narrow window: claimForPrompt found the session
@@ -3042,6 +3073,15 @@ func (s *Server) handleGoalBusy(w http.ResponseWriter, id string, condition stri
 			}
 		}
 		writeJSON(w, http.StatusOK, goalPostResponse{Seq: s.currentSeq(), Status: "updated"})
+		return
+	}
+
+	if deferred {
+		if err := sess.RegisterGoalDeferred(condition); err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, goalPostResponse{Seq: s.currentSeq(), Status: "armed"})
 		return
 	}
 

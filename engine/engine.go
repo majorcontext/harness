@@ -1436,6 +1436,10 @@ type Session struct {
 	// Guarded by mu.
 	goalGen uint64
 
+	// goalDeferred makes the next PursueGoal entry evaluate before it posts
+	// a turn. Runtime-only; guarded by mu.
+	goalDeferred bool
+
 	// goalParked mirrors the most recent goal.parked record's classified
 	// reason and attempt count (see recordGoalParked/classifyGoalWorkerError
 	// in goal.go) for the ambient status segment goal_parked_status.go

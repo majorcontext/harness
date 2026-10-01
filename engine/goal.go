@@ -614,6 +614,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		return nil, err
 	}
 
+	deferFirst := opts.Registered && s.takeGoalDeferred()
 	var (
 		reason    string // last NOT MET reason, carried into the next turn's guidance
 		reasonGen uint64 // generation `reason` was produced at; see the pairing rule below
@@ -668,173 +669,175 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		// really sent to (and seen by) the worker model — injected prompts
 		// are never restored to the queue on a stale discard, only ever
 		// delivered once. See TestInjectedPromptsNotRedeliveredAfterStaleDiscard.
-		queued := s.DequeueAllPrompts("injected")
-		// `reason` is only ever valid paired with the generation it was
-		// produced for (reasonGen, set alongside it below). Every one of
-		// this loop's stale-discard `continue` sites — a worker-turn
-		// failure, an evaluator failure, or a discarded evaluator verdict —
-		// leaves `reason` untouched, so without this check the NEXT turn's
-		// directive would silently repeat a reason that describes a
-		// condition or transcript state that is no longer current — for
-		// example, turn 3 repeating turn 1's "the file does not exist"
-		// feedback verbatim after turn 2 already created the file and
-		// self-adjusted the goal. The same rule also covers a
-		// generation change that happens WITHOUT any discard — e.g. an
-		// UpdateGoal landing in the gap between turn N ending and turn N+1's
-		// snapshot — since the check is purely "does this turn's generation
-		// match the one `reason` was produced for", not "was there a
-		// discard". See TestStaleDiscardReplacesReasonWithAdjustmentNotice.
-		directive := snap.condition
-		if turn > 1 {
-			if reasonGen == snap.gen {
-				directive = goalGuidance(snap.condition, reason)
-			} else {
-				directive = goalGuidance(snap.condition, goalAdjustedNotice)
+		if !(deferFirst && turn == 1) {
+			queued := s.DequeueAllPrompts("injected")
+			// `reason` is only ever valid paired with the generation it was
+			// produced for (reasonGen, set alongside it below). Every one of
+			// this loop's stale-discard `continue` sites — a worker-turn
+			// failure, an evaluator failure, or a discarded evaluator verdict —
+			// leaves `reason` untouched, so without this check the NEXT turn's
+			// directive would silently repeat a reason that describes a
+			// condition or transcript state that is no longer current — for
+			// example, turn 3 repeating turn 1's "the file does not exist"
+			// feedback verbatim after turn 2 already created the file and
+			// self-adjusted the goal. The same rule also covers a
+			// generation change that happens WITHOUT any discard — e.g. an
+			// UpdateGoal landing in the gap between turn N ending and turn N+1's
+			// snapshot — since the check is purely "does this turn's generation
+			// match the one `reason` was produced for", not "was there a
+			// discard". See TestStaleDiscardReplacesReasonWithAdjustmentNotice.
+			directive := snap.condition
+			if turn > 1 {
+				if reasonGen == snap.gen {
+					directive = goalGuidance(snap.condition, reason)
+				} else {
+					directive = goalGuidance(snap.condition, goalAdjustedNotice)
+				}
 			}
-		}
-		// batchOrigin/batchEntries are message.Message.Origin/OperatorBatch
-		// for the message promptTurnWithRetry's first mention of `directive`
-		// appends this turn — empty/nil when queued is empty, exactly like
-		// operatorBatchDrain's own empty-input case. Built alongside
-		// `directive` itself, from the SAME operatorBatchDrain helper the
-		// two operatorContextTask drain sites (engine.go, claude_code_
-		// backend.go) use, so this turn-boundary drain cannot forget to
-		// stamp them the way an earlier version of this fix did — a client
-		// (boxes' console) that only special-cased those two drains still
-		// misparsed THIS one's own "OPERATOR MESSAGES (... continue the
-		// goal)" text for the identical reason (a queued prompt's own body
-		// containing a numbered list). See operatorBatchDrain's own doc
-		// comment for why block is used untrimmed here (concatenated ahead
-		// of directive, not wrapped alone in promptParts).
-		var batchOrigin string
-		var batchEntries []message.OperatorBatchEntry
-		if len(queued) > 0 {
-			// Prepend, never replace: the goal directive/guidance below is
-			// still exactly what it would have been with no queue activity
-			// at all — this only adds a clearly labeled block ahead of it.
-			// The evaluator's CONDITION field is built from snap.condition
-			// alone (see evaluateGoal/runEvaluator) and never includes this
-			// block or `directive` itself, so "goal injection judges only
-			// the goal" holds for that field structurally, not by
-			// convention. This block is NOT hidden from the evaluator
-			// overall, though: runEvaluator's CONVERSATION TRANSCRIPT field
-			// renders the full history (renderConversation(s.History())),
-			// which includes this turn's directive — and therefore this
-			// block — once the worker turn that received it has run. Only
-			// the condition string itself stays clean.
-			var block string
-			block, batchOrigin, batchEntries = operatorBatchDrain(queued, operatorContextGoal)
-			directive = block + directive
-		}
-		// The drained batch's attachments ride to the worker turn beside
-		// that block: operatorMessagesBlock renders text only and announces
-		// each prompt's attachment count, so these bytes are what the count
-		// refers to. An image an operator sent mid-goal would otherwise be
-		// dropped at exactly this boundary — see queuedBlobs (queue.go).
-		if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen, batchOrigin, batchEntries, queuedBlobs(queued)...); err != nil {
-			if errors.Is(err, context.Canceled) {
-				// Deliberate abort: leave the goal exactly as it is (a
-				// drain must be resumable), no goal.stalled, no clear.
-				return nil, err
+			// batchOrigin/batchEntries are message.Message.Origin/OperatorBatch
+			// for the message promptTurnWithRetry's first mention of `directive`
+			// appends this turn — empty/nil when queued is empty, exactly like
+			// operatorBatchDrain's own empty-input case. Built alongside
+			// `directive` itself, from the SAME operatorBatchDrain helper the
+			// two operatorContextTask drain sites (engine.go, claude_code_
+			// backend.go) use, so this turn-boundary drain cannot forget to
+			// stamp them the way an earlier version of this fix did — a client
+			// (boxes' console) that only special-cased those two drains still
+			// misparsed THIS one's own "OPERATOR MESSAGES (... continue the
+			// goal)" text for the identical reason (a queued prompt's own body
+			// containing a numbered list). See operatorBatchDrain's own doc
+			// comment for why block is used untrimmed here (concatenated ahead
+			// of directive, not wrapped alone in promptParts).
+			var batchOrigin string
+			var batchEntries []message.OperatorBatchEntry
+			if len(queued) > 0 {
+				// Prepend, never replace: the goal directive/guidance below is
+				// still exactly what it would have been with no queue activity
+				// at all — this only adds a clearly labeled block ahead of it.
+				// The evaluator's CONDITION field is built from snap.condition
+				// alone (see evaluateGoal/runEvaluator) and never includes this
+				// block or `directive` itself, so "goal injection judges only
+				// the goal" holds for that field structurally, not by
+				// convention. This block is NOT hidden from the evaluator
+				// overall, though: runEvaluator's CONVERSATION TRANSCRIPT field
+				// renders the full history (renderConversation(s.History())),
+				// which includes this turn's directive — and therefore this
+				// block — once the worker turn that received it has run. Only
+				// the condition string itself stays clean.
+				var block string
+				block, batchOrigin, batchEntries = operatorBatchDrain(queued, operatorContextGoal)
+				directive = block + directive
 			}
-			active, stale := s.goalStatus(snap.gen)
-			if !active {
-				// Cleared concurrently (DELETE /goal) while a retry was in
-				// flight: clean stop, same as the checks above/below.
-				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
-			}
-			if stale {
-				// UpdateGoal moved the goal to a new generation while this
-				// turn's retries were in flight: this turn's failure was
-				// attributed to a condition that is no longer current, so it
-				// must not clear the (still active, just redirected) goal —
-				// discard silently and let the next iteration's fresh
-				// snapshot pick up the new condition.
-				continue
-			}
-			// Worker failures: every remaining shape of worker-turn
-			// exhaustion — the deterministic budget (goalWorkerRetries)
-			// running out, the retryable-class budget
-			// (goalRetryableMaxAttempts) running out, or the non-idempotency
-			// gate stopping retries early after a tool already executed —
-			// exit-parks the goal, preserving its condition and directive
-			// for a human or a later retry rather than discarding
-			// accumulated progress. The only worker-turn failure that
-			// still clears is context overflow, immediately below — a
-			// deterministic failure no amount of waiting can fix, unlike
-			// every case reaching this point.
-			//
-			// class/retryable are derived directly from the returned err via
-			// provider.AsRetryable, not from checking whether
-			// promptTurnWithRetry happened to wrap it in
-			// *goalRetryableExhaustedError: errors.As traverses that
-			// sentinel's Unwrap chain down to the same *provider.RetryableError
-			// an ordinary (non-exhausted) retryable failure carries, so this
-			// reads the true classification uniformly whether the retryable
-			// budget was genuinely exhausted (attempts == goalRetryableMaxAttempts,
-			// wrapped) or retrying merely stopped early after a tool call
-			// (attempts far fewer, raw err) — both are still worth recording
-			// accurately, exactly as goal.stalled already does for the same
-			// failing attempt (see promptTurnWithRetry).
-			class, retryable := provider.AsRetryable(err)
-			// classifyProviderExhausted (shared with promptTurnWithRetry's
-			// own call below, so the two sites can never drift): by the time
-			// promptTurnWithRetry returns an error here for a
-			// provider-exhausted failure, its own tier budget
-			// (goalProviderExhaustedMaxAttempts) has already been spent
-			// retrying it, so this IS a genuine exhaustion, not the
-			// fail-fast-on-attempt-one shape the pre-fix permanent branch
-			// produced. Reclassifying it as retryable/goalClassProviderExhausted
-			// here — rather than leaving it to fall into the permanent branch
-			// below — keeps the resulting goal.parked record and
-			// classifyGoalWorkerError reason honest: "provider capacity
-			// exhausted", never "permanent provider error".
-			retryable, class, _ = classifyProviderExhausted(err, retryable, class)
-			if !retryable && provider.IsContextOverflow(err) {
-				// Issue #62, layer 1: a deterministic context/prompt
-				// overflow gets its own distinct clear reason instead of a
-				// park — waiting cannot fix it, unlike every case above (see
-				// worker failure handling on this deliberate,
-				// documented asymmetry) — and the error is returned AS-IS
-				// (not wrapped) so last_turn.error (server/journal.go's
-				// recordTurnEnd) surfaces exactly err.Error()'s clear,
-				// deterministic message — see provider.Error.Error().
-				// Checked only once retryable is ruled out: overflow is
-				// never classified retryable, so the two are disjoint.
-				s.clearGoal(err.Error())
-				return nil, err
-			}
-			// A permanent-classified error (see promptTurnWithRetry's
-			// fail-fast branch above) is, like context
-			// overflow, never classified retryable — but unlike context
-			// overflow it does NOT clear: the malformed request shape that
-			// produced it might be fixed by something else entirely before a
-			// later resume, so it falls through to the same park path every
-			// other worker-turn exhaustion uses. permanent is threaded
-			// through only to select a more accurate classified reason (see
-			// classifyGoalWorkerError) and a distinct tier name on the
-			// returned sentinel (see goalWorkerParkedError) — it changes no
-			// other behavior on this path.
-			permanent := !retryable && provider.AsPermanent(err)
-			// Every remaining case parks: journal a durable, classified
-			// goal.parked record (see recordGoalParked/
-			// classifyGoalWorkerError) and return the sentinel WITHOUT
-			// clearing — the goal stays active for an external caller (the
-			// server's activity-driven auto-arm, upstream of this package)
-			// to resume with a fresh PursueGoal call. Like every other
-			// per-turn goal record, a false return here means a concurrent
-			// ClearGoal or UpdateGoal raced this turn to completion: fall
-			// back to the same goalStatus-driven stale-discard-vs-clean-stop
-			// split every other record in this loop already uses (see
-			// recordGoalEvalFailed's caller for the identical shape) rather
-			// than ever parking a generation that is no longer current.
-			if !s.recordGoalParked(turn, attempts, retryable, permanent, class, snap.gen) {
-				if _, stale := s.goalStatus(snap.gen); stale {
+			// The drained batch's attachments ride to the worker turn beside
+			// that block: operatorMessagesBlock renders text only and announces
+			// each prompt's attachment count, so these bytes are what the count
+			// refers to. An image an operator sent mid-goal would otherwise be
+			// dropped at exactly this boundary — see queuedBlobs (queue.go).
+			if attempts, err := s.promptTurnWithRetry(ctx, directive, turn, snap.gen, batchOrigin, batchEntries, queuedBlobs(queued)...); err != nil {
+				if errors.Is(err, context.Canceled) {
+					// Deliberate abort: leave the goal exactly as it is (a
+					// drain must be resumable), no goal.stalled, no clear.
+					return nil, err
+				}
+				active, stale := s.goalStatus(snap.gen)
+				if !active {
+					// Cleared concurrently (DELETE /goal) while a retry was in
+					// flight: clean stop, same as the checks above/below.
+					return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+				}
+				if stale {
+					// UpdateGoal moved the goal to a new generation while this
+					// turn's retries were in flight: this turn's failure was
+					// attributed to a condition that is no longer current, so it
+					// must not clear the (still active, just redirected) goal —
+					// discard silently and let the next iteration's fresh
+					// snapshot pick up the new condition.
 					continue
 				}
-				return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+				// Worker failures: every remaining shape of worker-turn
+				// exhaustion — the deterministic budget (goalWorkerRetries)
+				// running out, the retryable-class budget
+				// (goalRetryableMaxAttempts) running out, or the non-idempotency
+				// gate stopping retries early after a tool already executed —
+				// exit-parks the goal, preserving its condition and directive
+				// for a human or a later retry rather than discarding
+				// accumulated progress. The only worker-turn failure that
+				// still clears is context overflow, immediately below — a
+				// deterministic failure no amount of waiting can fix, unlike
+				// every case reaching this point.
+				//
+				// class/retryable are derived directly from the returned err via
+				// provider.AsRetryable, not from checking whether
+				// promptTurnWithRetry happened to wrap it in
+				// *goalRetryableExhaustedError: errors.As traverses that
+				// sentinel's Unwrap chain down to the same *provider.RetryableError
+				// an ordinary (non-exhausted) retryable failure carries, so this
+				// reads the true classification uniformly whether the retryable
+				// budget was genuinely exhausted (attempts == goalRetryableMaxAttempts,
+				// wrapped) or retrying merely stopped early after a tool call
+				// (attempts far fewer, raw err) — both are still worth recording
+				// accurately, exactly as goal.stalled already does for the same
+				// failing attempt (see promptTurnWithRetry).
+				class, retryable := provider.AsRetryable(err)
+				// classifyProviderExhausted (shared with promptTurnWithRetry's
+				// own call below, so the two sites can never drift): by the time
+				// promptTurnWithRetry returns an error here for a
+				// provider-exhausted failure, its own tier budget
+				// (goalProviderExhaustedMaxAttempts) has already been spent
+				// retrying it, so this IS a genuine exhaustion, not the
+				// fail-fast-on-attempt-one shape the pre-fix permanent branch
+				// produced. Reclassifying it as retryable/goalClassProviderExhausted
+				// here — rather than leaving it to fall into the permanent branch
+				// below — keeps the resulting goal.parked record and
+				// classifyGoalWorkerError reason honest: "provider capacity
+				// exhausted", never "permanent provider error".
+				retryable, class, _ = classifyProviderExhausted(err, retryable, class)
+				if !retryable && provider.IsContextOverflow(err) {
+					// Issue #62, layer 1: a deterministic context/prompt
+					// overflow gets its own distinct clear reason instead of a
+					// park — waiting cannot fix it, unlike every case above (see
+					// worker failure handling on this deliberate,
+					// documented asymmetry) — and the error is returned AS-IS
+					// (not wrapped) so last_turn.error (server/journal.go's
+					// recordTurnEnd) surfaces exactly err.Error()'s clear,
+					// deterministic message — see provider.Error.Error().
+					// Checked only once retryable is ruled out: overflow is
+					// never classified retryable, so the two are disjoint.
+					s.clearGoal(err.Error())
+					return nil, err
+				}
+				// A permanent-classified error (see promptTurnWithRetry's
+				// fail-fast branch above) is, like context
+				// overflow, never classified retryable — but unlike context
+				// overflow it does NOT clear: the malformed request shape that
+				// produced it might be fixed by something else entirely before a
+				// later resume, so it falls through to the same park path every
+				// other worker-turn exhaustion uses. permanent is threaded
+				// through only to select a more accurate classified reason (see
+				// classifyGoalWorkerError) and a distinct tier name on the
+				// returned sentinel (see goalWorkerParkedError) — it changes no
+				// other behavior on this path.
+				permanent := !retryable && provider.AsPermanent(err)
+				// Every remaining case parks: journal a durable, classified
+				// goal.parked record (see recordGoalParked/
+				// classifyGoalWorkerError) and return the sentinel WITHOUT
+				// clearing — the goal stays active for an external caller (the
+				// server's activity-driven auto-arm, upstream of this package)
+				// to resume with a fresh PursueGoal call. Like every other
+				// per-turn goal record, a false return here means a concurrent
+				// ClearGoal or UpdateGoal raced this turn to completion: fall
+				// back to the same goalStatus-driven stale-discard-vs-clean-stop
+				// split every other record in this loop already uses (see
+				// recordGoalEvalFailed's caller for the identical shape) rather
+				// than ever parking a generation that is no longer current.
+				if !s.recordGoalParked(turn, attempts, retryable, permanent, class, snap.gen) {
+					if _, stale := s.goalStatus(snap.gen); stale {
+						continue
+					}
+					return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+				}
+				return nil, &goalWorkerParkedError{err: err, attempts: attempts, retryable: retryable, permanent: permanent, class: class}
 			}
-			return nil, &goalWorkerParkedError{err: err, attempts: attempts, retryable: retryable, permanent: permanent, class: class}
 		}
 		met, evalReason, err := s.evaluateGoal(ctx, snap.condition, opts.Evaluator)
 		if err != nil {
@@ -1638,6 +1641,7 @@ func (s *Session) clearGoal(reason string) bool {
 	}
 	s.goalActive = false
 	s.goalCondition = ""
+	s.goalDeferred = false
 	// A clear (operator DELETE, or PursueGoal's context-overflow branch)
 	// always supersedes any parked signal still standing from an earlier
 	// exit-park episode — see the goalParked field's doc comment: there is
@@ -1680,6 +1684,7 @@ func (s *Session) RegisterGoal(condition string) error {
 	}
 	s.goalActive = true
 	s.goalCondition = trimmed
+	s.goalDeferred = false
 	s.goalGen++
 	s.persistGoalLocked(recGoalSet, goalRecord{Condition: trimmed})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
@@ -1687,6 +1692,29 @@ func (s *Session) RegisterGoal(condition string) error {
 	s.emit(Event{Type: EventGoalSet, GoalCondition: trimmed})
 	s.mu.Unlock()
 	return nil
+}
+
+// RegisterGoalDeferred is RegisterGoal for a goal whose condition must not be
+// posted as a turn. The next PursueGoal call evaluates the existing history
+// first and sends guidance only on NOT MET. The deferral is runtime-only and
+// covers that one loop entry.
+func (s *Session) RegisterGoalDeferred(condition string) error {
+	if err := s.RegisterGoal(condition); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.goalDeferred = true
+	s.mu.Unlock()
+	return nil
+}
+
+// takeGoalDeferred reports and clears the deferral set by RegisterGoalDeferred.
+func (s *Session) takeGoalDeferred() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.goalDeferred
+	s.goalDeferred = false
+	return d
 }
 
 // UpdateGoal rewrites the condition of an already-active goal: it journals a
