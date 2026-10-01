@@ -183,6 +183,28 @@ func readMessagePage(dir, id string, beforeSeq, limit int) (MessagePage, error) 
 // checks exist for opens between taking an index and reading the journal,
 // which nothing outside can drive through the public call.
 func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit int) (MessagePage, error) {
+	return readMessagePageFrom(func() (pageSource, error) {
+		f, err := os.Open(sessionPath(dir, id))
+		if err != nil {
+			return pageSource{}, err
+		}
+		return pageSource{ReaderAt: f, size: func() (int64, error) {
+			fi, err := f.Stat()
+			if err != nil {
+				return 0, err
+			}
+			return fi.Size(), nil
+		}, close: f.Close}, nil
+	}, id, ix, beforeSeq, limit)
+}
+
+type pageSource struct {
+	io.ReaderAt
+	size  func() (int64, error)
+	close func() error
+}
+
+func readMessagePageFrom(open func() (pageSource, error), id string, ix SessionIndex, beforeSeq, limit int) (MessagePage, error) {
 	page := MessagePage{Total: ix.DurableMessages}
 	lo, hi, _ := MessagePageWindow(ix.DurableMessages, beforeSeq, limit)
 	if hi < lo && ix.DurableMessages != 0 {
@@ -191,11 +213,11 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		return page, nil
 	}
 
-	f, err := os.Open(sessionPath(dir, id))
+	f, err := open()
 	if err != nil {
 		return MessagePage{}, err
 	}
-	defer f.Close()
+	defer f.close()
 
 	// The index named a journal length; the file has to still be at least
 	// that long. It can be shorter: another process's ensureLog repairs a
@@ -208,17 +230,17 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 	// narrower window the check cannot cover: a repair that lands after it
 	// and before the scan reads. Removing either leaves the other reporting
 	// the same classification, one attempt later.
-	fi, err := f.Stat()
+	size, err := f.size()
 	if err != nil {
 		return MessagePage{}, err
 	}
-	if fi.Size() < ix.LogSize {
+	if size < ix.LogSize {
 		return MessagePage{}, ErrStaleMessagePage
 	}
 
-	msgs, heads, ok, err := tailPage(f, ix.LogSize, fi.Size(), ix.DurableMessages, lo, hi)
+	msgs, heads, ok, err := tailPage(f, ix.LogSize, size, ix.DurableMessages, lo, hi)
 	if err != nil {
-		return MessagePage{}, pageError(f, id, ix, err)
+		return MessagePage{}, pageErrorFrom(f.size, id, ix, err)
 	}
 	if !ok {
 		// The page reaches into compacted history. Fall back to the forward
@@ -233,11 +255,11 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 		// already use — which is why the tail walk above exists for pages
 		// that do not need it.
 		data := make([]byte, ix.LogSize)
-		if _, err := io.ReadFull(f, data); err != nil {
-			return MessagePage{}, pageError(f, id, ix, err)
+		if _, err := io.ReadFull(io.NewSectionReader(f, 0, ix.LogSize), data); err != nil {
+			return MessagePage{}, pageErrorFrom(f.size, id, ix, err)
 		}
 		if msgs, heads, err = foldedPage(data, lo, hi); err != nil {
-			return MessagePage{}, pageError(f, id, ix, err)
+			return MessagePage{}, pageErrorFrom(f.size, id, ix, err)
 		}
 	}
 	page.Messages = msgs
@@ -249,7 +271,7 @@ func readMessagePageWithIndex(dir, id string, ix SessionIndex, beforeSeq, limit 
 	fromFirst := page.FirstSeq == 1 || ix.DurableMessages == 0
 	cmds, err := decodeCommandHeads(f, selectCommandHeadsInWindow(heads, page.Messages, fromFirst))
 	if err != nil {
-		return MessagePage{}, pageError(f, id, ix, err)
+		return MessagePage{}, pageErrorFrom(f.size, id, ix, err)
 	}
 	page.Commands = cmds
 	return page, nil
@@ -292,7 +314,17 @@ func commandsInWindow[T any](cmds []T, window []message.Message, fromFirst bool,
 // is stale. Re-stat and say so, and ReadMessagePage's one retry answers
 // from a fresh index.
 func pageError(f *os.File, id string, ix SessionIndex, cause error) error {
-	if fi, statErr := f.Stat(); statErr == nil && fi.Size() < ix.LogSize {
+	return pageErrorFrom(func() (int64, error) {
+		fi, err := f.Stat()
+		if err != nil {
+			return 0, err
+		}
+		return fi.Size(), nil
+	}, id, ix, cause)
+}
+
+func pageErrorFrom(size func() (int64, error), id string, ix SessionIndex, cause error) error {
+	if n, statErr := size(); statErr == nil && n < ix.LogSize {
 		return ErrStaleMessagePage
 	}
 	return fmt.Errorf("engine: session %s: %w", id, cause)
@@ -454,7 +486,7 @@ func reanchorCommandHeads(heads []commandHead, history []message.Message, start,
 // CreatedAt and AfterMessageID come from the head, not the decoded record: a
 // compaction reanchors a head in memory without rewriting the stale journal
 // bytes.
-func decodeCommandHeads(f *os.File, heads []commandHead) ([]message.CommandRecord, error) {
+func decodeCommandHeads(f io.ReaderAt, heads []commandHead) ([]message.CommandRecord, error) {
 	out := make([]message.CommandRecord, 0, len(heads))
 	for _, h := range heads {
 		raw := h.line

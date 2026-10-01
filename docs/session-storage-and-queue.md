@@ -17,6 +17,14 @@ work only when the store is a `*DiskStore`. A session on any other store
 loads by full replay and keeps every tool result inline. `engine.NewMemStore`
 is an in-memory store for tests and for embedders that own durability.
 
+The readers `ListSessionIDsFrom`, `SessionExistsIn`, `ReadSessionIndexFrom`,
+`ReadSessionInfoFrom`, `ReadMessagePageFrom`, and `LoadJournalFrom` take a
+`SessionStore`. On a `*DiskStore` they call the directory readers, so the
+sidecar index and tail reads stay. On any other store they load the records
+and fold the index from them on each call. They write no cache.
+`ListSessionIDsFrom` drops ids that are not session ids, such as `events` and
+`<id>.claude-code`.
+
 Every store keeps these invariants:
 
 1. Appends are ordered. The caller serializes `Append` calls for one id
