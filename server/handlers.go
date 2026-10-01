@@ -2868,8 +2868,9 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 //     retry in handleGoalBusy's "not active" branch won the freed slot).
 //   - "armed": the goal is registered, but the run slot is still held by a
 //     plain prompt; maybeAutoArmGoal starts the loop once that prompt ends.
-//     A request with defer=true always answers "armed": it registers the goal
-//     without starting a loop, and the loop starts after the next prompt turn.
+//     A defer=true request answers "armed" whenever no loop is running: it
+//     registers the goal without starting a loop, and the loop starts after
+//     the next prompt turn. While a loop runs, defer is ignored.
 //   - "updated": an already-running loop's condition was rewritten in place;
 //     no new loop, no run-slot claim.
 type goalPostResponse struct {
@@ -3024,8 +3025,13 @@ func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionSt
 	var err error
 	if existing, active := st.sess.ActiveGoal(); !active {
 		err = st.sess.RegisterGoalDeferred(condition)
-	} else if existing != condition {
-		err = st.sess.UpdateGoal(condition)
+	} else {
+		if existing != condition {
+			err = st.sess.UpdateGoal(condition)
+		}
+		if err == nil {
+			st.sess.DeferActiveGoal()
+		}
 	}
 	s.mu.Lock()
 	st.running = false

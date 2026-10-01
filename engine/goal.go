@@ -641,7 +641,11 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		evalFailures    int
 		evalFailuresGen uint64
 	)
-	for turn := 1; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
+	firstTurn := 1
+	if deferFirst {
+		firstTurn = 0
+	}
+	for turn := firstTurn; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
 		// is the single source of truth for the rest of this iteration,
 		// deliberately NOT the condition parameter or a value carried over
@@ -650,7 +654,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		if !snap.active {
 			// Cleared between registration and this turn (or mid-loop by a
 			// concurrent DELETE): clean stop, no turn runs.
-			return &GoalResult{Achieved: false, Turns: turn - 1, Reason: "goal cleared"}, nil
+			return &GoalResult{Achieved: false, Turns: max(turn-1, 0), Reason: "goal cleared"}, nil
 		}
 		// Drain the ENTIRE prompt queue, FIFO, in one locked operation
 		// (dequeueAllLocked via DequeueAllPrompts) — right here, at the turn
@@ -669,7 +673,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		// really sent to (and seen by) the worker model — injected prompts
 		// are never restored to the queue on a stale discard, only ever
 		// delivered once. See TestInjectedPromptsNotRedeliveredAfterStaleDiscard.
-		if !(deferFirst && turn == 1) {
+		if turn > 0 || !deferFirst {
 			queued := s.DequeueAllPrompts("injected")
 			// `reason` is only ever valid paired with the generation it was
 			// produced for (reasonGen, set alongside it below). Every one of
@@ -687,7 +691,7 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 			// match the one `reason` was produced for", not "was there a
 			// discard". See TestStaleDiscardReplacesReasonWithAdjustmentNotice.
 			directive := snap.condition
-			if turn > 1 {
+			if turn > 1 || deferFirst {
 				if reasonGen == snap.gen {
 					directive = goalGuidance(snap.condition, reason)
 				} else {
@@ -1672,6 +1676,10 @@ func (s *Session) clearGoal(reason string) bool {
 // cleared or achieved) never mistakes this freshly-registered one for a
 // continuation of it — see goalSnapshot.
 func (s *Session) RegisterGoal(condition string) error {
+	return s.registerGoal(condition, false)
+}
+
+func (s *Session) registerGoal(condition string, deferred bool) error {
 	trimmed := strings.TrimSpace(condition)
 	if trimmed == "" {
 		return errors.New("engine: RegisterGoal requires a non-empty condition")
@@ -1684,7 +1692,7 @@ func (s *Session) RegisterGoal(condition string) error {
 	}
 	s.goalActive = true
 	s.goalCondition = trimmed
-	s.goalDeferred = false
+	s.goalDeferred = deferred
 	s.goalGen++
 	s.persistGoalLocked(recGoalSet, goalRecord{Condition: trimmed})
 	// Emit while holding s.mu (see ClearGoal): event order matches log
@@ -1699,13 +1707,18 @@ func (s *Session) RegisterGoal(condition string) error {
 // first and sends guidance only on NOT MET. The deferral is runtime-only and
 // covers that one loop entry.
 func (s *Session) RegisterGoalDeferred(condition string) error {
-	if err := s.RegisterGoal(condition); err != nil {
-		return err
-	}
+	return s.registerGoal(condition, true)
+}
+
+// DeferActiveGoal arms the one-shot deferral on an already-active goal and
+// reports whether a goal was active.
+func (s *Session) DeferActiveGoal() bool {
 	s.mu.Lock()
-	s.goalDeferred = true
-	s.mu.Unlock()
-	return nil
+	defer s.mu.Unlock()
+	if s.goalActive {
+		s.goalDeferred = true
+	}
+	return s.goalActive
 }
 
 // takeGoalDeferred reports and clears the deferral set by RegisterGoalDeferred.

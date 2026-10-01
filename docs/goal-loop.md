@@ -393,13 +393,17 @@ unchanged.
 `POST /session/{id}/goal` accepts an optional boolean `defer`. With
 `defer: true` the server registers the goal (`Session.RegisterGoalDeferred`)
 and starts no loop, on an idle or a busy session alike. The response is
-`status: "armed"` (202), and `max_turns` is ignored. No turn carries the
-condition text.
+`status: "armed"` (202), and `max_turns` is ignored. No standalone turn posts
+the condition. A running loop ignores `defer`: the request returns `updated`
+as usual. An active-but-idle goal (after an abort, restart, or park) keeps its
+state, takes any new condition, and gets the same deferral.
 
 The loop starts through the existing auto-arm path (`maybeAutoArmGoal`) when
 the next prompt turn ends. Its first iteration skips the worker turn and
-evaluates the history as it stands. MET ends the goal with no extra turn. NOT
-MET sends the usual guidance with the evaluator reason as turn two. The
+evaluates the history as it stands, and that evaluation does not count
+against `max_turns`. MET ends the goal with no extra turn. NOT MET sends the
+usual guidance as the first worker turn. The guidance includes the condition
+text, as it does after any NOT MET. The
 deferral is runtime-only and covers one loop entry: a later resume of the same
 goal posts the condition like any other goal. Without `defer`, behavior is
 unchanged. The `goal` session tool has no deferred form.

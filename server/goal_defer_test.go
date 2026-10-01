@@ -129,3 +129,36 @@ func TestGoalWithoutDeferPostsCondition(t *testing.T) {
 		t.Fatalf("turns sent = %q, want [c]", sent)
 	}
 }
+
+// A deferred POST for a goal left active and idle must defer it too, not
+// resume it with the condition posted.
+func TestGoalDeferOnActiveIdleGoalSkipsConditionTurn(t *testing.T) {
+	const cond = "write a summary"
+	prov := &workerLog{goalProv: &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("prompt done")},
+		eval:   [][]provider.Event{asstTurn("MET: done")},
+	}}
+	h := newGoalHarness(t, prov)
+	id := h.createSession("test/m1")
+	sse := h.openSSE("?from=0", "")
+	if err := h.srv.residentSession(id).RegisterGoal(cond); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": cond, "defer": true})
+	if resp.StatusCode != http.StatusAccepted || !strings.Contains(string(data), `"status":"armed"`) {
+		t.Fatalf("POST goal = %d %s, want 202 armed", resp.StatusCode, data)
+	}
+	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+		"parts": []map[string]string{{"type": "text", "text": "hello"}},
+	})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
+	}
+	sse.collectUntilIdle(t)
+	sse.collectUntilIdle(t)
+	if sent := prov.sent(); len(sent) != 1 || sent[0] == cond {
+		t.Fatalf("turns sent = %q, want only the prompt", sent)
+	}
+}

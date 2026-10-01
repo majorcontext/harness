@@ -37,7 +37,7 @@ func TestPursueGoalDeferredEvaluatesBeforeAnyTurn(t *testing.T) {
 			eval:      [][]provider.Event{evalTurn("MET: summary exists")},
 			worker:    [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "first"})},
 			wantMet:   true,
-			wantTurns: 1,
+			wantTurns: 0,
 			wantUsers: 1,
 		},
 		{
@@ -48,7 +48,7 @@ func TestPursueGoalDeferredEvaluatesBeforeAnyTurn(t *testing.T) {
 				asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
 			},
 			wantMet:     true,
-			wantTurns:   2,
+			wantTurns:   1,
 			wantUsers:   2,
 			wantGuidanc: "summary is missing",
 		},
@@ -90,15 +90,17 @@ func TestPursueGoalDeferredEvaluatesBeforeAnyTurn(t *testing.T) {
 }
 
 // The deferral covers only the first loop entry: a later loop over the same
-// goal posts the condition like any non-deferred goal.
+// goal posts the condition like any non-deferred goal. The preliminary
+// evaluation does not count against MaxTurns.
 func TestPursueGoalDeferralConsumedByFirstLoop(t *testing.T) {
 	const cond = "write a summary"
 	prov := &goalProvider{
 		worker: [][]provider.Event{
 			asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
 			asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
+			asstTurn(provider.StopEndTurn, &message.Text{Text: "third"}),
 		},
-		eval: [][]provider.Event{evalTurn("NOT MET: x"), evalTurn("MET: ok")},
+		eval: [][]provider.Event{evalTurn("NOT MET: x"), evalTurn("NOT MET: y"), evalTurn("MET: ok")},
 	}
 	s := goalSession(t, prov, t.TempDir())
 	if err := s.RegisterGoalDeferred(cond); err != nil {
@@ -111,11 +113,43 @@ func TestPursueGoalDeferralConsumedByFirstLoop(t *testing.T) {
 	if res, err := s.PursueGoal(context.Background(), cond, opts); err != nil || res.Reason != "max turns" {
 		t.Fatalf("first loop = %+v, %v; want max turns", res, err)
 	}
+	if users := userTexts(s); len(users) != 2 || !strings.Contains(users[1], "x") {
+		t.Fatalf("user turns = %q, want one guidance turn after the prompt", users)
+	}
 	opts.MaxTurns = 0
 	if _, err := s.PursueGoal(context.Background(), cond, opts); err != nil {
 		t.Fatal(err)
 	}
-	if users := userTexts(s); len(users) != 2 || users[1] != cond {
+	if users := userTexts(s); len(users) != 3 || users[2] != cond {
 		t.Fatalf("user turns = %q, want the second loop to post the condition", users)
+	}
+}
+
+// DeferActiveGoal arms the one-shot deferral on a goal left active by an
+// abort or restart.
+func TestDeferActiveGoalSkipsConditionTurn(t *testing.T) {
+	const cond = "write a summary"
+	prov := &goalProvider{
+		worker: [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "first"})},
+		eval:   [][]provider.Event{evalTurn("MET: ok")},
+	}
+	s := goalSession(t, prov, t.TempDir())
+	if s.DeferActiveGoal() {
+		t.Fatal("DeferActiveGoal reported true with no active goal")
+	}
+	if err := s.RegisterGoal(cond); err != nil {
+		t.Fatal(err)
+	}
+	if !s.DeferActiveGoal() {
+		t.Fatal("DeferActiveGoal reported false with an active goal")
+	}
+	if _, err := s.Prompt(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PursueGoal(context.Background(), cond, GoalOptions{Registered: true, Evaluator: evalModel}); err != nil {
+		t.Fatal(err)
+	}
+	if users := userTexts(s); len(users) != 1 {
+		t.Fatalf("user turns = %q, want only the prompt", users)
 	}
 }
