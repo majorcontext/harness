@@ -62,16 +62,12 @@ var openaiContextWindows = map[string]int{
 	"gpt-6.1-sol":              1050000,
 	"gpt-daybreak-blue-latest": 1050000,
 	"gpt-daybreak-red-latest":  400000,
-	"gpt-realtime-2.1":         128000,
 	"o1":                       200000,
 	"o1-pro":                   200000,
 	"o3":                       200000,
 	"o3-mini":                  200000,
 	"o3-pro":                   200000,
 	"o4-mini":                  200000,
-	"text-embedding-3-large":   8191,
-	"text-embedding-3-small":   8191,
-	"text-embedding-ada-002":   8192,
 }
 
 // bedrockAnthropicContextWindows holds models.dev "amazon-bedrock" anthropic.* entries, keyed by model ID without region prefix, "anthropic." family segment, or version suffix. Bedrock can report a different window than the first-party route for the same model, and lookup keeps that divergence.
@@ -127,14 +123,9 @@ var bifrostFireworksContextWindows = map[string]int{
 // bifrostVertexContextWindows holds models.dev "google-vertex" Gemini entries, keyed by model ID.
 var bifrostVertexContextWindows = map[string]int{
 	"gemini-2.5-flash":                   1048576,
-	"gemini-2.5-flash-image":             32768,
 	"gemini-2.5-flash-lite":              1048576,
-	"gemini-2.5-flash-tts":               32768,
 	"gemini-2.5-pro":                     1048576,
-	"gemini-2.5-pro-tts":                 32768,
 	"gemini-3-flash-preview":             1048576,
-	"gemini-3-pro-image":                 65536,
-	"gemini-3.1-flash-image":             131072,
 	"gemini-3.1-flash-lite":              1048576,
 	"gemini-3.1-flash-lite-preview":      1048576,
 	"gemini-3.1-pro-preview":             1048576,
@@ -144,7 +135,6 @@ var bifrostVertexContextWindows = map[string]int{
 	"gemini-3.6-flash":                   1048576,
 	"gemini-3.7-flash":                   1048576,
 	"gemini-3.8-flash":                   1048576,
-	"gemini-embedding-001":               2048,
 	"gemini-flash-latest":                1048576,
 	"gemini-flash-lite-latest":           1048576,
 }

@@ -37,7 +37,7 @@ jobs:
         run: go generate ./modelmeta/
 
       - name: Test generated tables
-        run: go test ./modelmeta/...
+        run: go test -race -timeout 300s ./modelmeta/...
 
       - name: Open or update pull request
         run: |

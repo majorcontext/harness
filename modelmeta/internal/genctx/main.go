@@ -38,6 +38,12 @@ var tables = []table{
 var bedrockPrefixPattern = regexp.MustCompile(`^(?:[a-z]+\.)?anthropic\.`)
 var bedrockVersionSuffixPattern = regexp.MustCompile(`-v\d+(:\d+)?$`)
 
+// isChat reports whether an entry is a text-output model with a chat
+// capability flag. Embedding entries carry a positive context but set none.
+func isChat(output []string, toolCall, reasoning, temperature bool) bool {
+	return len(output) == 1 && output[0] == "text" && (toolCall || reasoning || temperature)
+}
+
 func identityKey(id string) string { return id }
 
 func lastSegmentKey(id string) string {
@@ -67,6 +73,12 @@ type catalog map[string]struct {
 		Limit struct {
 			Context int `json:"context"`
 		} `json:"limit"`
+		Modalities struct {
+			Output []string `json:"output"`
+		} `json:"modalities"`
+		ToolCall    bool `json:"tool_call"`
+		Reasoning   bool `json:"reasoning"`
+		Temperature bool `json:"temperature"`
 	} `json:"models"`
 }
 
@@ -157,8 +169,8 @@ func generate(catalogJSON, ovrJSON []byte) (code []byte, notes []string, err err
 		vals := map[string]int{}
 		for id, m := range prov.Models {
 			k := t.key(id)
-			// Zero marks a non-chat model; it must stay unknown to callers.
-			if k == "" || m.Limit.Context <= 0 {
+			// Zero context marks a non-chat model; it must stay unknown to callers.
+			if k == "" || m.Limit.Context <= 0 || !isChat(m.Modalities.Output, m.ToolCall, m.Reasoning, m.Temperature) {
 				continue
 			}
 			// Several IDs can share a key; the smallest window compacts earliest.
