@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
@@ -406,4 +407,58 @@ func TestGoalDeleteNeverResumes(t *testing.T) {
 	}
 	h.srv.wg.Wait()
 	requireGoalTurnStopped(t, store, prov, id)
+}
+
+func TestCancelTreeDuringToolCallJournalsCanceledResult(t *testing.T) {
+	store := engine.NewMemStore()
+	prov := &toolStopProvider{toolStarted: make(chan struct{})}
+	h := newOwnerServer(t, store, prov)
+	id := h.createSession("")
+	sse := h.openSSE("", "")
+	h.startTurn(sse, id, "hi")
+
+	deadline := time.After(5 * time.Second)
+	select {
+	case <-prov.toolStarted:
+	case <-deadline:
+		t.Fatal("tool call never started")
+	}
+	resp, body := h.do("DELETE", "/session/"+id+"/cancel_tree", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("cancel_tree status = %d: %s", resp.StatusCode, body)
+	}
+	drained := make(chan struct{})
+	go func() { h.srv.wg.Wait(); close(drained) }()
+	select {
+	case <-drained:
+	case <-deadline:
+		t.Fatal("turn did not settle after cancel_tree")
+	}
+
+	recs := journalTypes(t, store, id)
+	n := len(recs)
+	m, _ := recs[n-3]["message"].(map[string]any)
+	parts, _ := m["parts"].([]any)
+	if recs[n-3]["type"] != "message" || m["role"] != "tool" || len(parts) != 1 {
+		t.Fatalf("journal tail = %v, want a tool result message, turn.stopped, child_turn.settled", recs[n-3:])
+	}
+	if got := parts[0].(map[string]any)["call_id"]; got != "call_1" {
+		t.Errorf("tool result call_id = %v, want call_1", got)
+	}
+	if recs[n-2]["type"] != "turn.stopped" || recs[n-1]["type"] != "child_turn.settled" {
+		t.Errorf("journal tail = %v, want turn.stopped then child_turn.settled", recs[n-2:])
+	}
+
+	reloaded, err := engine.LoadSession(engine.Config{
+		Providers:      provider.Registry{"test": prov},
+		Model:          message.ModelRef{Provider: "test", Model: "m1"},
+		SessionStore:   store,
+		MaxTurnResumes: 3,
+	}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.ResumableTurn() {
+		t.Error("ResumableTurn() = true after cancel_tree, want false")
+	}
 }

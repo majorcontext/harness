@@ -710,7 +710,7 @@ func (s *Server) handleCancelTree(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	if cancel != nil {
-		cancel(nil)
+		cancel(errTurnStopped)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
