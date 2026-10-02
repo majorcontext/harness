@@ -606,7 +606,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`.
 | Imports | `depguard`: internal packages never import `server` or `cmd` |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
 
-New packages start strict. Old packages ratchet down from a baseline. `AGENTS.md` shrinks to these gates and the three rules.
+New packages start strict. Old packages ratchet down from a baseline. `AGENTS.md` shrinks to these gates and the four rules.
 
 ## Migration
 
