@@ -52,10 +52,9 @@ type Report struct {
 type Violation struct{ Path, Rule, Detail string }
 
 var (
-	historyRE   = regexp.MustCompile(`(?i)#[0-9]+|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|red-verified|confirmed live|an earlier version|before this change|(fix|review) rounds?|round [0-9]+|copilot)\b`)
-	generatedRE = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
-	skipDirs    = map[string]bool{"testdata": true, ".worktrees": true, ".claude": true, ".git": true, "node_modules": true}
-	directives  = []string{"//go:", "//nolint", "//lint:", "//line "}
+	historyRE  = regexp.MustCompile(`(?i)#[0-9]+|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|red-verified|confirmed live|an earlier version|before this change|(fix|review) rounds?|round [0-9]+|copilot)\b`)
+	skipDirs   = map[string]bool{"testdata": true, ".worktrees": true, ".claude": true, ".git": true, "node_modules": true}
+	directives = []string{"//go:", "//nolint", "//lint:", "//line "}
 )
 
 // Collect measures every Go file and AGENTS.md file in fsys.
@@ -90,8 +89,7 @@ func Collect(fsys fs.FS) (Report, error) {
 			if err != nil {
 				return err
 			}
-			first, _, _ := bytes.Cut(data, []byte("\n"))
-			if generatedRE.Match(first) {
+			if generated(p, data) {
 				return nil
 			}
 			m, err := measure(p, data)
@@ -110,6 +108,11 @@ func Collect(fsys fs.FS) (Report, error) {
 		return nil
 	})
 	return r, err
+}
+
+func generated(name string, src []byte) bool {
+	f, err := parser.ParseFile(token.NewFileSet(), name, src, parser.PackageClauseOnly|parser.ParseComments)
+	return err == nil && ast.IsGenerated(f)
 }
 
 func nestedRoot(fsys fs.FS, dir string) bool {
