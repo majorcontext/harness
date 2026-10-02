@@ -63,7 +63,7 @@ type run struct {
 }
 
 // recordedCall is the outcome of one action that reports a result. Its key is
-// the action name plus the alias, with "#2", "#3" on a repeat.
+// the action name plus the alias, with a "#n" count suffix on a repeat.
 type recordedCall struct {
 	key string
 	res callResult

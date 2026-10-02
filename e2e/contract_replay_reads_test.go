@@ -7,9 +7,6 @@ import (
 )
 
 func TestContractReplayReads(t *testing.T) {
-	text := func(name, user, reply string) harnesstest.Step {
-		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
-	}
 	toolTurn := []harnesstest.Step{
 		{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
 			ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "echo replay"},
@@ -17,16 +14,6 @@ func TestContractReplayReads(t *testing.T) {
 		{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ran"}},
 	}
 	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
-	threeTurns := []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), text("three", "three", "3")}
-	threeTurnActions := []action{
-		create{as: "a"},
-		submit{as: "a", text: "one"},
-		waitIdle{as: "a"},
-		submit{as: "a", text: "two"},
-		waitIdle{as: "a"},
-		submit{as: "a", text: "three"},
-		waitIdle{as: "a"},
-	}
 	reads := func(as string) []action {
 		return []action{
 			listSessions{},
@@ -72,6 +59,24 @@ func TestContractReplayReads(t *testing.T) {
 				sseResume{afterSeq: 4, header: true},
 			},
 		},
+	})
+}
+
+func TestContractReplayReadsB(t *testing.T) {
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
+	}
+	threeTurns := []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), text("three", "three", "3")}
+	threeTurnActions := []action{
+		create{as: "a"},
+		submit{as: "a", text: "one"},
+		waitIdle{as: "a"},
+		submit{as: "a", text: "two"},
+		waitIdle{as: "a"},
+		submit{as: "a", text: "three"},
+		waitIdle{as: "a"},
+	}
+	runScenarios(t, []scenario{
 		{
 			name:  "messages_page_windows",
 			model: threeTurns,
@@ -125,6 +130,24 @@ func TestContractReplayReads(t *testing.T) {
 				bootstrap{as: "a", limit: 2},
 			),
 		},
+	})
+}
+
+func TestContractReplayReadsC(t *testing.T) {
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
+	}
+	threeTurns := []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2"), text("three", "three", "3")}
+	threeTurnActions := []action{
+		create{as: "a"},
+		submit{as: "a", text: "one"},
+		waitIdle{as: "a"},
+		submit{as: "a", text: "two"},
+		waitIdle{as: "a"},
+		submit{as: "a", text: "three"},
+		waitIdle{as: "a"},
+	}
+	runScenarios(t, []scenario{
 		{
 			name:  "sse_resume_after_kill",
 			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2")},

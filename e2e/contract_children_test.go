@@ -59,6 +59,14 @@ func TestContractChildren(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractChildrenControl(t *testing.T) {
+	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+	}}}}
+	runScenarios(t, []scenario{
 		{
 			// Known defect, pinned: after SIGKILL the running child reloads idle and the parent loses its children.
 			name:       "child_crash_recovered",

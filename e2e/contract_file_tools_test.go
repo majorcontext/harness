@@ -34,109 +34,118 @@ func toolChain(calls ...harnesstest.ToolCall) []harnesstest.Step {
 	return append(steps, harnesstest.Step{Name: "done", Match: assistantTurns(len(calls)), Reply: harnesstest.Reply{Text: "done"}})
 }
 
-func TestContractFileTools(t *testing.T) {
-	skipShort(t)
-	tool := func(name string, in map[string]any) harnesstest.ToolCall {
-		return harnesstest.ToolCall{Name: name, Input: in}
+func ftTool(name string, in map[string]any) harnesstest.ToolCall {
+	return harnesstest.ToolCall{Name: name, Input: in}
+}
+
+func ftWrite(path, content string) harnesstest.ToolCall {
+	return ftTool("write_file", map[string]any{"path": path, "content": content})
+}
+
+func ftRead(in map[string]any) harnesstest.ToolCall { return ftTool("read_file", in) }
+
+func ftEdit(path, old, repl string) harnesstest.ToolCall {
+	return ftTool("edit_file", map[string]any{"path": path, "old_string": old, "new_string": repl})
+}
+
+func ftBash(cmd string) harnesstest.ToolCall { return ftTool("bash", map[string]any{"command": cmd}) }
+
+func ftArgs(kv ...any) map[string]any {
+	out := map[string]any{}
+	for i := 0; i < len(kv); i += 2 {
+		out[kv[i].(string)] = kv[i+1]
 	}
-	write := func(path, content string) harnesstest.ToolCall {
-		return tool("write_file", map[string]any{"path": path, "content": content})
-	}
-	read := func(in map[string]any) harnesstest.ToolCall { return tool("read_file", in) }
-	edit := func(path, old, repl string) harnesstest.ToolCall {
-		return tool("edit_file", map[string]any{"path": path, "old_string": old, "new_string": repl})
-	}
-	bash := func(cmd string) harnesstest.ToolCall { return tool("bash", map[string]any{"command": cmd}) }
-	m := func(kv ...any) map[string]any {
-		out := map[string]any{}
-		for i := 0; i < len(kv); i += 2 {
-			out[kv[i].(string)] = kv[i+1]
-		}
-		return out
-	}
-	// Files are written newest-first in alphabetical order, so glob's
-	// newest-first order and its alphabetical tie-break agree.
-	table := []scenario{
+	return out
+}
+
+var oneTurn = []action{
+	create{as: "a"},
+	submit{as: "a", text: "go"},
+	waitIdle{as: "a"},
+}
+
+// Files are written newest-first in alphabetical order, so glob's
+// newest-first order and its alphabetical tie-break agree.
+func TestContractFileToolsWrites(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name: "file_tools_roundtrip",
 			model: toolChain(
-				write("proj/sub/c.txt", "gamma\n"),
-				write("proj/b.txt", "beta\nneedle two\n"),
-				write("proj/a.txt", "alpha\nNeedle one\nneedle three\n"),
-				read(m("path", "proj/a.txt")),
-				read(m("path", "proj/a.txt", "offset", 2, "limit", 1)),
-				edit("proj/a.txt", "alpha", "ALPHA"),
-				edit("proj/a.txt", "absent", "x"),
-				read(m("path", "proj/a.txt")),
-				tool("grep", m("pattern", "needle", "path", "proj")),
-				tool("grep", m("pattern", "needle", "path", "proj", "case_insensitive", true, "glob", "a.*")),
-				tool("glob", m("pattern", "**/*.txt", "path", "proj")),
-				tool("ls", m("path", "proj")),
-				read(m("path", "proj/missing.txt")),
+				ftWrite("proj/sub/c.txt", "gamma\n"),
+				ftWrite("proj/b.txt", "beta\nneedle two\n"),
+				ftWrite("proj/a.txt", "alpha\nNeedle one\nneedle three\n"),
+				ftRead(ftArgs("path", "proj/a.txt")),
+				ftRead(ftArgs("path", "proj/a.txt", "offset", 2, "limit", 1)),
+				ftEdit("proj/a.txt", "alpha", "ALPHA"),
+				ftEdit("proj/a.txt", "absent", "x"),
+				ftRead(ftArgs("path", "proj/a.txt")),
+				ftTool("grep", ftArgs("pattern", "needle", "path", "proj")),
+				ftTool("grep", ftArgs("pattern", "needle", "path", "proj", "case_insensitive", true, "glob", "a.*")),
+				ftTool("glob", ftArgs("pattern", "**/*.txt", "path", "proj")),
+				ftTool("ls", ftArgs("path", "proj")),
+				ftRead(ftArgs("path", "proj/missing.txt")),
 			),
+			actions: oneTurn,
 		},
 		{
 			name: "file_tools_write_edit_guards",
 			model: toolChain(
-				write("proj/g.txt", "one\ntwo\ntwo\n"),
-				bash("printf 'seed\\n' > proj/seed.txt"),
-				write("proj/seed.txt", "x"),
-				read(m("path", "proj/seed.txt")),
-				write("proj/seed.txt", "replaced\n"),
-				bash("printf 'outside\\n' > proj/seed.txt"),
-				write("proj/seed.txt", "again"),
-				edit("proj/g.txt", "two", "2"),
-				tool("edit_file", m("path", "proj/g.txt", "old_string", "two", "new_string", "2", "replace_all", true)),
-				read(m("path", "proj/g.txt")),
-				edit("proj/g.txt", "one", "one"),
-				edit("proj/nope.txt", "a", "b"),
-				tool("write_file", m("path", "proj/x.txt")),
-				edit("proj/g.txt", "", "x"),
+				ftWrite("proj/g.txt", "one\ntwo\ntwo\n"),
+				ftBash("printf 'seed\\n' > proj/seed.txt"),
+				ftWrite("proj/seed.txt", "x"),
+				ftRead(ftArgs("path", "proj/seed.txt")),
+				ftWrite("proj/seed.txt", "replaced\n"),
+				ftBash("printf 'outside\\n' > proj/seed.txt"),
+				ftWrite("proj/seed.txt", "again"),
+				ftEdit("proj/g.txt", "two", "2"),
+				ftTool("edit_file", ftArgs("path", "proj/g.txt", "old_string", "two", "new_string", "2", "replace_all", true)),
+				ftRead(ftArgs("path", "proj/g.txt")),
+				ftEdit("proj/g.txt", "one", "one"),
+				ftEdit("proj/nope.txt", "a", "b"),
+				ftTool("write_file", ftArgs("path", "proj/x.txt")),
+				ftEdit("proj/g.txt", "", "x"),
 			),
+			actions: oneTurn,
 		},
+	})
+}
+
+func TestContractFileToolsEdges(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name: "file_tools_read_edges",
 			model: toolChain(
-				write("proj/empty.txt", ""),
-				read(m("path", "proj/empty.txt")),
-				write("proj/three.txt", "a\nb\nc\n"),
-				read(m("path", "proj/three.txt", "offset", 9)),
-				read(m("path", "proj")),
-				read(m()),
-				read(m("path", "proj/three.txt", "offset", 2)),
-				read(m("path", "proj/three.txt", "limit", 1)),
+				ftWrite("proj/empty.txt", ""),
+				ftRead(ftArgs("path", "proj/empty.txt")),
+				ftWrite("proj/three.txt", "a\nb\nc\n"),
+				ftRead(ftArgs("path", "proj/three.txt", "offset", 9)),
+				ftRead(ftArgs("path", "proj")),
+				ftRead(ftArgs()),
+				ftRead(ftArgs("path", "proj/three.txt", "offset", 2)),
+				ftRead(ftArgs("path", "proj/three.txt", "limit", 1)),
 			),
+			actions: oneTurn,
 		},
 		{
 			name: "file_tools_search_edges",
 			model: toolChain(
-				write("proj/one.txt", "Alpha\nbeta\n"),
-				bash("printf 'alpha\\0' > proj/bin.dat && mkdir proj/empty"),
-				tool("grep", m("pattern", "(", "path", "proj")),
-				tool("grep", m("pattern", "zzz", "path", "proj")),
-				tool("grep", m("pattern", "alpha", "path", "proj", "case_insensitive", true)),
-				tool("grep", m("pattern", "alpha", "path", "proj/one.txt", "case_insensitive", true)),
-				tool("grep", m("pattern", "x", "path", "proj/nope")),
-				tool("grep", m()),
-				tool("glob", m("pattern", "proj/*.md")),
-				tool("glob", m("pattern", "proj/*.txt")),
-				tool("glob", m("pattern", "*", "path", "proj/nope")),
-				tool("glob", m()),
-				tool("ls", m("path", "proj")),
-				tool("ls", m("path", "proj/empty")),
-				tool("ls", m("path", "proj/nope")),
+				ftWrite("proj/one.txt", "Alpha\nbeta\n"),
+				ftBash("printf 'alpha\\0' > proj/bin.dat && mkdir proj/empty"),
+				ftTool("grep", ftArgs("pattern", "(", "path", "proj")),
+				ftTool("grep", ftArgs("pattern", "zzz", "path", "proj")),
+				ftTool("grep", ftArgs("pattern", "alpha", "path", "proj", "case_insensitive", true)),
+				ftTool("grep", ftArgs("pattern", "alpha", "path", "proj/one.txt", "case_insensitive", true)),
+				ftTool("grep", ftArgs("pattern", "x", "path", "proj/nope")),
+				ftTool("grep", ftArgs()),
+				ftTool("glob", ftArgs("pattern", "proj/*.md")),
+				ftTool("glob", ftArgs("pattern", "proj/*.txt")),
+				ftTool("glob", ftArgs("pattern", "*", "path", "proj/nope")),
+				ftTool("glob", ftArgs()),
+				ftTool("ls", ftArgs("path", "proj")),
+				ftTool("ls", ftArgs("path", "proj/empty")),
+				ftTool("ls", ftArgs("path", "proj/nope")),
 			),
+			actions: oneTurn,
 		},
-	}
-	for _, sc := range table {
-		t.Run(sc.name, func(t *testing.T) {
-			t.Parallel()
-			sc.actions = []action{
-				create{as: "a"},
-				submit{as: "a", text: "go"},
-				waitIdle{as: "a"},
-			}
-			compareGolden(t, sc.name, runScenario(t, sc))
-		})
-	}
+	})
 }

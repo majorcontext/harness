@@ -65,6 +65,11 @@ func TestContractSessionOps(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractSessionOpsGoals(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name:  "goal_update_deferred_goal_judges_empty_transcript",
 			model: []harnesstest.Step{evaluatorStep("judge", "MET: said done", false)},
@@ -128,6 +133,11 @@ func TestContractSessionOps(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractSessionOpsSettings(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name: "goal_provider_exhausted_parks",
 			model: []harnesstest.Step{
@@ -188,6 +198,13 @@ func TestContractSessionOps(t *testing.T) {
 				bootstrap{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractSessionOpsEnd(t *testing.T) {
+	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
+	rest := agentStep("rest", "ok", true)
+	runScenarios(t, []scenario{
 		{
 			name:  "end_session_semantics",
 			model: []harnesstest.Step{slow, rest},

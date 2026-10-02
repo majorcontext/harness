@@ -10,7 +10,6 @@ func TestContractDriver(t *testing.T) {
 	text := func(name, user, reply string) harnesstest.Step {
 		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
 	}
-	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
 	twoTurns := []action{
 		create{as: "a"},
 		submit{as: "a", text: "one"},
@@ -63,6 +62,15 @@ func TestContractDriver(t *testing.T) {
 				sseResume{as: "a", afterSeq: 2, scoped: true},
 			},
 		},
+	})
+}
+
+func TestContractDriverQueue(t *testing.T) {
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
+	}
+	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
+	runScenarios(t, []scenario{
 		{
 			name:  "driver_queue_goal_and_end",
 			model: []harnesstest.Step{slow, agentStep("tail", "ok", true)},
