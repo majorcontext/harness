@@ -18,6 +18,7 @@ var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract go
 type scenario struct {
 	name       string
 	concurrent bool // child sessions race, so requests are ordered by conversation
+	chat       bool // the model is a chat-completions gateway, and config names it as provider "bifrost"
 	config     map[string]any
 	model      []harnesstest.Step
 	actions    []action
@@ -257,9 +258,9 @@ func (a bindChild) run(t *testing.T, r *run) {
 
 func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
-	fake := harnesstest.New(t, sc.model...)
+	fake, config := scenarioFake(t, sc)
 	r := &run{
-		drv:    newHTTPDriverWith(t, fake.URL(), sc.config),
+		drv:    newHTTPDriverWith(t, fake.URL(), config),
 		fake:   fake,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},

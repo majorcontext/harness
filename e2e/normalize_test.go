@@ -61,6 +61,9 @@ type normRequest struct {
 	ThinkingType           string           `json:"thinking_type,omitempty"`
 	ThinkingBudgetTokens   int              `json:"thinking_budget_tokens,omitempty"`
 	ServiceTier            string           `json:"service_tier,omitempty"`
+	ReasoningEffort        string           `json:"reasoning_effort,omitempty"`
+	User                   string           `json:"user,omitempty"`
+	PromptCacheKey         string           `json:"prompt_cache_key,omitempty"`
 	Tools                  []string         `json:"tools"`
 	Messages               []normReqMessage `json:"messages"`
 }
@@ -242,6 +245,9 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 			ThinkingType:           r.ThinkingType,
 			ThinkingBudgetTokens:   r.ThinkingBudget,
 			ServiceTier:            r.ServiceTier,
+			ReasoningEffort:        r.ReasoningEffort,
+			User:                   n.id(r.User),
+			PromptCacheKey:         n.id(r.PromptCacheKey),
 			Tools:                  slices.Sorted(slices.Values(r.Tools)),
 		}
 		if len(r.Tools) == 0 {
