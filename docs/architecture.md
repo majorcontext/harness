@@ -1,6 +1,6 @@
 # Harness architecture
 
-A proposed re-architecture of harness: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer. 
+A proposed re-architecture of harness: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
 ## Problem
 
@@ -40,7 +40,7 @@ Non-goals:
 - Multi-writer sessions. One owner writes each session log.
 - Durable token deltas. Deltas stay ephemeral.
 
-## Three rules
+## Four rules
 
 1. A session is an append-only event log. One `Apply` function builds state from it, live and on replay.
 2. One goroutine owns each session's state. Other code sends it commands and reads published, immutable views.
