@@ -1,0 +1,287 @@
+package e2e
+
+import (
+	"encoding/json"
+	"fmt"
+	"maps"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/majorcontext/harness/internal/fakemodel"
+)
+
+var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call)_`)
+
+var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
+
+func maskTime(s string) string { return timePattern.ReplaceAllString(s, "<time>") }
+
+const goalEvaluatorMarker = "MET: <one short sentence"
+
+type normRequest struct {
+	SystemHasGoalEvaluator bool             `json:"system_has_goal_evaluator"`
+	Tools                  []string         `json:"tools"`
+	Messages               []normReqMessage `json:"messages"`
+}
+
+type normReqMessage struct {
+	Role  string        `json:"role"`
+	Parts []normReqPart `json:"parts"`
+}
+
+type normReqPart struct {
+	Kind      string         `json:"kind"`
+	Text      string         `json:"text,omitempty"`
+	ToolName  string         `json:"tool_name,omitempty"`
+	ToolInput map[string]any `json:"tool_input,omitempty"`
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+	IsError   bool           `json:"is_error,omitempty"`
+}
+
+type normMessage struct {
+	ID    string     `json:"id"`
+	Role  string     `json:"role"`
+	Parts []normPart `json:"parts"`
+}
+
+type normPart struct {
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments any    `json:"arguments,omitempty"`
+	IsError   bool   `json:"is_error,omitempty"`
+	Content   string `json:"content,omitempty"`
+}
+
+type normalizer struct {
+	aliases map[string]string
+	counts  map[string]int
+}
+
+func (n *normalizer) id(s string) string {
+	loc := idPattern.FindStringIndex(s)
+	if loc == nil {
+		return s
+	}
+	if a, ok := n.aliases[s]; ok {
+		return a
+	}
+	kind := s[:loc[1]-1]
+	n.counts[kind]++
+	a := fmt.Sprintf("%s#%d", kind, n.counts[kind])
+	n.aliases[s] = a
+	return a
+}
+
+func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) observation {
+	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}}
+	obs := observation{Sessions: map[string][]normMessage{}}
+	for _, r := range reqs {
+		nr := normRequest{
+			SystemHasGoalEvaluator: strings.Contains(r.System, goalEvaluatorMarker),
+			Tools:                  slices.Sorted(slices.Values(r.Tools)),
+		}
+		if len(r.Tools) == 0 {
+			nr.Tools = nil
+		}
+		for _, m := range r.Messages {
+			nm := normReqMessage{Role: m.Role}
+			for _, p := range m.Parts {
+				nm.Parts = append(nm.Parts, normReqPart{
+					Kind: p.Kind, Text: maskTime(p.Text), ToolName: p.ToolName, ToolInput: p.ToolInput,
+					ToolUseID: n.id(p.ToolUseID), IsError: p.IsError,
+				})
+			}
+			nr.Messages = append(nr.Messages, nm)
+		}
+		obs.Requests = append(obs.Requests, nr)
+	}
+	for _, alias := range slices.Sorted(maps.Keys(sessions)) {
+		msgs := make([]normMessage, 0, len(sessions[alias]))
+		for _, m := range sessions[alias] {
+			nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
+			for _, p := range m.Parts {
+				np := normPart{Type: p.Type, Text: maskTime(p.Text), CallID: n.id(p.CallID), Name: p.Name, IsError: p.IsError}
+				if len(p.Arguments) > 0 {
+					_ = json.Unmarshal(p.Arguments, &np.Arguments)
+				}
+				var content []string
+				for _, c := range p.Content {
+					content = append(content, c.Text)
+				}
+				np.Content = maskTime(strings.Join(content, "\n"))
+				nm.Parts = append(nm.Parts, np)
+			}
+			msgs = append(msgs, nm)
+		}
+		obs.Sessions[alias] = msgs
+	}
+	return obs
+}
+
+func invariantViolations(msgs []apiMessage, events []apiEvent) []string {
+	var out []string
+	seen := map[string]bool{}
+	calls, results := map[string]bool{}, map[string]bool{}
+	var callOrder []string
+	for _, m := range msgs {
+		if m.ID == "" || seen[m.ID] {
+			out = append(out, fmt.Sprintf("duplicate message id %s", m.ID))
+		}
+		seen[m.ID] = true
+		for _, p := range m.Parts {
+			switch p.Type {
+			case "tool_call":
+				calls[p.CallID] = true
+				callOrder = append(callOrder, p.CallID)
+			case "tool_result":
+				results[p.CallID] = true
+			}
+		}
+	}
+	for _, id := range callOrder {
+		if !results[id] {
+			out = append(out, fmt.Sprintf("tool call %s has no result", id))
+		}
+	}
+	var prev int64
+	for _, ev := range events {
+		if ev.Seq != prev+1 {
+			out = append(out, fmt.Sprintf("event seq %d follows %d", ev.Seq, prev))
+		}
+		prev = ev.Seq
+	}
+	return out
+}
+
+func mustMessages(t *testing.T, raw string) []apiMessage {
+	t.Helper()
+	var msgs []apiMessage
+	if err := json.Unmarshal([]byte(raw), &msgs); err != nil {
+		t.Fatalf("decode messages: %v", err)
+	}
+	return msgs
+}
+
+func TestNormalize(t *testing.T) {
+	skipShort(t)
+	toolReq := func(ids ...string) fakemodel.Request {
+		var parts []fakemodel.Part
+		for _, id := range ids {
+			parts = append(parts, fakemodel.Part{Kind: "tool_use", ToolName: "bash", ToolUseID: id})
+		}
+		return fakemodel.Request{Messages: []fakemodel.Message{{Role: "assistant", Parts: parts}}}
+	}
+	tests := []struct {
+		name string
+		reqs []fakemodel.Request
+		msgs string
+		want string
+	}{
+		{
+			name: "ids_renumbered_by_first_seen",
+			reqs: []fakemodel.Request{toolReq("toolu_zzz", "toolu_aaa")},
+			msgs: `[{"id":"msg_9","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`,
+			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"assistant","parts":[{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#1"},{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#2"}]}]}],` +
+				`"sessions":{"a":[{"id":"msg#1","role":"user","parts":[]},{"id":"msg#2","role":"assistant","parts":[]}]}}`,
+		},
+		{
+			name: "same_id_same_alias",
+			reqs: []fakemodel.Request{toolReq("toolu_x")},
+			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu_x","name":"bash","arguments":{"b":1,"a":2}}]}]`,
+			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"assistant","parts":[{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#1"}]}]}],` +
+				`"sessions":{"a":[{"id":"msg#1","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu#1","name":"bash","arguments":{"a":2,"b":1}}]}]}}`,
+		},
+		{
+			name: "tools_sorted",
+			reqs: []fakemodel.Request{{Tools: []string{"write", "bash", "read"}}},
+			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":["bash","read","write"],"messages":null}],"sessions":{}}`,
+		},
+		{
+			name: "timestamps_removed",
+			msgs: `[{"id":"msg_1","role":"user","created_at":"2026-10-02T10:00:00Z","parts":[{"type":"text","text":"hi"}]}]`,
+			want: `{"requests":null,"sessions":{"a":[{"id":"msg#1","role":"user","parts":[{"type":"text","text":"hi"}]}]}}`,
+		},
+		{
+			name: "system_reduced_to_flag",
+			reqs: []fakemodel.Request{{System: "You are a strict goal-completion evaluator.\nMET: <one short sentence saying why>"}, {System: "secret prompt body"}},
+			want: `{"requests":[{"system_has_goal_evaluator":true,"tools":null,"messages":null},{"system_has_goal_evaluator":false,"tools":null,"messages":null}],"sessions":{}}`,
+		},
+		{
+			name: "timestamps_in_text_masked",
+			reqs: []fakemodel.Request{{Messages: []fakemodel.Message{{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: "engine started 2026-10-02T15:29:58Z"}}}}}},
+			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"user","parts":[{"kind":"text","text":"engine started \u003ctime\u003e"}]}]}],"sessions":{}}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sessions := map[string][]apiMessage{}
+			if tc.msgs != "" {
+				sessions["a"] = mustMessages(t, tc.msgs)
+			}
+			got, err := json.Marshal(normalize(tc.reqs, sessions))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("normalize =\n%s\nwant\n%s", got, tc.want)
+			}
+			if strings.Contains(string(got), "2026-10-02") || strings.Contains(string(got), "secret prompt") {
+				t.Errorf("normalized output leaks unstable or system data: %s", got)
+			}
+		})
+	}
+}
+
+func TestInvariants(t *testing.T) {
+	skipShort(t)
+	tests := []struct {
+		name   string
+		msgs   string
+		events []apiEvent
+		want   string // substring of the single violation; empty means none
+	}{
+		{
+			name: "tool_call_without_result",
+			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"c1","name":"bash"}]}]`,
+			want: "tool call c1 has no result",
+		},
+		{
+			name: "duplicate_message_id",
+			msgs: `[{"id":"msg_1","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`,
+			want: "duplicate message id msg_1",
+		},
+		{
+			name: "paired_calls",
+			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"c1","name":"bash"}]},` +
+				`{"id":"msg_2","role":"tool","parts":[{"type":"tool_result","call_id":"c1"}]}]`,
+			events: []apiEvent{{Seq: 1}, {Seq: 2}},
+		},
+		{
+			name:   "seq_gap",
+			events: []apiEvent{{Seq: 1}, {Seq: 3}},
+			want:   "seq 3 follows 1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var msgs []apiMessage
+			if tc.msgs != "" {
+				msgs = mustMessages(t, tc.msgs)
+			}
+			got := invariantViolations(msgs, tc.events)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("violations = %v, want none", got)
+				}
+				return
+			}
+			if len(got) != 1 || !strings.Contains(got[0], tc.want) {
+				t.Fatalf("violations = %v, want one containing %q", got, tc.want)
+			}
+		})
+	}
+}

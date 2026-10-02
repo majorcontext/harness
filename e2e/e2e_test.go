@@ -370,11 +370,19 @@ func (p *serveProc) prompt(id, text string) {
 }
 
 type apiMessage struct {
-	ID    string `json:"id"`
-	Role  string `json:"role"`
-	Parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+	Parts     []struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		CallID    string          `json:"call_id"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		IsError   bool            `json:"is_error"`
+		Content   []struct {
+			Text string `json:"text"`
+		} `json:"content"`
 	} `json:"parts"`
 }
 
