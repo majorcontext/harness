@@ -245,7 +245,9 @@ func TestContractMCPEager(t *testing.T) {
 				mcpTool("weather", "echo", "from", "weather"),
 				mcpTool("stdio-weather", "echo", "from", "stdio"),
 			),
-			actions: oneTurn,
+			actions: append(append([]action{}, oneTurn...), expectMCPCalls{server: "weather", want: []harnesstest.MCPCall{
+				{Method: "tools/call", Name: "echo", Args: map[string]any{"from": "weather"}, Authorization: mcpToken},
+			}}),
 		},
 	})
 }
