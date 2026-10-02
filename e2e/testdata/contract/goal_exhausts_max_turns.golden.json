@@ -115,5 +115,48 @@
       ]
     }
   ],
-  "sessions": {}
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "say done"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "try"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: keep going\n\nKeep working until the goal is fully satisfied, then stop."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "try"
+          }
+        ]
+      }
+    ]
+  }
 }

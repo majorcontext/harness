@@ -19,6 +19,7 @@ type driver interface {
 	Events(t *testing.T) []apiEvent
 	Restart(t *testing.T, kill bool)
 	Queued(t *testing.T, id string) []string
+	AwaitTurnEnd(t *testing.T, outcome string)
 }
 
 type httpDriver struct {
@@ -174,5 +175,32 @@ func (p *serveProc) terminate(t *testing.T) {
 	}
 	if err := p.cmd.Wait(); err != nil {
 		t.Logf("serve exit after SIGTERM: %v", err)
+	}
+}
+
+func (d *httpDriver) AwaitTurnEnd(t *testing.T, outcome string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+d.p.addr+"/event?from=0", nil)
+	if err != nil {
+		t.Fatalf("event request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /event: %v", err)
+	}
+	defer resp.Body.Close()
+	sc := newSSEScanner(resp.Body)
+	for {
+		raw, err := sc.next()
+		if err != nil {
+			t.Fatalf("event stream ended before a turn ended with %q: %v", outcome, err)
+		}
+		var ev struct{ Type, Outcome string }
+		if json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == outcome {
+			return
+		}
 	}
 }

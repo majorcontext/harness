@@ -50,6 +50,7 @@ type run struct {
 	fake    *fakemodel.Server
 	ids     map[string]string
 	aliases []string
+	noIdle  map[string]bool
 	reqs    chan int
 	seen    int
 }
@@ -100,10 +101,11 @@ func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
 	fake := fakemodel.New(t, sc.model...)
 	r := &run{
-		drv:  newHTTPDriver(t, fake.URL()),
-		fake: fake,
-		ids:  map[string]string{},
-		reqs: make(chan int, 1024),
+		drv:    newHTTPDriver(t, fake.URL()),
+		fake:   fake,
+		ids:    map[string]string{},
+		noIdle: map[string]bool{},
+		reqs:   make(chan int, 1024),
 	}
 	fake.OnRequest(func(n int) {
 		select {
@@ -115,7 +117,9 @@ func runScenario(t *testing.T, sc scenario) observation {
 		a.run(t, r)
 	}
 	for _, alias := range r.aliases {
-		r.drv.WaitIdle(t, r.ids[alias])
+		if !r.noIdle[alias] {
+			r.drv.WaitIdle(t, r.ids[alias])
+		}
 	}
 	sessions := map[string][]apiMessage{}
 	for _, alias := range r.aliases {

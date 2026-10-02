@@ -1,9 +1,6 @@
 package e2e
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
 	"strings"
 	"testing"
 
@@ -28,39 +25,20 @@ func evaluatorStep(name, verdict string, repeat bool) fakemodel.Step {
 }
 
 // An exhausted goal stays active, so the session never reads idle and the
-// runner's final waitIdle would block; the alias stays out of run.aliases.
-type createUntracked struct{ as string }
+// runner's final waitIdle would block.
+type createActive struct{ as string }
 
-func (a createUntracked) run(t *testing.T, r *run) { r.ids[a.as] = r.drv.Create(t) }
+func (a createActive) run(t *testing.T, r *run) {
+	r.ids[a.as] = r.drv.Create(t)
+	r.aliases = append(r.aliases, a.as)
+	r.noIdle[a.as] = true
+}
 
 type awaitMaxTurnsExceeded struct{}
 
 func (awaitMaxTurnsExceeded) run(t *testing.T, r *run) {
 	t.Helper()
-	d := r.drv.(*httpDriver)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+d.p.addr+"/event?from=0", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /event: %v", err)
-	}
-	defer resp.Body.Close()
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			t.Fatalf("event stream ended before max_turns_exceeded: %v", err)
-		}
-		var ev struct{ Type, Outcome string }
-		if json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == "max_turns_exceeded" {
-			return
-		}
-	}
+	r.drv.AwaitTurnEnd(t, "max_turns_exceeded")
 }
 
 func TestContractGoal(t *testing.T) {
@@ -104,7 +82,7 @@ func TestContractGoal(t *testing.T) {
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},
 			actions: []action{
-				createUntracked{as: "a"},
+				createActive{as: "a"},
 				setGoal{as: "a", condition: "say done", maxTurns: 2},
 				awaitMaxTurnsExceeded{},
 			},
