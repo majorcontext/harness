@@ -1,159 +1,22 @@
-# Provider instructions
+# Provider
 
-These rules apply to `provider/` and its adapters. Harness does not merge
-ancestor files. If root guidance is not active, locate the Git root and read
-`<repo-root>/AGENTS.md`. Resolve repository paths from that root. Read
-`message/AGENTS.md` for canonical data rules.
+Read the root AGENTS.md. Read `message/AGENTS.md` for canonical data rules.
 
-## Adapter boundary
-
-Each adapter receives a canonical `provider.Request` and builds a new wire
-request. Never store provider wire state in session history.
-
-Every transcoder must:
-
-- Call `message.NormalizeForWire`.
-- Read tool output through `ToolResult.SafeContent`.
-- Apply `imageclamp.Clamp` with adapter-specific limits.
-- Map internal tool-call IDs deterministically.
+- Each adapter builds a new wire request from canonical history. Store no wire state.
+- Every transcoder calls `message.NormalizeForWire` and reads `ToolResult.SafeContent`.
+- Apply `imageclamp.Clamp`. Map tool-call IDs deterministically.
 - Replay opaque `ProviderData` only for the matching family.
-- Preserve request order after same-role merging.
-- Keep prompt-cache markers out of canonical history.
-
-Use golden JSON tests for wire shape and ordering.
-
-## Error classification
-
-Classify errors with typed `provider.Error` values. Engine retry code must not
-match provider error text.
-
-Mark malformed requests permanent. Keep context overflow separate. Use text
-matching only inside a provider parser for a documented provider shape, such as
-context overflow or account exhaustion.
-
-A stream that ends without its terminal event is
-`RetryableStreamTruncated`. Do not report it as an ordinary cancellation.
-
-## Images in tool results
-
-Anthropic can recurse into tool-result blobs. Native OpenAI and
-OpenAI-compatible adapters replace those blobs with an omission note. Preserve
-this adapter difference until the wire contracts change.
-
-Do not add a static model-name vision list. The repository has no complete
-capability signal.
-
-## Reasoning effort
-
-`message.EffortUnset` means "send no control." It is not equal to
-`message.EffortOff`.
-
-- Anthropic maps enabled levels to thinking budgets. It raises `max_tokens`
-  above the budget and drops temperature and top-p.
-- Native OpenAI Responses maps enabled levels into `reasoning.effort`.
-- OpenAI-compatible chat sends the literal `"off"` for `EffortOff`.
-  Gateways can reason by default when the field is absent.
-
-Reasoning-history stripping is intentionally asymmetric:
-
-- Anthropic strips stored thinking when reasoning is not enabled.
-- Native OpenAI strips stored reasoning only for explicit `EffortOff`.
-- Native OpenAI must replay encrypted reasoning on `EffortUnset` for
-  stateless multi-turn tool use.
-
-Do not replace this with one shared `!Reasoning()` condition.
-
-Read `docs/models-and-providers.md` before changing effort or
-compaction request behavior.
-
-## Session affinity
-
-`Request.SessionKey` is the stable session routing hint.
-
-- OpenAI-compatible sends `user` and, unless disabled, `prompt_cache_key`.
-- Native OpenAI Responses sends `prompt_cache_key`.
-- Codex-family HTTP Responses bodies use zstd level 3. Generic OpenAI stays uncompressed.
-- Anthropic ignores `SessionKey` and uses explicit cache markers.
-
-Omit empty keys. Do not replace the gateway `user` field with the native
-OpenAI field.
-
-## Anthropic cache TTL
-
-Anthropic uses two cache breakpoints. The default TTL is one hour.
-
-- `"1h"` adds the TTL and the required beta header.
-- `"5m"` restores the short cache shape without the beta header.
-- Reject unknown values.
-- Reject `cache_ttl` on an entry that does not build the native Anthropic
-  adapter.
-
-## Codex WebSocket lineage
-
-Only `CodexFamily` requests with WebSocket transport and a non-empty
-`SessionKey` can send `previous_response_id` or `generate:false`.
-
-- Keep lineage runtime-only and keyed by the session pool entry.
-- Install lineage only after clean `response.completed` with a non-empty ID.
-- Bind completion callbacks to the current connection generation.
-- Compare every context-bearing property before projecting an input suffix.
-- Match `prior input + prior assistant output` before sending the suffix.
-- Keep the complete request immutable for mismatch and HTTP fallback.
-- Recover only an immediate first-frame chain miss once. The rejection can
-  arrive as the documented `previous_response_not_found` code, as the
-  `404`/`not_found` HTTP-status vocabulary, or with no code at all, as an
-  `invalid_request_error` whose message names `previous_response_id`.
-  Classify all three. Match the last one on that field name, not on
-  `invalid_request_error`, which describes every malformed request.
-- Recover a chain miss on a chained request, or on a reused connection even
-  when the request itself was already complete. Do not recover one on a
-  freshly dialed connection carrying a non-chained request.
-- Send that recovery as the complete request on a freshly dialed connection,
-  not the one that produced the miss.
-- Do not size the reuse window from `chain_refusal=connection_idle`. It
-  undercounts: the measured idle life of an unread pooled connection is 60 to
-  90 seconds, well under `wsDefaultIdleTimeout`, so the usual idle loss
-  becomes an HTTP fallback that reports no `request_mode` and no refusal
-  reason. `idleTimeout` is also the per-frame read deadline, so split the two
-  before changing either value.
-- Invalidate later, repeated, partial, failed, canceled, or truncated lineage.
-- Never log, persist, or export a response ID as projection metadata.
-
-`generate:false` prewarm can accept empty input. Ordinary requests cannot.
-`StartupPrewarmEnabled` returns true only for `CodexFamily` with WebSocket
-transport. Prewarm emits no provider events. `Prewarm` must return promptly when
-its context is canceled; the engine cannot terminate a callback that ignores
-cancellation.
-
-Completed WebSocket streams can report `RequestMetadata` as `full` or
-`incremental`. Report complete and sent item counts and `chain_recovered` without
-response IDs. Keep OpenAI usage provider-reported: subtract `cached_tokens` from
-inclusive input and expose the cached subset as `CacheReadTokens`.
-
-## Native OpenAI Responses endpoints
-
-A configured provider with type `"openai"` builds the Responses adapter under
-that provider-map key. Require `base_url` for a non-built-in family.
-
-Keep `Client.Family` equal to the configured family. The family is both the
-router name and the opaque-data isolation boundary. Do not replay encrypted
-reasoning between two Responses endpoints.
-
-`responses_path` is valid only for an entry that builds this adapter.
-
-## Stable request bytes
-
-Prompt caches depend on stable bytes, not set equality. Keep tool order, system
-segment order, message merge behavior, and JSON field behavior deterministic.
-
-A test for cache-sensitive data must compare ordered wire bytes or ordered
-decoded objects. A membership assertion is insufficient.
-
-## Tests
-
-- Test shared behavior through each affected real adapter.
-- Use provider-contract oracles that do not call production normalization.
-- Cover malformed HTTP responses and mid-stream errors.
-- Assert unknown optional fields are omitted, not emitted as empty strings,
-  when the contract requires omission.
-- Never make a live provider call in the ordinary unit suite.
+- Keep prompt-cache markers out of history. Keep request bytes stable and ordered.
+- Classify errors with typed `provider.Error`. Engine code never matches error text.
+- A stream that ends without a terminal event is `RetryableStreamTruncated`.
+- `message.EffortUnset` sends no control. It is not `message.EffortOff`.
+- Reasoning-history stripping differs by adapter. Never use one shared `!Reasoning()` check.
+- Never replay encrypted reasoning between two Responses endpoints. `Client.Family` is the boundary.
+- `Request.SessionKey` is the routing hint. Omit empty keys.
+- Anthropic cache TTL is `"1h"` or `"5m"`. Reject other values.
+- Send `previous_response_id` or `generate:false` only for `CodexFamily` over WebSocket with a `SessionKey`.
+- Install lineage only after a clean `response.completed`. Never log or persist a response ID.
+- Recover a first-frame chain miss once, with the complete request on a fresh connection.
+- Add no static model-name vision list.
+- Test each shared behavior through every affected real adapter. Compare ordered wire bytes.
+- Cover mid-stream errors and malformed responses. Make no live call in unit tests.
