@@ -34,7 +34,7 @@ func (p *serveProc) scanEventsFrom(ctx context.Context, from int64, header bool,
 	if err != nil {
 		p.t.Fatalf("event request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Authorization", "Bearer "+p.token)
 	if header {
 		req.Header.Set("Last-Event-ID", strconv.FormatInt(from, 10))
 	}
