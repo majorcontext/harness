@@ -102,8 +102,11 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 	sort.Strings(req.Tools)
 
 	var system []string
-	toolNames := map[string]string{}
+	pending := map[string]string{}
 	for _, m := range w.Messages {
+		if m.Role != "tool" && len(pending) > 0 {
+			return Request{}, fmt.Errorf("%s message follows assistant tool calls with %d unanswered", m.Role, len(pending))
+		}
 		switch m.Role {
 		case "system":
 			system = append(system, chatText(m.Content))
@@ -115,7 +118,7 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 				msg.Parts = append(msg.Parts, Part{Kind: "text", Text: text})
 			}
 			for _, tc := range m.ToolCalls {
-				toolNames[tc.ID] = tc.Function.Name
+				pending[tc.ID] = tc.Function.Name
 				var input map[string]any
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
 					return Request{}, fmt.Errorf("tool call %q has malformed arguments: %w", tc.ID, err)
@@ -124,10 +127,12 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 			}
 			req.Messages = append(req.Messages, msg)
 		case "tool":
-			if _, ok := toolNames[m.ToolCallID]; !ok {
+			name, ok := pending[m.ToolCallID]
+			if !ok {
 				return Request{}, fmt.Errorf("tool message %q has no matching assistant tool call", m.ToolCallID)
 			}
-			part := Part{Kind: "tool_result", Text: chatText(m.Content), ToolName: toolNames[m.ToolCallID], ToolUseID: m.ToolCallID}
+			delete(pending, m.ToolCallID)
+			part := Part{Kind: "tool_result", Text: chatText(m.Content), ToolName: name, ToolUseID: m.ToolCallID}
 			if n := len(req.Messages); n > 0 && len(req.Messages[n-1].Parts) > 0 && req.Messages[n-1].Parts[0].Kind == "tool_result" {
 				req.Messages[n-1].Parts = append(req.Messages[n-1].Parts, part)
 			} else {
@@ -136,6 +141,9 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 		default:
 			return Request{}, fmt.Errorf("unknown message role %q", m.Role)
 		}
+	}
+	if len(pending) > 0 {
+		return Request{}, fmt.Errorf("%d assistant tool calls have no tool message", len(pending))
 	}
 	req.System = strings.Join(system, "\n\n")
 	return req, nil

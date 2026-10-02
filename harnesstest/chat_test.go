@@ -159,6 +159,9 @@ func TestChatRejectsRequestsARealGatewayRejects(t *testing.T) {
 		{"unknown role", "/chat/completions", `{"messages":[{"role":"critic","content":"x"}],` + opts + `}`, `unknown message role "critic"`},
 		{"malformed arguments", "/chat/completions", `{"messages":[{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"bash","arguments":"{"}}]}],` + opts + `}`, "malformed arguments"},
 		{"orphan tool message", "/chat/completions", `{"messages":[` + asst + `,{"role":"tool","tool_call_id":"c2","content":"x"}],` + opts + `}`, `"c2" has no matching`},
+		{"duplicate tool message", "/chat/completions", `{"messages":[` + asst + `,{"role":"tool","tool_call_id":"c1","content":"x"},{"role":"tool","tool_call_id":"c1","content":"x"}],` + opts + `}`, `"c1" has no matching`},
+		{"message between call and result", "/chat/completions", `{"messages":[` + asst + `,{"role":"user","content":"hi"},{"role":"tool","tool_call_id":"c1","content":"x"}],` + opts + `}`, "user message follows assistant tool calls"},
+		{"missing tool message", "/chat/completions", `{"messages":[` + asst + `],` + opts + `}`, "have no tool message"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
