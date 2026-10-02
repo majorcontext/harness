@@ -165,7 +165,10 @@ func measure(name string, src []byte) (FileMetrics, error) {
 			m.CodeLines++
 		}
 	}
-	isTest := strings.HasSuffix(name, "_test.go")
+	timePkg := ""
+	if strings.HasSuffix(name, "_test.go") {
+		timePkg = timeImportName(f)
+	}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
@@ -173,13 +176,28 @@ func measure(name string, src []byte) (FileMetrics, error) {
 				m.LongFuncs++
 			}
 		case *ast.SelectorExpr:
-			if id, ok := n.X.(*ast.Ident); ok && isTest && id.Name == "time" && (n.Sel.Name == "Sleep" || n.Sel.Name == "After") {
+			if id, ok := n.X.(*ast.Ident); ok && timePkg != "" && id.Name == timePkg && (n.Sel.Name == "Sleep" || n.Sel.Name == "After") {
 				m.SleepAfter++
 			}
 		}
 		return true
 	})
 	return m, nil
+}
+
+func timeImportName(f *ast.File) string {
+	for _, imp := range f.Imports {
+		if imp.Path.Value != `"time"` {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			return "time"
+		case imp.Name.Name != "_" && imp.Name.Name != ".":
+			return imp.Name.Name
+		}
+	}
+	return ""
 }
 
 func hasDirective(text string) bool {

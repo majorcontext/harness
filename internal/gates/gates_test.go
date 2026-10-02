@@ -80,6 +80,15 @@ var checkCases = []struct {
 		want: []string{"a/a_test.go:sleep_after"},
 	},
 	{
+		name: "aliased_time_import_sleep_fails",
+		head: fstest.MapFS{"a/a_test.go": file("package a\n\nimport clock \"time\"\n\nfunc TestX() { clock.Sleep(1) }\n")},
+		want: []string{"a/a_test.go:sleep_after"},
+	},
+	{
+		name: "sleep_method_on_value_named_time_passes",
+		head: fstest.MapFS{"a/a_test.go": file("package a\n\ntype T struct{}\n\nfunc (T) Sleep(int) {}\n\nfunc TestX() {\n\ttime := T{}\n\ttime.Sleep(1)\n}\n")},
+	},
+	{
 		name: "sleep_outside_test_file_passes",
 		head: fstest.MapFS{"a/a.go": file("package a\n\nimport \"time\"\n\nfunc F() { time.Sleep(1) }\n")},
 	},
