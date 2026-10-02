@@ -2,6 +2,7 @@ package harnesstest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -10,21 +11,32 @@ import (
 )
 
 // NewChat starts a Server that speaks the OpenAI chat-completions wire at
-// BaseURL+"/chat/completions", as a gateway such as Bifrost does. Steps,
-// matching, Block, Release, and error replies behave as for New.
+// a path ending in "/chat/completions", as a gateway such as Bifrost does.
+// Steps, matching, Block, Release, and error replies behave as for New. A
+// request that a real gateway rejects fails the test: a wrong path, a body
+// without stream and stream_options.include_usage set to true, an unknown
+// role, malformed tool-call arguments, or a tool message with no matching
+// assistant tool call.
 func NewChat(t testing.TB, steps ...Step) *Server {
 	t.Helper()
 	return start(t, chatCodec, steps)
 }
 
-var chatCodec = codec{decode: decodeChatRequest, stream: (*Server).chatStream, writeError: writeChatError, replyError: writeChatReplyError}
+var chatCodec = codec{
+	decode: decodeChatRequest, stream: (*Server).chatStream, writeError: writeChatError, replyError: writeChatReplyError,
+	pathSuffix: "/chat/completions",
+}
 
 type chatWireRequest struct {
 	Model           string `json:"model"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	User            string `json:"user"`
 	PromptCacheKey  string `json:"prompt_cache_key"`
-	Messages        []struct {
+	Stream          bool   `json:"stream"`
+	StreamOptions   struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options"`
+	Messages []struct {
 		Role       string          `json:"role"`
 		Content    json.RawMessage `json:"content"`
 		ToolCalls  []chatToolCall  `json:"tool_calls"`
@@ -74,6 +86,12 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 	if err := json.Unmarshal(body, &w); err != nil {
 		return Request{}, err
 	}
+	if !w.Stream {
+		return Request{}, errors.New("stream is not true")
+	}
+	if !w.StreamOptions.IncludeUsage {
+		return Request{}, errors.New("stream_options.include_usage is not true")
+	}
 	req := Request{
 		Model: w.Model, ReasoningEffort: w.ReasoningEffort, User: w.User,
 		PromptCacheKey: w.PromptCacheKey, Header: h.Clone(),
@@ -99,17 +117,24 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 			for _, tc := range m.ToolCalls {
 				toolNames[tc.ID] = tc.Function.Name
 				var input map[string]any
-				_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+					return Request{}, fmt.Errorf("tool call %q has malformed arguments: %w", tc.ID, err)
+				}
 				msg.Parts = append(msg.Parts, Part{Kind: "tool_use", ToolName: tc.Function.Name, ToolInput: input, ToolUseID: tc.ID})
 			}
 			req.Messages = append(req.Messages, msg)
 		case "tool":
+			if _, ok := toolNames[m.ToolCallID]; !ok {
+				return Request{}, fmt.Errorf("tool message %q has no matching assistant tool call", m.ToolCallID)
+			}
 			part := Part{Kind: "tool_result", Text: chatText(m.Content), ToolName: toolNames[m.ToolCallID], ToolUseID: m.ToolCallID}
 			if n := len(req.Messages); n > 0 && len(req.Messages[n-1].Parts) > 0 && req.Messages[n-1].Parts[0].Kind == "tool_result" {
 				req.Messages[n-1].Parts = append(req.Messages[n-1].Parts, part)
 			} else {
 				req.Messages = append(req.Messages, Message{Role: "user", Parts: []Part{part}})
 			}
+		default:
+			return Request{}, fmt.Errorf("unknown message role %q", m.Role)
 		}
 	}
 	req.System = strings.Join(system, "\n\n")

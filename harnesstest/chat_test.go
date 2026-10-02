@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -140,5 +142,38 @@ func TestChatLastUserTextSkipsEngineContextMessage(t *testing.T) {
 	ctx := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: "ambient"}}}
 	if _, err := chatStream(t, s, &provider.Request{Messages: []message.Message{userMsg("real prompt"), ctx}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatRejectsRequestsARealGatewayRejects(t *testing.T) {
+	const opts = `"stream":true,"stream_options":{"include_usage":true}`
+	asst := `{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"bash","arguments":"{}"}}]}`
+	tests := []struct {
+		name, path, body, want string
+	}{
+		{"wrong path", "/v1/messages", `{"messages":[],` + opts + `}`, `request path "/v1/messages"`},
+		{"not streaming", "/chat/completions", `{"messages":[],"stream_options":{"include_usage":true}}`, "stream is not true"},
+		{"no include_usage", "/chat/completions", `{"messages":[],"stream":true}`, "include_usage is not true"},
+		{"unknown role", "/chat/completions", `{"messages":[{"role":"critic","content":"x"}],` + opts + `}`, `unknown message role "critic"`},
+		{"malformed arguments", "/chat/completions", `{"messages":[{"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"bash","arguments":"{"}}]}],` + opts + `}`, "malformed arguments"},
+		{"orphan tool message", "/chat/completions", `{"messages":[` + asst + `,{"role":"tool","tool_call_id":"c2","content":"x"}],` + opts + `}`, `"c2" has no matching`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{TB: t}
+			s := NewChat(rec, Step{Repeat: true, Reply: Reply{Text: "x"}})
+			resp, err := http.Post(s.URL()+tc.path, "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode < 400 {
+				t.Errorf("status = %d, want an error", resp.StatusCode)
+			}
+			rec.runCleanups()
+			if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], tc.want) {
+				t.Errorf("errors = %q, want one containing %q", rec.errors, tc.want)
+			}
+		})
 	}
 }

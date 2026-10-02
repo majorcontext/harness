@@ -116,6 +116,8 @@ type codec struct {
 	stream     func(s *Server, w http.ResponseWriter, r *http.Request, n int, name string, rep Reply)
 	writeError func(w http.ResponseWriter, status int, msg string)
 	replyError func(w http.ResponseWriter, rep Reply)
+	// pathSuffix, when set, is the end of the only path the server answers.
+	pathSuffix string
 }
 
 var anthropicCodec = codec{
@@ -346,6 +348,13 @@ func (s *Server) selectStep(req Request) int {
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+	if suffix := s.wire().pathSuffix; suffix != "" && !strings.HasSuffix(r.URL.Path, suffix) {
+		s.mu.Lock()
+		s.undecoded = append(s.undecoded, fmt.Sprintf("request path %q does not end in %q", r.URL.Path, suffix))
+		s.mu.Unlock()
+		s.wire().writeError(w, http.StatusNotFound, "harnesstest: unknown path")
+		return
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		s.wire().writeError(w, http.StatusBadRequest, err.Error())
