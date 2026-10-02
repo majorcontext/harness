@@ -156,7 +156,7 @@ func (r *recorder) runCleanups() {
 
 func TestUnmatchedRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec, Step{Match: LastUserText("expected"), Reply: Reply{Text: "x"}})
+	s := New(rec, Step{Match: LastUserText("expected"), Repeat: true, Reply: Reply{Text: "x"}})
 	if _, err := ask(t, s, "surprise title request"); err == nil {
 		t.Fatal("unmatched request succeeded, want an HTTP error")
 	}
@@ -262,7 +262,7 @@ func TestBlockedStreamExits(t *testing.T) {
 
 func TestUndecodableRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec, Step{Match: Any(), Reply: Reply{Text: "x"}})
+	s := New(rec, Step{Match: Any(), Repeat: true, Reply: Reply{Text: "x"}})
 	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages": [`))
 	if err != nil {
 		t.Fatal(err)
@@ -277,6 +277,22 @@ func TestUndecodableRequestFailsLoudly(t *testing.T) {
 	rec.runCleanups()
 	if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], "undecodable request body") || !strings.Contains(rec.errors[0], `{\"messages\": [`) {
 		t.Errorf("errors = %q, want one naming the undecodable body", rec.errors)
+	}
+}
+
+func TestUnconsumedStepFailsLoudly(t *testing.T) {
+	rec := &recorder{TB: t}
+	s := New(rec,
+		Step{Name: "fired", Match: LastUserText("one"), Reply: Reply{Text: "x"}},
+		Step{Name: "idle", Match: LastUserText("two"), Reply: Reply{Text: "x"}},
+		Step{Name: "fallback", Match: LastUserText("three"), Repeat: true, Reply: Reply{Text: "x"}},
+	)
+	if _, err := ask(t, s, "one"); err != nil {
+		t.Fatal(err)
+	}
+	rec.runCleanups()
+	if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], `"idle" never matched`) {
+		t.Errorf("errors = %q, want one naming the idle step", rec.errors)
 	}
 }
 
@@ -325,7 +341,7 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 	  ]}`
 	var seen []int
 	s := New(t,
-		Step{Name: "no", Match: And(LastToolResult("bash"), SystemContains("absent")), Reply: Reply{Text: "no"}},
+		Step{Name: "no", Match: And(LastToolResult("bash"), SystemContains("absent")), Repeat: true, Reply: Reply{Text: "no"}},
 		Step{Name: "yes", Match: And(LastToolResult("bash"), SystemContains("sys b")), Reply: Reply{Text: "yes"}},
 	)
 	s.OnRequest(func(n int) { seen = append(seen, n) })

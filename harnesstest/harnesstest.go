@@ -121,6 +121,13 @@ func New(t testing.TB, steps ...Step) *Server {
 		for _, msg := range s.undecoded {
 			t.Errorf("harnesstest: undecodable request body: %s", msg)
 		}
+		if !t.Failed() {
+			for i, st := range s.steps {
+				if !st.Repeat && !s.consumed[i] {
+					t.Errorf("harnesstest: step %d %q never matched a request", i, st.Name)
+				}
+			}
+		}
 		for _, r := range s.unmatched {
 			sys := r.System
 			if len(sys) > 80 {
