@@ -178,6 +178,10 @@ func transcriptOf(msgs []apiMessage) []transcriptMessage {
 			}
 			var content []string
 			for _, c := range p.Content {
+				if c.Type == "blob" {
+					content = append(content, "[blob "+c.MediaType+" "+c.Data+"]")
+					continue
+				}
 				content = append(content, c.Text)
 			}
 			tp.Content = strings.Join(content, "\n")

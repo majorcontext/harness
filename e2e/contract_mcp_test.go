@@ -398,7 +398,7 @@ func TestContractMCPLazyLoading(t *testing.T) {
 		},
 		{
 			name:    "mcp_auto_stays_eager_under_threshold",
-			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": 5}, weather),
+			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": 6}, weather),
 			model:   textReply("hi"),
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"Deferred MCP tools"}}),
 		},

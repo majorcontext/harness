@@ -388,7 +388,10 @@ type apiMessage struct {
 		Arguments json.RawMessage `json:"arguments"`
 		IsError   bool            `json:"is_error"`
 		Content   []struct {
-			Text string `json:"text"`
+			Type      string `json:"type"`
+			Text      string `json:"text"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
 		} `json:"content"`
 	} `json:"parts"`
 }

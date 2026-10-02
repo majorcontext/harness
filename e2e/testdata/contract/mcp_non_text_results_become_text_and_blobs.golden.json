@@ -125,7 +125,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "plain\n\nresource: doc://x (x)\nembedded"
+            "content": "plain\n[blob image/png iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==]\nresource: doc://x (x)\nembedded"
           }
         ]
       },
