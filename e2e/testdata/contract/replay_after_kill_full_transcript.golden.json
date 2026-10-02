@@ -1,0 +1,776 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo replay"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "replay\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ran"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "bootstrap.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "live_from": 10,
+        "seqs": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "stream_from": 8
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        }
+      ]
+    },
+    "bootstrap.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "live_from": 13,
+        "seqs": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "stream_from": 13
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "id": "msg#5",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 4,
+        "model": "anthropic/claude-fable-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 10,
+          "last_input_tokens": 5,
+          "messages": 4,
+          "output_tokens": 6
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "messages": 5,
+        "model": "anthropic/claude-fable-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 10,
+          "last_input_tokens": 5,
+          "messages": 5,
+          "output_tokens": 6
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "next_cursor": 7,
+        "records": [
+          {
+            "created_at": "\u003ctime\u003e",
+            "effort": "",
+            "seq": 1,
+            "service_tier": "",
+            "type": "session",
+            "workdir": "\u003cworkdir\u003e"
+          },
+          {
+            "model": "anthropic/claude-fable-5",
+            "seq": 2,
+            "type": "model"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#1",
+            "message_role": "user",
+            "seq": 3,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#2",
+            "message_role": "assistant",
+            "seq": 4,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#3",
+            "message_role": "tool",
+            "seq": 5,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#4",
+            "message_role": "assistant",
+            "seq": 6,
+            "type": "message"
+          },
+          {
+            "seq": 7,
+            "type": "child_turn.settled"
+          }
+        ],
+        "session_id": "ses:a"
+      }
+    },
+    "journal_page.a#2": {
+      "status": 200,
+      "body": {
+        "next_cursor": 8,
+        "records": [
+          {
+            "created_at": "\u003ctime\u003e",
+            "effort": "",
+            "seq": 1,
+            "service_tier": "",
+            "type": "session",
+            "workdir": "\u003cworkdir\u003e"
+          },
+          {
+            "model": "anthropic/claude-fable-5",
+            "seq": 2,
+            "type": "model"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#1",
+            "message_role": "user",
+            "seq": 3,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#2",
+            "message_role": "assistant",
+            "seq": 4,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#3",
+            "message_role": "tool",
+            "seq": 5,
+            "type": "message"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#4",
+            "message_role": "assistant",
+            "seq": 6,
+            "type": "message"
+          },
+          {
+            "seq": 7,
+            "type": "child_turn.settled"
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "message_id": "msg#5",
+            "message_role": "user",
+            "seq": 8,
+            "type": "message"
+          }
+        ],
+        "session_id": "ses:a"
+      }
+    },
+    "list_sessions": {
+      "status": 200,
+      "body": [
+        {
+          "context": {
+            "used_tokens": 5,
+            "window_tokens": 1000000
+          },
+          "created_at": "\u003ctime\u003e",
+          "id": "ses:a",
+          "last_activity_at": "\u003ctime\u003e",
+          "last_turn": {
+            "outcome": "completed"
+          },
+          "lineage": {
+            "children": [],
+            "status": "idle"
+          },
+          "messages": 4,
+          "model": "anthropic/claude-fable-5",
+          "plugins": [],
+          "queued": 0,
+          "seq": 10,
+          "state": "idle",
+          "status": "idle",
+          "subscription_usage": null,
+          "usage": {
+            "input_tokens": 10,
+            "last_input_tokens": 5,
+            "messages": 4,
+            "output_tokens": 6
+          },
+          "workdir": "\u003cworkdir\u003e"
+        }
+      ]
+    },
+    "list_sessions#2": {
+      "status": 200,
+      "body": [
+        {
+          "context": {
+            "used_tokens": 5,
+            "window_tokens": 1000000
+          },
+          "created_at": "\u003ctime\u003e",
+          "id": "ses:a",
+          "last_activity_at": "\u003ctime\u003e",
+          "last_turn": {
+            "outcome": "completed"
+          },
+          "messages": 5,
+          "model": "anthropic/claude-fable-5",
+          "plugins": [],
+          "queued": 0,
+          "seq": 13,
+          "state": "idle",
+          "status": "idle",
+          "subscription_usage": null,
+          "usage": {
+            "input_tokens": 10,
+            "last_input_tokens": 5,
+            "messages": 5,
+            "output_tokens": 6
+          },
+          "workdir": "\u003cworkdir\u003e"
+        }
+      ]
+    },
+    "messages_page.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 4,
+        "total": 4
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 5,
+        "total": 5
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "id": "msg#5",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    },
+    "session_status": {
+      "status": 200,
+      "body": {
+        "ses:a": {
+          "context": {
+            "used_tokens": 5,
+            "window_tokens": 1000000
+          },
+          "last_turn": {
+            "outcome": "completed"
+          },
+          "state": "idle",
+          "type": "idle",
+          "usage": {
+            "input_tokens": 10,
+            "last_input_tokens": 5,
+            "messages": 4,
+            "output_tokens": 6
+          }
+        }
+      }
+    },
+    "session_status#2": {
+      "status": 200,
+      "body": {
+        "ses:a": {
+          "context": {
+            "used_tokens": 5,
+            "window_tokens": 1000000
+          },
+          "last_turn": {
+            "outcome": "completed"
+          },
+          "state": "idle",
+          "type": "idle",
+          "usage": {
+            "input_tokens": 10,
+            "last_input_tokens": 5,
+            "messages": 5,
+            "output_tokens": 6
+          }
+        }
+      }
+    }
+  }
+}

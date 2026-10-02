@@ -1,0 +1,471 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo replay"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "replay\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ran"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "partial"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "sse_resume": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "5",
+            "message_id": "msg#2",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "6",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          },
+          {
+            "id": "7",
+            "message_id": "msg#3",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "8",
+            "message_id": "msg#4",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "9",
+            "session_id": "ses:a",
+            "type": "turn.end"
+          },
+          {
+            "id": "10",
+            "session_id": "ses:a",
+            "status": "idle",
+            "type": "session.status"
+          },
+          {
+            "id": "11",
+            "session_id": "ses:a",
+            "status": "busy",
+            "type": "session.status"
+          },
+          {
+            "id": "12",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          }
+        ]
+      }
+    },
+    "sse_resume#2": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "5",
+            "message_id": "msg#2",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "6",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          },
+          {
+            "id": "7",
+            "message_id": "msg#3",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "8",
+            "message_id": "msg#4",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "9",
+            "session_id": "ses:a",
+            "type": "turn.end"
+          },
+          {
+            "id": "10",
+            "session_id": "ses:a",
+            "status": "idle",
+            "type": "session.status"
+          },
+          {
+            "id": "11",
+            "session_id": "ses:a",
+            "status": "busy",
+            "type": "session.status"
+          },
+          {
+            "id": "12",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          }
+        ]
+      }
+    },
+    "sse_resume#3": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "5",
+            "message_id": "msg#2",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "6",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          },
+          {
+            "id": "7",
+            "message_id": "msg#3",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "8",
+            "message_id": "msg#4",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "9",
+            "session_id": "ses:a",
+            "type": "turn.end"
+          },
+          {
+            "id": "10",
+            "session_id": "ses:a",
+            "status": "idle",
+            "type": "session.status"
+          },
+          {
+            "id": "11",
+            "session_id": "ses:a",
+            "status": "busy",
+            "type": "session.status"
+          },
+          {
+            "id": "12",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          },
+          {
+            "id": "13",
+            "message_id": "msg#5",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "14",
+            "message_id": "msg#6",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "15",
+            "session_id": "ses:a",
+            "type": "turn.end"
+          },
+          {
+            "id": "16",
+            "session_id": "ses:a",
+            "status": "idle",
+            "type": "session.status"
+          }
+        ]
+      }
+    },
+    "sse_resume.a": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "5",
+            "message_id": "msg#2",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "6",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          },
+          {
+            "id": "7",
+            "message_id": "msg#3",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "8",
+            "message_id": "msg#4",
+            "session_id": "ses:a",
+            "type": "message"
+          },
+          {
+            "id": "9",
+            "session_id": "ses:a",
+            "type": "turn.end"
+          },
+          {
+            "id": "10",
+            "session_id": "ses:a",
+            "status": "idle",
+            "type": "session.status"
+          },
+          {
+            "id": "11",
+            "session_id": "ses:a",
+            "status": "busy",
+            "type": "session.status"
+          },
+          {
+            "id": "12",
+            "session_id": "ses:a",
+            "type": "request.meta"
+          }
+        ]
+      }
+    }
+  }
+}
