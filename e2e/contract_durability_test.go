@@ -40,7 +40,7 @@ func TestContractDurability(t *testing.T) {
 			// Known defect, pinned on purpose: after a SIGKILL restart the refolded
 			// queue entry is not dispatched.
 			name:  "queued_input_survives_kill",
-			model: []fakemodel.Step{slow, text("second", "second", "2")},
+			model: []fakemodel.Step{slow},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},
