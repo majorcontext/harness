@@ -134,3 +134,11 @@ func TestChatMaxTokensStopReason(t *testing.T) {
 		t.Errorf("stop = %q, want max_tokens", got)
 	}
 }
+
+func TestChatLastUserTextSkipsEngineContextMessage(t *testing.T) {
+	s := NewChat(t, Step{Match: LastUserText("real prompt"), Reply: Reply{Text: "ok"}})
+	ctx := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: "ambient"}}}
+	if _, err := chatStream(t, s, &provider.Request{Messages: []message.Message{userMsg("real prompt"), ctx}}); err != nil {
+		t.Fatal(err)
+	}
+}

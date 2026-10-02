@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/majorcontext/harness/message"
 )
 
 // Step is one scripted reply and the requests it answers.
@@ -85,18 +87,23 @@ type Part struct {
 }
 
 // LastUserText is the text of the last user message that has a text part.
+// A message made only of engine context does not count: the chat wire sends
+// it as its own user message, where the Anthropic wire folds it into the
+// previous one.
 func (r Request) LastUserText() string {
 	for i := len(r.Messages) - 1; i >= 0; i-- {
 		if r.Messages[i].Role != "user" {
 			continue
 		}
 		var texts []string
+		engineOnly := true
 		for _, p := range r.Messages[i].Parts {
 			if p.Kind == "text" {
 				texts = append(texts, p.Text)
+				engineOnly = engineOnly && strings.HasPrefix(p.Text, message.EngineContextOpenTag)
 			}
 		}
-		if len(texts) > 0 {
+		if len(texts) > 0 && !engineOnly {
 			return strings.Join(texts, "\n")
 		}
 	}
