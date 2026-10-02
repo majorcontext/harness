@@ -439,15 +439,11 @@ type apiEvent struct {
 	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
-// eventReplay connects to GET /event?from=0, reads the durable replay batch,
-// and disconnects. /event is a long-lived stream (replay, then live, then
-// heartbeats), so the read is bounded by a context deadline: the replay is
-// written and flushed immediately on connect, and the subsequent block hits
-// the deadline, at which point we return what we collected.
-func (p *serveProc) eventReplay() []apiEvent {
+// scanEvents opens GET /event?from=0 and passes each frame to visit until it
+// returns true. It returns nil on that, or the stream error that ended the read
+// first, such as ctx expiring.
+func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool) error {
 	p.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?from=0", nil)
 	if err != nil {
 		p.t.Fatalf("event request: %v", err)
@@ -458,19 +454,35 @@ func (p *serveProc) eventReplay() []apiEvent {
 		p.t.Fatalf("GET /event: %v", err)
 	}
 	defer resp.Body.Close()
-	var events []apiEvent
-	dec := newSSEScanner(resp.Body)
+	sc := newSSEScanner(resp.Body)
 	for {
-		data, err := dec.next()
+		raw, err := sc.next()
 		if err != nil {
-			break // deadline reached or stream ended: replay already consumed
+			return err
 		}
-		var ev apiEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			continue
+		if visit(raw) {
+			return nil
 		}
-		events = append(events, ev)
 	}
+}
+
+// eventReplay reads the durable replay batch of GET /event?from=0. /event is a
+// long-lived stream (replay, then live, then heartbeats), so the read is
+// bounded by a context deadline: the replay is written and flushed immediately
+// on connect, and the subsequent block hits the deadline, at which point we
+// return what we collected.
+func (p *serveProc) eventReplay() []apiEvent {
+	p.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	var events []apiEvent
+	_ = p.scanEvents(ctx, func(raw []byte) bool {
+		var ev apiEvent
+		if json.Unmarshal(raw, &ev) == nil {
+			events = append(events, ev)
+		}
+		return false
+	})
 	return events
 }
 

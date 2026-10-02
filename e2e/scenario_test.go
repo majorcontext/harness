@@ -3,11 +3,13 @@ package e2e
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/internal/fakemodel"
 )
@@ -82,13 +84,31 @@ func (a setGoal) run(t *testing.T, r *run) {
 }
 func (a release) run(_ *testing.T, r *run) { r.fake.Release(a.step) }
 func (a awaitRequests) run(t *testing.T, r *run) {
-	for r.seen < a.n {
+	t.Helper()
+	if !r.waitForRequests(a.n, waitBound) {
+		t.Fatalf("waited %s for %d model requests; saw %d: %s\nserve stderr:\n%s", waitBound, a.n, r.seen, requestSummary(r.fake.Requests()), r.drv.Stderr())
+	}
+}
+
+func (r *run) waitForRequests(n int, bound time.Duration) bool {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	for r.seen < n {
 		select {
 		case r.seen = <-r.reqs:
-		case <-t.Context().Done():
-			t.Fatalf("test ended while waiting for %d model requests; saw %d", a.n, r.seen)
+		case <-timer.C:
+			return false
 		}
 	}
+	return true
+}
+
+func requestSummary(reqs []fakemodel.Request) string {
+	var b strings.Builder
+	for i, req := range reqs {
+		fmt.Fprintf(&b, "\n  %d: last user text %q", i+1, req.LastUserText())
+	}
+	return b.String()
 }
 func (a expectQueued) run(t *testing.T, r *run) {
 	if got := r.drv.Queued(t, r.id(t, a.as)); !slices.Equal(got, a.texts) {

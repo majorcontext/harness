@@ -3,8 +3,12 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
+	"time"
+
+	"github.com/majorcontext/harness/internal/fakemodel"
 )
 
 type driver interface {
@@ -19,7 +23,12 @@ type driver interface {
 	Restart(t *testing.T, kill bool)
 	Queued(t *testing.T, id string) []string
 	AwaitTurnEnd(t *testing.T, outcome string)
+	Stderr() string
 }
+
+// waitBound is a failure bound for a wait on the serve process, not a delay.
+// It is far above any real latency; a wait that reaches it fails the test.
+var waitBound = 60 * time.Second
 
 type httpDriver struct {
 	sessDir, workDir, config string
@@ -68,6 +77,15 @@ func (d *httpDriver) Enqueue(t *testing.T, id, text string) {
 	d.expect(t, http.StatusAccepted, http.MethodPost, "/session/"+id+"/enqueue", body)
 }
 
+func (d *httpDriver) Stderr() string { return d.p.stderr.String() }
+
+func (d *httpDriver) scan(t *testing.T, visit func(raw []byte) bool) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+	defer cancel()
+	return d.p.scanEvents(ctx, visit)
+}
+
 func (d *httpDriver) WaitIdle(t *testing.T, id string) {
 	t.Helper()
 	data := d.expect(t, http.StatusOK, http.MethodGet, "/session/"+id+"/wait?until=idle&timeout_s=300", nil)
@@ -112,34 +130,19 @@ func (d *httpDriver) Events(t *testing.T) []apiEvent {
 	if tip.Seq == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+d.p.addr+"/event?from=0", nil)
-	if err != nil {
-		t.Fatalf("event request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /event: %v", err)
-	}
-	defer resp.Body.Close()
 	var events []apiEvent
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			t.Fatalf("event stream ended at %d events before tip %d: %v", len(events), tip.Seq, err)
-		}
+	err := d.scan(t, func(raw []byte) bool {
 		var ev apiEvent
 		if json.Unmarshal(raw, &ev) != nil || ev.Seq == 0 {
-			continue
+			return false
 		}
 		events = append(events, ev)
-		if ev.Seq >= tip.Seq {
-			return events
-		}
+		return ev.Seq >= tip.Seq
+	})
+	if err != nil {
+		t.Fatalf("event stream ended at %d events before tip %d: %v\nstderr:\n%s", len(events), tip.Seq, err, d.Stderr())
 	}
+	return events
 }
 
 func (d *httpDriver) Queued(t *testing.T, id string) []string {
@@ -163,27 +166,38 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 
 func (d *httpDriver) AwaitTurnEnd(t *testing.T, outcome string) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+d.p.addr+"/event?from=0", nil)
-	if err != nil {
-		t.Fatalf("event request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /event: %v", err)
-	}
-	defer resp.Body.Close()
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			t.Fatalf("event stream ended before a turn ended with %q: %v", outcome, err)
-		}
+	err := d.scan(t, func(raw []byte) bool {
 		var ev struct{ Type, Outcome string }
-		if json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == outcome {
-			return
-		}
+		return json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == outcome
+	})
+	if err != nil {
+		t.Fatalf("no turn ended with %q: %v\nstderr:\n%s", outcome, err, d.Stderr())
 	}
+}
+
+func TestWaitsFailAtTheirBound(t *testing.T) {
+	skipShort(t)
+	old := waitBound
+	waitBound = 100 * time.Millisecond
+	t.Cleanup(func() { waitBound = old })
+
+	t.Run("model requests", func(t *testing.T) {
+		r := &run{reqs: make(chan int, 4)}
+		r.reqs <- 1
+		if r.waitForRequests(2, waitBound) {
+			t.Fatal("waitForRequests(2) = true with one request seen, want false at the bound")
+		}
+		r.reqs <- 2
+		if !r.waitForRequests(2, waitBound) {
+			t.Fatal("waitForRequests(2) = false with two requests seen")
+		}
+	})
+	t.Run("event stream", func(t *testing.T) {
+		fake := fakemodel.New(t)
+		d := newHTTPDriver(t, fake.URL())
+		err := d.scan(t, func([]byte) bool { return false })
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("scan of an idle stream = %v, want context deadline exceeded", err)
+		}
+	})
 }
