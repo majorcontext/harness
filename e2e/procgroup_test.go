@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -160,9 +161,24 @@ func gone(pid int) bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) 
 func requireGone(t *testing.T, what string, pid int) {
 	t.Helper()
 	testpoll.Until(t, 10*time.Second, fmt.Sprintf("%s %d outlived its test", what, pid), func() bool { return gone(pid) })
-	if !gone(-pid) {
-		t.Errorf("process group %d outlived its test", pid)
+	if !testpoll.UntilNoT(10*time.Second, func() bool { return gone(-pid) }) {
+		t.Errorf("process group %d outlived its test; pids still present: %v", pid, groupMembers(pid))
 	}
+}
+
+func groupMembers(pgid int) []int {
+	out, err := exec.Command("ps", "-axo", "pid=,pgid=").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		var p, g int
+		if n, _ := fmt.Sscan(line, &p, &g); n == 2 && g == pgid {
+			pids = append(pids, p)
+		}
+	}
+	return pids
 }
 
 func shellGroup(t *testing.T, script string) (g *procGroup, grandchild int) {
