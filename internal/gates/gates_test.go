@@ -50,10 +50,39 @@ var checkCases = []struct {
 		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 3, CodeLines: 2}}},
 	},
 	{
-		name: "history_marker_fails_even_in_baseline",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\nvar D = 4\nvar E = 5\nvar F = 6\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 9, CommentLines: 1, CodeLines: 7, HistoryMarkers: 1}}},
+		name: "history_marker_new_file_fails",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
 		want: []string{"a/a.go:history"},
+	},
+	{
+		name: "history_marker_at_baseline_passes",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
+	},
+	{
+		name: "history_marker_above_baseline_fails",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123 and #124\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
+		want: []string{"a/a.go:ratchet"},
+	},
+	{
+		name: "history_marker_below_baseline_passes",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
+	},
+	{
+		name: "comment_share_at_limit_passes",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("// x\n", 25) + strings.Repeat("var _ = 1\n", 74))},
+	},
+	{
+		name: "comment_share_above_limit_fails",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("// x\n", 26) + strings.Repeat("var _ = 1\n", 73))},
+		want: []string{"a/a.go:comment_share"},
+	},
+	{
+		name: "func_with_line_directive_measured_by_raw_lines",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\nfunc F() {\n//line x.go:1\n" + strings.Repeat("\t_ = 1\n", 80) + "}\n")},
+		want: []string{"a/a.go:long_func"},
 	},
 	{
 		name: "long_func_new_file_fails",
@@ -142,6 +171,22 @@ var checkCases = []struct {
 		want: []string{"a:test_ratio"},
 	},
 	{
+		name: "new_package_at_test_ratio_limit_passes",
+		fs: fstest.MapFS{
+			"a/a.go":      file("package a\nvar A = 1\n"),
+			"a/a_test.go": file("package a\nvar T = 1\nvar U = 1\n"),
+		},
+	},
+	{
+		name: "baseline_package_may_not_rise_below_new_package_limit",
+		fs: fstest.MapFS{
+			"a/a.go":      file("package a\nvar A = 1\nvar B = 1\nvar C = 1\n"),
+			"a/a_test.go": file("package a\nvar T = 1\nvar U = 1\nvar V = 1\n"),
+		},
+		base: Report{Packages: map[string]PackageMetrics{"a": {TestLines: 2, CodeLines: 4}}},
+		want: []string{"a:test_ratio"},
+	},
+	{
 		name: "new_package_within_test_ratio_limit_passes",
 		fs: fstest.MapFS{
 			"a/a.go":      file("package a\nvar A = 1\nvar B = 1\nvar C = 1\n"),
@@ -167,6 +212,32 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestHistoryPattern(t *testing.T) {
+	for text, want := range map[string]bool{
+		"fixed in #123":         true,
+		"on 2026-10-02":         true,
+		"previously did x":      true,
+		"no longer needed":      true,
+		"round 12":              true,
+		"round 3 of review":     true,
+		"fix rounds":            true,
+		"fix round":             true,
+		"review rounds":         true,
+		"review caught it":      true,
+		"copilot said":          true,
+		"two findings":          true,
+		"use x instead of y":    false,
+		"around 12 items":       false,
+		"the round trip":        false,
+		"a rounds table":        false,
+		"issue 5 is not marked": false,
+	} {
+		if got := historyRE.MatchString(text); got != want {
+			t.Errorf("historyRE.MatchString(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
 func TestCommentShareDetailNamesCounts(t *testing.T) {
 	vs := absolutes(FileMetrics{CommentLines: 26, CodeLines: 74})
 	if len(vs) != 1 || vs[0].Detail != "26 of 100 lines are comments, limit 25%" {
@@ -181,6 +252,18 @@ func TestCollectCounts(t *testing.T) {
 	}
 	got := r.Files["a/a.go"]
 	want := FileMetrics{Lines: 6, CommentLines: 3, CodeLines: 2}
+	if got != want {
+		t.Fatalf("metrics = %+v, want %+v", got, want)
+	}
+}
+
+func TestLineDirectiveIsNotAComment(t *testing.T) {
+	r, err := Collect(fstest.MapFS{"a/a.go": file("package a\n\n//line other.go:500\n//lines of prose\nvar A = 1\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := r.Files["a/a.go"]
+	want := FileMetrics{Lines: 5, CommentLines: 1, CodeLines: 3}
 	if got != want {
 		t.Fatalf("metrics = %+v, want %+v", got, want)
 	}
