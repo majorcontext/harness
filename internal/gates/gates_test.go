@@ -432,8 +432,8 @@ func TestLoadBaseNamesTheMissingRef(t *testing.T) {
 	write(t, dir, "a.go", "package a\n")
 	gitIn(t, dir, "add", ".")
 	gitIn(t, dir, "commit", "-q", "-m", "base")
-	if _, err := LoadBase(dir, "origin/nope"); err == nil || !strings.Contains(err.Error(), "origin/nope") {
-		t.Fatalf("err = %v, want one naming origin/nope", err)
+	if _, err := LoadBase(dir, "origin/nope"); !errors.Is(err, ErrNoBase) || !strings.Contains(err.Error(), "origin/nope") {
+		t.Fatalf("err = %v, want ErrNoBase naming origin/nope", err)
 	}
 }
 
