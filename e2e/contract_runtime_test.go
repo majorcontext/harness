@@ -88,3 +88,40 @@ func eventTip(t *testing.T, d *httpDriver) int64 {
 	}
 	return n
 }
+
+// bodyOf is the decoded JSON object of a recorded call.
+func bodyOf(t *testing.T, res callResult) map[string]any {
+	t.Helper()
+	obj, ok := res.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %#v, want a JSON object (status %d)", res.Body, res.Status)
+	}
+	return obj
+}
+
+// requestSystem is the system prompt segments of the newest model request of a session.
+func requestSystem(t *testing.T, d *httpDriver, id string) []string {
+	t.Helper()
+	res := d.call(t, http.MethodGet, "/session/"+id+"/request", nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("GET /session/%s/request = %d %v", id, res.Status, res.Body)
+	}
+	var out []string
+	for _, seg := range bodyOf(t, res)["system"].([]any) {
+		out = append(out, seg.(string))
+	}
+	return out
+}
+
+// toolResults is the content of every tool result of a session, in order.
+func toolResults(msgs []transcriptMessage) []transcriptPart {
+	var out []transcriptPart
+	for _, m := range msgs {
+		for _, p := range m.Parts {
+			if p.Type == "tool_result" {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
