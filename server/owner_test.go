@@ -136,13 +136,17 @@ func newOwnerServer(t *testing.T, store engine.SessionStore, prov provider.Provi
 		if m.IsZero() {
 			m = model
 		}
-		return engine.Config{
+		cfg := engine.Config{
 			Providers:      provider.Registry{prov.Name(): prov},
 			Model:          m,
 			SessionStore:   store,
 			MaxTurnResumes: 3,
 			OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 		}
+		if tp, ok := prov.(interface{ tools() []engine.Tool }); ok {
+			cfg.Tools = tp.tools()
+		}
+		return cfg
 	}
 	opts := Options{
 		Store:             store,

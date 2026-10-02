@@ -1209,6 +1209,7 @@ type Session struct {
 
 	// turnResumes is the durable resume count of the unsettled turn.
 	turnResumes int
+	turnStopped bool
 
 	// committedOutcome is the exact taskNotification finalizeTurn (or
 	// recoverInterruptedTurnLocked itself) computed for s's most recent
@@ -2687,6 +2688,7 @@ func (s *Session) appendWithUsage(m message.Message, usage *provider.Usage) {
 	// See turnUnsettled's own doc comment: any append means a turn has
 	// started (or is still in progress) without yet being finalized.
 	s.turnUnsettled = true
+	s.turnStopped = false
 	// See committedOutcome's own doc comment: THIS is the "a new turn
 	// started" invalidation point — appendWithUsage is the live turn-
 	// driving append (runAgenticLoop, via Prompt), never
@@ -2760,6 +2762,7 @@ func (s *Session) appendMemoryOnly(m message.Message) message.Message {
 	// method's one caller) relies on calling markTurnSettled AFTER this,
 	// not before, so that call's turnUnsettled=false is what wins.
 	s.turnUnsettled = true
+	s.turnStopped = false
 	// Deliberately does NOT clear committedOutcome, unlike
 	// appendWithUsage's own identical-looking line — see committedOutcome's
 	// own doc comment. This method's one caller only ever appends its own
@@ -3287,8 +3290,9 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 				// interruptedTurnError's doc comment.
 				s.append(*interrupted.partial)
 				s.emit(Event{Type: EventMessage, Message: interrupted.partial})
-				toolMsg := interruptedToolResults(interrupted.partial)
-				s.append(toolMsg)
+				if toolMsg := interruptedToolResults(interrupted.partial); len(toolMsg.Parts) > 0 {
+					s.append(toolMsg)
+				}
 			}
 			s.emitSessionError(err)
 			return nil, err
@@ -3645,7 +3649,8 @@ func (s *Session) streamTurn(ctx context.Context, attempt int) (*message.Message
 			// idle-timeout error (and passes every other failure — parent
 			// aborts included — through untouched).
 			err = watch.explain(err)
-			if len(toolCalls) == 0 {
+			stopped := text.Len() > 0 && errors.Is(context.Cause(ctx), ErrTurnStopped)
+			if len(toolCalls) == 0 && !stopped {
 				// No tool call was ever recorded this turn: nothing can
 				// be orphaned, so this is an ordinary turn failure —
 				// identical to the pre-fix behavior.

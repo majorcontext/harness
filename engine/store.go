@@ -158,6 +158,7 @@ const (
 	// message shape resulted.
 	recChildTurnSettled = "child_turn.settled"
 	recTurnResumed      = "turn.resumed"
+	recTurnStopped      = "turn.stopped"
 	// recTaskOutcomeCommitted carries the EXACT taskNotification payload
 	// (reusing taskNotifyRecord's shape, via record.TaskNotify — the same
 	// field recTaskNotifyQueued/recTaskNotifyDelivered use) that
@@ -385,6 +386,8 @@ type record struct {
 	ClaudeCodeCompactStartedAt  time.Time `json:"claude_code_compact_started_at,omitzero"`
 
 	Count int `json:"count,omitempty"`
+
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // applyGoalRecord folds one goal.* record into the durable goal state a
@@ -1531,6 +1534,7 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			// Session.turnUnsettled's own doc comment. Mirrors
 			// appendWithUsage's own identical live-path write.
 			s.turnUnsettled = true
+			s.turnStopped = false
 			// s.committedOutcome invalidation — mirrors appendWithUsage's
 			// OWN identical clear, with one deliberate exception: a
 			// message recognizable as ONE OF recoverInterruptedTurnLocked's
@@ -1553,6 +1557,10 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			}
 		case recTurnResumed:
 			s.turnResumes = rec.Count
+		case recTurnStopped:
+			s.turnUnsettled = false
+			s.turnResumes = 0
+			s.turnStopped = true
 		case recChildTurnSettled:
 			s.turnUnsettled = false
 			s.turnResumes = 0

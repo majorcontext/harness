@@ -22,7 +22,10 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
+	"github.com/majorcontext/harness/typeid"
 )
+
+var errTurnStopped = engine.ErrTurnStopped
 
 // sessionJSON is the openapi Session shape.
 type sessionJSON struct {
@@ -2078,7 +2081,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		st.sess.SetModel(body.Model)
 	}
 
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	s.emitBusy(id, st)
 
 	go s.runPrompt(ctx, id, st, text, "", msgID, &prov, blobs...)
 	writeJSON(w, http.StatusAccepted, promptAsyncResponse{Seq: fromSeq, Status: "started", MessageID: msgID})
@@ -2509,6 +2512,21 @@ func (s *Server) enqueueDurableBusy(w http.ResponseWriter, id string, text strin
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
+func newTurnID() string {
+	id, err := typeid.New("turn")
+	if err != nil {
+		panic(err)
+	}
+	return id.String()
+}
+
+func (s *Server) emitBusy(id string, st *sessionState) {
+	s.mu.Lock()
+	turnID := st.turnID
+	s.mu.Unlock()
+	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy", TurnID: turnID})
+}
+
 // releasePromptClaim releases a run-slot claim taken by claimForPrompt
 // without running a turn: the exact reset runPrompt's own tail performs,
 // shared by every path that claims the slot and then discovers there is
@@ -2626,7 +2644,7 @@ func (s *Server) dispatchQueueHead(id string, st *sessionState, ctx context.Cont
 		s.releasePromptClaim(st)
 		return head, 0, false
 	}
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	s.emitBusy(id, st)
 	// origin "": a dequeued prompt is always someone's real durably-queued
 	// text (an ordinary prompt_async caught behind a busy turn, or a
 	// session.send) — never the engine's own synthetic resume trigger, even
@@ -2719,6 +2737,9 @@ func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, turn 
 	// hits, closing the "task tool broken after restart" gap a live
 	// review caught.
 	s.sessMgr.ReportTurnStart(st.sess)
+	s.mu.Lock()
+	turnID := st.turnID
+	s.mu.Unlock()
 	// A question parked by an EARLIER turn stays pending across a switch to
 	// a native model. Only the turn that parked one awaits input.
 	parked := st.sess.PendingQuestion()
@@ -2727,14 +2748,21 @@ func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, turn 
 	question := st.sess.PendingQuestion()
 	switch {
 	case err == nil && question != "" && question != parked:
-		s.recordTurnEndQuestion(id, st.sess, question)
+		s.recordTurnEndQuestion(id, turnID, st.sess, question)
 	case err == nil:
-		s.recordTurnEnd(id, st.sess, "completed", nil)
+		s.recordTurnEnd(id, turnID, st.sess, "completed", nil)
 	case errors.Is(err, context.Canceled):
-		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
+		aborted := Event{Type: evtSessionAborted, SessionID: id, TurnID: turnID}
+		if errors.Is(context.Cause(ctx), errTurnStopped) {
+			aborted.MessageID = engine.PartialMessageID(err)
+			if serr := st.sess.RecordTurnStopped(aborted.MessageID); serr != nil {
+				s.logWarn("record turn.stopped", "session", id, "error", serr.Error())
+			}
+		}
+		s.emitDurable(aborted)
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, st.sess, turnEndOutcome(err), err)
+		s.recordTurnEnd(id, turnID, st.sess, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 	if s.postIdleEmitRace != nil {
@@ -3282,7 +3310,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	s.syncMessages(id)
 	switch {
 	case err == nil && res.Achieved:
-		s.recordTurnEnd(id, st.sess, "completed", nil)
+		s.recordTurnEnd(id, "", st.sess, "completed", nil)
 	case err == nil && res.Reason == "goal cleared":
 		// Cleared in flight without the context being cancelled: goal.cleared
 		// is already journaled (ClearGoal/handleGoalDelete); no turn.end, same
@@ -3290,12 +3318,12 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 	case err == nil:
 		// Any other nil-error, non-achieved result is MaxTurns exhaustion —
 		// PursueGoal's only remaining terminal case (see its doc comment).
-		s.recordTurnEnd(id, st.sess, outcomeMaxTurnsExceeded, nil)
+		s.recordTurnEnd(id, "", st.sess, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
 		// Cleared via DELETE (goal.cleared already journaled) or drained.
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, st.sess, turnEndOutcome(err), err)
+		s.recordTurnEnd(id, "", st.sess, turnEndOutcome(err), err)
 	}
 	s.freeRunSlotAndEmitIdle(id, st)
 
@@ -3417,7 +3445,7 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		releaseEvicted(evicted)
 	}
 	s.mu.Lock()
-	var cancel context.CancelFunc
+	var cancel context.CancelCauseFunc
 	if st.goalLoop {
 		cancel = st.cancel
 	}
@@ -3445,10 +3473,10 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		// as structurally possible — right here, before this function's own
 		// cancel() below — and ride out its unwind to completion before
 		// letting this handler proceed. See TestGoalDeleteClearBeforeIdleRace.
-		s.goalDeleteRace(cancel)
+		s.goalDeleteRace(func() { cancel(nil) })
 	}
 	if cancel != nil {
-		cancel() // stop the loop; runGoal treats context.Canceled as a clean stop (no-op if the hook above already fired it)
+		cancel(nil) // stop the loop; runGoal treats context.Canceled as a clean stop (no-op if the hook above already fired it)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -3769,7 +3797,9 @@ func releaseEvicted(evicted []*engine.Session) {
 	}
 }
 
-// handleAbort interrupts a session's in-flight prompt. Unknown session (not
+// handleAbort interrupts a session's in-flight prompt. An optional body
+// {"turn_id":"..."} names the turn to stop: a turn_id that is not the active
+// turn is a no-op. Unknown session (not
 // resident and no session log on disk) is 404; a known session is 204 whether
 // or not anything was running (idempotent). A non-resident session cannot
 // have a prompt in flight, so a bare existence check suffices — the abort
@@ -3779,15 +3809,41 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var body struct {
+		TurnID string `json:"turn_id"`
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<10))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &body); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request body")
+			return
+		}
+	}
 	s.mu.Lock()
 	st := s.sessions[id]
-	var cancel context.CancelFunc
-	if st != nil {
+	var cancel context.CancelCauseFunc
+	cause := error(nil)
+	if st != nil && st.cancel != nil && (body.TurnID == "" || body.TurnID == st.turnID) {
 		cancel = st.cancel
+		if !st.goalLoop {
+			cause = errTurnStopped
+		}
 	}
 	s.mu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(cause)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if body.TurnID != "" {
+		if st == nil && !s.sessionOnDisk(id) {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -4374,9 +4430,10 @@ func (s *Server) claimForPrompt(id string) (st *sessionState, ctx context.Contex
 		return nil, nil, 0, http.StatusConflict, h
 	}
 	fromSeq = s.seq
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	st.running = true
 	st.cancel = cancel
+	st.turnID = newTurnID()
 	// Reset here too, not just at every prior occupant's tail: this makes the
 	// claim self-contained rather than trusting every past and future tail to
 	// reset it, and it is always correct because every runGoal-spawning call

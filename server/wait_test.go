@@ -105,13 +105,13 @@ func TestCompositeStateGoalRunningDuringBlockedWorker(t *testing.T) {
 	t.Cleanup(func() {
 		h.srv.mu.Lock()
 		st := h.srv.sessions[id]
-		var cancel context.CancelFunc
+		var cancel context.CancelCauseFunc
 		if st != nil {
 			cancel = st.cancel
 		}
 		h.srv.mu.Unlock()
 		if cancel != nil {
-			cancel()
+			cancel(nil)
 		}
 	})
 
@@ -713,13 +713,13 @@ func TestWaitTimeoutReturnsCleanly(t *testing.T) {
 		// operations, no sleeps.
 		srv.mu.Lock()
 		st := srv.sessions[id]
-		var cancel context.CancelFunc
+		var cancel context.CancelCauseFunc
 		if st != nil {
 			cancel = st.cancel
 		}
 		srv.mu.Unlock()
 		if cancel != nil {
-			cancel()
+			cancel(nil)
 		}
 		srv.Drain(context.Background())
 	})
@@ -741,13 +741,13 @@ func TestWaitDisconnectDoesNotLeakWaiter(t *testing.T) {
 	t.Cleanup(func() {
 		h.srv.mu.Lock()
 		st := h.srv.sessions[id]
-		var cancel context.CancelFunc
+		var cancel context.CancelCauseFunc
 		if st != nil {
 			cancel = st.cancel
 		}
 		h.srv.mu.Unlock()
 		if cancel != nil {
-			cancel()
+			cancel(nil)
 		}
 	})
 

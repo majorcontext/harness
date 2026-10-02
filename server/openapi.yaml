@@ -1875,6 +1875,17 @@ components:
         `Last-Event-ID` reconnection works with standard clients.
       required: [type, session_id]
       properties:
+        turn_id:
+          type: string
+          description: >
+            The prompt turn's id. On the `session.status` busy event of a
+            prompt turn, and on the `session.aborted` and `turn.end` events
+            that close it.
+        message_id:
+          type: string
+          description: >
+            On `session.aborted` after a stop, the partial assistant message
+            the stop kept. Absent when the stop came before any reply text.
         type:
           type: string
           enum:
@@ -2544,6 +2555,7 @@ components:
             - task.notify_delivered
             - child_turn.settled
             - turn.resumed
+            - turn.stopped
             - task.outcome_committed
             - command
         created_at:
@@ -2573,7 +2585,7 @@ components:
             which is always >= 1.
         message_id:
           type: string
-          description: Only on `message` records. Identity only — never content.
+          description: On `message` records, the message id. On `turn.stopped` records, the partial assistant message the stop kept, absent when the stop came before any reply text. Identity only, never content.
         message_role:
           type: string
           description: Only on `message` records.
@@ -4174,10 +4186,33 @@ paths:
     post:
       operationId: abortSession
       summary: Interrupt the in-flight prompt, if any.
+      description: >
+        An optional JSON body names the turn to stop. The server mints a
+        `turn_id` for each prompt turn and puts it on the `session.status`
+        busy event, and on the `session.aborted` and `turn.end` events that
+        close the turn. A `turn_id` that is not the active turn is a no-op
+        (still 204) and cancels nothing, so a late request cannot stop a newer
+        turn. No body, or an empty `turn_id`, interrupts whatever turn runs.
+        A stop keeps the partial reply, appends it with synthetic results for
+        its tool calls, and writes a durable `turn.stopped` journal record. The
+        turn never resumes. `session.aborted` then carries `turn_id` and, when
+        a partial reply was kept, `message_id`. Shutdown and loss of session
+        ownership write no `turn.stopped`: the next holder can resume the turn.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                turn_id:
+                  type: string
+                  description: The turn to stop.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       responses:
-        "204": { description: Interrupted (or nothing was running). }
+        "204": { description: Interrupted (or nothing was running, or turn_id did not name the active turn). }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 

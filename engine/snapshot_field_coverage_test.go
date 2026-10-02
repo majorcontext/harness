@@ -65,6 +65,7 @@ var snapshottedSessionFields = map[string]bool{
 	"taskNotifications":          true,
 	"turnUnsettled":              true,
 	"turnResumes":                true,
+	"turnStopped":                true,
 	"committedOutcome":           true,
 	"claudeCodeCLISessionID":     true,
 	"claudeCodeHistoryWatermark": true,

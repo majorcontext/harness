@@ -853,7 +853,8 @@ type turnOutcome struct {
 type sessionState struct {
 	sess     *engine.Session
 	running  bool
-	cancel   context.CancelFunc
+	cancel   context.CancelCauseFunc
+	turnID   string
 	lastUsed time.Time
 	// pins counts outstanding residency holds a command dispatch takes
 	// through mutableSession; while positive, evictResidentLocked skips this
@@ -1266,7 +1267,7 @@ func (s *Server) Drain(ctx context.Context) {
 	s.mu.Lock()
 	for _, st := range s.sessions {
 		if st.cancel != nil {
-			st.cancel()
+			st.cancel(nil)
 		}
 	}
 	s.mu.Unlock()

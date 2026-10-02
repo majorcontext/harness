@@ -140,7 +140,7 @@ func (s *Server) ownershipLost(id string, e *ownerEntry) {
 	for _, c := range lineage {
 		s.refused[c] = struct{}{}
 	}
-	var cancel context.CancelFunc
+	var cancel context.CancelCauseFunc
 	var sess *engine.Session
 	if st := s.sessions[id]; st != nil {
 		cancel = st.cancel
@@ -150,7 +150,7 @@ func (s *Server) ownershipLost(id string, e *ownerEntry) {
 	}
 	s.mu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(nil)
 	}
 	s.sessMgr.Suspend(id)
 	if sess != nil {
@@ -171,7 +171,7 @@ func (s *Server) fenceLocked() {
 	var evicted []*engine.Session
 	for id, st := range s.sessions {
 		if st.cancel != nil {
-			st.cancel()
+			st.cancel(nil)
 		}
 		evicted = append(evicted, st.sess)
 		delete(s.sessions, id)

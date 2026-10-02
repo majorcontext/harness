@@ -265,7 +265,7 @@ func (s *Server) runOrQueueText(id, text string) engine.RunnerOutcome {
 		s.dispatchQueueHead(id, st, ctx)
 		return engine.RunnerHandled
 	}
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	s.emitBusy(id, st)
 	// origin message.OriginEngine: text here is ALWAYS taskResumeTriggerText
 	// — runOrQueueText is only ever reached as resumeSessionForTaskNotification,
 	// this server's engine.ExternalRunner, and this is the one branch that
@@ -381,7 +381,7 @@ func (s *Server) sendTextToRoot(id, text string, msgID string, prov engine.Promp
 			_, remaining, _ := s.dispatchQueueHead(id, st, ctx)
 			return "queued", remaining, 0, ""
 		}
-		s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+		s.emitBusy(id, st)
 		// origin "": sendTextToRoot delivers a genuine session.send message
 		// (an MCP send_message_to_box call, or any other operator-authored
 		// text), never the engine's own synthetic resume trigger — that one
@@ -704,13 +704,13 @@ func (s *Server) handleCancelTree(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	st := s.sessions[id]
-	var cancel context.CancelFunc
+	var cancel context.CancelCauseFunc
 	if st != nil {
 		cancel = st.cancel
 	}
 	s.mu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

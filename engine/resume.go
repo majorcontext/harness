@@ -15,6 +15,56 @@ const delegatedResumeText = "Your previous turn was interrupted by a restart. Co
 // ErrNotResumable is returned by ResumeTurn when no turn may resume.
 var ErrNotResumable = errors.New("engine: no resumable turn")
 
+// ErrTurnStopped is the context cancel cause of a deliberate stop. A turn
+// canceled with this cause keeps its partial reply and is never resumed.
+var ErrTurnStopped = errors.New("engine: turn stopped")
+
+// PartialMessageID returns the id of the partial assistant message that a
+// stopped turn appended before it failed with err, or "" when err names none.
+func PartialMessageID(err error) string {
+	var interrupted *interruptedTurnError
+	if errors.As(err, &interrupted) && interrupted.partial != nil {
+		return interrupted.partial.ID
+	}
+	return ""
+}
+
+// TurnStopped reports whether the journal ends in a turn.stopped record.
+func (s *Session) TurnStopped() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnStopped
+}
+
+// RecordTurnStopped durably settles the current turn as stopped. The turn
+// never resumes. partialMessageID names the partial assistant message the
+// stop kept, or is empty when the stop came before any reply text.
+func (s *Session) RecordTurnStopped(partialMessageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.store != nil {
+		if err := s.ensureLog(); err != nil {
+			s.lastPersistErr = err
+			return err
+		}
+		s.flushQueueRecordsLocked()
+		if err := s.writeRecord(record{Type: recTurnStopped, MessageID: partialMessageID}); err != nil {
+			s.lastPersistErr = err
+			return err
+		}
+		if !s.volumeSync() {
+			if err := s.store.Sync(s.ID); err != nil {
+				s.lastPersistErr = err
+				return err
+			}
+		}
+	}
+	s.turnUnsettled = false
+	s.turnResumes = 0
+	s.turnStopped = true
+	return nil
+}
+
 // ResumableTurn reports whether ResumeTurn may run: a root session with an
 // unsettled turn, resumes left under Config.MaxTurnResumes, no committed
 // outcome, and a journal that does not already end in a final answer.

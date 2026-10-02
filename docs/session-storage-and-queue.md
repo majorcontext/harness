@@ -622,8 +622,17 @@ is issued again from the last journaled message:
 | An assistant message with unresolved tool calls | Appends synthetic "interrupted" results, then runs the loop. With `Config.ResumeRerunTools`, it runs the tools and appends the real results. |
 | Any message, on a claude-code session | Runs the delegated turn. If the last message is not a user message, it first sends the fixed prompt "Your previous turn was interrupted by a restart. Continue from where you left off." |
 
-A stopped turn never resumes: `SessionManager.AbortTurn` settles the turn. A
-root turn that ends because the caller's context was canceled (shutdown
+A stopped turn never resumes. `SessionManager.AbortTurn` settles a child
+turn. For a root, `POST /session/{id}/abort` cancels the run context with the
+cause `engine.ErrTurnStopped`. The engine then keeps the partial reply: it
+appends the partial assistant message and synthetic results for its tool
+calls. The server then calls `Session.RecordTurnStopped`, which writes a
+`turn.stopped` record (`{"type":"turn.stopped","message_id":"<partial id>"}`;
+`message_id` is absent when no reply text came before the stop). Folding the
+record settles the turn, resets the resume count, and makes
+`Session.TurnStopped()` true until the next append. `ResumableTurn()` is then
+false. The abort body `{"turn_id":"..."}` names the turn to stop; a turn id that
+is not the active turn is a no-op. A root turn that ends because the caller's context was canceled (shutdown
 handoff) stays unsettled when `MaxTurnResumes` is above zero, so the next
 holder of the session resumes it.
 

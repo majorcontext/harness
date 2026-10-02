@@ -128,7 +128,9 @@ type Event struct {
 	// Error (above) carries the sanitized failure detail when Outcome is
 	// "error", empty on a clean completion. See runPrompt/runGoal's
 	// recordTurnEnd.
-	Outcome string `json:"outcome,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
 	// QuestionCallID carries a turn.end record's parked AskUserQuestion
 	// call id when Outcome is outcomeAwaitingInput.
 	QuestionCallID string `json:"question_call_id,omitempty"`
@@ -864,20 +866,20 @@ func (s *Server) publishQueue(ev engine.Event) {
 // publishGoal's own logging: "goal eval" at INFO (the evaluator runs exactly
 // once per completed worker turn) and "goal stalled" at WARN (a worker-turn
 // retry) — see publishGoal's doc comment.
-func (s *Server) recordTurnEnd(sessionID string, sess *engine.Session, outcome string, turnErr error) {
-	s.recordTurnEndEvent(sessionID, sess, outcome, turnErr, "")
+func (s *Server) recordTurnEnd(sessionID, turnID string, sess *engine.Session, outcome string, turnErr error) {
+	s.recordTurnEndEvent(sessionID, turnID, sess, outcome, turnErr, "")
 }
 
-func (s *Server) recordTurnEndQuestion(sessionID string, sess *engine.Session, callID string) {
-	s.recordTurnEndEvent(sessionID, sess, outcomeAwaitingInput, nil, callID)
+func (s *Server) recordTurnEndQuestion(sessionID, turnID string, sess *engine.Session, callID string) {
+	s.recordTurnEndEvent(sessionID, turnID, sess, outcomeAwaitingInput, nil, callID)
 }
 
-func (s *Server) recordTurnEndEvent(sessionID string, sess *engine.Session, outcome string, turnErr error, questionCallID string) {
+func (s *Server) recordTurnEndEvent(sessionID, turnID string, sess *engine.Session, outcome string, turnErr error, questionCallID string) {
 	errStr := ""
 	if turnErr != nil {
 		errStr = plugin.SanitizeSessionError(turnErr.Error())
 	}
-	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, Outcome: outcome, Error: errStr, QuestionCallID: questionCallID}
+	ev := &Event{Type: evtTurnEnd, SessionID: sessionID, TurnID: turnID, Outcome: outcome, Error: errStr, QuestionCallID: questionCallID}
 	if sess != nil {
 		ev.ContextUsedTokens, ev.ContextWindowTokens = sessionContextFields(sess)
 	}
@@ -956,10 +958,10 @@ func (s *Server) onChildTurnEnd(id string, msg *message.Message, err error, canc
 	case canceled:
 		s.emitDurable(Event{Type: evtSessionAborted, SessionID: id})
 	case err == nil:
-		s.recordTurnEnd(id, s.resolveLive(id).session(), "completed", nil)
+		s.recordTurnEnd(id, "", s.resolveLive(id).session(), "completed", nil)
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
-		s.recordTurnEnd(id, s.resolveLive(id).session(), turnEndOutcome(err), err)
+		s.recordTurnEnd(id, "", s.resolveLive(id).session(), turnEndOutcome(err), err)
 	}
 	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "idle"})
 }

@@ -297,6 +297,8 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 		}
 	case recTurnResumed:
 		out.TurnResumes = rec.Count
+	case recTurnStopped:
+		out.MessageID = rec.MessageID
 	case recChildTurnSettled:
 		// Pure marker, no payload -- see store.go's own doc comment.
 	}
