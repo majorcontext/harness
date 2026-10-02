@@ -146,8 +146,10 @@ func TestContractSessionOps(t *testing.T) {
 			},
 		},
 		{
-			name:  "session_settings_validation_and_persistence",
-			model: []harnesstest.Step{agentStep("rest", "ok", true)},
+			name: "session_settings_validation_and_persistence",
+			// Model-derived windows are the behavior under test, so the driver override stays off.
+			config: map[string]any{"context_window_tokens": 0},
+			model:  []harnesstest.Step{agentStep("rest", "ok", true)},
 			actions: []action{
 				create{as: "a"},
 				setModel{as: "a", model: "anthropic/no-such-model"},

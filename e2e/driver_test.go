@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -83,10 +84,12 @@ func newHTTPDriver(t *testing.T, modelURL string) *httpDriver {
 
 func newHTTPDriverWith(t *testing.T, modelURL string, extra map[string]any) *httpDriver {
 	t.Helper()
+	cfg := map[string]any{"context_window_tokens": 1_000_000} // the modelmeta table is bot-refreshed
+	maps.Copy(cfg, extra)
 	d := &httpDriver{
 		sessDir: t.TempDir(),
 		workDir: t.TempDir(),
-		config:  writeGoalConfigWith(t, modelURL, extra),
+		config:  writeGoalConfigWith(t, modelURL, cfg),
 		enqSeq:  map[string]int64{},
 	}
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
