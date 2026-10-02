@@ -419,7 +419,7 @@ func TestErrorReplyBody(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			var body struct {
 				Error struct{ Type, Message string }
 			}

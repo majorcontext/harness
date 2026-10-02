@@ -42,7 +42,7 @@ func (p *serveProc) scanEventsFrom(ctx context.Context, from int64, header bool,
 	if err != nil {
 		p.t.Fatalf("GET /event: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	sc := newSSEScanner(resp.Body)
 	for {
 		raw, err := sc.next()
