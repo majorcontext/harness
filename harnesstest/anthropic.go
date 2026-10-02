@@ -9,8 +9,14 @@ import (
 )
 
 type wireRequest struct {
-	System   json.RawMessage `json:"system"`
-	Messages []struct {
+	Model    string `json:"model"`
+	Thinking struct {
+		Type         string `json:"type"`
+		BudgetTokens int    `json:"budget_tokens"`
+	} `json:"thinking"`
+	ServiceTier string          `json:"service_tier"`
+	System      json.RawMessage `json:"system"`
+	Messages    []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
@@ -35,7 +41,10 @@ func decodeRequest(body []byte) (Request, error) {
 	if err := json.Unmarshal(body, &w); err != nil {
 		return Request{}, err
 	}
-	req := Request{System: joinText(w.System)}
+	req := Request{
+		System: joinText(w.System), Model: w.Model, ServiceTier: w.ServiceTier,
+		ThinkingType: w.Thinking.Type, ThinkingBudget: w.Thinking.BudgetTokens,
+	}
 	for _, t := range w.Tools {
 		req.Tools = append(req.Tools, t.Name)
 	}

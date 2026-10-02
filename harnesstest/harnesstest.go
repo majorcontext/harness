@@ -50,9 +50,13 @@ type Usage struct{ Input, Output int }
 
 // Request is a decoded model request.
 type Request struct {
-	System   string
-	Messages []Message
-	Tools    []string // sorted names
+	System         string
+	Model          string
+	ThinkingType   string
+	ThinkingBudget int
+	ServiceTier    string
+	Messages       []Message
+	Tools          []string // sorted names
 }
 
 // Message is one conversation turn in a Request.

@@ -140,6 +140,25 @@ func TestStepsMatchInOrder(t *testing.T) {
 	}
 }
 
+func TestRecordsModelThinkingAndServiceTier(t *testing.T) {
+	s := New(t, Step{Name: "a", Reply: Reply{Text: "A"}})
+	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
+	st, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: anthropic.Family, Model: "m"},
+		Effort:    message.EffortHigh,
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "q"}}}},
+		MaxTokens: 30000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, st)
+	got := s.Requests()[0]
+	if got.Model != "m" || got.ThinkingType != "enabled" || got.ThinkingBudget != 16384 {
+		t.Errorf("request = model %q thinking %q/%d, want m enabled/16384", got.Model, got.ThinkingType, got.ThinkingBudget)
+	}
+}
+
 type recorder struct {
 	testing.TB
 	cleanups []func()
