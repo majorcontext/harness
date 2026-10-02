@@ -48,7 +48,7 @@ func requestHasSegment(want bool) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool { return strings.Contains(r.System, fixtureSegment) == want }
 }
 
-func all(ms ...harnesstest.Matcher) harnesstest.Matcher {
+func pluginMatchAll(ms ...harnesstest.Matcher) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool {
 		for _, m := range ms {
 			if !m(r) {
@@ -59,7 +59,7 @@ func all(ms ...harnesstest.Matcher) harnesstest.Matcher {
 	}
 }
 
-func toolReply(id, name string, in map[string]any) harnesstest.Reply {
+func pluginToolReply(id, name string, in map[string]any) harnesstest.Reply {
 	return harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: name, Input: in}}}
 }
 
@@ -86,8 +86,8 @@ func TestContractPluginTools(t *testing.T) {
 			name:   "plugin_system_segment_in_every_request",
 			config: cfg,
 			model: []harnesstest.Step{
-				{Name: "call", Match: all(assistantTurns(0), requestHasSegment(true)), Reply: toolReply("toolu_1", "ls", ftArgs("path", "."))},
-				{Name: "done", Match: all(assistantTurns(1), requestHasSegment(true)), Reply: harnesstest.Reply{Text: "done"}},
+				{Name: "call", Match: pluginMatchAll(assistantTurns(0), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "ls", ftArgs("path", "."))},
+				{Name: "done", Match: pluginMatchAll(assistantTurns(1), requestHasSegment(true)), Reply: harnesstest.Reply{Text: "done"}},
 			},
 			actions: oneTurn,
 		},
@@ -129,10 +129,10 @@ func TestContractPluginCrash(t *testing.T) {
 			name:   "plugin_crash_mid_call_session_continues",
 			config: cfg,
 			model: []harnesstest.Step{
-				{Name: "crash", Match: all(harnesstest.LastUserText("crash"), requestHasSegment(true)), Reply: toolReply("toolu_1", "fixture_crash", ftArgs())},
-				{Name: "reported", Match: all(harnesstest.LastToolResult("fixture_crash"), requestHasSegment(false)), Reply: harnesstest.Reply{Text: "plugin died"}},
-				{Name: "again", Match: harnesstest.LastUserText("again"), Reply: toolReply("toolu_2", "bash", ftArgs("command", "echo rewrite-me"))},
-				{Name: "echo", Match: harnesstest.LastToolResult("bash"), Reply: toolReply("toolu_3", "fixture_echo", ftArgs("text", "hi"))},
+				{Name: "crash", Match: pluginMatchAll(harnesstest.LastUserText("crash"), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "fixture_crash", ftArgs())},
+				{Name: "reported", Match: pluginMatchAll(harnesstest.LastToolResult("fixture_crash"), requestHasSegment(false)), Reply: harnesstest.Reply{Text: "plugin died"}},
+				{Name: "again", Match: harnesstest.LastUserText("again"), Reply: pluginToolReply("toolu_2", "bash", ftArgs("command", "echo rewrite-me"))},
+				{Name: "echo", Match: harnesstest.LastToolResult("bash"), Reply: pluginToolReply("toolu_3", "fixture_echo", ftArgs("text", "hi"))},
 				{Name: "fin", Match: harnesstest.LastToolResult("fixture_echo"), Reply: harnesstest.Reply{Text: "still here"}},
 			},
 			actions: []action{
