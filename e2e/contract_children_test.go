@@ -60,9 +60,7 @@ func TestContractChildren(t *testing.T) {
 			},
 		},
 		{
-			// Known defect, pinned on purpose: after a SIGKILL restart the running
-			// child reloads idle with no lineage status, the parent loses its
-			// children, and nothing tells the parent the child died.
+			// Known defect, pinned: after SIGKILL the running child reloads idle and the parent loses its children.
 			name:       "child_crash_recovered",
 			concurrent: true,
 			model: []harnesstest.Step{
@@ -84,8 +82,7 @@ func TestContractChildren(t *testing.T) {
 			},
 		},
 		{
-			// Known defect, pinned on purpose: cancel_tree marks an idle root with
-			// lineage status "canceled" and silently drops the child's queued send.
+			// Known defect, pinned: cancel_tree marks an idle root canceled and drops the child's queued send.
 			name:       "send_to_child_and_cancel_tree",
 			concurrent: true,
 			model: []harnesstest.Step{

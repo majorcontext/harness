@@ -94,7 +94,7 @@ func TestContractReplayReads(t *testing.T) {
 				bootstrap{as: "a", limit: 1000},
 				bootstrap{as: "a"},
 				bootstrap{as: "a", limit: 2},
-				bootstrap{as: "a", limit: 1001},
+				bootstrap{as: "a", limit: 1001}, // possible defect: accepted here, while messages_page rejects 1001 with 400
 			),
 		},
 		{

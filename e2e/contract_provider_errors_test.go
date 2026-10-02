@@ -22,7 +22,7 @@ func TestContractProviderErrors(t *testing.T) {
 	}
 	runScenarios(t, []scenario{
 		{
-			// Possible defect: the retry waits a fixed 1s and ignores Retry-After.
+			// Retry-After 1 equals the fixed 1s backoff, so this row cannot tell them apart.
 			name: "provider_429_then_ok",
 			model: []harnesstest.Step{
 				{Name: "limited", Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "1", ErrorMessage: "slow down"}},

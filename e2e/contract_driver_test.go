@@ -84,6 +84,7 @@ func TestContractDriver(t *testing.T) {
 			},
 		},
 		{
+			// Known defect, pinned: cancel_tree marks an idle root canceled and drops the child's queued send.
 			name:       "driver_child_send_and_cancel",
 			concurrent: true,
 			model: []harnesstest.Step{
