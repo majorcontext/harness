@@ -597,3 +597,105 @@ swapped models would replay one endpoint's ciphertext to the other. A
 per-client family makes that a cross-family DROP instead — the canonical
 crossing rule — which costs one turn of reasoning continuity and nothing
 else.
+
+## Claude Code structured questions
+
+A `claude-code` session can ask the user a structured, multiple-choice
+question with the CLI's `AskUserQuestion` tool. The tool is dormant by
+default. `harness serve -ask-user-question` enables it. Set that flag only
+when a client renders questions and answers them. A question that no client
+answers keeps its session parked.
+
+The CLI registers `AskUserQuestion` only when harness passes
+`--permission-prompt-tool stdio`. Harness passes that flag, and an inline
+`--settings` hook, only when all of these are true:
+
+- The server has the flag.
+- The session is a root session. A `task` child has no human who watches it.
+- No goal is armed. The goal loop is autonomous, and the evaluator cannot
+  answer a question.
+
+The same turns add `EnterPlanMode` and `ExitPlanMode` to
+`--disallowedTools`. Both tools also need a human, and plan mode is a
+settled non-goal.
+
+`Config.ClaudeCode.ExtraArgs` follows every engine-owned flag, and the CLI
+keeps the last value of a repeated option. Harness therefore rejects
+`--settings`, `--permission-prompt-tool`, `--permission-prompts`,
+`--disallowedTools`, and its `--disallowed-tools` alias in `ExtraArgs`, in
+both the separate-value and the `=value` form, whenever a turn offers
+`AskUserQuestion`. Each would silently defeat the defer hook, the answer
+channel, or the plan-mode ban.
+
+### Park
+
+The hook returns the `defer` permission decision for `AskUserQuestion`. The
+CLI streams the `tool_use` frame and then ends the turn with
+`stop_reason: "tool_deferred"`. Harness journals the call as an ordinary
+`ToolCall` part named `AskUserQuestion`. Its `arguments.questions` array
+holds each question, header, option, and `multiSelect` flag. The
+`tool_deferred` result records the call id durably as the session's pending
+question (`Session.PendingQuestion`). The server records `turn.end` with
+outcome `awaiting_input` and `question_call_id`. A parked turn is not an
+error.
+
+A parked question survives a restart. `LoadSession` restores the pending
+call id, and the server restores `last_turn` from its event journal. The
+answer resumes the CLI's own session file under `~/.claude/projects`, so
+the feature requires a durable `HOME`. A consumer with an ephemeral `HOME`
+loses the parked question when the process restarts.
+
+The load-time orphan repair skips the pending call id. The call has no
+result yet by design, so a synthetic error result would read as its
+outcome. Every other orphaned call is still repaired.
+
+### Answer
+
+`POST /session/{id}/question/{call_id}/answer` with
+`{"answers": {"<question text>": "<option label>"}}` calls
+`Session.AnswerQuestion`. Harness resumes the CLI session with `--resume`
+and writes no text to stdin. On resume, the CLI runs the deferred call again
+before it reads stdin, and it drives the turn with its own continuation
+prompt. The hook passes that one call id, so the CLI asks the host through a
+`can_use_tool` control request. Harness answers with `allow` and the call's
+input plus `answers`. The CLI then delivers the tool result against the same
+call id, and the model continues.
+
+Harness journals the tool result before the record that clears the pending
+question, so a process lost between the two writes reloads with the answer
+in place. `LoadSession` reads a pending call that already holds a result as
+answered: the CLI never runs a finished call again, so no dismissal could
+clear it.
+
+The answer turn does not inject queued prompts. The CLI queues stdin text
+behind its own continuation and answers it in a second `result`. Harness
+stops reading at the first `result`, so that reply would be lost. A queued
+prompt runs after the answer turn instead, through the normal queue drain.
+
+### Dismiss
+
+Any other turn on a parked session dismisses the question first. This
+includes a prompt, a queued prompt, a task notification, and a goal
+directive. Harness resumes the CLI with no stdin text and answers the
+parked call with `deny` and `interrupt: true`. The CLI records an error tool
+result and stops without a model call. Harness then runs the turn
+normally. The transcript shows the question, its dismissal result, and then
+the new prompt. `POST /session/{id}/compact` dismisses the question the same
+way before it sends `/compact`.
+
+The interrupted child exits nonzero after its own terminal result. Harness
+expects that one exit and nothing else: a dismissal child that dies before
+that result fails the turn.
+
+Only the turn that parks a question ends with outcome `awaiting_input`. A
+session that switches to a native model keeps the pending call, because a
+later delegated turn must still dismiss it, so a native turn there ends
+`completed`. The answer route returns 409 while the model is native.
+
+### Permission requests
+
+With `--permission-prompt-tool stdio`, every permission prompt goes to the
+host. Outside `bypassPermissions`, an ordinary tool such as Bash can send
+`can_use_tool` and block until the host answers. Without the flag, a
+print-mode CLI denies these itself. Harness answers each such request with
+`deny`, which keeps the same behavior.

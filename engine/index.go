@@ -216,6 +216,9 @@ type indexRecord struct {
 	// Same JSON names as record's fields.
 	ClaudeCodeLastUsage    *provider.Usage `json:"claude_code_last_usage,omitempty"`
 	ClaudeCodeWindowTokens int             `json:"claude_code_window_tokens,omitempty"`
+	// ClaudeCodeQuestion mirrors LoadSession's exemption of the parked
+	// call from the orphan repair, which Messages counts.
+	ClaudeCodeQuestion string `json:"claude_code_question,omitempty"`
 }
 
 // indexRecordOf projects a full record (the shape the write path and
@@ -243,6 +246,7 @@ func indexRecordOf(rec record) indexRecord {
 
 		ClaudeCodeLastUsage:    rec.ClaudeCodeLastUsage,
 		ClaudeCodeWindowTokens: rec.ClaudeCodeWindowTokens,
+		ClaudeCodeQuestion:     rec.ClaudeCodeQuestion,
 	}
 	if rec.Message != nil {
 		out.Message = indexMessageOf(*rec.Message)
@@ -296,8 +300,9 @@ type indexFold struct {
 	// repairs is how many messages message.ResolveOrphanToolCalls would
 	// insert into the skeleton, maintained as records arrive so snapshot
 	// stays constant time. See appendMessage.
-	repairs int
-	queue   promptQueueFold
+	repairs         int
+	pendingQuestion string
+	queue           promptQueueFold
 	// header is set by the session header record. A journal whose first
 	// record is not a header is not a session log (events.jsonl is the one
 	// in-tree example), and snapshot refuses it.
@@ -374,6 +379,9 @@ func (f *indexFold) applyIndexRecord(rec indexRecord, isLast bool) error {
 		if rec.Prompt != nil {
 			f.queue.dequeued(*rec.Prompt)
 		}
+	case recClaudeCodeQuestion:
+		f.pendingQuestion = rec.ClaudeCodeQuestion
+		f.recountRepairs()
 	case recTaskSpawned:
 		if rec.TaskSpawn != nil && rec.TaskSpawn.ChildID != "" {
 			f.ix.SpawnedChildIDs = append(f.ix.SpawnedChildIDs, rec.TaskSpawn.ChildID)
@@ -478,7 +486,7 @@ func (f *indexFold) repairsAt(i int) int {
 	if len(window) == 2 {
 		window[1].Parts = append(window[1].Parts, &message.Text{Text: repairWindowMarker})
 	}
-	out := message.ResolveOrphanToolCalls(window)
+	out := message.ResolveOrphanToolCallsExcept(window, f.pendingQuestion)
 	if len(window) == 1 {
 		// No follower: message i is the last, so every insertion is its
 		// own.

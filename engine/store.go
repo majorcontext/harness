@@ -195,6 +195,9 @@ const (
 	// lifecycle meaning beyond "the value changed", replayed
 	// last-writer-wins.
 	recClaudeCodeHistoryWatermark = "claude_code.history_watermark"
+	// recClaudeCodeQuestion records Session.claudeCodePendingQuestion,
+	// replayed last-writer-wins. An empty value clears it.
+	recClaudeCodeQuestion = "claude_code.question"
 	// recClaudeCodeUsage carries one delegated turn's AGGREGATE Usage (see
 	// Session.applyClaudeCodeUsage's own doc comment for why this is a
 	// dedicated record rather than riding a recMessage the way a native
@@ -350,7 +353,8 @@ type record struct {
 	// watermark of 0, which is harmless — persistClaudeCodeHistoryWatermark
 	// is never called with 0 in practice (a delegated turn always appends
 	// at least the pending trigger message before this is recorded).
-	ClaudeCodeHistoryWatermark int `json:"claude_code_history_watermark,omitempty"`
+	ClaudeCodeHistoryWatermark int    `json:"claude_code_history_watermark,omitempty"`
+	ClaudeCodeQuestion         string `json:"claude_code_question,omitempty"`
 	// ClaudeCodeCostUSD carries a recClaudeCodeUsage record's own
 	// per-turn total_cost_usd (see Session.applyClaudeCodeUsage and
 	// message.SubscriptionUsage.SessionCostUSD's own doc comment) — a
@@ -818,6 +822,21 @@ func (s *Session) persistClaudeCodeHistoryWatermark(n int) {
 		return
 	}
 	if err := s.writeRecord(record{Type: recClaudeCodeHistoryWatermark, ClaudeCodeHistoryWatermark: n}); err != nil {
+		s.lastPersistErr = err
+	}
+}
+
+// persistClaudeCodeQuestion mirrors persistClaudeCodeSessionID for
+// recClaudeCodeQuestion. Caller holds s.mu.
+func (s *Session) persistClaudeCodeQuestion(callID string) {
+	if s.cfg.SessionDir == "" || !s.logStarted {
+		return
+	}
+	if err := s.ensureLog(); err != nil {
+		s.lastPersistErr = err
+		return
+	}
+	if err := s.writeRecord(record{Type: recClaudeCodeQuestion, ClaudeCodeQuestion: callID}); err != nil {
 		s.lastPersistErr = err
 	}
 }
@@ -1717,6 +1736,8 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 			s.claudeCodeCLISessionID = rec.ClaudeCodeSessionID
 		case recClaudeCodeHistoryWatermark:
 			s.claudeCodeHistoryWatermark = rec.ClaudeCodeHistoryWatermark
+		case recClaudeCodeQuestion:
+			s.claudeCodePendingQuestion = rec.ClaudeCodeQuestion
 		case recClaudeCodeUsage:
 			// See Session.applyClaudeCodeUsage's own doc comment for why
 			// this folds into BOTH cumulative usage and lastUsage, unlike
@@ -2043,7 +2064,13 @@ func LoadSession(cfg Config, id string) (*Session, error) {
 	// bypassed that path entirely (an older binary, a plugin, or an
 	// external writer). The repair is re-derived deterministically on every
 	// load; the log itself stays append-only and unmodified.
-	s.history = message.ResolveOrphanToolCalls(s.history)
+	// A crash between the answer's result and the record that clears the
+	// question leaves a parked call that already holds its result. The CLI
+	// never re-runs a finished call, so no dismissal could clear it.
+	if s.claudeCodePendingQuestion != "" && claudeCodeCallHasResult(s.history, s.claudeCodePendingQuestion) {
+		s.claudeCodePendingQuestion = ""
+	}
+	s.history = message.ResolveOrphanToolCallsExcept(s.history, s.claudeCodePendingQuestion)
 	// newSession already resolved s.cfg.ContextWindowTokens/contextWindowSource
 	// once, against cfg.Model — but a recModel record above may have moved
 	// s.model to whatever this session was last switched to, in an earlier

@@ -46,6 +46,7 @@ type foldState struct {
 	Committed                  *taskNotification
 	ClaudeCodeCLISessionID     string
 	ClaudeCodeHistoryWatermark int
+	ClaudeCodePendingQuestion  string
 	ClaudeCodeSessionCostUSD   float64
 	HaveClaudeCodeCost         bool
 	CreatedAt                  string
@@ -90,6 +91,7 @@ func foldStateOf(t *testing.T, s *Session) string {
 		Committed:                  s.committedOutcome,
 		ClaudeCodeCLISessionID:     s.claudeCodeCLISessionID,
 		ClaudeCodeHistoryWatermark: s.claudeCodeHistoryWatermark,
+		ClaudeCodePendingQuestion:  s.claudeCodePendingQuestion,
 		ClaudeCodeSessionCostUSD:   s.claudeCodeSessionCostUSD,
 		HaveClaudeCodeCost:         s.haveClaudeCodeCost,
 		CreatedAt:                  s.createdAt.UTC().String(),

@@ -2055,7 +2055,7 @@ func TestClaudeCodeReasoningFlushesStandaloneOnDivergingUpstreamID(t *testing.T)
 {"type":"assistant","message":{"id":"msg_B","role":"assistant","content":[{"type":"text","text":"text for B"}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"text for B"}
 `
-	if _, _, err, _ := s.consumeClaudeCodeStream(strings.NewReader(stream), s.model); err != nil {
+	if _, _, err, _, _ := s.consumeClaudeCodeStream(strings.NewReader(stream), s.model, nil, nil); err != nil {
 		t.Fatalf("consumeClaudeCodeStream: %v", err)
 	}
 

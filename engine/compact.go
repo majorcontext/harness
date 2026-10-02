@@ -318,6 +318,12 @@ func (s *Session) RunCompactCommand(ctx context.Context, opts CompactOptions) (C
 		if opts.KeepTurns != 0 || !opts.Model.IsZero() {
 			return CompactResult{}, errors.New("engine: keep_turns/model are not applicable to a session delegated to the Claude Code CLI, which owns its own context")
 		}
+		// Same ordering contract as promptWithOrigin: a resumed CLI reads
+		// the command as the parked call's control response and loses it.
+		if err := s.dismissClaudeCodeQuestion(ctx); err != nil {
+			s.emitSessionError(err)
+			return CompactResult{}, err
+		}
 		if _, err := s.dispatchClaudeCodeTurn(ctx, backend, compactCommandText, message.OriginEngine, "", nil, nil); err != nil {
 			return CompactResult{}, err
 		}

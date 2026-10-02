@@ -1243,6 +1243,12 @@ type Session struct {
 	// restored by LoadSession, alongside claudeCodeCLISessionID.
 	claudeCodeHistoryWatermark int
 
+	// claudeCodePendingQuestion is the call id of the AskUserQuestion call
+	// a delegated turn parked on, or "". The CLI resumes that call on its
+	// next --resume before it reads stdin, so every later turn must answer
+	// or dismiss it first. Persisted (recClaudeCodeQuestion, store.go).
+	claudeCodePendingQuestion string
+
 	// spawnedChildIDs is every child id this session has ever Spawn'd —
 	// appended to live (Spawn, session_manager.go) and folded back from
 	// the durable recTaskSpawned audit trail on reload (store.go's
@@ -2948,6 +2954,13 @@ func (s *Session) PromptWithOriginFrom(ctx context.Context, text string, origin 
 // turn's directive as new history.
 func (s *Session) promptWithOrigin(ctx context.Context, text string, origin string, id string, prov *PromptProvenance, operatorBatch []message.OperatorBatchEntry, blobs ...*message.Blob) (*message.Message, error) {
 	if backend, ok := s.delegatedBackend(); ok {
+		// A pending question must be dismissed before the new user message
+		// joins history: the dismissal compares the CLI history watermark
+		// against len(s.History()) to decide whether to re-send it.
+		if err := s.dismissClaudeCodeQuestion(ctx); err != nil {
+			s.emitSessionError(err)
+			return nil, err
+		}
 		return s.dispatchClaudeCodeTurn(ctx, backend, text, origin, id, prov, operatorBatch, blobs...)
 	}
 	// A fresh native session consumes startup prewarm exactly once before any
