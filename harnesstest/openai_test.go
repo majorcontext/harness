@@ -65,13 +65,13 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 	asst.Role = message.RoleAssistant
 	codexTurn(t, c, codexRequest(codexUser("run it"), asst, results))
 
-	want := []WireRequest{
+	want := []WireEvent{
 		{Transport: "ws", Event: "dial", Conn: 1, ResponsesWebsockets: true},
 		{Transport: "ws", Event: "prewarm", Conn: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
 		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_warm_1", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
 		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_1", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
 	}
-	if got := s.WireRequests(); !reflect.DeepEqual(got, want) {
+	if got := s.WireEvents(); !reflect.DeepEqual(got, want) {
 		t.Errorf("wire = %+v\nwant %+v", got, want)
 	}
 	reqs := s.Requests()
@@ -103,7 +103,7 @@ func TestOpenAIReasoningItemSurfacesAndReplays(t *testing.T) {
 		&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "out"}}},
 	}}
 	codexTurn(t, c, codexRequest(codexUser("go"), asst, results))
-	if w := s.WireRequests(); len(w) != 2 || w[0].ReasoningItems != 0 || w[1].ReasoningItems != 1 {
+	if w := s.WireEvents(); len(w) != 2 || w[0].ReasoningItems != 0 || w[1].ReasoningItems != 1 {
 		t.Errorf("wire = %+v, want the second request to replay one reasoning item", w)
 	}
 }
@@ -125,7 +125,7 @@ func TestOpenAIRecordsSchemaKeywordsTheBackendRejects(t *testing.T) {
 			req := codexRequest(codexUser("hi"))
 			req.Tools = []provider.ToolDef{{Name: "send", InputSchema: schema}}
 			codexTurn(t, c, req)
-			if got := s.WireRequests()[0].RejectedSchemaKeywords; !reflect.DeepEqual(got, tc.want) {
+			if got := s.WireEvents()[0].RejectedSchemaKeywords; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("rejected keywords = %v, want %v", got, tc.want)
 			}
 		})
@@ -140,8 +140,8 @@ func TestOpenAISSEDecodesZstdAndReportsRateLimitHeaders(t *testing.T) {
 	if got := ev.SubscriptionUsage; got == nil || got.Plan != "pro" || len(got.Windows) != 1 || got.Windows[0].Label != "Weekly" || got.Windows[0].UsedPercent != 12.5 {
 		t.Errorf("subscription usage = %+v, want pro plan with a Weekly 12.5%% window", got)
 	}
-	want := []WireRequest{{Transport: "sse", Event: "request", ContentEncoding: "zstd", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"}}
-	if got := s.WireRequests(); !reflect.DeepEqual(got, want) {
+	want := []WireEvent{{Transport: "sse", Event: "request", ContentEncoding: "zstd", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"}}
+	if got := s.WireEvents(); !reflect.DeepEqual(got, want) {
 		t.Errorf("wire = %+v, want %+v", got, want)
 	}
 }
@@ -159,7 +159,7 @@ func TestOpenAIRateLimitsFrameOverWebSocket(t *testing.T) {
 func TestOpenAIRefusedWebSocketFallsBackToSSE(t *testing.T) {
 	s := NewOpenAI(t, OpenAIOptions{RefuseWebSocket: true}, Step{Reply: Reply{Text: "hi"}})
 	codexTurn(t, codexClient(s, true), codexRequest(codexUser("hi")))
-	got := s.WireRequests()
+	got := s.WireEvents()
 	if len(got) != 2 || got[0].Event != "refused" || got[1].Transport != "sse" {
 		t.Errorf("wire = %+v, want a refused upgrade then an SSE request", got)
 	}
@@ -167,7 +167,7 @@ func TestOpenAIRefusedWebSocketFallsBackToSSE(t *testing.T) {
 
 func chainMissFrame(t *testing.T, s *OpenAI) []byte {
 	t.Helper()
-	url := "ws" + strings.TrimPrefix(s.URL(), "http") + DefaultCodexPath
+	url := "ws" + strings.TrimPrefix(s.URL(), "http") + codexPath
 	hdr := http.Header{"Authorization": {"Bearer k"}}
 	conn, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{HTTPHeader: hdr})
 	if err != nil {

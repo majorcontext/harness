@@ -1,4 +1,4 @@
-// Package harnesstest is a scripted Anthropic Messages server for tests.
+// Package harnesstest provides scripted Anthropic Messages and OpenAI Responses servers for tests.
 package harnesstest
 
 import (
@@ -112,6 +112,24 @@ type Server struct {
 	arrived   chan struct{} // closed and replaced when a request is recorded
 }
 
+func newServer(steps []Step) *Server {
+	steps = append([]Step(nil), steps...)
+	for i := range steps {
+		if steps[i].Match == nil {
+			steps[i].Match = func(Request) bool { return true }
+		}
+	}
+	return &Server{
+		closing:  make(chan struct{}),
+		steps:    steps,
+		consumed: make([]bool, len(steps)),
+		releases: map[string]chan struct{}{},
+		blocked:  map[string]chan struct{}{},
+		canceled: map[string]chan struct{}{},
+		arrived:  make(chan struct{}),
+	}
+}
+
 // New starts a Server that answers each request with the first step, in
 // declaration order, that has not been consumed and whose Match accepts it.
 // A step without Repeat is consumed when it matches.
@@ -122,21 +140,7 @@ type Server struct {
 // already failed.
 func New(t testing.TB, steps ...Step) *Server {
 	t.Helper()
-	steps = append([]Step(nil), steps...)
-	for i := range steps {
-		if steps[i].Match == nil {
-			steps[i].Match = func(Request) bool { return true }
-		}
-	}
-	s := &Server{
-		closing:  make(chan struct{}),
-		steps:    steps,
-		consumed: make([]bool, len(steps)),
-		releases: map[string]chan struct{}{},
-		blocked:  map[string]chan struct{}{},
-		canceled: map[string]chan struct{}{},
-		arrived:  make(chan struct{}),
-	}
+	s := newServer(steps)
 	s.srv = httptest.NewServer(http.HandlerFunc(s.handle))
 	t.Cleanup(func() {
 		close(s.closing)

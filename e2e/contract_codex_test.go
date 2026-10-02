@@ -50,7 +50,7 @@ type recordWire struct{}
 
 func (recordWire) run(t *testing.T, _ *run) { t.Fatal("recordWire runs only under runCodexScenario") }
 func (recordWire) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
-	raw, err := json.Marshal(map[string]any{"events": o.WireRequests()})
+	raw, err := json.Marshal(map[string]any{"events": o.WireEvents()})
 	if err != nil {
 		t.Fatal(err)
 	}
