@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ func TestServeNonLoopbackNoTokenFailsClosed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, harnessBin, "serve", "-addr", addr)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.Dir = t.TempDir()
 	cmd.Env = cleanEnv(map[string]string{
 		"HARNESS_SESSION_DIR": t.TempDir(),
@@ -58,13 +61,7 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting serve: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	startGroup(t, cmd)
 
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -105,13 +102,7 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting serve: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	startGroup(t, cmd)
 
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {

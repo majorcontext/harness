@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"syscall"
 	"testing"
 )
 
@@ -160,22 +159,6 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 		d.p.terminate(t)
 	}
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
-}
-
-func (p *serveProc) terminate(t *testing.T) {
-	t.Helper()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.waited {
-		return
-	}
-	p.waited = true
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("SIGTERM: %v", err)
-	}
-	if err := p.cmd.Wait(); err != nil {
-		t.Logf("serve exit after SIGTERM: %v", err)
-	}
 }
 
 func (d *httpDriver) AwaitTurnEnd(t *testing.T, outcome string) {

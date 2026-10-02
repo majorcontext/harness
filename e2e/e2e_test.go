@@ -53,7 +53,12 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		harnessBin = bin
+		stop := guardProcessGroups()
 		code := m.Run()
+		stop()
+		if reportLeakedGroups() && code == 0 {
+			code = 1
+		}
 		cleanup()
 		os.Exit(code)
 	}
@@ -197,17 +202,14 @@ func (b *lockedBuffer) String() string {
 
 // serveProc is a running `harness serve` subprocess.
 type serveProc struct {
+	*procGroup
 	t      *testing.T
-	cmd    *exec.Cmd
 	addr   string
 	stderr *lockedBuffer
-
-	mu     sync.Mutex
-	waited bool
 }
 
 // startServe launches `harness serve` on a free port with the given session
-// dir and config, then waits (bounded) for /health. The process is killed at
+// dir and config, then waits (bounded) for /health. The process group is killed at
 // test cleanup. Its working directory is a throwaway temp dir.
 func startServe(t *testing.T, sessDir, configPath string) *serveProc {
 	t.Helper()
@@ -230,25 +232,9 @@ func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc 
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting serve: %v", err)
-	}
-	p := &serveProc{t: t, cmd: cmd, addr: addr, stderr: stderr}
-	t.Cleanup(p.kill)
+	p := &serveProc{procGroup: startGroup(t, cmd), t: t, addr: addr, stderr: stderr}
 	p.waitHealthy()
 	return p
-}
-
-// kill terminates the process with SIGKILL and reaps it. Idempotent.
-func (p *serveProc) kill() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.waited {
-		return
-	}
-	p.waited = true
-	_ = p.cmd.Process.Kill()
-	_ = p.cmd.Wait()
 }
 
 // waitHealthy polls GET /health until 200 or a deadline. Real cross-process
