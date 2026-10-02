@@ -101,6 +101,16 @@ An embedder that holds one lease for the whole life of the server can make
 `Server.Fenced` returns a channel that closes when an events-log conflict
 fences the server. `New` returns an error if boot reconcile itself fenced.
 
+Compare-and-append alone does not fence an ownership handoff. An old owner
+can start an `Append` at the current length before the new owner acquires the
+session. That append still matches, and the new owner's next `Append` then
+conflicts and stops the new owner. A store that two processes share must check
+ownership in the same atomic operation as the append. For example, a Postgres
+store checks and locks the owner's lease row (`FOR SHARE`) in the append
+transaction, so the new owner's claim waits for an in-flight append and a
+later append from the old owner fails. `DiskStore` and `MemStore` serve one
+process and need no such check.
+
 ### Claude-code mirror log
 
 With `ClaudeCodeConfig.MirrorCLISession`, the backend keeps the CLI transcript
