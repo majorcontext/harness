@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 )
@@ -437,7 +438,9 @@ func TestClaudeCodeDisableBuiltinToolsDismissesQuestionLocally(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_INIT_TOOLS", "[]")
 	_ = os.Remove(os.Getenv("FAKE_CLAUDE_STATE"))
 	before := len(readInvocations(t, logPath))
-	_, err := s.Prompt(context.Background(), "use the default")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := s.Prompt(ctx, "use the default")
 	if err != nil {
 		t.Fatalf("Prompt with a stale question: %v", err)
 	}
@@ -450,5 +453,12 @@ func TestClaudeCodeDisableBuiltinToolsDismissesQuestionLocally(t *testing.T) {
 	}
 	if questionResults(s) != 1 {
 		t.Errorf("tool results for the parked call = %d, want 1 dismissal result", questionResults(s))
+	}
+	for _, m := range s.History() {
+		for _, p := range m.Parts {
+			if tr, ok := p.(*message.ToolResult); ok && tr.CallID == "toolu_q" && !tr.IsError {
+				t.Errorf("dismissal result IsError = false, want true")
+			}
+		}
 	}
 }

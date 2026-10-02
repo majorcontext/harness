@@ -200,21 +200,26 @@ func (s *Session) dismissClaudeCodeQuestion(ctx context.Context) error {
 	if callID == "" {
 		return nil
 	}
-	caughtUp := s.claudeCodeHistoryWatermarkCount() == len(s.History())
 	if s.cfg.ClaudeCode.DisableBuiltinTools {
 		// The dismissal child emits no init, so the fail-closed tool check
 		// would reject it and wedge every prompt. A question parked under an
 		// earlier config is closed here, with the result the child would
-		// have reported.
+		// have reported. The CLI's own transcript never receives that
+		// result, so the history watermark stays put and the next turn
+		// re-sends the get_conversation_history directive.
 		s.dismissClaudeCodeQuestionLocally(callID)
-	} else {
-		if _, err := s.runClaudeCodeChild(ctx, "", nil, &claudeCodeResolution{
-			callID:   callID,
-			decision: map[string]any{"behavior": "deny", "message": claudeCodeDismissMessage, "interrupt": true},
-			dismiss:  true,
-		}); err != nil {
-			return err
+		if s.PendingQuestion() != "" {
+			return fmt.Errorf("engine: claude-code: question %s was not dismissed", callID)
 		}
+		return nil
+	}
+	caughtUp := s.claudeCodeHistoryWatermarkCount() == len(s.History())
+	if _, err := s.runClaudeCodeChild(ctx, "", nil, &claudeCodeResolution{
+		callID:   callID,
+		decision: map[string]any{"behavior": "deny", "message": claudeCodeDismissMessage, "interrupt": true},
+		dismiss:  true,
+	}); err != nil {
+		return err
 	}
 	if s.PendingQuestion() != "" {
 		return fmt.Errorf("engine: claude-code: question %s was not dismissed", callID)
