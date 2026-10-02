@@ -31,7 +31,7 @@ Add none of these without a new design decision:
 - Validate credentials on first use. Keep model catalogs static.
 
 ## Code
-- Keep files under 600 lines and functions under 80. `internal/gates` enforces the ceilings.
+- Keep files under 800 lines and functions under 80. `internal/gates` enforces the ceilings.
 - Write no comment by default. A comment states a constraint, a hazard, or a non-obvious reason.
 - A comment never states history: no issue numbers, dates, "previously", "no longer", or "instead of".
 - An exported identifier gets a one-line doc comment.
