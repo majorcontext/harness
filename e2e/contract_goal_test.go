@@ -71,6 +71,8 @@ func TestContractGoal(t *testing.T) {
 				agentStep("try", "try", true),
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},
+			// Known defect, pinned on purpose: a goal that exhausts max_turns stays
+			// active, so wait?until=idle never returns.
 			actions: []action{
 				create{as: "a", staysActive: true},
 				setGoal{as: "a", condition: "say done", maxTurns: 2},

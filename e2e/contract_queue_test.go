@@ -33,6 +33,7 @@ func TestContractQueue(t *testing.T) {
 			},
 		},
 		{
+			// Known defect, pinned on purpose: interrupt drops the partial assistant text.
 			name:  "interrupt_drops_unfinished_text_then_queue_continues",
 			model: []fakemodel.Step{slow("unfinished"), second},
 			actions: []action{
