@@ -204,7 +204,8 @@ func fileViolations(h, b FileMetrics) []Violation {
 	add := func(rule, format string, a ...any) {
 		vs = append(vs, Violation{Rule: rule, Detail: fmt.Sprintf(format, a...)})
 	}
-	if limit := max(maxShare, commentShare(b)); commentShare(h) > limit {
+	deletion := h.CodeLines < b.CodeLines && h.CommentLines <= b.CommentLines
+	if limit := max(maxShare, commentShare(b)); !deletion && commentShare(h) > limit {
 		add("comment_share", "%d of %d lines are comments, limit %.1f%%", h.CommentLines, h.CommentLines+h.CodeLines, limit*100)
 	}
 	if !within(h.Lines, b.Lines, maxFileLines) {
@@ -224,10 +225,14 @@ func fileViolations(h, b FileMetrics) []Violation {
 
 // ratioFailure explains a test:code ratio violation, or returns "". A package
 // without code has no gate. A ratio up to maxTestRatio always passes. A
-// package absent from base may not pass it. Any other package may not raise
-// its ratio above the merge base.
+// package absent from base may not pass it. A change that removes code and
+// adds no test lines always passes. Any other package may not raise its ratio
+// above the merge base.
 func ratioFailure(h, b PackageMetrics, inBase bool) string {
 	if h.CodeLines == 0 || h == b || h.TestLines*2 <= h.CodeLines*3 {
+		return ""
+	}
+	if inBase && h.CodeLines < b.CodeLines && h.TestLines <= b.TestLines {
 		return ""
 	}
 	if !inBase || b == (PackageMetrics{}) {
@@ -239,15 +244,41 @@ func ratioFailure(h, b PackageMetrics, inBase bool) string {
 	return ""
 }
 
+// oldPackage names the base package that most of the renamed files of the
+// head package dir came from, or dir when no file moved in.
+func oldPackage(dir string, head Report, renames map[string]string) string {
+	from := map[string]int{}
+	for p, old := range renames {
+		if _, ok := head.Files[p]; ok && path.Dir(p) == dir {
+			from[path.Dir(old)]++
+		}
+	}
+	best := dir
+	for d, n := range from {
+		if n > from[best] || n == from[best] && d < best {
+			best = d
+		}
+	}
+	return best
+}
+
 // Check returns the violations of head against base. Only files in changed
-// are checked. A file absent from base is new and meets the absolute limits.
-func Check(head, base Report, changed map[string]bool) []Violation {
+// are checked. A file absent from base is new and meets the absolute limits,
+// unless renames maps it to a base path. A package absent from base compares
+// with the base package that its files came from.
+func Check(head, base Report, changed map[string]bool, renames map[string]string) []Violation {
+	baseOf := func(p string) string {
+		if old, ok := renames[p]; ok {
+			return old
+		}
+		return p
+	}
 	var vs []Violation
 	for p, m := range head.Files {
 		if !changed[p] {
 			continue
 		}
-		for _, v := range fileViolations(m, base.Files[p]) {
+		for _, v := range fileViolations(m, base.Files[baseOf(p)]) {
 			v.Path = p
 			vs = append(vs, v)
 		}
@@ -257,12 +288,15 @@ func Check(head, base Report, changed map[string]bool) []Violation {
 		if p == "AGENTS.md" {
 			limit = rootAgentsMax
 		}
-		if changed[p] && !within(n, base.Agents[p], limit) {
-			vs = append(vs, Violation{p, "agents_cap", fmt.Sprintf("%d lines, limit %d", n, max(limit, base.Agents[p]))})
+		if b := base.Agents[baseOf(p)]; changed[p] && !within(n, b, limit) {
+			vs = append(vs, Violation{p, "agents_cap", fmt.Sprintf("%d lines, limit %d", n, max(limit, b))})
 		}
 	}
 	for p, m := range head.Packages {
 		b, ok := base.Packages[p]
+		if !ok {
+			b, ok = base.Packages[oldPackage(p, head, renames)]
+		}
 		if d := ratioFailure(m, b, ok); d != "" {
 			vs = append(vs, Violation{p, "test_ratio", d})
 		}

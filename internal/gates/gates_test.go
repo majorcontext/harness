@@ -2,6 +2,7 @@ package gates
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,7 @@ func rules(vs []Violation) []string {
 var checkCases = []struct {
 	name       string
 	head, base fstest.MapFS
+	renames    map[string]string
 	want       []string
 }{
 	{
@@ -54,11 +56,11 @@ var checkCases = []struct {
 		want: []string{"a/a.go:file_size"},
 	},
 	{
-		name: "new_file_func_at_limit_passes",
+		name: "new_func_brace_span_80_passes",
 		head: fstest.MapFS{"a/a.go": file(longFunc(79))},
 	},
 	{
-		name: "new_file_long_func_fails",
+		name: "new_func_brace_span_81_fails",
 		head: fstest.MapFS{"a/a.go": file(longFunc(80))},
 		want: []string{"a/a.go:long_func"},
 	},
@@ -191,10 +193,57 @@ var checkCases = []struct {
 		base: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
 	},
 	{
-		name: "deleting_code_that_raises_ratio_over_limit_fails",
+		name: "deleting_untested_dead_code_passes",
 		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
 		base: fstest.MapFS{"a/a.go": file("package a\n" + code(4)), "a/a_test.go": file("package a\n" + code(4))},
+	},
+	{
+		name: "deleting_code_while_adding_tests_over_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(4)), "a/a_test.go": file("package a\n" + code(2))},
 		want: []string{"a:test_ratio"},
+	},
+	{
+		name: "deleting_code_from_a_commented_file_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(40) + code(50))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(40) + code(60))},
+	},
+	{
+		name: "comment_count_rise_that_lowers_share_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(50) + code(100))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(40) + code(60))},
+	},
+	{
+		name: "comment_count_rise_that_raises_share_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(41) + code(60))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(40) + code(60))},
+		want: []string{"a/a.go:comment_share"},
+	},
+	{
+		name:    "moved_over_limit_file_passes",
+		head:    fstest.MapFS{"b/new.go": file("package b\n" + code(900))},
+		base:    fstest.MapFS{"a/old.go": file("package a\n" + code(900))},
+		renames: map[string]string{"b/new.go": "a/old.go"},
+	},
+	{
+		name:    "moved_file_that_grows_past_its_old_size_fails",
+		head:    fstest.MapFS{"b/new.go": file("package b\n" + code(901))},
+		base:    fstest.MapFS{"a/old.go": file("package a\n" + code(900))},
+		renames: map[string]string{"b/new.go": "a/old.go"},
+		want:    []string{"b/new.go:file_size"},
+	},
+	{
+		name:    "moved_package_keeps_its_old_ratio",
+		head:    fstest.MapFS{"b/b.go": file("package b\n" + code(3)), "b/b_test.go": file("package b\n" + code(11))},
+		base:    fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
+		renames: map[string]string{"b/b.go": "a/a.go", "b/b_test.go": "a/a_test.go"},
+	},
+	{
+		name:    "moved_package_may_not_raise_its_old_ratio",
+		head:    fstest.MapFS{"b/b.go": file("package b\n" + code(3)), "b/b_test.go": file("package b\n" + code(12))},
+		base:    fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
+		renames: map[string]string{"b/b.go": "a/a.go", "b/b_test.go": "a/a_test.go"},
+		want:    []string{"b:test_ratio"},
 	},
 	{
 		name: "new_package_at_ratio_limit_passes",
@@ -226,7 +275,7 @@ func TestCheck(t *testing.T) {
 			}
 			want := slices.Clone(tc.want)
 			slices.Sort(want)
-			if got := rules(Check(head, base, changed)); !slices.Equal(got, want) {
+			if got := rules(Check(head, base, changed, tc.renames)); !slices.Equal(got, want) {
 				t.Fatalf("violations = %v, want %v", got, want)
 			}
 		})
@@ -238,7 +287,7 @@ func TestCheckSkipsPathsOutsideChangedSet(t *testing.T) {
 		Files:  map[string]FileMetrics{"a.go": {Lines: 900, CodeLines: 900}},
 		Agents: map[string]int{"AGENTS.md": 90},
 	}
-	if got := Check(head, Report{}, nil); len(got) != 0 {
+	if got := Check(head, Report{}, nil, nil); len(got) != 0 {
 		t.Fatalf("violations = %v, want none", got)
 	}
 }
@@ -394,7 +443,59 @@ func TestRepository(t *testing.T) {
 			fmt.Printf("::warning title=comment share::%s\n", w)
 		}
 	}
-	for _, v := range Check(head, base.Report, base.Changed) {
+	for _, v := range Check(head, base.Report, base.Changed, base.Renames) {
 		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
+	}
+}
+
+func TestLoadBaseIgnoresCommitsMadeToTheBaseBranchAfterTheBranchPoint(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	write(t, dir, "a.go", "package a\n")
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	trunk := gitIn(t, dir, "rev-parse", "--abbrev-ref", "HEAD")
+	gitIn(t, dir, "checkout", "-q", "-b", "feature")
+	write(t, dir, "a.go", "package a\n"+code(2))
+	gitIn(t, dir, "commit", "-q", "-am", "edit")
+	gitIn(t, dir, "checkout", "-q", trunk)
+	write(t, dir, "moved.go", "package a\n")
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "trunk moves")
+	gitIn(t, dir, "checkout", "-q", "feature")
+
+	got, err := LoadBase(dir, trunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Changed["moved.go"] {
+		t.Fatal("a trunk commit after the branch point is in Changed")
+	}
+	if _, ok := got.Report.Files["moved.go"]; ok {
+		t.Fatal("a trunk commit after the branch point is in Report")
+	}
+}
+
+func TestLoadBaseMapsEachRenamedPathToItsOldPath(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	write(t, dir, "a/old.go", "package a\n"+code(20))
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+	if err := os.Mkdir(filepath.Join(dir, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, dir, "mv", "a/old.go", "b/new.go")
+
+	got, err := LoadBase(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"b/new.go": "a/old.go"}; !maps.Equal(got.Renames, want) {
+		t.Fatalf("renames = %v, want %v", got.Renames, want)
+	}
+	if !got.Changed["b/new.go"] {
+		t.Fatal("renamed path is not in Changed")
 	}
 }

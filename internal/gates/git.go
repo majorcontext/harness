@@ -17,6 +17,7 @@ import (
 type Base struct {
 	Report  Report
 	Changed map[string]bool
+	Renames map[string]string
 }
 
 func git(root string, args ...string) ([]byte, error) {
@@ -59,18 +60,30 @@ func LoadBase(root, ref string) (Base, error) {
 		return Base{}, err
 	}
 	changed := map[string]bool{}
-	for _, args := range [][]string{
-		{"diff", "--name-only", "-z", "--no-renames", sha},
-		{"ls-files", "-z", "--others", "--exclude-standard"},
-	} {
-		if out, err = git(root, args...); err != nil {
-			return Base{}, err
-		}
-		for _, p := range nulPaths(out) {
-			changed[p] = true
+	renames := map[string]string{}
+	if out, err = git(root, "diff", "-M", "--name-status", "-z", sha); err != nil {
+		return Base{}, err
+	}
+	fields := nulPaths(out)
+	for i := 0; i < len(fields); i++ {
+		status := fields[i]
+		if status[0] == 'R' && i+2 < len(fields) {
+			renames[fields[i+2]] = fields[i+1]
+			changed[fields[i+1]] = true
+			changed[fields[i+2]] = true
+			i += 2
+		} else if i+1 < len(fields) {
+			changed[fields[i+1]] = true
+			i++
 		}
 	}
-	return Base{report, changed}, nil
+	if out, err = git(root, "ls-files", "-z", "--others", "--exclude-standard"); err != nil {
+		return Base{}, err
+	}
+	for _, p := range nulPaths(out) {
+		changed[p] = true
+	}
+	return Base{report, changed, renames}, nil
 }
 
 func wanted(p string) bool {
