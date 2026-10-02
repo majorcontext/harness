@@ -103,7 +103,7 @@ func TestContractRuntimeEventSink(t *testing.T) {
 		{"event_sink_ships_every_durable_record", sinkShipsEveryRecord},
 		{"event_sink_include_types_ships_checkpoints", sinkIncludeTypes},
 		{"event_sink_receiver_rewind_reships_from_the_start", sinkRewind},
-		{"event_sink_resumes_from_receiver_cursor_after_restart", sinkRestart},
+		{"event_sink_restart_reships_the_restored_journal_from_seq_1", sinkRestartReships},
 		{"event_sink_retries_a_retryable_failure", sinkRetries},
 		{"event_sink_permanent_rejection_retires_only_the_pump", sinkPermanentRejection},
 	}
@@ -217,7 +217,7 @@ func sinkRewind(t *testing.T) {
 	}
 }
 
-func sinkRestart(t *testing.T) {
+func sinkRestartReships(t *testing.T) {
 	var applied atomic.Int64
 	rcv := harnesstest.NewSinkReceiver(t, func(_ int, b harnesstest.SinkBatch) harnesstest.SinkReply {
 		if b.FromSeq <= applied.Load()+1 && b.ToSeq > applied.Load() {
