@@ -31,6 +31,7 @@ type driver interface {
 	Queued(t *testing.T, id string) []string
 	AwaitMaxTurnsExceeded(t *testing.T)
 	Stderr() string
+	Workdir() string
 
 	Compact(t *testing.T, id string) callResult
 	SetModel(t *testing.T, id, model string) callResult
@@ -120,6 +121,8 @@ func (d *httpDriver) Enqueue(t *testing.T, id, text string) {
 }
 
 func (d *httpDriver) Stderr() string { return d.p.stderr.String() }
+
+func (d *httpDriver) Workdir() string { return d.workDir }
 
 func (d *httpDriver) scan(t *testing.T, visit func(raw []byte) bool) error {
 	t.Helper()

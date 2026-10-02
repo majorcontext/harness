@@ -12,13 +12,8 @@ import (
 
 type captureWorkdir struct{ dst *string }
 
-func (a captureWorkdir) run(t *testing.T, r *run) {
-	t.Helper()
-	d, ok := r.drv.(*httpDriver)
-	if !ok {
-		t.Fatalf("driver is %T, want *httpDriver", r.drv)
-	}
-	*a.dst = d.workDir
+func (a captureWorkdir) run(_ *testing.T, r *run) {
+	*a.dst = r.drv.Workdir()
 }
 
 // scrubWorkdir rewrites the session workdir to "<workdir>" in every string of
