@@ -167,6 +167,12 @@ func (d *httpDriver) Messages(t *testing.T, id string) []transcriptMessage {
 	return transcriptOf(d.p.messages(id))
 }
 
+// apiContent is one item of a tool result: text, or a blob with its bytes.
+type apiContent struct {
+	Type, Text, Data string
+	MediaType        string `json:"media_type"`
+}
+
 func transcriptOf(msgs []apiMessage) []transcriptMessage {
 	out := make([]transcriptMessage, len(msgs))
 	for i, m := range msgs {
@@ -178,6 +184,10 @@ func transcriptOf(msgs []apiMessage) []transcriptMessage {
 			}
 			var content []string
 			for _, c := range p.Content {
+				if c.Type == "blob" {
+					content = append(content, "[blob "+c.MediaType+" "+c.Data+"]")
+					continue
+				}
 				content = append(content, c.Text)
 			}
 			tp.Content = strings.Join(content, "\n")

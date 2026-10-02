@@ -1,0 +1,83 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "mcp",
+        "mcp__weather__t01",
+        "mcp__weather__t02",
+        "mcp__weather__t03",
+        "mcp__weather__t04",
+        "mcp__weather__t05",
+        "mcp__weather__t06",
+        "mcp__weather__t07",
+        "mcp__weather__t08",
+        "mcp__weather__t09",
+        "mcp__weather__t10",
+        "mcp__weather__t11",
+        "mcp__weather__t12",
+        "mcp__weather__t13",
+        "mcp__weather__t14",
+        "mcp__weather__t15",
+        "mcp__weather__t16",
+        "mcp__weather__t17",
+        "mcp__weather__t18",
+        "mcp__weather__t19",
+        "mcp__weather__t20",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      }
+    ]
+  }
+}

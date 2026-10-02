@@ -1,0 +1,741 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://guide"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "# Guide\nbe brief",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://guide"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "# Guide\nbe brief",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://logo"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "[binary resource: doc://logo, 5 bytes, image/png]",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://guide"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "# Guide\nbe brief",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://logo"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "[binary resource: doc://logo, 5 bytes, image/png]",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://missing"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "list_mcp_resources",
+        "ls",
+        "mcp",
+        "mcp__docs__search",
+        "model",
+        "process",
+        "read_file",
+        "read_mcp_resource",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://guide"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "# Guide\nbe brief",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://logo"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "[binary resource: doc://logo, 5 bytes, image/png]",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_mcp_resource",
+              "tool_input": {
+                "server": "docs",
+                "uri": "doc://missing"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing",
+              "tool_name": "read_mcp_resource",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "list_mcp_resources",
+              "tool_input": {
+                "server": "nope"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "list_mcp_resources: engine: mcp: server \"nope\" is not configured",
+              "tool_name": "list_mcp_resources",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "list_mcp_resources",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"resources\":[{\"uri\":\"doc://guide\",\"name\":\"guide\",\"mimeType\":\"text/markdown\",\"server\":\"docs\"},{\"uri\":\"doc://logo\",\"name\":\"logo\",\"mimeType\":\"image/png\",\"server\":\"docs\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "read_mcp_resource",
+            "arguments": {
+              "server": "docs",
+              "uri": "doc://guide"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "# Guide\nbe brief"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "read_mcp_resource",
+            "arguments": {
+              "server": "docs",
+              "uri": "doc://logo"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "[binary resource: doc://logo, 5 bytes, image/png]"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "read_mcp_resource",
+            "arguments": {
+              "server": "docs",
+              "uri": "doc://missing"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "list_mcp_resources",
+            "arguments": {
+              "server": "nope"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "is_error": true,
+            "content": "list_mcp_resources: engine: mcp: server \"nope\" is not configured"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}
