@@ -9,16 +9,26 @@ import (
 func TestContractChildren(t *testing.T) {
 	runScenarios(t, []scenario{
 		{
-			name: "task_child_result_reaches_parent",
+			name:       "task_child_result_reaches_parent",
+			concurrent: true,
 			model: []fakemodel.Step{
 				{Name: "delegate", Match: fakemodel.LastUserText("delegate"), Reply: fakemodel.Reply{ToolCalls: []fakemodel.ToolCall{{
 					ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
 				}}}},
-				{Name: "child", Match: fakemodel.LastUserText("child work"), Reply: fakemodel.Reply{Text: "child done"}},
+				{Name: "child", Match: fakemodel.LastUserText("child work"), Reply: fakemodel.Reply{Text: "child done", Block: true}},
 				{Name: "ack", Match: fakemodel.LastToolResult("task"), Reply: fakemodel.Reply{Text: "waiting"}},
 				{Name: "parent", Match: fakemodel.LastUserText("child done"), Reply: fakemodel.Reply{Text: "parent done"}},
 			},
-			actions: []action{create{"a"}, submit{"a", "delegate"}, awaitRequests{n: 4}, waitIdle{"a"}},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				// The child holds its reply until the parent's ack request exists, so the
+				// result cannot ride on that request.
+				awaitRequests{n: 3},
+				release{step: "child"},
+				awaitRequests{n: 4},
+				waitIdle{as: "a"},
+			},
 		},
 	})
 }

@@ -130,6 +130,36 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 	return obs
 }
 
+// groupByConversation orders requests by the first user text, in order of
+// first arrival, and keeps arrival order inside each group.
+func groupByConversation(reqs []fakemodel.Request) []fakemodel.Request {
+	var roots []string
+	groups := map[string][]fakemodel.Request{}
+	for _, r := range reqs {
+		root := conversationRoot(r)
+		if _, ok := groups[root]; !ok {
+			roots = append(roots, root)
+		}
+		groups[root] = append(groups[root], r)
+	}
+	var out []fakemodel.Request
+	for _, root := range roots {
+		out = append(out, groups[root]...)
+	}
+	return out
+}
+
+func conversationRoot(r fakemodel.Request) string {
+	if len(r.Messages) == 0 {
+		return ""
+	}
+	var texts []string
+	for _, p := range r.Messages[0].Parts {
+		texts = append(texts, p.Text)
+	}
+	return strings.Join(texts, "\n")
+}
+
 func uniqueIDViolations(kind string, ids []string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -333,5 +363,34 @@ func TestInvariants(t *testing.T) {
 				t.Fatalf("violations = %v, want one containing %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGroupByConversation(t *testing.T) {
+	skipShort(t)
+	req := func(root, last string) fakemodel.Request {
+		msgs := []fakemodel.Message{{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: root}}}}
+		if last != "" {
+			msgs = append(msgs, fakemodel.Message{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: last}}})
+		}
+		return fakemodel.Request{Messages: msgs}
+	}
+	label := func(rs []fakemodel.Request) string {
+		var out []string
+		for _, r := range rs {
+			out = append(out, r.LastUserText())
+		}
+		return strings.Join(out, ",")
+	}
+	// The child request arrives between the parent's first and second request,
+	// or after its second; both arrival orders must normalize alike.
+	arrivals := [][]fakemodel.Request{
+		{req("p", ""), req("c", ""), req("p", "ack")},
+		{req("p", ""), req("p", "ack"), req("c", "")},
+	}
+	for _, in := range arrivals {
+		if got, want := label(groupByConversation(in)), "p,ack,c"; got != want {
+			t.Errorf("groupByConversation(%s) = %s, want %s", label(in), got, want)
+		}
 	}
 }

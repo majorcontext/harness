@@ -17,9 +17,10 @@ import (
 var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract goldens")
 
 type scenario struct {
-	name    string
-	model   []fakemodel.Step
-	actions []action
+	name       string
+	concurrent bool // child sessions race, so requests are ordered by conversation
+	model      []fakemodel.Step
+	actions    []action
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -152,7 +153,11 @@ func runScenario(t *testing.T, sc scenario) observation {
 	for _, v := range journalViolations(r.drv.Events(t)) {
 		t.Errorf("journal: %s", v)
 	}
-	return normalize(fake.Requests(), sessions)
+	reqs := fake.Requests()
+	if sc.concurrent {
+		reqs = groupByConversation(reqs)
+	}
+	return normalize(reqs, sessions)
 }
 
 func runScenarios(t *testing.T, table []scenario) {
