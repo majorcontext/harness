@@ -107,7 +107,7 @@ func (a claudeInvocations) run(t *testing.T, r *run) {
 	if err != nil {
 		t.Fatalf("open argv log: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var out []any
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
