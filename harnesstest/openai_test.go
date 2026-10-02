@@ -39,7 +39,7 @@ func codexTurn(t testing.TB, c *openai.Client, req *provider.Request) provider.E
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	return done(t, drain(t, st))
 }
 
@@ -142,7 +142,7 @@ func TestOpenAIDropEndsWebSocketStreamWithoutTerminalEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	for {
 		ev, err := st.Next()
 		if err == io.EOF || ev.Type == provider.EventDone {
