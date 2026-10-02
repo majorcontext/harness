@@ -16,7 +16,7 @@ const devScript = "echo ready-line; echo second; sleep 100"
 func devProcesses() map[string]any {
 	return map[string]any{"processes": map[string]any{"dev": map[string]any{
 		"command":         []string{"sh", "-c", devScript},
-		"ready_regex":     "ready-line",
+		"ready_regex":     "second",
 		"ready_timeout_s": 10,
 		"ports":           []int{3000},
 	}}}
@@ -185,7 +185,7 @@ func processToolFromModel(t *testing.T) {
 		isError bool
 		content string
 	}{
-		{false, `[{"command":["sh","-c","` + devScript + `"],"name":"dev","origin":"config","ports":[3000],"ready_regex":"ready-line","ready_timeout":"10s","status":{` + log + `,"name":"dev","ports":[3000],"ready":false}}]`},
+		{false, `[{"command":["sh","-c","` + devScript + `"],"name":"dev","origin":"config","ports":[3000],"ready_regex":"second","ready_timeout":"10s","status":{` + log + `,"name":"dev","ports":[3000],"ready":false}}]`},
 		{false, `{` + log + `,"name":"dev","ports":[3000],"ready":false}`},
 		{false, `{` + log + `,"name":"dev","ports":[3000],"ready":true,"state":"ready"}`},
 		{false, `{` + log + `,"logs":"second","name":"dev","ports":[3000],"ready":true,"state":"ready"}`},
