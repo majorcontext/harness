@@ -1,0 +1,147 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "hello"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ]
+      },
+      {
+        "id": "resp_1",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "beta_header": true,
+            "conn": 1,
+            "event": "dial",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "prewarm",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "reasoning_summary": "auto",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 2,
+            "previous_response_id": "resp_warm_1",
+            "reasoning_summary": "auto",
+            "transport": "ws"
+          }
+        ]
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 2,
+        "model": "codex/gpt-5.6-sol",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "plan": "pro",
+          "provider": "codex",
+          "windows": [
+            {
+              "key": "primary",
+              "label": "Weekly",
+              "resets_at": 1900000000,
+              "used_percent": 42.5
+            },
+            {
+              "key": "secondary",
+              "label": "5-hour",
+              "resets_at": 1800000000,
+              "used_percent": 7
+            }
+          ]
+        },
+        "usage": {
+          "input_tokens": 5,
+          "last_input_tokens": 5,
+          "messages": 2,
+          "output_tokens": 3
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

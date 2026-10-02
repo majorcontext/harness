@@ -1,0 +1,174 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo codex"
+              },
+              "tool_use_id": "call#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "codex\n",
+              "tool_name": "bash",
+              "tool_use_id": "call#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run"
+          }
+        ]
+      },
+      {
+        "id": "resp_1",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "call#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo codex"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "call#1",
+            "content": "codex\n"
+          }
+        ]
+      },
+      {
+        "id": "resp_2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ran"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 2,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          },
+          {
+            "content_encoding": "zstd",
+            "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "input_items": 4,
+            "reasoning_summary": "auto",
+            "transport": "sse"
+          }
+        ]
+      }
+    }
+  }
+}
