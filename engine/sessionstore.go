@@ -11,7 +11,7 @@ var ErrAppendConflict = errors.New("engine: session store append position confli
 // newline. The index sidecar, snapshots, and tool-result retention are disk
 // caches outside this interface.
 //
-// Every implementation keeps five invariants:
+// Every implementation keeps six invariants:
 //
 //  1. Appends are ordered. The caller serializes Append calls for one id
 //     (Session.mu). A record is visible only after every earlier record is.

@@ -569,6 +569,12 @@ type Server struct {
 	// TestGoalDeleteClearBeforeIdleRace). Always nil in production.
 	goalDeleteRace func(cancel context.CancelFunc)
 
+	// handoffCancelRace is a test-only seam: when non-nil, ownershipLost and
+	// the fence invoke it in place of a bare cancel of a running turn, so a
+	// test can let the turn unwind before anything else runs. Always nil in
+	// production.
+	handoffCancelRace func(cancel context.CancelCauseFunc)
+
 	// autoArmRace is a test-only seam: when non-nil, maybeAutoArmGoal invokes
 	// it right before its own claimForPrompt call, letting a test force a
 	// real concurrent prompt_async (or another POST /goal) to race the

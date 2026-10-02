@@ -150,7 +150,9 @@ const (
 // A canceled turn's results are NOT discarded, and an earlier version of
 // this comment wrongly said they were. runToolCalls returns the
 // synthesized results, runAgenticLoop appends the whole RoleTool message
-// to DURABLE history, and they survive a resume. That makes the gate more
+// to DURABLE history, and they survive a resume. The one exception is a
+// handoff cancel on a resumable root (handoffCanceled): its results are
+// dropped so the next holder sees the calls as unresolved. That makes the gate more
 // important, not less: what lands in the log is a legible "not started"
 // result for each refused call, instead of a side effect the operator
 // aborted to prevent.

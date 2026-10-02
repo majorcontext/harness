@@ -515,3 +515,58 @@ func TestOwnershipLostDuringColdLoadRefusesClaim(t *testing.T) {
 		t.Error("session became resident after loss")
 	}
 }
+
+func handoffRaceHook(srv *Server, done chan<- struct{}) func(context.CancelCauseFunc) {
+	return func(cancel context.CancelCauseFunc) {
+		cancel(nil)
+		srv.wg.Wait()
+		close(done)
+	}
+}
+
+func TestOwnershipLostSuspendsBeforeCancel(t *testing.T) {
+	store := engine.NewMemStore()
+	prov := &cancelWatchProvider{started: make(chan struct{}), canceled: make(chan struct{})}
+	owner := newFakeOwner()
+	h := newOwnerServerCap(t, store, prov, 0, func(o *Options) { o.SessionOwner = owner })
+	id := h.createSession("")
+	done := make(chan struct{})
+	h.srv.handoffCancelRace = handoffRaceHook(h.srv, done)
+	if resp, body := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status = %d: %s", resp.StatusCode, body)
+	}
+	<-prov.started
+	owner.loseOwnership(id)
+	<-done
+
+	if hasSettled(t, store, id) {
+		t.Error("turn was settled when ownership was lost: the cancel ran before the suspend")
+	}
+}
+
+func TestFenceSuspendsBeforeCancel(t *testing.T) {
+	store := engine.NewMemStore()
+	prov := &cancelWatchProvider{started: make(chan struct{}), canceled: make(chan struct{})}
+	h := newOwnerServerCap(t, store, prov, 0)
+	id := h.createSession("")
+	done := make(chan struct{})
+	h.srv.handoffCancelRace = handoffRaceHook(h.srv, done)
+	if resp, body := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{"parts": []map[string]string{{"type": "text", "text": "hi"}}}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("prompt status = %d: %s", resp.StatusCode, body)
+	}
+	<-prov.started
+
+	n, err := store.Len(defaultEventLogID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(defaultEventLogID, n, []byte(`{"type":"other.writer"}`)); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.emitDurable(Event{Type: evtSessionCreated, SessionID: id})
+	<-done
+
+	if hasSettled(t, store, id) {
+		t.Error("turn was settled when the server fenced: the cancel ran before the suspend")
+	}
+}

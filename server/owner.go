@@ -149,10 +149,8 @@ func (s *Server) ownershipLost(id string, e *ownerEntry) {
 		delete(s.lastRequest, id)
 	}
 	s.mu.Unlock()
-	if cancel != nil {
-		cancel(nil)
-	}
 	s.sessMgr.Suspend(id)
+	s.cancelForHandoff(cancel)
 	if sess != nil {
 		sess.ReleaseFiles()
 	}
@@ -169,9 +167,10 @@ func (s *Server) fenceLocked() {
 		close(s.fencedCh)
 	}
 	var evicted []*engine.Session
+	var cancels []context.CancelCauseFunc
 	for id, st := range s.sessions {
 		if st.cancel != nil {
-			st.cancel(nil)
+			cancels = append(cancels, st.cancel)
 		}
 		evicted = append(evicted, st.sess)
 		delete(s.sessions, id)
@@ -182,8 +181,21 @@ func (s *Server) fenceLocked() {
 	}
 	go func() {
 		s.sessMgr.SuspendAll()
+		for _, cancel := range cancels {
+			s.cancelForHandoff(cancel)
+		}
 		releaseEvicted(evicted)
 	}()
+}
+
+func (s *Server) cancelForHandoff(cancel context.CancelCauseFunc) {
+	if cancel == nil {
+		return
+	}
+	if s.handoffCancelRace != nil {
+		s.handoffCancelRace(cancel)
+	}
+	cancel(nil)
 }
 
 // keepOwnership stops the end of the current request from releasing id.

@@ -710,7 +710,9 @@ The check fails closed. After the `system`/`init` event, every entry in its
 `tools` list must start with `mcp__`. If one entry does not, or if the event
 has no `tools` list, the engine kills the child and the turn returns an error
 that wraps `ErrClaudeCodeBuiltinTools`. The error names the tools. The engine
-journals no assistant message for the turn.
+journals no assistant message for the turn. An `assistant`, `user`, or `result`
+event that arrives before `init` fails the turn the same way. A
+`transcript_mirror` frame before `init` stays accepted.
 
 `ClaudeCodeConfig.ExtraArgs` cannot hold `--tools`, `--allowedTools`, or
 `--allowed-tools` when this option is on. The turn is refused before the child

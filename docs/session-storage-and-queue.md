@@ -82,9 +82,10 @@ session. A child session that a parent spawned runs under the parent. If
 by this server` and does not load the session. The server calls `Release` when
 it evicts the session and on `Close`.
 
-When `Ownership.Lost` closes, the server cancels the session run context and
-suspends the whole lineage in the `SessionManager` (`Suspend`). It does not
-call `AbortTurn` or `Cancel`, so no turn of the session or of its spawned
+When `Ownership.Lost` closes, the server suspends the whole lineage in the
+`SessionManager` (`Suspend`) and then cancels the session run context. A fence
+does the same: `SuspendAll` first, then each cancel. The suspend comes first so
+that a turn that returns cannot settle. The server does not call `AbortTurn` or `Cancel`, so no turn of the session or of its spawned
 children gets a settle record and the next holder can resume them (see
 `Config.MaxTurnResumes`). The server then evicts the session, makes no more
 durable emits for the session or its children, and answers every later request
@@ -619,7 +620,7 @@ is issued again from the last journaled message:
 | Journal ends with | Resume does |
 |---|---|
 | A user message or a tool result | Runs the agentic loop. |
-| An assistant message with unresolved tool calls | Appends synthetic "interrupted" results, then runs the loop. With `Config.ResumeRerunTools`, it runs the tools and appends the real results. |
+| An assistant message with unresolved tool calls | Appends synthetic error results, then runs the loop. The text is "The process restarted while this tool call was running; its outcome is unknown." With `Config.ResumeRerunTools`, it runs the tools with the same `ToolCallID` and appends the real results. |
 | Any message, on a claude-code session | Runs the delegated turn. If the last message is not a user message, it first sends the fixed prompt "Your previous turn was interrupted by a restart. Continue from where you left off." |
 
 A stopped turn never resumes. `SessionManager.AbortTurn` settles a child
@@ -632,9 +633,16 @@ calls. The server then calls `Session.RecordTurnStopped`, which writes a
 record settles the turn, resets the resume count, and makes
 `Session.TurnStopped()` true until the next append. `ResumableTurn()` is then
 false. The abort body `{"turn_id":"..."}` names the turn to stop; a turn id that
-is not the active turn is a no-op. A root turn that ends because the caller's context was canceled (shutdown
+is not the active turn is a no-op. A goal turn stopped by `POST /session/{id}/abort` or `DELETE /goal` is
+stopped the same way: the server cancels with `engine.ErrTurnStopped` and
+`runGoal` writes `turn.stopped`.
+
+A root turn that ends because the caller's context was canceled (shutdown
 handoff) stays unsettled when `MaxTurnResumes` is above zero, so the next
-holder of the session resumes it.
+holder of the session resumes it. The engine journals no tool-result message
+for such a cancel. The calls stay unresolved, so a resume sees them as
+interrupted, or re-runs them with `Config.ResumeRerunTools` and the same
+`ToolCallID`. A stop (`ErrTurnStopped`) still records its results.
 
 ### Embedder-triggered resume
 
