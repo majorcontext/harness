@@ -178,7 +178,7 @@ type blockedRun struct {
 }
 
 func startBlocked(ctx context.Context, reply Reply) *blockedRun {
-	s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}}
+	s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}, canceled: map[string]chan struct{}{}}
 	br := &blockedRun{s: s, w: httptest.NewRecorder(), done: make(chan struct{})}
 	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(ctx)
 	go func() {
@@ -452,9 +452,7 @@ func TestAwaitCanceled(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				br := startBlocked(ctx, Reply{Text: "x", Block: true})
-				if !br.s.AwaitBlocked("slow", time.Minute) {
-					t.Fatal("AwaitBlocked = false for a waiting request")
-				}
+				<-br.s.blockedCh("slow")
 				if br.s.AwaitCanceled("slow", time.Minute) {
 					t.Fatal("AwaitCanceled = true before the client dropped the request")
 				}

@@ -188,16 +188,7 @@ func (s *Server) blockedCh(stepName string) <-chan struct{} {
 func (s *Server) canceledCh(stepName string) <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.canceled == nil {
-		s.canceled = map[string]chan struct{}{}
-	}
 	return s.chanFor(s.canceled, stepName)
-}
-
-// AwaitBlocked reports whether a request for the named Block step is waiting
-// for Release within bound.
-func (s *Server) AwaitBlocked(stepName string, bound time.Duration) bool {
-	return s.awaitClosed(s.blockedCh(stepName), bound)
 }
 
 // AwaitCanceled reports whether the client dropped a waiting request for the
@@ -270,9 +261,6 @@ func (s *Server) block(r *http.Request, name string) bool {
 		return true
 	case <-r.Context().Done():
 		s.mu.Lock()
-		if s.canceled == nil {
-			s.canceled = map[string]chan struct{}{}
-		}
 		closeOnce(s.chanFor(s.canceled, name))
 		s.mu.Unlock()
 	case <-s.closing:
