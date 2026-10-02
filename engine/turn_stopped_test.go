@@ -124,3 +124,52 @@ func TestPlainCancelKeepsTurnResumableAndSavesNoPartial(t *testing.T) {
 		t.Error("ResumableTurn() = false after a plain cancel, want true")
 	}
 }
+
+func TestClearedTurnKeepsNoPartialText(t *testing.T) {
+	st, _, s, err := stopAfterText(t, "par", ErrTurnCleared)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prompt error = %v, want context.Canceled", err)
+	}
+	if got := PartialMessageID(err); got != "" {
+		t.Fatalf("PartialMessageID = %q, want empty for a cleared turn", got)
+	}
+	recs := journalOf(t, st, s.ID)
+	if last := recs[len(recs)-1]; last.Type != recMessage || last.Message.Role != message.RoleUser {
+		t.Errorf("last record = %+v, want only the user message", last)
+	}
+	if errors.Is(ErrTurnCleared, ErrTurnStopped) {
+		t.Error("ErrTurnCleared wraps ErrTurnStopped, want a distinct cause")
+	}
+}
+
+func TestClearedTurnStillRecordsToolResults(t *testing.T) {
+	st := NewMemStore()
+	bt := &blockingCallTool{started: make(chan struct{}), block: true}
+	prov := scriptedTurns("p", [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("t1", "probe", `{}`)),
+	}).(*scriptedProvider)
+	cfg := resumeConfig(st, prov, 3, bt.tool())
+	s := NewSession(withStore(cfg, st))
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(ctx, "q")
+		done <- err
+	}()
+	select {
+	case <-bt.started:
+	case err := <-done:
+		t.Fatalf("Prompt returned before the tool started: %v", err)
+	}
+	cancel(ErrTurnCleared)
+	<-done
+
+	got := realToolResults(reloadSession(t, st, cfg, s.ID).History())
+	if len(got) != 1 {
+		t.Fatalf("tool-result messages = %+v, want the clear to record one", got)
+	}
+	if res, ok := got[0].Parts[0].(*message.ToolResult); !ok || res.CallID != "t1" {
+		t.Errorf("recorded result = %+v, want a result for t1", got[0].Parts[0])
+	}
+}

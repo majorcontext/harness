@@ -26,6 +26,7 @@ import (
 )
 
 var errTurnStopped = engine.ErrTurnStopped
+var errTurnCleared = engine.ErrTurnCleared
 
 // sessionJSON is the openapi Session shape.
 type sessionJSON struct {
@@ -3322,7 +3323,7 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		// PursueGoal's only remaining terminal case (see its doc comment).
 		s.recordTurnEnd(id, "", st.sess, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
-		if errors.Is(context.Cause(ctx), errTurnStopped) {
+		if cause := context.Cause(ctx); errors.Is(cause, errTurnStopped) || errors.Is(cause, errTurnCleared) {
 			if serr := st.sess.RecordTurnStopped(engine.PartialMessageID(err)); serr != nil {
 				s.logWarn("record turn.stopped", "session", id, "error", serr.Error())
 			}
@@ -3479,10 +3480,10 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		// as structurally possible — right here, before this function's own
 		// cancel() below — and ride out its unwind to completion before
 		// letting this handler proceed. See TestGoalDeleteClearBeforeIdleRace.
-		s.goalDeleteRace(func() { cancel(errTurnStopped) })
+		s.goalDeleteRace(func() { cancel(errTurnCleared) })
 	}
 	if cancel != nil {
-		cancel(errTurnStopped) // stop the loop; runGoal records the stop (no-op if the hook above already fired it)
+		cancel(errTurnCleared) // stop the loop; runGoal records the stop (no-op if the hook above already fired it)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

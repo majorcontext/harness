@@ -633,16 +633,22 @@ calls. The server then calls `Session.RecordTurnStopped`, which writes a
 record settles the turn, resets the resume count, and makes
 `Session.TurnStopped()` true until the next append. `ResumableTurn()` is then
 false. The abort body `{"turn_id":"..."}` names the turn to stop; a turn id that
-is not the active turn is a no-op. A goal turn stopped by `POST /session/{id}/abort` or `DELETE /goal` is
+is not the active turn is a no-op. A goal turn stopped by `POST /session/{id}/abort` is
 stopped the same way: the server cancels with `engine.ErrTurnStopped` and
 `runGoal` writes `turn.stopped`.
+
+`DELETE /goal` on a running goal clears the turn instead. The server cancels
+with `engine.ErrTurnCleared`, a deliberate stop that discards the partial
+reply: the engine keeps no text-only partial message. It is not a handoff, so
+the engine still records tool results, and `runGoal` writes `turn.stopped`, so
+the turn never resumes.
 
 A root turn that ends because the caller's context was canceled (shutdown
 handoff) stays unsettled when `MaxTurnResumes` is above zero, so the next
 holder of the session resumes it. The engine journals no tool-result message
 for such a cancel. The calls stay unresolved, so a resume sees them as
 interrupted, or re-runs them with `Config.ResumeRerunTools` and the same
-`ToolCallID`. A stop (`ErrTurnStopped`) still records its results.
+`ToolCallID`. A stop (`ErrTurnStopped`) or a clear (`ErrTurnCleared`) still records its results.
 
 ### Embedder-triggered resume
 

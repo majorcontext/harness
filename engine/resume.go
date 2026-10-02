@@ -21,6 +21,12 @@ var ErrNotResumable = errors.New("engine: no resumable turn")
 // canceled with this cause keeps its partial reply and is never resumed.
 var ErrTurnStopped = errors.New("engine: turn stopped")
 
+// ErrTurnCleared is the context cancel cause of a deliberate stop that
+// discards the partial reply. It is not a handoff, so tool results are still
+// journaled, and a turn canceled with it never resumes. It does not wrap
+// ErrTurnStopped, so the engine keeps no partial text for it.
+var ErrTurnCleared = errors.New("engine: turn cleared")
+
 // handoffCanceled reports whether ctx was canceled for a handoff rather than
 // a stop, on a root that may resume. The caller must then leave the tool
 // calls unresolved: a journaled canceled result would hide a call that may
@@ -28,7 +34,8 @@ var ErrTurnStopped = errors.New("engine: turn stopped")
 func (s *Session) handoffCanceled(ctx context.Context) bool {
 	return s.cfg.MaxTurnResumes > 0 && !s.hasTaskParent() &&
 		errors.Is(ctx.Err(), context.Canceled) &&
-		!errors.Is(context.Cause(ctx), ErrTurnStopped)
+		!errors.Is(context.Cause(ctx), ErrTurnStopped) &&
+		!errors.Is(context.Cause(ctx), ErrTurnCleared)
 }
 
 // PartialMessageID returns the id of the partial assistant message that a
