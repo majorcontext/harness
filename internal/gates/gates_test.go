@@ -440,14 +440,19 @@ func TestLoadBaseNamesTheMissingRef(t *testing.T) {
 func TestRepository(t *testing.T) { checkRepository(t, LoadBase) }
 
 func TestResolveBaseSkipsOnlyWhenNotRequired(t *testing.T) {
-	failing := func(string, string) (Base, error) { return Base{}, errors.New("no merge base") }
 	for _, tc := range []struct {
 		required string
+		loadErr  error
 		skip     bool
 		err      bool
-	}{{"", true, false}, {"1", false, true}} {
-		t.Run("GATES_REQUIRED="+tc.required, func(t *testing.T) {
+	}{
+		{"", ErrNoBase, true, false},
+		{"1", ErrNoBase, false, true},
+		{"", errors.New("archive failed"), false, true},
+	} {
+		t.Run(fmt.Sprintf("required=%q/%v", tc.required, tc.loadErr), func(t *testing.T) {
 			t.Setenv("GATES_REQUIRED", tc.required)
+			failing := func(string, string) (Base, error) { return Base{}, tc.loadErr }
 			_, skip, err := resolveBase(failing, "root", "origin/main")
 			if (skip != "") != tc.skip || (err != nil) != tc.err {
 				t.Fatalf("skip = %q, err = %v; want skip %v, err %v", skip, err, tc.skip, tc.err)
@@ -461,7 +466,7 @@ func resolveBase(load func(root, ref string) (Base, error), root, ref string) (B
 	if err == nil {
 		return base, "", nil
 	}
-	if os.Getenv("GATES_REQUIRED") == "1" {
+	if os.Getenv("GATES_REQUIRED") == "1" || !errors.Is(err, ErrNoBase) {
 		return Base{}, "", err
 	}
 	return Base{}, fmt.Sprintf("base %s unavailable; set GATES_BASE_REF or fetch full history (GATES_REQUIRED=1 fails instead)", ref), nil

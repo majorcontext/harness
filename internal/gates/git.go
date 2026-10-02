@@ -42,13 +42,16 @@ func nulPaths(out []byte) []string {
 	return ps
 }
 
+// ErrNoBase marks a LoadBase failure to resolve the merge base.
+var ErrNoBase = errors.New("merge base unavailable")
+
 // LoadBase measures the merge base of HEAD and ref in the repository at root.
 // Changed holds every path that differs from the merge base in the working
 // tree, including untracked files.
 func LoadBase(root, ref string) (Base, error) {
 	out, err := git(root, "merge-base", "HEAD", ref)
 	if err != nil {
-		return Base{}, fmt.Errorf("find the merge base of HEAD and %s (fetch full history or set GATES_BASE_REF): %w", ref, err)
+		return Base{}, fmt.Errorf("find the merge base of HEAD and %s (fetch full history or set GATES_BASE_REF): %w: %w", ref, ErrNoBase, err)
 	}
 	sha := strings.TrimSpace(string(out))
 	tree, err := archiveFS(root, sha)
