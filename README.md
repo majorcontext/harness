@@ -209,8 +209,8 @@ These fail config loading with an error that names the entry: an unknown
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md) first. It holds repository-wide rules and an index
-of each subsystem's `AGENTS.md`. [docs/README.md](docs/README.md) indexes the
+Read [AGENTS.md](AGENTS.md) first. It holds the repository-wide rules. Read the
+`AGENTS.md` in each directory you change. [docs/README.md](docs/README.md) indexes the
 technical documentation.
 
 ---

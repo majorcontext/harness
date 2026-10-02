@@ -3,7 +3,7 @@
 Read the root AGENTS.md.
 
 - Contract scenarios drive the real binary over HTTP. They import no `engine` or `server` package.
-- Every test calls `skipShort(t)`.
+- Every test calls `skipShort(t)`, directly or through `runScenarios`.
 - Do not poll state that has an in-process notification seam.
 - Wait on `GET /session/{id}/wait`, an SSE stream, or a channel.
 - Each scenario owns its binary process and temp dirs.

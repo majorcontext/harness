@@ -1169,8 +1169,8 @@
 			"sleep_after": 0
 		},
 		"internal/testpoll/testpoll.go": {
-			"lines": 77,
-			"comment_lines": 43,
+			"lines": 64,
+			"comment_lines": 30,
 			"code_lines": 30,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -2407,7 +2407,7 @@
 			"code_lines": 910
 		},
 		"e2e": {
-			"test_lines": 3055,
+			"test_lines": 3058,
 			"code_lines": 0
 		},
 		"engine": {
