@@ -1,0 +1,222 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "pick a db"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "AskUserQuestion",
+            "arguments": {
+              "questions": [
+                {
+                  "header": "DB",
+                  "multiSelect": false,
+                  "options": [
+                    {
+                      "description": "a",
+                      "label": "PostgreSQL"
+                    },
+                    {
+                      "description": "b",
+                      "label": "SQLite"
+                    }
+                  ],
+                  "question": "Which database?"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "The user dismissed this question without answering."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "never mind"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": true,
+          "resume": null
+        },
+        {
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": true,
+          "resume": "fake-session-1"
+        },
+        {
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": true,
+          "resume": "fake-session-1"
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "awaiting_input",
+          "question_call_id": "toolu#1"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 2,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "usage": {
+          "input_tokens": 0,
+          "messages": 2,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 113,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 8,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.0123,
+          "windows": []
+        },
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 101,
+          "last_input_tokens": 101,
+          "messages": 8,
+          "output_tokens": 42
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

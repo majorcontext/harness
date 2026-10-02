@@ -1,0 +1,124 @@
+package e2e
+
+import (
+	"testing"
+
+	"github.com/majorcontext/harness/harnesstest"
+)
+
+func claudeLaneDriver(mode string) func(*testing.T, string) driver {
+	return claudeLane{mode: mode}.newDriver
+}
+
+func withActions(base []action, more ...action) []action {
+	return append(append([]action{}, base...), more...)
+}
+
+var claudeOneTurn = []action{create{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"}}
+
+func TestContractClaudeCodeTurns(t *testing.T) {
+	again := []action{submit{as: "a", text: "again"}, waitIdle{as: "a"}}
+	runScenarios(t, []scenario{
+		{
+			name:    "claudecode_turn_text_and_tool",
+			driver:  claudeLaneDriver("normal"),
+			actions: withActions(claudeOneTurn, claudeSession{as: "a"}, claudeInvocations{as: "a"}),
+		},
+		{
+			name:    "claudecode_resume_across_turns",
+			driver:  claudeLaneDriver("normal"),
+			actions: withActions(claudeOneTurn, append(again, claudeInvocations{as: "a"})...),
+		},
+		{
+			name:    "claudecode_resume_survives_restart",
+			driver:  claudeLaneDriver("normal"),
+			actions: withActions(claudeOneTurn, append([]action{restart{}}, append(again, claudeInvocations{as: "a"})...)...),
+		},
+		{
+			name:   "claudecode_interrupt_mid_turn",
+			driver: claudeLaneDriver("hang_after_text"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitText{as: "a", text: "Working on it."},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			},
+		},
+		{
+			name:    "claudecode_compact_delegated",
+			driver:  claudeLaneDriver("compact_turn"),
+			actions: []action{create{as: "a"}, compact{as: "a"}, claudeJournalTypes{as: "a", prefix: "compaction."}, claudeSession{as: "a"}, claudeInvocations{as: "a"}},
+		},
+	})
+}
+
+func TestContractClaudeCodeFrames(t *testing.T) {
+	row := func(name, mode string, more ...action) scenario {
+		return scenario{name: name, driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
+	}
+	session := claudeSession{as: "a"}
+	runScenarios(t, []scenario{
+		row("claudecode_thinking_block_is_reasoning", "thinking", session),
+		row("claudecode_subagent_frames_keep_parent", "subagent", claudeMessageParents{as: "a"}),
+		row("claudecode_error_result_fails_turn", "error", session, claudeInvocations{as: "a"}),
+		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
+		row("claudecode_context_window_from_model_usage", "per_call_usage", session),
+	})
+}
+
+func TestContractClaudeCodeHistory(t *testing.T) {
+	native := harnesstest.Step{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}
+	runScenarios(t, []scenario{{
+		name:   "claudecode_history_bridge_after_native_turn",
+		driver: claudeLaneDriver("normal"),
+		model:  []harnesstest.Step{native},
+		actions: withActions(claudeOneTurn,
+			setModel{as: "a", model: "anthropic/claude-fable-5"},
+			submit{as: "a", text: "native"}, waitIdle{as: "a"},
+			setModel{as: "a", model: "claude-code/sonnet"},
+			submit{as: "a", text: "back"}, waitIdle{as: "a"},
+			claudeInvocations{as: "a"},
+			claudeHistoryTool{as: "a"},
+		),
+	}})
+}
+
+func TestContractClaudeCodeQuestions(t *testing.T) {
+	lane := claudeLane{mode: "question", ask: true}.newDriver
+	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
+	answers := map[string]string{"Which database?": "SQLite"}
+	runScenarios(t, []scenario{
+		{
+			name:   "claudecode_question_parks_then_answer_resumes",
+			driver: lane,
+			actions: withActions(parked,
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			),
+		},
+		{
+			name:   "claudecode_question_dismissed_by_next_prompt",
+			driver: lane,
+			actions: withActions(parked,
+				submit{as: "a", text: "never mind"}, waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			),
+		},
+		{
+			name:   "claudecode_question_unknown_call_id_conflicts",
+			driver: lane,
+			actions: withActions(parked,
+				claudeAnswer{as: "a", callID: "toolu_other", answers: answers},
+				claudeSession{as: "a"},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				waitIdle{as: "a"},
+			),
+		},
+	})
+}

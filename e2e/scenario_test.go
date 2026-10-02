@@ -22,6 +22,7 @@ type scenario struct {
 	config     map[string]any
 	model      []harnesstest.Step
 	actions    []action
+	driver     func(t *testing.T, modelURL string) driver // nil runs the default HTTP driver
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -259,8 +260,14 @@ func (a bindChild) run(t *testing.T, r *run) {
 func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
 	fake, config := scenarioFake(t, sc)
+	var drv driver
+	if sc.driver != nil {
+		drv = sc.driver(t, fake.URL())
+	} else {
+		drv = newHTTPDriverWith(t, fake.URL(), config)
+	}
 	r := &run{
-		drv:    newHTTPDriverWith(t, fake.URL(), config),
+		drv:    drv,
 		fake:   fake,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},

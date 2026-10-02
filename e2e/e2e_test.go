@@ -75,9 +75,9 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// buildHarness compiles ./cmd/harness into a temp dir and returns the binary
-// path plus a cleanup func. It runs from the repo root (the parent of this
-// package's directory).
+// buildHarness compiles ./cmd/harness and ./harnesstest/fakeclaude into a temp
+// dir and returns the harness binary path plus a cleanup func. It runs from
+// the repo root (the parent of this package's directory).
 func buildHarness() (string, func(), error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -89,11 +89,11 @@ func buildHarness() (string, func(), error) {
 		return "", nil, err
 	}
 	bin := filepath.Join(dir, "harness")
-	args := []string{"build", "-o", bin}
+	args := []string{"build", "-o", dir + string(filepath.Separator)}
 	if os.Getenv("HARNESS_E2E_COVER") == "1" {
 		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/...")
 	}
-	cmd := exec.Command("go", append(args, "./cmd/harness")...)
+	cmd := exec.Command("go", append(args, "./cmd/harness", "./harnesstest/fakeclaude")...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(dir)

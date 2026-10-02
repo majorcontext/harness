@@ -1,0 +1,79 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "/compact"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": null
+        }
+      ]
+    },
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "claude_code_delegated": true,
+        "turns_folded": 0
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 1,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "usage": {
+          "input_tokens": 0,
+          "messages": 1,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "journal_types.a": {
+      "status": 200,
+      "body": [
+        "compaction.claude_code"
+      ]
+    }
+  }
+}
