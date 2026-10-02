@@ -223,3 +223,11 @@ func TestChatBlockUntilRelease(t *testing.T) {
 		})
 	}
 }
+
+func TestChatErrorCodeClassifiesContextOverflow(t *testing.T) {
+	s := NewChat(t, Step{Reply: Reply{HTTPStatus: 400, ErrorMessage: ContextOverflowMessage, ErrorCode: "context_length_exceeded"}})
+	_, err := chatStream(t, s, &provider.Request{Messages: []message.Message{userMsg("hi")}})
+	if !provider.IsContextOverflow(err) {
+		t.Fatalf("IsContextOverflow(%v) = false, want true", err)
+	}
+}

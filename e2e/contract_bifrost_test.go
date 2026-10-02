@@ -133,6 +133,15 @@ func TestContractBifrostProviderErrors(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
 		},
 		{
+			// The message carries no token counts, so only the structural error code classifies it.
+			name: "bifrost_context_overflow",
+			chat: true,
+			model: []harnesstest.Step{
+				{Name: "overflow", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage, ErrorCode: "context_length_exceeded"}},
+			},
+			actions: append(append([]action{}, oneTurn...), getSession{as: "a"}),
+		},
+		{
 			name: "bifrost_max_tokens_continuation",
 			chat: true,
 			model: []harnesstest.Step{

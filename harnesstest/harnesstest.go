@@ -39,6 +39,9 @@ type Reply struct {
 	// Reasoning is streamed before Text as reasoning_content deltas. Only the
 	// chat-completions server (NewChat) sends it.
 	Reasoning string
+	// ErrorCode is the error.code of an HTTPStatus reply, for example
+	// "context_length_exceeded". Only NewChat sends it.
+	ErrorCode string
 }
 
 // ContextOverflowMessage is the error message Anthropic sends for a prompt
