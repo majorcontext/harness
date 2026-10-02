@@ -105,12 +105,6 @@
         ]
       }
     },
-    "sse_resume#2": {
-      "status": 200,
-      "body": {
-        "frames": []
-      }
-    },
     "sse_resume.a": {
       "status": 200,
       "body": {

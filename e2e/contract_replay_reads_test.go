@@ -139,7 +139,6 @@ func TestContractReplayReads(t *testing.T) {
 				sseResume{afterSeq: 0},
 				sseResume{as: "b", afterSeq: 6, header: true},
 				sseResume{as: "b", afterSeq: 6, scoped: true},
-				sseResume{afterSeq: 1000},
 			},
 		},
 		{

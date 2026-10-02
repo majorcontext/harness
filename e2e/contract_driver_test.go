@@ -61,7 +61,6 @@ func TestContractDriver(t *testing.T) {
 				sseResume{afterSeq: 0},
 				sseResume{as: "a", afterSeq: 2, header: true},
 				sseResume{as: "a", afterSeq: 2, scoped: true},
-				sseResume{afterSeq: 1000},
 			},
 		},
 		{

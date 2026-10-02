@@ -199,12 +199,6 @@
         ]
       }
     },
-    "sse_resume#2": {
-      "status": 200,
-      "body": {
-        "frames": []
-      }
-    },
     "sse_resume.b": {
       "status": 200,
       "body": {

@@ -388,12 +388,12 @@ type sseFrame struct {
 }
 
 // frames reads /event after seq `after` until a frame reaches stop. The read
-// ends on that frame, not on a deadline; none is opened when stop <= after.
+// ends on that frame, not on a deadline, so stop must be past after.
 func (d *httpDriver) frames(t *testing.T, after int64, header bool, session string, stop int64) []sseFrame {
 	t.Helper()
 	var out []sseFrame
 	if stop <= after {
-		return out
+		t.Fatalf("event stream after seq %d never reaches stop seq %d", after, stop)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
 	defer cancel()
