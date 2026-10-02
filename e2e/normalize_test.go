@@ -18,8 +18,12 @@ var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)
 
 var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
+var enginePattern = regexp.MustCompile(`engine: harness \S+`)
+
 func maskTime(s string) string {
-	return sessionIDPattern.ReplaceAllString(timePattern.ReplaceAllString(s, "<time>"), "<session>")
+	s = timePattern.ReplaceAllString(s, "<time>")
+	s = sessionIDPattern.ReplaceAllString(s, "<session>")
+	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
 }
 
 const goalEvaluatorMarker = "MET: <one short sentence"
