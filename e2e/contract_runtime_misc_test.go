@@ -116,15 +116,21 @@ func TestContractRuntimeContextWindow(t *testing.T) {
 		{"context_window_tokens_admits_an_unknown_model", func(t *testing.T) {
 			d := start(t, map[string]any{"context_window_tokens": 200000})
 			res := create(t, d, unknownModel)
-			if res.Status != http.StatusCreated || window(t, res) != "200000" {
-				t.Errorf("create = %d window %v, want 201 with the named window 200000", res.Status, window(t, res))
+			if res.Status != http.StatusCreated {
+				t.Fatalf("create = %d %v, want 201", res.Status, res.Body)
+			}
+			if got := window(t, res); got != "200000" {
+				t.Errorf("window = %v, want the named window 200000", got)
 			}
 		}},
 		{"context_window_required_false_admits_an_unknown_model_without_a_window", func(t *testing.T) {
 			d := start(t, map[string]any{"context_window_tokens": 0, "context_window_required": false})
 			res := create(t, d, unknownModel)
-			if res.Status != http.StatusCreated || window(t, res) != "0" {
-				t.Errorf("create = %d window %v, want 201 with window 0", res.Status, window(t, res))
+			if res.Status != http.StatusCreated {
+				t.Fatalf("create = %d %v, want 201", res.Status, res.Body)
+			}
+			if got := window(t, res); got != "0" {
+				t.Errorf("window = %v, want 0", got)
 			}
 		}},
 	}
