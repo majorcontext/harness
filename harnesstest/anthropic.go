@@ -102,6 +102,17 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	_, _ = w.Write(body)
 }
 
+func writeReplyError(w http.ResponseWriter, rep Reply) {
+	if rep.RetryAfter != "" {
+		w.Header().Set("Retry-After", rep.RetryAfter)
+	}
+	msg := rep.ErrorMessage
+	if msg == "" {
+		msg = "harnesstest: scripted error"
+	}
+	writeError(w, rep.HTTPStatus, msg)
+}
+
 type sseWriter struct {
 	w http.ResponseWriter
 	f http.Flusher
