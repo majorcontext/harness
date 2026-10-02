@@ -14,7 +14,7 @@ func postSink(t *testing.T, r *SinkReceiver, body string) (int, string) {
 	if err != nil {
 		t.Fatalf("post: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(data)
 }
