@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -174,6 +176,50 @@ func TestChatRejectsRequestsARealGatewayRejects(t *testing.T) {
 			if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], tc.want) {
 				t.Errorf("errors = %q, want one containing %q", rec.errors, tc.want)
 			}
+		})
+	}
+}
+
+func TestChatBlockUntilRelease(t *testing.T) {
+	tests := []struct {
+		name      string
+		reply     Reply
+		wantDelta string
+	}{
+		{"text", Reply{Text: "slow text", Block: true}, `"content":"slow text"`},
+		{"tool call only", Reply{Block: true, ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}}, `"id":"call_1"`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}, canceled: map[string]chan struct{}{}}
+				w := httptest.NewRecorder()
+				r := httptest.NewRequest(http.MethodPost, "/chat/completions", nil)
+				finished := make(chan struct{})
+				go func() {
+					defer close(finished)
+					s.chatStream(w, r, 1, "slow", tc.reply)
+				}()
+				synctest.Wait()
+				select {
+				case <-s.blockedCh("slow"):
+				default:
+					t.Fatal("handler is not waiting on Release")
+				}
+				if body := w.Body.String(); !strings.Contains(body, tc.wantDelta) || strings.Contains(body, "[DONE]") {
+					t.Fatalf("body before Release = %q, want the first delta and no [DONE]", body)
+				}
+				s.Release("slow")
+				synctest.Wait()
+				select {
+				case <-finished:
+				default:
+					t.Fatal("handler still waiting after Release")
+				}
+				if !strings.Contains(w.Body.String(), "[DONE]") {
+					t.Errorf("body after Release = %q, want [DONE]", w.Body.String())
+				}
+			})
 		})
 	}
 }
