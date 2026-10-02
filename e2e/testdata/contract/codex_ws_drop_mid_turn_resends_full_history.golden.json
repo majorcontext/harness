@@ -1,0 +1,243 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "gpt-5.6-sol",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "resp_1",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "resp_3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "codex_wire": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "conn": 1,
+            "event": "dial",
+            "respon\u003csession\u003e": true,
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "prewarm",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "request",
+            "input_items": 2,
+            "previous_response_id": "resp_warm_1",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "request",
+            "input_items": 1,
+            "previous_response_id": "resp_1",
+            "transport": "ws"
+          },
+          {
+            "conn": 2,
+            "event": "dial",
+            "respon\u003csession\u003e": true,
+            "transport": "ws"
+          },
+          {
+            "conn": 2,
+            "event": "request",
+            "input_items": 4,
+            "transport": "ws"
+          }
+        ]
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 4,
+        "model": "codex/gpt-5.6-sol",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 10,
+          "last_input_tokens": 5,
+          "messages": 4,
+          "output_tokens": 6
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}
