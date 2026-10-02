@@ -11,9 +11,15 @@
 //	FAKE_CLAUDE_SESSION_ID session id in the init frame (default fake-session-1)
 //	FAKE_CLAUDE_STATE      file path that keeps the "question" mode parked state
 //	FAKE_CLAUDE_LEAK_PID_FILE  receives the pid of a leaked grandchild
+//	FAKE_CLAUDE_DISMISS_DIES   makes a dismissed parked question exit at once
 //
-// The mode names and what each proves are in modes.go, modes_stdin.go, and
-// modes_question.go.
+// The mode names and what each proves are in modes.go, modes_thinking.go,
+// modes_stdin.go, and modes_question.go.
+//
+// The normal turn is not byte-faithful to the real CLI in two ways. Its
+// result frame has no num_turns or session_id, so the driver takes its
+// num_turns-absent branch. Every spawn reuses the tool id toolu_1, so a
+// session that spans spawns holds duplicate tool call ids.
 package main
 
 import (

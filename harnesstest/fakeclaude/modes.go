@@ -94,6 +94,14 @@ func compactBoundary(f *fake) {
 
 func hang(*fake) { time.Sleep(time.Hour) }
 
+// basicModes cover result classification and process exit. The retry class
+// comes from the result subtype and text: "rate_limit_error" and
+// "transient_server_error" are retryable, "deterministic_error" (max turns)
+// is not, and the credential modes are permanent failures. "crash" exits
+// nonzero after init and is retryable, while "crash_before_init"
+// (modes_question.go) exits before any frame and is not. "fast_no_drain"
+// closes stdin before the driver writes, so a broken-pipe write must not
+// fail a complete turn.
 var basicModes = map[string]mode{
 	"per_call_usage":              perCallUsage,
 	"compact_boundary":            compactBoundary,
