@@ -580,11 +580,14 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 
 ### Contract suite
 
-- `harnesstest` is a public package. It serves the Anthropic Messages API from a script: text, tool call, error status, block until released.
+- `harnesstest` is a public package. It serves the Anthropic Messages API from a script: text, tool call, error status with a message and `Retry-After`, a context-overflow error, `max_tokens`, usage values, and block until released or the client cancels.
 - A scenario is a model script and a list of actions. Its golden holds the normalized model requests and the final transcript of each session, not event shapes, so the goldens survive the event-log change in phase 4.
 - Scenarios run the real `harness serve` binary over loopback, in its own process group, through a driver interface. Each wait has a bound.
 - Every scenario checks the invariants that hold in both formats: unique message ids, one result for each tool call, and contiguous event sequence numbers.
 - The suite exists before any internal change. It pins today's behavior, so each later phase is checked against it.
+- An action that returns a result records its status and body in the golden under `calls`, keyed `<action>.<alias>`, with `#2`, `#3` on a repeat. Ids in a body become `ses:<alias>`, `msg#N`, and so on. A scenario binds each child with `bindChild` before it lists sessions, so no id gets a run-dependent number.
+- `scenario.config` adds top-level keys to the served config, for example `context_window_tokens` or `compaction_keep_turns`.
+- `HARNESS_E2E_COVER=1 go test -race ./e2e/ -run TestContract` builds an instrumented binary, runs the contract scenarios, and prints the statement coverage by package from `TestMain`. It appends a Markdown table to `$GITHUB_STEP_SUMMARY` when that variable is set. Test cleanup sends SIGTERM before SIGKILL so a serve process flushes its counters. CI runs the command without gating.
 
 Today ~70% of 127k test lines read unexported state and will not survive the restructure. The target is 40k–50k test lines.
 

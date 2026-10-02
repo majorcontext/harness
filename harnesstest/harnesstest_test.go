@@ -140,6 +140,25 @@ func TestStepsMatchInOrder(t *testing.T) {
 	}
 }
 
+func TestRecordsModelThinkingAndServiceTier(t *testing.T) {
+	s := New(t, Step{Name: "a", Reply: Reply{Text: "A"}})
+	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
+	st, err := c.Stream(context.Background(), &provider.Request{
+		Model:     message.ModelRef{Provider: anthropic.Family, Model: "m"},
+		Effort:    message.EffortHigh,
+		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: "q"}}}},
+		MaxTokens: 30000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, st)
+	got := s.Requests()[0]
+	if got.Model != "m" || got.ThinkingType != "enabled" || got.ThinkingBudget != 16384 {
+		t.Errorf("request = model %q thinking %q/%d, want m enabled/16384", got.Model, got.ThinkingType, got.ThinkingBudget)
+	}
+}
+
 type recorder struct {
 	testing.TB
 	cleanups []func()
@@ -178,7 +197,7 @@ type blockedRun struct {
 }
 
 func startBlocked(ctx context.Context, reply Reply) *blockedRun {
-	s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}}
+	s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}, canceled: map[string]chan struct{}{}}
 	br := &blockedRun{s: s, w: httptest.NewRecorder(), done: make(chan struct{})}
 	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(ctx)
 	go func() {
@@ -378,6 +397,91 @@ func TestHTTPErrorReply(t *testing.T) {
 	}
 	if _, ok := provider.AsRetryable(err); !ok {
 		t.Errorf("AsRetryable(%v) = false, want retryable", err)
+	}
+}
+
+func TestErrorReplyBody(t *testing.T) {
+	tests := []struct {
+		name       string
+		reply      Reply
+		wantType   string
+		wantMsg    string
+		wantHeader string
+	}{
+		{"default message", Reply{HTTPStatus: 500}, "api_error", "harnesstest: scripted error", ""},
+		{"rate limit with retry-after", Reply{HTTPStatus: 429, RetryAfter: "7", ErrorMessage: "slow down"}, "rate_limit_error", "slow down", "7"},
+		{"context overflow", Reply{HTTPStatus: 400, ErrorMessage: ContextOverflowMessage}, "invalid_request_error", ContextOverflowMessage, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(t, Step{Reply: tc.reply})
+			resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			var body struct {
+				Error struct{ Type, Message string }
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != tc.reply.HTTPStatus || body.Error.Type != tc.wantType || body.Error.Message != tc.wantMsg {
+				t.Errorf("status %d type %q message %q, want %d %q %q", resp.StatusCode, body.Error.Type, body.Error.Message, tc.reply.HTTPStatus, tc.wantType, tc.wantMsg)
+			}
+			if got := resp.Header.Get("Retry-After"); got != tc.wantHeader {
+				t.Errorf("Retry-After = %q, want %q", got, tc.wantHeader)
+			}
+		})
+	}
+}
+
+func TestContextOverflowReplyIsClassified(t *testing.T) {
+	s := New(t, Step{Reply: Reply{HTTPStatus: 400, ErrorMessage: ContextOverflowMessage}})
+	_, err := ask(t, s, "hi")
+	if !provider.IsContextOverflow(err) {
+		t.Fatalf("IsContextOverflow(%v) = false, want true", err)
+	}
+}
+
+func TestMaxTokensStopReason(t *testing.T) {
+	s := New(t, Step{Reply: Reply{Text: "cut", StopReason: "max_tokens", Usage: Usage{Input: 900, Output: 1}}})
+	st, err := ask(t, s, "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := done(t, drain(t, st))
+	if d.StopReason != provider.StopMaxTokens || d.Usage.InputTokens != 900 {
+		t.Errorf("stop %q input %d, want max_tokens and 900", d.StopReason, d.Usage.InputTokens)
+	}
+}
+
+func TestAwaitCanceled(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(cancel context.CancelFunc, s *Server)
+		want bool
+	}{
+		{"client cancel", func(cancel context.CancelFunc, _ *Server) { cancel() }, true},
+		{"release", func(_ context.CancelFunc, s *Server) { s.Release("slow") }, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				br := startBlocked(ctx, Reply{Text: "x", Block: true})
+				<-br.s.blockedCh("slow")
+				if br.s.AwaitCanceled("slow", time.Minute) {
+					t.Fatal("AwaitCanceled = true before the client dropped the request")
+				}
+				tc.end(cancel, br.s)
+				synctest.Wait()
+				if got := br.s.AwaitCanceled("slow", time.Minute); got != tc.want {
+					t.Errorf("AwaitCanceled = %v, want %v", got, tc.want)
+				}
+			})
+		})
 	}
 }
 

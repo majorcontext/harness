@@ -23,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +48,11 @@ var harnessBin string
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if !testing.Short() {
+		finishCover, err := startCover()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: coverage setup:", err)
+			os.Exit(1)
+		}
 		bin, cleanup, err := buildHarness()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "e2e: building harness:", err)
@@ -60,6 +66,10 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 		cleanup()
+		if err := finishCover(); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: coverage report:", err)
+			code = 1
+		}
 		os.Exit(code)
 	}
 	os.Exit(m.Run())
@@ -79,7 +89,11 @@ func buildHarness() (string, func(), error) {
 		return "", nil, err
 	}
 	bin := filepath.Join(dir, "harness")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/harness")
+	args := []string{"build", "-o", bin}
+	if os.Getenv("HARNESS_E2E_COVER") == "1" {
+		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/...")
+	}
+	cmd := exec.Command("go", append(args, "./cmd/harness")...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
@@ -452,33 +466,6 @@ type apiEvent struct {
 	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
-// scanEvents opens GET /event?from=0 and passes each frame to visit until it
-// returns true. It returns nil on that, or the stream error that ended the read
-// first, such as ctx expiring.
-func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool) error {
-	p.t.Helper()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?from=0", nil)
-	if err != nil {
-		p.t.Fatalf("event request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		p.t.Fatalf("GET /event: %v", err)
-	}
-	defer resp.Body.Close()
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			return err
-		}
-		if visit(raw) {
-			return nil
-		}
-	}
-}
-
 // eventReplay reads the durable replay batch of GET /event?from=0. /event is a
 // long-lived stream (replay, then live, then heartbeats), so the read is
 // bounded by a context deadline: the replay is written and flushed immediately
@@ -497,65 +484,6 @@ func (p *serveProc) eventReplay() []apiEvent {
 		return false
 	})
 	return events
-}
-
-// sseScanner extracts the data payload of each SSE frame from a reader.
-type sseScanner struct {
-	r   *bufReader
-	buf bytes.Buffer
-}
-
-func newSSEScanner(r io.Reader) *sseScanner { return &sseScanner{r: newBufReader(r)} }
-
-func (s *sseScanner) next() ([]byte, error) {
-	s.buf.Reset()
-	got := false
-	for {
-		line, err := s.r.readLine()
-		if err != nil {
-			if got {
-				return s.buf.Bytes(), nil
-			}
-			return nil, err
-		}
-		switch {
-		case line == "":
-			if got {
-				return s.buf.Bytes(), nil
-			}
-		case strings.HasPrefix(line, "data:"):
-			s.buf.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
-			got = true
-		}
-	}
-}
-
-// bufReader is a minimal line reader that respects the underlying reader's
-// (context-driven) read errors so the bounded read in eventReplay terminates.
-type bufReader struct {
-	r   io.Reader
-	buf []byte
-}
-
-func newBufReader(r io.Reader) *bufReader { return &bufReader{r: r} }
-
-func (b *bufReader) readLine() (string, error) {
-	for {
-		if i := bytes.IndexByte(b.buf, '\n'); i >= 0 {
-			line := string(bytes.TrimRight(b.buf[:i], "\r"))
-			b.buf = b.buf[i+1:]
-			return line, nil
-		}
-		tmp := make([]byte, 4096)
-		n, err := b.r.Read(tmp)
-		if n > 0 {
-			b.buf = append(b.buf, tmp[:n]...)
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-	}
 }
 
 // --- config ------------------------------------------------------------
@@ -966,6 +894,13 @@ func (f *fakeGoalAnthropic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // naming a distinct evaluator model, so goal requests are enabled.
 func writeGoalConfig(t *testing.T, baseURL string) string {
 	t.Helper()
+	return writeGoalConfigWith(t, baseURL, nil)
+}
+
+// writeGoalConfigWith is writeGoalConfig with top-level keys that replace or
+// add to the base config.
+func writeGoalConfigWith(t *testing.T, baseURL string, extra map[string]any) string {
+	t.Helper()
 	cfg := map[string]any{
 		"model":                "anthropic/claude-fable-5",
 		"goal_evaluator_model": "anthropic/eval-model",
@@ -976,6 +911,7 @@ func writeGoalConfig(t *testing.T, baseURL string) string {
 			},
 		},
 	}
+	maps.Copy(cfg, extra)
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)

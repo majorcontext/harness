@@ -1,0 +1,289 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-haiku-4-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 200000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "anthropic/claude-haiku-4-5",
+        "plugins": [],
+        "queued": 0,
+        "service_tier": "priority",
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 200000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "messages": 2,
+        "model": "anthropic/claude-haiku-4-5",
+        "plugins": [],
+        "queued": 0,
+        "service_tier": "priority",
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 5,
+          "last_input_tokens": 5,
+          "messages": 2,
+          "output_tokens": 3
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#3": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 200000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "messages": 2,
+        "model": "anthropic/claude-haiku-4-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 5,
+          "last_input_tokens": 5,
+          "messages": 2,
+          "output_tokens": 3
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "set_model.a": {
+      "status": 400,
+      "body": {
+        "error": "engine: no context window configured for model: unknown model \"anthropic/no-such-model\": refusing to run without a context window (set context_window_tokens for this model, or context_window_required=false to allow it)"
+      }
+    },
+    "set_model.a#2": {
+      "status": 400,
+      "body": {
+        "error": "provider \"nosuch\" is not configured"
+      }
+    },
+    "set_model.a#3": {
+      "status": 400,
+      "body": {
+        "error": "message: model ref \"bare\" is not of the form \"provider/model\""
+      }
+    },
+    "set_model.a#4": {
+      "status": 200,
+      "body": {
+        "model": "anthropic/claude-haiku-4-5"
+      }
+    },
+    "set_service_tier.a": {
+      "status": 200,
+      "body": {
+        "service_tier": "bogus"
+      }
+    },
+    "set_service_tier.a#2": {
+      "status": 200,
+      "body": {
+        "service_tier": "priority"
+      }
+    },
+    "set_service_tier.a#3": {
+      "status": 200,
+      "body": {
+        "service_tier": ""
+      }
+    },
+    "set_thinking.a": {
+      "status": 400,
+      "body": {
+        "error": "message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)"
+      }
+    },
+    "set_thinking.a#2": {
+      "status": 200,
+      "body": {
+        "effort": "high"
+      }
+    },
+    "set_thinking.a#3": {
+      "status": 200,
+      "body": {
+        "effort": ""
+      }
+    }
+  }
+}

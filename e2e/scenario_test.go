@@ -18,6 +18,7 @@ var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract go
 type scenario struct {
 	name       string
 	concurrent bool // child sessions race, so requests are ordered by conversation
+	config     map[string]any
 	model      []harnesstest.Step
 	actions    []action
 }
@@ -48,6 +49,7 @@ type expectQueued struct {
 type observation struct {
 	Requests []normRequest            `json:"requests"`
 	Sessions map[string][]normMessage `json:"sessions"`
+	Calls    map[string]normCall      `json:"calls,omitempty"`
 }
 
 type run struct {
@@ -56,6 +58,28 @@ type run struct {
 	ids     map[string]string
 	aliases []string
 	noIdle  map[string]bool
+	calls   []recordedCall
+	keys    map[string]int
+}
+
+// recordedCall is the outcome of one action that reports a result. Its key is
+// the action name plus the alias, with a "#n" count suffix on a repeat.
+type recordedCall struct {
+	key string
+	res callResult
+}
+
+func (r *run) record(t *testing.T, name, alias string, res callResult) {
+	t.Helper()
+	key := name
+	if alias != "" {
+		key += "." + alias
+	}
+	r.keys[key]++
+	if n := r.keys[key]; n > 1 {
+		key = fmt.Sprintf("%s#%d", key, n)
+	}
+	r.calls = append(r.calls, recordedCall{key: key, res: res})
 }
 
 func (r *run) id(t *testing.T, alias string) string {
@@ -107,14 +131,139 @@ func (a expectQueued) run(t *testing.T, r *run) {
 }
 func (a restart) run(t *testing.T, r *run) { r.drv.Restart(t, a.kill) }
 
+// Actions that record a result under a golden key "calls.<name>.<alias>".
+// Each records the response status and body and never fails on a non-2xx
+// status, so a scenario can pin an error path.
+type compact struct{ as string }
+type setModel struct{ as, model string }
+type setThinking struct{ as, level string }
+type setServiceTier struct{ as, tier string }
+type endSession struct{ as string }
+type sendToSession struct{ as, text string }
+type cancelTree struct{ as string }
+type deleteQueued struct{ as string }
+type updateGoal struct{ as, condition string }
+type clearGoal struct{ as string }
+type command struct{ as, text string }
+
+// Observations. A zero beforeSeq, from, or limit is left out of the request.
+// listSessions needs at most one resident session: the server lists them in map order.
+type listSessions struct{}
+type getSession struct{ as string }
+type sessionStatus struct{}
+type commands struct{}
+type messagesPage struct {
+	as               string
+	beforeSeq, limit int
+}
+type bootstrap struct {
+	as    string
+	limit int
+}
+type journalPage struct {
+	as          string
+	from, limit int
+}
+
+// sseResume reads /event after afterSeq up to the tip seen on entry.
+// header sends Last-Event-ID instead of from. as limits the frames to one
+// session; scoped asks the server to filter with its session query.
+type sseResume struct {
+	as             string
+	afterSeq       int64
+	header, scoped bool
+}
+
+// bindChild gives the alias as to the nth child of the session parent, in
+// creation order, and waits until that child exists. record adds the alias
+// to the final transcript capture; staysActive skips its final idle wait.
+type bindChild struct {
+	as, parent          string
+	nth                 int
+	record, staysActive bool
+}
+
+func (a compact) run(t *testing.T, r *run) {
+	r.record(t, "compact", a.as, r.drv.Compact(t, r.id(t, a.as)))
+}
+func (a setModel) run(t *testing.T, r *run) {
+	r.record(t, "set_model", a.as, r.drv.SetModel(t, r.id(t, a.as), a.model))
+}
+func (a setThinking) run(t *testing.T, r *run) {
+	r.record(t, "set_thinking", a.as, r.drv.SetThinking(t, r.id(t, a.as), a.level))
+}
+func (a setServiceTier) run(t *testing.T, r *run) {
+	r.record(t, "set_service_tier", a.as, r.drv.SetServiceTier(t, r.id(t, a.as), a.tier))
+}
+func (a endSession) run(t *testing.T, r *run) {
+	r.record(t, "end_session", a.as, r.drv.EndSession(t, r.id(t, a.as)))
+}
+func (a sendToSession) run(t *testing.T, r *run) {
+	r.record(t, "send", a.as, r.drv.Send(t, r.id(t, a.as), a.text))
+}
+func (a cancelTree) run(t *testing.T, r *run) {
+	r.record(t, "cancel_tree", a.as, r.drv.CancelTree(t, r.id(t, a.as)))
+}
+func (a deleteQueued) run(t *testing.T, r *run) {
+	r.record(t, "delete_queued", a.as, r.drv.DeleteQueued(t, r.id(t, a.as)))
+}
+func (a updateGoal) run(t *testing.T, r *run) {
+	r.record(t, "update_goal", a.as, r.drv.UpdateGoal(t, r.id(t, a.as), a.condition))
+}
+func (a clearGoal) run(t *testing.T, r *run) {
+	r.record(t, "clear_goal", a.as, r.drv.ClearGoal(t, r.id(t, a.as)))
+}
+func (a command) run(t *testing.T, r *run) {
+	r.record(t, "command", a.as, r.drv.Command(t, r.id(t, a.as), a.text))
+}
+func (commands) run(t *testing.T, r *run) {
+	r.record(t, "commands", "", r.drv.Commands(t))
+}
+func (listSessions) run(t *testing.T, r *run) {
+	r.record(t, "list_sessions", "", r.drv.ListSessions(t))
+}
+func (a getSession) run(t *testing.T, r *run) {
+	r.record(t, "get_session", a.as, r.drv.GetSession(t, r.id(t, a.as)))
+}
+func (sessionStatus) run(t *testing.T, r *run) {
+	r.record(t, "session_status", "", r.drv.SessionStatus(t))
+}
+func (a messagesPage) run(t *testing.T, r *run) {
+	r.record(t, "messages_page", a.as, r.drv.MessagesPage(t, r.id(t, a.as), a.beforeSeq, a.limit))
+}
+func (a bootstrap) run(t *testing.T, r *run) {
+	r.record(t, "bootstrap", a.as, r.drv.Bootstrap(t, r.id(t, a.as), a.limit))
+}
+func (a journalPage) run(t *testing.T, r *run) {
+	r.record(t, "journal_page", a.as, r.drv.JournalPage(t, r.id(t, a.as), a.from, a.limit))
+}
+func (a sseResume) run(t *testing.T, r *run) {
+	id := ""
+	if a.as != "" {
+		id = r.id(t, a.as)
+	}
+	r.record(t, "sse_resume", a.as, r.drv.SSEResume(t, id, a.afterSeq, a.header, a.scoped))
+}
+func (a bindChild) run(t *testing.T, r *run) {
+	if _, dup := r.ids[a.as]; dup {
+		t.Fatalf("alias %q bound twice", a.as)
+	}
+	r.ids[a.as] = r.drv.Child(t, r.id(t, a.parent), a.nth)
+	if a.record {
+		r.aliases = append(r.aliases, a.as)
+		r.noIdle[a.as] = a.staysActive
+	}
+}
+
 func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
 	fake := harnesstest.New(t, sc.model...)
 	r := &run{
-		drv:    newHTTPDriver(t, fake.URL()),
+		drv:    newHTTPDriverWith(t, fake.URL(), sc.config),
 		fake:   fake,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
+		keys:   map[string]int{},
 	}
 	for _, a := range sc.actions {
 		a.run(t, r)
@@ -139,7 +288,7 @@ func runScenario(t *testing.T, sc scenario) observation {
 	if sc.concurrent {
 		reqs = groupByConversation(reqs)
 	}
-	return normalize(reqs, sessions)
+	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runScenarios(t *testing.T, table []scenario) {

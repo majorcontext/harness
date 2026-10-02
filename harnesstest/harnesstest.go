@@ -24,11 +24,20 @@ type Step struct {
 type Reply struct {
 	Text       string
 	ToolCalls  []ToolCall // emitted as tool_use blocks after Text
-	StopReason string     // default "end_turn", or "tool_use" when ToolCalls is set
-	Usage      Usage      // default {Input: 5, Output: 3}
+	StopReason string     // default "end_turn", or "tool_use" when ToolCalls is set; "max_tokens" ends the turn at the output limit
+	Usage      Usage      // default {Input: 5, Output: 3}; Input past a context-window threshold triggers auto-compaction
 	HTTPStatus int        // non-zero: reply with this status and an Anthropic error body
-	Block      bool       // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
+	// ErrorMessage is the message of the error body of an HTTPStatus reply.
+	// The default is "harnesstest: scripted error".
+	ErrorMessage string
+	// RetryAfter is the Retry-After header value of an HTTPStatus reply.
+	RetryAfter string
+	Block      bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
 }
+
+// ContextOverflowMessage is the error message Anthropic sends for a prompt
+// over the context window. Use it as Reply.ErrorMessage with HTTPStatus 400.
+const ContextOverflowMessage = "prompt is too long: 205102 tokens > 200000 maximum"
 
 // ToolCall is a tool_use block in a Reply.
 type ToolCall struct {
@@ -41,9 +50,13 @@ type Usage struct{ Input, Output int }
 
 // Request is a decoded model request.
 type Request struct {
-	System   string
-	Messages []Message
-	Tools    []string // sorted names
+	System         string
+	Model          string
+	ThinkingType   string
+	ThinkingBudget int
+	ServiceTier    string
+	Messages       []Message
+	Tools          []string // sorted names
 }
 
 // Message is one conversation turn in a Request.
@@ -95,6 +108,7 @@ type Server struct {
 	undecoded []string
 	releases  map[string]chan struct{}
 	blocked   map[string]chan struct{}
+	canceled  map[string]chan struct{}
 	arrived   chan struct{} // closed and replaced when a request is recorded
 }
 
@@ -120,6 +134,7 @@ func New(t testing.TB, steps ...Step) *Server {
 		consumed: make([]bool, len(steps)),
 		releases: map[string]chan struct{}{},
 		blocked:  map[string]chan struct{}{},
+		canceled: map[string]chan struct{}{},
 		arrived:  make(chan struct{}),
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.handle))
@@ -173,6 +188,33 @@ func (s *Server) blockedCh(stepName string) <-chan struct{} {
 	return s.chanFor(s.blocked, stepName)
 }
 
+// canceledCh is closed once the client has dropped a waiting request for the named Block step.
+func (s *Server) canceledCh(stepName string) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.chanFor(s.canceled, stepName)
+}
+
+// AwaitCanceled reports whether the client dropped a waiting request for the
+// named Block step within bound. It stays false for a request that Release
+// or server close ended.
+func (s *Server) AwaitCanceled(stepName string, bound time.Duration) bool {
+	return s.awaitClosed(s.canceledCh(stepName), bound)
+}
+
+func (s *Server) awaitClosed(ch <-chan struct{}, bound time.Duration) bool {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return true
+	case <-timer.C:
+		return false
+	case <-s.closing:
+		return false
+	}
+}
+
 func closeOnce(ch chan struct{}) {
 	select {
 	case <-ch:
@@ -222,6 +264,9 @@ func (s *Server) block(r *http.Request, name string) bool {
 	case <-release:
 		return true
 	case <-r.Context().Done():
+		s.mu.Lock()
+		closeOnce(s.chanFor(s.canceled, name))
+		s.mu.Unlock()
 	case <-s.closing:
 	}
 	return false
@@ -290,7 +335,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case matched < 0:
 		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
 	case step.Reply.HTTPStatus != 0:
-		writeError(w, step.Reply.HTTPStatus, "harnesstest: scripted error")
+		writeReplyError(w, step.Reply)
 	default:
 		s.stream(w, r, n, step.Name, step.Reply)
 	}

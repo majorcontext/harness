@@ -49,6 +49,12 @@ jobs:
           version: v2.14
           only-new-issues: true
 
+      - name: Contract coverage
+        # Reports what the contract suite reaches in the real binary. It never
+        # gates; the table goes to the job summary.
+        continue-on-error: true
+        run: HARNESS_E2E_COVER=1 go test -race -count=1 ./e2e/ -run TestContract
+
       - name: Startup budget
         # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
         # shared-runner noise out; the bound is generous versus the ~5ms

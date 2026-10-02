@@ -37,8 +37,7 @@ func TestContractDurability(t *testing.T) {
 			},
 		},
 		{
-			// Known defect, pinned on purpose: after a SIGKILL restart the refolded
-			// queue entry is not dispatched.
+			// Known defect, pinned: after SIGKILL the refolded queue entry is not dispatched.
 			name:  "queued_input_survives_kill",
 			model: []harnesstest.Step{slow},
 			actions: []action{
