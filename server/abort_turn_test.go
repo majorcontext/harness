@@ -350,3 +350,60 @@ func TestStopDuringToolCall(t *testing.T) {
 		t.Errorf("tool result call_id = %v, want call_1", got)
 	}
 }
+
+func goalStopServer(t *testing.T) (*harness, *goalProv, engine.SessionStore, string) {
+	t.Helper()
+	store := engine.NewMemStore()
+	prov := &goalProv{
+		name:        "test",
+		blockWorker: true,
+		started:     make(chan struct{}),
+		eval:        [][]provider.Event{asstTurn("MET: ok")},
+	}
+	h := newOwnerServer(t, store, prov, func(o *Options) {
+		o.GoalEvaluator = message.ModelRef{Provider: "test", Model: "eval"}
+	})
+	id := h.createSession("test/m1")
+	resp, body := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond"})
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST goal status %d: %s", resp.StatusCode, body)
+	}
+	<-prov.started
+	return h, prov, store, id
+}
+
+func requireGoalTurnStopped(t *testing.T, store engine.SessionStore, prov *goalProv, id string) {
+	t.Helper()
+	reloaded, err := engine.LoadSession(engine.Config{
+		Providers:      provider.Registry{"test": prov},
+		Model:          message.ModelRef{Provider: "test", Model: "m1"},
+		SessionStore:   store,
+		MaxTurnResumes: 3,
+	}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.ResumableTurn() {
+		t.Error("ResumableTurn() = true after the operator stopped a goal turn, want false")
+	}
+	if !reloaded.TurnStopped() {
+		t.Error("TurnStopped() = false after the operator stopped a goal turn, want true")
+	}
+}
+
+func TestGoalAbortNeverResumes(t *testing.T) {
+	h, prov, store, id := goalStopServer(t)
+	h.abortBody(id, "")
+	h.srv.wg.Wait()
+	requireGoalTurnStopped(t, store, prov, id)
+}
+
+func TestGoalDeleteNeverResumes(t *testing.T) {
+	h, prov, store, id := goalStopServer(t)
+	resp, _ := h.do("DELETE", "/session/"+id+"/goal", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE goal = %d, want 204", resp.StatusCode)
+	}
+	h.srv.wg.Wait()
+	requireGoalTurnStopped(t, store, prov, id)
+}

@@ -3322,7 +3322,11 @@ func (s *Server) runGoal(ctx context.Context, id string, st *sessionState, condi
 		// PursueGoal's only remaining terminal case (see its doc comment).
 		s.recordTurnEnd(id, "", st.sess, outcomeMaxTurnsExceeded, nil)
 	case errors.Is(err, context.Canceled):
-		// Cleared via DELETE (goal.cleared already journaled) or drained.
+		if errors.Is(context.Cause(ctx), errTurnStopped) {
+			if serr := st.sess.RecordTurnStopped(engine.PartialMessageID(err)); serr != nil {
+				s.logWarn("record turn.stopped", "session", id, "error", serr.Error())
+			}
+		}
 	default:
 		s.emitDurable(Event{Type: evtSessionError, SessionID: id, Error: err.Error()})
 		s.recordTurnEnd(id, "", st.sess, turnEndOutcome(err), err)
@@ -3475,10 +3479,10 @@ func (s *Server) handleGoalDelete(w http.ResponseWriter, r *http.Request) {
 		// as structurally possible — right here, before this function's own
 		// cancel() below — and ride out its unwind to completion before
 		// letting this handler proceed. See TestGoalDeleteClearBeforeIdleRace.
-		s.goalDeleteRace(func() { cancel(nil) })
+		s.goalDeleteRace(func() { cancel(errTurnStopped) })
 	}
 	if cancel != nil {
-		cancel(nil) // stop the loop; runGoal treats context.Canceled as a clean stop (no-op if the hook above already fired it)
+		cancel(errTurnStopped) // stop the loop; runGoal records the stop (no-op if the hook above already fired it)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -3828,16 +3832,12 @@ func (s *Server) handleAbort(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	st := s.sessions[id]
 	var cancel context.CancelCauseFunc
-	cause := error(nil)
 	if st != nil && st.cancel != nil && (body.TurnID == "" || body.TurnID == st.turnID) {
 		cancel = st.cancel
-		if !st.goalLoop {
-			cause = errTurnStopped
-		}
 	}
 	s.mu.Unlock()
 	if cancel != nil {
-		cancel(cause)
+		cancel(errTurnStopped)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
