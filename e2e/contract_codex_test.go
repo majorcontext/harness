@@ -168,10 +168,6 @@ func codexWebSocketRows() []codexScenario {
 	}
 	return []codexScenario{
 		{
-			scenario:  scenario{name: "codex_ws_text_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"))},
-			websocket: true,
-		},
-		{
 			scenario:  scenario{name: "codex_ws_prewarm_warms_first_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), wire)},
 			websocket: true,
 		},
@@ -184,7 +180,7 @@ func codexWebSocketRows() []codexScenario {
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_usage_frame_reaches_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}})},
+			scenario:  scenario{name: "codex_ws_usage_frame_reaches_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}, recordWire{}})},
 			websocket: true,
 			opts:      codexUsage(false),
 		},
