@@ -136,24 +136,31 @@ func TestOpenAIRejectsChainToUnknownResponse(t *testing.T) {
 	}
 }
 
-func TestOpenAIDropEndsWebSocketStreamWithoutTerminalEvent(t *testing.T) {
-	s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"d": {Drop: true}}}, Step{Name: "d", Reply: Reply{Text: "partial"}})
-	st, err := codexClient(s, true).Stream(context.Background(), codexRequest(codexUser("hi")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = st.Close() }()
-	for {
-		ev, err := st.Next()
-		if err == io.EOF || ev.Type == provider.EventDone {
-			t.Fatal("stream ended cleanly, want a truncation error")
-		}
-		if err != nil {
-			if class, ok := provider.AsRetryable(err); !ok || class != provider.RetryableStreamTruncated {
-				t.Fatalf("err = %v, want a stream-truncated retryable error", err)
+func TestOpenAIDropEndsStreamWithoutTerminalEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ws   bool
+	}{{"websocket", true}, {"sse", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"d": {Drop: true}}}, Step{Name: "d", Reply: Reply{Text: "partial"}})
+			st, err := codexClient(s, tc.ws).Stream(context.Background(), codexRequest(codexUser("hi")))
+			if err != nil {
+				t.Fatal(err)
 			}
-			return
-		}
+			defer func() { _ = st.Close() }()
+			for {
+				ev, err := st.Next()
+				if err == io.EOF || ev.Type == provider.EventDone {
+					t.Fatal("stream ended cleanly, want a truncation error")
+				}
+				if err != nil {
+					if class, ok := provider.AsRetryable(err); !ok || class != provider.RetryableStreamTruncated {
+						t.Fatalf("err = %v, want a stream-truncated retryable error", err)
+					}
+					return
+				}
+			}
+		})
 	}
 }
 
