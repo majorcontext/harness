@@ -1,0 +1,2286 @@
+{
+	"files": {
+		"cmd/harness/cache_ttl_parity_test.go": {
+			"lines": 93,
+			"comment_lines": 33,
+			"code_lines": 53,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/clientapi.go": {
+			"lines": 131,
+			"comment_lines": 38,
+			"code_lines": 78,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/clientapi_late_test.go": {
+			"lines": 170,
+			"comment_lines": 19,
+			"code_lines": 131,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/configlog.go": {
+			"lines": 72,
+			"comment_lines": 22,
+			"code_lines": 44,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/gcwatch.go": {
+			"lines": 139,
+			"comment_lines": 43,
+			"code_lines": 82,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/main.go": {
+			"lines": 2268,
+			"comment_lines": 806,
+			"code_lines": 1363,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/main_test.go": {
+			"lines": 1439,
+			"comment_lines": 141,
+			"code_lines": 1234,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/mcp.go": {
+			"lines": 109,
+			"comment_lines": 42,
+			"code_lines": 58,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/plugins.go": {
+			"lines": 687,
+			"comment_lines": 214,
+			"code_lines": 445,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/plugins_test.go": {
+			"lines": 1189,
+			"comment_lines": 192,
+			"code_lines": 915,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/pprof_defaultmux_test.go": {
+			"lines": 33,
+			"comment_lines": 10,
+			"code_lines": 21,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/process.go": {
+			"lines": 69,
+			"comment_lines": 21,
+			"code_lines": 42,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/text_stream_printer_test.go": {
+			"lines": 149,
+			"comment_lines": 47,
+			"code_lines": 95,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"cmd/harness/watchdog.go": {
+			"lines": 172,
+			"comment_lines": 79,
+			"code_lines": 77,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"command/command.go": {
+			"lines": 86,
+			"comment_lines": 24,
+			"code_lines": 52,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"command/prompt.go": {
+			"lines": 421,
+			"comment_lines": 10,
+			"code_lines": 394,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"command/registry.go": {
+			"lines": 125,
+			"comment_lines": 5,
+			"code_lines": 114,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"config/config.go": {
+			"lines": 1861,
+			"comment_lines": 885,
+			"code_lines": 910,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"config/config_test.go": {
+			"lines": 1879,
+			"comment_lines": 101,
+			"code_lines": 1723,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"e2e/compaction_test.go": {
+			"lines": 270,
+			"comment_lines": 38,
+			"code_lines": 206,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"e2e/e2e_test.go": {
+			"lines": 1307,
+			"comment_lines": 195,
+			"code_lines": 976,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"e2e/enqueue_test.go": {
+			"lines": 201,
+			"comment_lines": 73,
+			"code_lines": 109,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"e2e/managed_processes_test.go": {
+			"lines": 287,
+			"comment_lines": 55,
+			"code_lines": 206,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"e2e/subagent_test.go": {
+			"lines": 208,
+			"comment_lines": 55,
+			"code_lines": 136,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/agentdef.go": {
+			"lines": 449,
+			"comment_lines": 201,
+			"code_lines": 229,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/bash.go": {
+			"lines": 224,
+			"comment_lines": 83,
+			"code_lines": 123,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/bash_other.go": {
+			"lines": 15,
+			"comment_lines": 8,
+			"code_lines": 4,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/bash_pipe_test.go": {
+			"lines": 386,
+			"comment_lines": 123,
+			"code_lines": 228,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/bash_unix.go": {
+			"lines": 65,
+			"comment_lines": 28,
+			"code_lines": 32,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/claude_code_backend.go": {
+			"lines": 2636,
+			"comment_lines": 1238,
+			"code_lines": 1295,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/claude_code_backend_test.go": {
+			"lines": 3388,
+			"comment_lines": 764,
+			"code_lines": 2375,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 15
+		},
+		"engine/command_test.go": {
+			"lines": 371,
+			"comment_lines": 0,
+			"code_lines": 346,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/compact.go": {
+			"lines": 1256,
+			"comment_lines": 687,
+			"code_lines": 507,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/compact_test.go": {
+			"lines": 2985,
+			"comment_lines": 623,
+			"code_lines": 2152,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/compact_zero_usage_test.go": {
+			"lines": 90,
+			"comment_lines": 26,
+			"code_lines": 55,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/context_window.go": {
+			"lines": 192,
+			"comment_lines": 106,
+			"code_lines": 73,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/doc.go": {
+			"lines": 16,
+			"comment_lines": 15,
+			"code_lines": 1,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/engine.go": {
+			"lines": 4384,
+			"comment_lines": 2770,
+			"code_lines": 1393,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/filetools.go": {
+			"lines": 582,
+			"comment_lines": 207,
+			"code_lines": 343,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal.go": {
+			"lines": 2359,
+			"comment_lines": 1387,
+			"code_lines": 884,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_directive_anchor_test.go": {
+			"lines": 211,
+			"comment_lines": 94,
+			"code_lines": 95,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_eval_truncated_test.go": {
+			"lines": 106,
+			"comment_lines": 33,
+			"code_lines": 66,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_evaluator_bound_test.go": {
+			"lines": 212,
+			"comment_lines": 68,
+			"code_lines": 129,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_operator_batch_test.go": {
+			"lines": 130,
+			"comment_lines": 28,
+			"code_lines": 90,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_parked_status.go": {
+			"lines": 43,
+			"comment_lines": 25,
+			"code_lines": 15,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_parked_status_test.go": {
+			"lines": 317,
+			"comment_lines": 78,
+			"code_lines": 218,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_permanent_error_test.go": {
+			"lines": 202,
+			"comment_lines": 40,
+			"code_lines": 150,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_provider_exhausted_test.go": {
+			"lines": 203,
+			"comment_lines": 51,
+			"code_lines": 139,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_retry_dedup_test.go": {
+			"lines": 354,
+			"comment_lines": 110,
+			"code_lines": 211,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_retry_reuse_test.go": {
+			"lines": 595,
+			"comment_lines": 174,
+			"code_lines": 378,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_test.go": {
+			"lines": 1815,
+			"comment_lines": 386,
+			"code_lines": 1315,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_tool.go": {
+			"lines": 126,
+			"comment_lines": 38,
+			"code_lines": 76,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_toolcall_boundary_test.go": {
+			"lines": 120,
+			"comment_lines": 24,
+			"code_lines": 84,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/goal_update_test.go": {
+			"lines": 1038,
+			"comment_lines": 172,
+			"code_lines": 777,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/id.go": {
+			"lines": 111,
+			"comment_lines": 50,
+			"code_lines": 53,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/identity_status.go": {
+			"lines": 105,
+			"comment_lines": 76,
+			"code_lines": 25,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/index.go": {
+			"lines": 972,
+			"comment_lines": 375,
+			"code_lines": 545,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/index_test.go": {
+			"lines": 1478,
+			"comment_lines": 211,
+			"code_lines": 1192,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/instructions.go": {
+			"lines": 426,
+			"comment_lines": 174,
+			"code_lines": 230,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/instructions_outline.go": {
+			"lines": 304,
+			"comment_lines": 94,
+			"code_lines": 190,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/instructions_test.go": {
+			"lines": 834,
+			"comment_lines": 76,
+			"code_lines": 722,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/journal.go": {
+			"lines": 318,
+			"comment_lines": 134,
+			"code_lines": 165,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/journal_test.go": {
+			"lines": 301,
+			"comment_lines": 36,
+			"code_lines": 235,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/load_session_empty_tool_result_test.go": {
+			"lines": 127,
+			"comment_lines": 22,
+			"code_lines": 96,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/max_tokens_wire_test.go": {
+			"lines": 163,
+			"comment_lines": 41,
+			"code_lines": 112,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp.go": {
+			"lines": 1327,
+			"comment_lines": 565,
+			"code_lines": 687,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_classify_test.go": {
+			"lines": 220,
+			"comment_lines": 33,
+			"code_lines": 174,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_instructions.go": {
+			"lines": 334,
+			"comment_lines": 135,
+			"code_lines": 178,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_lazy.go": {
+			"lines": 567,
+			"comment_lines": 247,
+			"code_lines": 284,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_lazy_e2e_test.go": {
+			"lines": 302,
+			"comment_lines": 50,
+			"code_lines": 231,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_search.go": {
+			"lines": 403,
+			"comment_lines": 146,
+			"code_lines": 232,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_status.go": {
+			"lines": 89,
+			"comment_lines": 48,
+			"code_lines": 36,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_test.go": {
+			"lines": 1794,
+			"comment_lines": 375,
+			"code_lines": 1237,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/mcp_tool.go": {
+			"lines": 309,
+			"comment_lines": 90,
+			"code_lines": 195,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/messagepage.go": {
+			"lines": 916,
+			"comment_lines": 336,
+			"code_lines": 534,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/messagepage_test.go": {
+			"lines": 1545,
+			"comment_lines": 256,
+			"code_lines": 1210,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/model_tool.go": {
+			"lines": 314,
+			"comment_lines": 124,
+			"code_lines": 166,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/model_tool_billing_test.go": {
+			"lines": 154,
+			"comment_lines": 44,
+			"code_lines": 96,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/operator_batch_replay_test.go": {
+			"lines": 189,
+			"comment_lines": 21,
+			"code_lines": 153,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/orphan_tool_use_test.go": {
+			"lines": 336,
+			"comment_lines": 56,
+			"code_lines": 257,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/process_ambient_test.go": {
+			"lines": 388,
+			"comment_lines": 43,
+			"code_lines": 323,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"engine/prompt_retry.go": {
+			"lines": 175,
+			"comment_lines": 101,
+			"code_lines": 68,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/prompt_retry_test.go": {
+			"lines": 616,
+			"comment_lines": 146,
+			"code_lines": 432,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/queue.go": {
+			"lines": 853,
+			"comment_lines": 513,
+			"code_lines": 307,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/queue_operator_batch_test.go": {
+			"lines": 166,
+			"comment_lines": 26,
+			"code_lines": 123,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/queue_persist_order_test.go": {
+			"lines": 218,
+			"comment_lines": 61,
+			"code_lines": 139,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/queue_replay_model_test.go": {
+			"lines": 317,
+			"comment_lines": 92,
+			"code_lines": 206,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/queue_toolcall_boundary_test.go": {
+			"lines": 194,
+			"comment_lines": 31,
+			"code_lines": 145,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/recovery_harness_test.go": {
+			"lines": 264,
+			"comment_lines": 133,
+			"code_lines": 115,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/root_interrupted_turn_recovery_test.go": {
+			"lines": 254,
+			"comment_lines": 66,
+			"code_lines": 164,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/searchtools.go": {
+			"lines": 484,
+			"comment_lines": 116,
+			"code_lines": 350,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/session_info.go": {
+			"lines": 134,
+			"comment_lines": 43,
+			"code_lines": 82,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/session_manager.go": {
+			"lines": 5293,
+			"comment_lines": 3606,
+			"code_lines": 1542,
+			"long_funcs": 10,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/session_manager_child_turn_start_test.go": {
+			"lines": 488,
+			"comment_lines": 143,
+			"code_lines": 301,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 8
+		},
+		"engine/session_manager_delivery_test.go": {
+			"lines": 4380,
+			"comment_lines": 1614,
+			"code_lines": 2416,
+			"long_funcs": 17,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"engine/session_manager_orphan_queue_test.go": {
+			"lines": 229,
+			"comment_lines": 55,
+			"code_lines": 149,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/session_manager_send_or_queue_test.go": {
+			"lines": 410,
+			"comment_lines": 66,
+			"code_lines": 302,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 3
+		},
+		"engine/session_manager_test.go": {
+			"lines": 2224,
+			"comment_lines": 589,
+			"code_lines": 1439,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 4
+		},
+		"engine/session_replay_model_test.go": {
+			"lines": 499,
+			"comment_lines": 136,
+			"code_lines": 332,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/skills.go": {
+			"lines": 132,
+			"comment_lines": 37,
+			"code_lines": 84,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/snapshot.go": {
+			"lines": 721,
+			"comment_lines": 302,
+			"code_lines": 372,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/snapshot_test.go": {
+			"lines": 913,
+			"comment_lines": 162,
+			"code_lines": 687,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/snapshot_wait_unix_test.go": {
+			"lines": 106,
+			"comment_lines": 38,
+			"code_lines": 56,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/startup_prewarm_test.go": {
+			"lines": 771,
+			"comment_lines": 0,
+			"code_lines": 710,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store.go": {
+			"lines": 2479,
+			"comment_lines": 1345,
+			"code_lines": 1071,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_failure_test.go": {
+			"lines": 254,
+			"comment_lines": 79,
+			"code_lines": 156,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_fuzz_test.go": {
+			"lines": 129,
+			"comment_lines": 31,
+			"code_lines": 85,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_phase_start_test.go": {
+			"lines": 161,
+			"comment_lines": 25,
+			"code_lines": 126,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_sync_other.go": {
+			"lines": 9,
+			"comment_lines": 4,
+			"code_lines": 3,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_sync_unix.go": {
+			"lines": 22,
+			"comment_lines": 5,
+			"code_lines": 14,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/store_test.go": {
+			"lines": 859,
+			"comment_lines": 120,
+			"code_lines": 669,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/stream_watchdog.go": {
+			"lines": 148,
+			"comment_lines": 56,
+			"code_lines": 83,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/task_external_turn_test.go": {
+			"lines": 76,
+			"comment_lines": 37,
+			"code_lines": 32,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/task_redrive_ctx_test.go": {
+			"lines": 77,
+			"comment_lines": 24,
+			"code_lines": 45,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/task_tool.go": {
+			"lines": 883,
+			"comment_lines": 385,
+			"code_lines": 464,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/task_verbs_revival_test.go": {
+			"lines": 418,
+			"comment_lines": 95,
+			"code_lines": 284,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/task_verbs_test.go": {
+			"lines": 1136,
+			"comment_lines": 199,
+			"code_lines": 809,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/taskdelivery.go": {
+			"lines": 669,
+			"comment_lines": 369,
+			"code_lines": 266,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/tool_call_poison_test.go": {
+			"lines": 172,
+			"comment_lines": 83,
+			"code_lines": 79,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/tool_result_empty_output_test.go": {
+			"lines": 70,
+			"comment_lines": 17,
+			"code_lines": 47,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolexec.go": {
+			"lines": 434,
+			"comment_lines": 203,
+			"code_lines": 206,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolexec_adversarial_test.go": {
+			"lines": 896,
+			"comment_lines": 107,
+			"code_lines": 710,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"engine/toolexec_test.go": {
+			"lines": 1444,
+			"comment_lines": 201,
+			"code_lines": 1123,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"engine/toolmem.go": {
+			"lines": 231,
+			"comment_lines": 120,
+			"code_lines": 99,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolmem_test.go": {
+			"lines": 655,
+			"comment_lines": 68,
+			"code_lines": 532,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 4
+		},
+		"engine/toolresult.go": {
+			"lines": 585,
+			"comment_lines": 280,
+			"code_lines": 265,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolresult_provider_test.go": {
+			"lines": 135,
+			"comment_lines": 32,
+			"code_lines": 87,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolresult_secrets.go": {
+			"lines": 309,
+			"comment_lines": 179,
+			"code_lines": 119,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolresult_secrets_test.go": {
+			"lines": 502,
+			"comment_lines": 161,
+			"code_lines": 315,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolresult_tool.go": {
+			"lines": 609,
+			"comment_lines": 230,
+			"code_lines": 338,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/toolresult_tool_test.go": {
+			"lines": 870,
+			"comment_lines": 235,
+			"code_lines": 558,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"engine/turn_metrics.go": {
+			"lines": 179,
+			"comment_lines": 95,
+			"code_lines": 78,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"engine/turn_metrics_test.go": {
+			"lines": 566,
+			"comment_lines": 114,
+			"code_lines": 419,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"imageclamp/imageclamp.go": {
+			"lines": 398,
+			"comment_lines": 102,
+			"code_lines": 265,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"internal/gates/gates_test.go": {
+			"lines": 212,
+			"comment_lines": 0,
+			"code_lines": 202,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"internal/testpoll/testpoll.go": {
+			"lines": 77,
+			"comment_lines": 43,
+			"code_lines": 30,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"mcp/conn_test.go": {
+			"lines": 146,
+			"comment_lines": 44,
+			"code_lines": 84,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"mcp/doc.go": {
+			"lines": 10,
+			"comment_lines": 9,
+			"code_lines": 1,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"mcp/http.go": {
+			"lines": 299,
+			"comment_lines": 44,
+			"code_lines": 233,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"mcp/http_test.go": {
+			"lines": 625,
+			"comment_lines": 49,
+			"code_lines": 509,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 3
+		},
+		"mcp/stdio_test.go": {
+			"lines": 459,
+			"comment_lines": 21,
+			"code_lines": 394,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"mcp/types.go": {
+			"lines": 179,
+			"comment_lines": 47,
+			"code_lines": 110,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"mcpserver/doc.go": {
+			"lines": 7,
+			"comment_lines": 6,
+			"code_lines": 1,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/doc.go": {
+			"lines": 9,
+			"comment_lines": 8,
+			"code_lines": 1,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/effort.go": {
+			"lines": 62,
+			"comment_lines": 25,
+			"code_lines": 30,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/engine_context.go": {
+			"lines": 66,
+			"comment_lines": 31,
+			"code_lines": 26,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/message.go": {
+			"lines": 1094,
+			"comment_lines": 652,
+			"code_lines": 388,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/message_test.go": {
+			"lines": 1047,
+			"comment_lines": 249,
+			"code_lines": 743,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/properties_test.go": {
+			"lines": 709,
+			"comment_lines": 290,
+			"code_lines": 373,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/subscription_usage.go": {
+			"lines": 80,
+			"comment_lines": 56,
+			"code_lines": 20,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/unmarshal_fuzz_test.go": {
+			"lines": 147,
+			"comment_lines": 41,
+			"code_lines": 97,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/wire_normalize.go": {
+			"lines": 994,
+			"comment_lines": 543,
+			"code_lines": 419,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/wire_normalize_test.go": {
+			"lines": 834,
+			"comment_lines": 233,
+			"code_lines": 564,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/wire_oracle_meta_test.go": {
+			"lines": 342,
+			"comment_lines": 129,
+			"code_lines": 193,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"message/wire_oracle_test.go": {
+			"lines": 333,
+			"comment_lines": 132,
+			"code_lines": 185,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"modelmeta/modelmeta.go": {
+			"lines": 253,
+			"comment_lines": 151,
+			"code_lines": 90,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"modelmeta/modelmeta_test.go": {
+			"lines": 293,
+			"comment_lines": 78,
+			"code_lines": 200,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"modelmeta/tool_search_test.go": {
+			"lines": 100,
+			"comment_lines": 28,
+			"code_lines": 62,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/concurrency_test.go": {
+			"lines": 463,
+			"comment_lines": 97,
+			"code_lines": 333,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/crash_failopen_test.go": {
+			"lines": 97,
+			"comment_lines": 26,
+			"code_lines": 62,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/hooks.go": {
+			"lines": 268,
+			"comment_lines": 73,
+			"code_lines": 158,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/host.go": {
+			"lines": 832,
+			"comment_lines": 231,
+			"code_lines": 546,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/host_state_test.go": {
+			"lines": 250,
+			"comment_lines": 88,
+			"code_lines": 139,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/protocol.go": {
+			"lines": 327,
+			"comment_lines": 90,
+			"code_lines": 208,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/protocol_test.go": {
+			"lines": 336,
+			"comment_lines": 86,
+			"code_lines": 221,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/resolve.go": {
+			"lines": 57,
+			"comment_lines": 14,
+			"code_lines": 38,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/sanitize.go": {
+			"lines": 57,
+			"comment_lines": 33,
+			"code_lines": 18,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"plugin/typescript_conformance_test.go": {
+			"lines": 115,
+			"comment_lines": 12,
+			"code_lines": 89,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/process.go": {
+			"lines": 706,
+			"comment_lines": 216,
+			"code_lines": 440,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/process_other.go": {
+			"lines": 20,
+			"comment_lines": 6,
+			"code_lines": 10,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/process_test.go": {
+			"lines": 443,
+			"comment_lines": 28,
+			"code_lines": 378,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/process_unix.go": {
+			"lines": 46,
+			"comment_lines": 14,
+			"code_lines": 27,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/ready_gate_test.go": {
+			"lines": 196,
+			"comment_lines": 13,
+			"code_lines": 165,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"process/ready_probe.go": {
+			"lines": 86,
+			"comment_lines": 33,
+			"code_lines": 46,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"process/validate_test.go": {
+			"lines": 102,
+			"comment_lines": 0,
+			"code_lines": 100,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/anthropic/anthropic.go": {
+			"lines": 701,
+			"comment_lines": 171,
+			"code_lines": 493,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/anthropic/stream_fuzz_test.go": {
+			"lines": 104,
+			"comment_lines": 27,
+			"code_lines": 69,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/anthropic/stream_test.go": {
+			"lines": 332,
+			"comment_lines": 26,
+			"code_lines": 286,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/anthropic/transcode.go": {
+			"lines": 549,
+			"comment_lines": 221,
+			"code_lines": 283,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/anthropic/transcode_test.go": {
+			"lines": 1104,
+			"comment_lines": 257,
+			"code_lines": 787,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/claudecode/claudecode.go": {
+			"lines": 51,
+			"comment_lines": 33,
+			"code_lines": 12,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/errors.go": {
+			"lines": 68,
+			"comment_lines": 17,
+			"code_lines": 37,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/openai.go": {
+			"lines": 1049,
+			"comment_lines": 238,
+			"code_lines": 747,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/schema_sanitize.go": {
+			"lines": 255,
+			"comment_lines": 45,
+			"code_lines": 184,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/stream_fuzz_test.go": {
+			"lines": 104,
+			"comment_lines": 27,
+			"code_lines": 69,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/stream_test.go": {
+			"lines": 420,
+			"comment_lines": 13,
+			"code_lines": 384,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/subscription_usage.go": {
+			"lines": 216,
+			"comment_lines": 72,
+			"code_lines": 131,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/transcode.go": {
+			"lines": 724,
+			"comment_lines": 232,
+			"code_lines": 447,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/transcode_test.go": {
+			"lines": 943,
+			"comment_lines": 152,
+			"code_lines": 745,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/ws.go": {
+			"lines": 216,
+			"comment_lines": 66,
+			"code_lines": 136,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/ws_chaining_test.go": {
+			"lines": 1282,
+			"comment_lines": 91,
+			"code_lines": 1082,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/ws_pool.go": {
+			"lines": 439,
+			"comment_lines": 58,
+			"code_lines": 352,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/ws_redial_live_test.go": {
+			"lines": 500,
+			"comment_lines": 112,
+			"code_lines": 360,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openai/ws_test.go": {
+			"lines": 537,
+			"comment_lines": 56,
+			"code_lines": 436,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 2
+		},
+		"provider/openaicompat/openaicompat.go": {
+			"lines": 604,
+			"comment_lines": 138,
+			"code_lines": 432,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openaicompat/readdataline_eof_test.go": {
+			"lines": 70,
+			"comment_lines": 19,
+			"code_lines": 43,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openaicompat/stream_fuzz_test.go": {
+			"lines": 106,
+			"comment_lines": 28,
+			"code_lines": 70,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openaicompat/stream_test.go": {
+			"lines": 532,
+			"comment_lines": 22,
+			"code_lines": 483,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openaicompat/transcode.go": {
+			"lines": 547,
+			"comment_lines": 196,
+			"code_lines": 319,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/openaicompat/transcode_test.go": {
+			"lines": 1086,
+			"comment_lines": 201,
+			"code_lines": 829,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/provider.go": {
+			"lines": 292,
+			"comment_lines": 167,
+			"code_lines": 104,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"provider/retryable.go": {
+			"lines": 98,
+			"comment_lines": 24,
+			"code_lines": 60,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/capabilities.go": {
+			"lines": 15,
+			"comment_lines": 8,
+			"code_lines": 5,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/claude_code_model_switch_test.go": {
+			"lines": 279,
+			"comment_lines": 62,
+			"code_lines": 199,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/clientapi.go": {
+			"lines": 62,
+			"comment_lines": 18,
+			"code_lines": 37,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/cold_read_test.go": {
+			"lines": 715,
+			"comment_lines": 125,
+			"code_lines": 536,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/command_cold_load_delete_test.go": {
+			"lines": 141,
+			"comment_lines": 0,
+			"code_lines": 130,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/command_resolve_test.go": {
+			"lines": 539,
+			"comment_lines": 0,
+			"code_lines": 502,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/commands.go": {
+			"lines": 440,
+			"comment_lines": 24,
+			"code_lines": 388,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/commands_during_task_test.go": {
+			"lines": 106,
+			"comment_lines": 16,
+			"code_lines": 81,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/compact_command_result_test.go": {
+			"lines": 118,
+			"comment_lines": 0,
+			"code_lines": 114,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/compact_test.go": {
+			"lines": 943,
+			"comment_lines": 191,
+			"code_lines": 672,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 3
+		},
+		"server/dirlock.go": {
+			"lines": 8,
+			"comment_lines": 3,
+			"code_lines": 3,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/dirlock_other.go": {
+			"lines": 18,
+			"comment_lines": 9,
+			"code_lines": 5,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/dirlock_unix.go": {
+			"lines": 59,
+			"comment_lines": 17,
+			"code_lines": 36,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/enqueue_test.go": {
+			"lines": 991,
+			"comment_lines": 169,
+			"code_lines": 723,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/eventsink.go": {
+			"lines": 292,
+			"comment_lines": 93,
+			"code_lines": 184,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/eventsink_test.go": {
+			"lines": 1132,
+			"comment_lines": 152,
+			"code_lines": 862,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"server/git_changes.go": {
+			"lines": 858,
+			"comment_lines": 148,
+			"code_lines": 650,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/git_changes_test.go": {
+			"lines": 1221,
+			"comment_lines": 93,
+			"code_lines": 1032,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_delete_nonresident_test.go": {
+			"lines": 109,
+			"comment_lines": 19,
+			"code_lines": 78,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_eval_resilience_test.go": {
+			"lines": 406,
+			"comment_lines": 88,
+			"code_lines": 289,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_paused_test.go": {
+			"lines": 549,
+			"comment_lines": 89,
+			"code_lines": 415,
+			"long_funcs": 3,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_rollback_test.go": {
+			"lines": 151,
+			"comment_lines": 53,
+			"code_lines": 84,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"server/goal_test.go": {
+			"lines": 732,
+			"comment_lines": 148,
+			"code_lines": 531,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_update_test.go": {
+			"lines": 832,
+			"comment_lines": 157,
+			"code_lines": 603,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/goal_worker_park_test.go": {
+			"lines": 960,
+			"comment_lines": 206,
+			"code_lines": 699,
+			"long_funcs": 5,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/handlers.go": {
+			"lines": 4872,
+			"comment_lines": 2483,
+			"code_lines": 2235,
+			"long_funcs": 7,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/journal.go": {
+			"lines": 1959,
+			"comment_lines": 1047,
+			"code_lines": 840,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/journal_spawn_sync_test.go": {
+			"lines": 200,
+			"comment_lines": 96,
+			"code_lines": 93,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/lineage_children_union_test.go": {
+			"lines": 209,
+			"comment_lines": 49,
+			"code_lines": 149,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/lineage_fail_kind_test.go": {
+			"lines": 126,
+			"comment_lines": 8,
+			"code_lines": 108,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/live.go": {
+			"lines": 222,
+			"comment_lines": 136,
+			"code_lines": 72,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/live_events_test.go": {
+			"lines": 266,
+			"comment_lines": 56,
+			"code_lines": 192,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/live_resolve_test.go": {
+			"lines": 237,
+			"comment_lines": 63,
+			"code_lines": 158,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/lockorder_test.go": {
+			"lines": 97,
+			"comment_lines": 30,
+			"code_lines": 58,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/lookup_live_session_test.go": {
+			"lines": 216,
+			"comment_lines": 80,
+			"code_lines": 124,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/mcp_history.go": {
+			"lines": 554,
+			"comment_lines": 267,
+			"code_lines": 257,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/mcp_history_test.go": {
+			"lines": 952,
+			"comment_lines": 206,
+			"code_lines": 690,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/message_degradation_test.go": {
+			"lines": 147,
+			"comment_lines": 36,
+			"code_lines": 100,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/pprof.go": {
+			"lines": 230,
+			"comment_lines": 69,
+			"code_lines": 146,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/pprof_test.go": {
+			"lines": 397,
+			"comment_lines": 60,
+			"code_lines": 299,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 1
+		},
+		"server/prompt_attachments_test.go": {
+			"lines": 480,
+			"comment_lines": 78,
+			"code_lines": 369,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/prompt_parts.go": {
+			"lines": 249,
+			"comment_lines": 129,
+			"code_lines": 105,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/prompt_source.go": {
+			"lines": 184,
+			"comment_lines": 79,
+			"code_lines": 94,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/queue_clear_race_test.go": {
+			"lines": 240,
+			"comment_lines": 80,
+			"code_lines": 143,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/queue_delete_nonresident_test.go": {
+			"lines": 155,
+			"comment_lines": 43,
+			"code_lines": 94,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/queue_test.go": {
+			"lines": 1552,
+			"comment_lines": 344,
+			"code_lines": 1063,
+			"long_funcs": 4,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/restart_recovery_crashed_child_test.go": {
+			"lines": 158,
+			"comment_lines": 45,
+			"code_lines": 98,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/restart_test.go": {
+			"lines": 141,
+			"comment_lines": 35,
+			"code_lines": 94,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/servemux_empty_segment_test.go": {
+			"lines": 102,
+			"comment_lines": 30,
+			"code_lines": 64,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/server.go": {
+			"lines": 1356,
+			"comment_lines": 889,
+			"code_lines": 413,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/server_test.go": {
+			"lines": 2348,
+			"comment_lines": 328,
+			"code_lines": 1816,
+			"long_funcs": 4,
+			"history_markers": 0,
+			"sleep_after": 3
+		},
+		"server/session_journal.go": {
+			"lines": 150,
+			"comment_lines": 60,
+			"code_lines": 80,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/session_tree.go": {
+			"lines": 697,
+			"comment_lines": 388,
+			"code_lines": 296,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/session_tree_test.go": {
+			"lines": 2568,
+			"comment_lines": 631,
+			"code_lines": 1738,
+			"long_funcs": 4,
+			"history_markers": 0,
+			"sleep_after": 4
+		},
+		"server/sse.go": {
+			"lines": 138,
+			"comment_lines": 35,
+			"code_lines": 92,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/thinking_realmodel_live_test.go": {
+			"lines": 372,
+			"comment_lines": 90,
+			"code_lines": 268,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/timing.go": {
+			"lines": 133,
+			"comment_lines": 45,
+			"code_lines": 74,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/tip.go": {
+			"lines": 14,
+			"comment_lines": 3,
+			"code_lines": 8,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/transcript_bootstrap_window_test.go": {
+			"lines": 982,
+			"comment_lines": 287,
+			"code_lines": 630,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/transcript_live_from_test.go": {
+			"lines": 392,
+			"comment_lines": 92,
+			"code_lines": 267,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/transcript_sync_test.go": {
+			"lines": 530,
+			"comment_lines": 160,
+			"code_lines": 326,
+			"long_funcs": 1,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/transcript_tail_seqs_test.go": {
+			"lines": 367,
+			"comment_lines": 133,
+			"code_lines": 211,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/wait.go": {
+			"lines": 272,
+			"comment_lines": 143,
+			"code_lines": 115,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/wait_test.go": {
+			"lines": 945,
+			"comment_lines": 208,
+			"code_lines": 656,
+			"long_funcs": 2,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"server/worktree.go": {
+			"lines": 294,
+			"comment_lines": 102,
+			"code_lines": 177,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"skill/frontmatter_fuzz_test.go": {
+			"lines": 157,
+			"comment_lines": 43,
+			"code_lines": 106,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"skill/skill.go": {
+			"lines": 222,
+			"comment_lines": 71,
+			"code_lines": 137,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"typeid/base32.go": {
+			"lines": 101,
+			"comment_lines": 24,
+			"code_lines": 66,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"typeid/typeid.go": {
+			"lines": 195,
+			"comment_lines": 56,
+			"code_lines": 115,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		},
+		"typeid/typeid_console_golden_test.go": {
+			"lines": 33,
+			"comment_lines": 11,
+			"code_lines": 19,
+			"long_funcs": 0,
+			"history_markers": 0,
+			"sleep_after": 0
+		}
+	},
+	"packages": {
+		"cmd/harness": {
+			"test_lines": 4619,
+			"code_lines": 2399
+		},
+		"command": {
+			"test_lines": 529,
+			"code_lines": 670
+		},
+		"config": {
+			"test_lines": 2864,
+			"code_lines": 910
+		},
+		"e2e": {
+			"test_lines": 1827,
+			"code_lines": 0
+		},
+		"engine": {
+			"test_lines": 43810,
+			"code_lines": 15468
+		},
+		"examples/custom-tool": {
+			"test_lines": 0,
+			"code_lines": 66
+		},
+		"examples/prompt": {
+			"test_lines": 0,
+			"code_lines": 41
+		},
+		"examples/switch-model": {
+			"test_lines": 0,
+			"code_lines": 68
+		},
+		"imageclamp": {
+			"test_lines": 378,
+			"code_lines": 265
+		},
+		"internal/gates": {
+			"test_lines": 202,
+			"code_lines": 264
+		},
+		"internal/testpoll": {
+			"test_lines": 0,
+			"code_lines": 30
+		},
+		"mcp": {
+			"test_lines": 1049,
+			"code_lines": 936
+		},
+		"mcpserver": {
+			"test_lines": 249,
+			"code_lines": 168
+		},
+		"message": {
+			"test_lines": 2402,
+			"code_lines": 959
+		},
+		"modelmeta": {
+			"test_lines": 262,
+			"code_lines": 90
+		},
+		"modelmeta/internal/genctx": {
+			"test_lines": 51,
+			"code_lines": 177
+		},
+		"plugin": {
+			"test_lines": 1527,
+			"code_lines": 1184
+		},
+		"process": {
+			"test_lines": 901,
+			"code_lines": 717
+		},
+		"provider": {
+			"test_lines": 225,
+			"code_lines": 201
+		},
+		"provider/anthropic": {
+			"test_lines": 2208,
+			"code_lines": 776
+		},
+		"provider/claudecode": {
+			"test_lines": 23,
+			"code_lines": 12
+		},
+		"provider/openai": {
+			"test_lines": 4888,
+			"code_lines": 2136
+		},
+		"provider/openaicompat": {
+			"test_lines": 2171,
+			"code_lines": 751
+		},
+		"server": {
+			"test_lines": 24439,
+			"code_lines": 6603
+		},
+		"skill": {
+			"test_lines": 466,
+			"code_lines": 332
+		},
+		"typeid": {
+			"test_lines": 284,
+			"code_lines": 181
+		}
+	}
+}
