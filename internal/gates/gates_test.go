@@ -322,7 +322,7 @@ func TestHistoryPattern(t *testing.T) {
 		"stop after finding it": false,
 		"around 12 items":       false,
 		"the round trip":        false,
-		"issue #5 is open":      false,
+		"issue #5 is open":      true,
 		"a rounds table":        false,
 	} {
 		if got := historyRE.MatchString(text); got != want {
