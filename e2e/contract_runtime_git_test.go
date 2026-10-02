@@ -10,14 +10,20 @@ import (
 	"testing"
 )
 
-// gitIn runs git in dir with the user's and the system's git config out of
-// the way, so a host setting cannot change the repository the row builds.
+// gitIn runs git in dir with the inherited GIT_* variables and the user's and
+// the system's git config out of the way, so the host cannot change the
+// repository the row builds.
 func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	full := append([]string{"-c", "user.name=contract", "-c", "user.email=contract@example.com", "-c", "commit.gpgsign=false"}, args...)
 	cmd := exec.CommandContext(t.Context(), "git", full...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
