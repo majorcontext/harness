@@ -225,8 +225,8 @@ func toolPairingViolations(msgs []transcriptMessage) []string {
 		switch n := results[id]; {
 		case n == 0:
 			out = append(out, fmt.Sprintf("tool call %s has no result", id))
-		case n > 1:
-			out = append(out, fmt.Sprintf("tool call %s has %d results", id, n))
+		case n != calls[id]:
+			out = append(out, fmt.Sprintf("tool call %s has %d results for %d calls", id, n, calls[id]))
 		}
 	}
 	for _, id := range resultOrder {
@@ -340,6 +340,9 @@ func TestInvariants(t *testing.T) {
 	call := func(id string) string {
 		return `{"id":"m` + id + `","role":"assistant","parts":[{"type":"tool_call","call_id":"` + id + `","name":"bash"}]}`
 	}
+	callAs := func(mid, id string) string {
+		return `{"id":"` + mid + `","role":"assistant","parts":[{"type":"tool_call","call_id":"` + id + `","name":"bash"}]}`
+	}
 	result := func(mid, id string) string {
 		return `{"id":"` + mid + `","role":"tool","parts":[{"type":"tool_result","call_id":"` + id + `"}]}`
 	}
@@ -352,6 +355,8 @@ func TestInvariants(t *testing.T) {
 		{name: "tool_call_without_result", msgs: `[` + call("c1") + `]`, want: "tool call c1 has no result"},
 		{name: "tool_result_without_call", msgs: `[` + result("r1", "c1") + `]`, want: "tool result c1 has no call"},
 		{name: "doubled_tool_result", msgs: `[` + call("c1") + `,` + result("r1", "c1") + `,` + result("r2", "c1") + `]`, want: "tool call c1 has 2 results"},
+		{name: "duplicate_call_id_one_result", msgs: `[` + callAs("a1", "c1") + `,` + callAs("a2", "c1") + `,` + result("r1", "c1") + `]`, want: "tool call c1 has 1 results for 2 calls"},
+		{name: "duplicate_call_id_two_results", msgs: `[` + callAs("a1", "c1") + `,` + callAs("a2", "c1") + `,` + result("r1", "c1") + `,` + result("r2", "c1") + `]`},
 		{name: "duplicate_message_id", msgs: `[{"id":"msg_1","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`, want: "duplicate message id msg_1"},
 		{name: "empty_message_id", msgs: `[{"id":"","role":"user","parts":[]}]`, want: "message with empty id"},
 		{name: "paired_calls", msgs: `[` + call("c1") + `,` + result("r1", "c1") + `]`, events: `[{"seq":1},{"seq":2}]`},
