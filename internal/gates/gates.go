@@ -24,6 +24,7 @@ const (
 	agentsMax     = 25
 )
 
+// FileMetrics holds the measured line counts and rule hits of one Go file.
 type FileMetrics struct {
 	Lines          int `json:"lines"`
 	CommentLines   int `json:"comment_lines"`
@@ -33,17 +34,20 @@ type FileMetrics struct {
 	SleepAfter     int `json:"sleep_after"`
 }
 
+// PackageMetrics holds the summed test and code lines of one package.
 type PackageMetrics struct {
 	TestLines int `json:"test_lines"`
 	CodeLines int `json:"code_lines"`
 }
 
+// Report is the full measurement of a tree: files, packages, and AGENTS.md sizes.
 type Report struct {
 	Files    map[string]FileMetrics    `json:"files"`
 	Packages map[string]PackageMetrics `json:"packages"`
 	Agents   map[string]int            `json:"agents,omitempty"`
 }
 
+// Violation names one rule broken by one path.
 type Violation struct{ Path, Rule, Detail string }
 
 var (
@@ -53,6 +57,7 @@ var (
 	directives  = []string{"//go:", "//nolint", "//lint:"}
 )
 
+// Collect measures every Go file and AGENTS.md file in fsys.
 func Collect(fsys fs.FS) (Report, error) {
 	r := Report{
 		Files:    map[string]FileMetrics{},
@@ -198,10 +203,12 @@ func exceeds(m, b FileMetrics) bool {
 		m.LongFuncs > b.LongFuncs || m.HistoryMarkers > b.HistoryMarkers || m.SleepAfter > b.SleepAfter
 }
 
+// A package with no non-test code in its baseline, such as e2e, has no ratio gate.
 func ratioRises(m, b PackageMetrics) bool {
 	return m.TestLines*b.CodeLines > b.TestLines*m.CodeLines
 }
 
+// Check returns the violations of absolute rules and of the ratchet against base.
 func Check(r Report, base Report) []Violation {
 	var vs []Violation
 	for p, m := range r.Files {
