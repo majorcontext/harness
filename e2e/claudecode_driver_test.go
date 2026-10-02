@@ -28,6 +28,7 @@ type claudeDriver struct {
 	*httpDriver
 	lane     claudeLane
 	argvLog  string
+	stdinLog string
 	stateDir string
 }
 
@@ -42,6 +43,7 @@ func (l claudeLane) newDriver(t *testing.T, modelURL string) driver {
 	}
 	d := &claudeDriver{lane: l, stateDir: t.TempDir()}
 	d.argvLog = filepath.Join(d.stateDir, "argv.jsonl")
+	d.stdinLog = filepath.Join(d.stateDir, "stdin.jsonl")
 	d.httpDriver = &httpDriver{
 		sessDir: t.TempDir(),
 		workDir: t.TempDir(),
@@ -62,13 +64,14 @@ func (d *claudeDriver) serve(t *testing.T) *serveProc {
 	cmd := exec.Command(harnessBin, args...)
 	cmd.Dir = d.workDir
 	cmd.Env = cleanEnv(map[string]string{
-		"HARNESS_RUN_TOKEN":   testToken,
-		"HARNESS_SESSION_DIR": d.sessDir,
-		"HARNESS_CONFIG":      d.config,
-		"ANTHROPIC_API_KEY":   "e2e-dummy-key",
-		"FAKE_CLAUDE_MODE":    d.lane.mode,
-		"FAKE_CLAUDE_LOG":     d.argvLog,
-		"FAKE_CLAUDE_STATE":   filepath.Join(d.stateDir, "parked"),
+		"HARNESS_RUN_TOKEN":     testToken,
+		"HARNESS_SESSION_DIR":   d.sessDir,
+		"HARNESS_CONFIG":        d.config,
+		"ANTHROPIC_API_KEY":     "e2e-dummy-key",
+		"FAKE_CLAUDE_MODE":      d.lane.mode,
+		"FAKE_CLAUDE_LOG":       d.argvLog,
+		"FAKE_CLAUDE_STDIN_LOG": d.stdinLog,
+		"FAKE_CLAUDE_STATE":     filepath.Join(d.stateDir, "parked"),
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
@@ -134,7 +137,56 @@ func argvFacts(argv []string) map[string]any {
 		"history_directive":  strings.Contains(appended, "get_conversation_history"),
 		"mcp_config":         slices.Contains(argv, "--mcp-config"),
 		"question_tool_open": slices.Contains(argv, "--permission-prompt-tool"),
+
+		"forward_subagent_text": slices.Contains(argv, "--forward-subagent-text"),
+		"thinking_display":      value("--thinking-display"),
+		"disallowed_tools":      value("--disallowedTools"),
+		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
 	}
+}
+
+// claudeInputs records, in order across spawns, each stdin line harness wrote
+// to fakeclaude: the frame type with its role and content, or the
+// control_response subtype with its interrupt flag.
+type claudeInputs struct{ as string }
+
+func (a claudeInputs) run(t *testing.T, r *run) {
+	d := claudeDriverOf(t, r)
+	out := []any{}
+	if f, err := os.Open(d.stdinLog); err == nil {
+		defer func() { _ = f.Close() }()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			out = append(out, inputFacts(t, sc.Bytes()))
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("open stdin log: %v", err)
+	}
+	r.record(t, "claude_inputs", a.as, callResult{Status: http.StatusOK, Body: out})
+}
+
+func inputFacts(t *testing.T, line []byte) map[string]any {
+	t.Helper()
+	var m struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		} `json:"message"`
+		Response struct {
+			Subtype  string `json:"subtype"`
+			Response struct {
+				Interrupt bool `json:"interrupt"`
+			} `json:"response"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(line, &m); err != nil {
+		t.Fatalf("decode stdin line %q: %v", line, err)
+	}
+	if m.Type == "control_response" {
+		return map[string]any{"type": m.Type, "subtype": m.Response.Subtype, "interrupt": m.Response.Response.Interrupt}
+	}
+	return map[string]any{"type": m.Type, "role": m.Message.Role, "content": m.Message.Content}
 }
 
 // claudeAwaitText blocks on the event stream until the session journals an
@@ -233,11 +285,11 @@ func (a claudeMessageParents) run(t *testing.T, r *run) {
 	r.record(t, "message_parents", a.as, callResult{Status: resp.StatusCode, Body: out})
 }
 
-// claudeJournalTypes records the types of the session's journal events that start
-// with prefix, in journal order.
-type claudeJournalTypes struct{ as, prefix string }
+// claudeJournalEvents records the type and compaction fields of the session's
+// journal events whose type starts with prefix, in journal order.
+type claudeJournalEvents struct{ as, prefix string }
 
-func (a claudeJournalTypes) run(t *testing.T, r *run) {
+func (a claudeJournalEvents) run(t *testing.T, r *run) {
 	d := claudeDriverOf(t, r)
 	id := r.id(t, a.as)
 	var tip struct {
@@ -246,23 +298,28 @@ func (a claudeJournalTypes) run(t *testing.T, r *run) {
 	if err := json.Unmarshal(d.expect(t, http.StatusOK, http.MethodGet, "/event/tip", nil), &tip); err != nil {
 		t.Fatalf("decode tip: %v", err)
 	}
-	types := []any{}
+	events := []any{}
 	err := d.scan(t, func(raw []byte) bool {
 		var ev struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id"`
-			Seq       int64  `json:"seq"`
+			Type       string `json:"type"`
+			SessionID  string `json:"session_id"`
+			Seq        int64  `json:"seq"`
+			Trigger    string `json:"trigger"`
+			PreTokens  int    `json:"pre_tokens"`
+			PostTokens int    `json:"post_tokens"`
 		}
 		if json.Unmarshal(raw, &ev) != nil || ev.Seq == 0 {
 			return false
 		}
 		if ev.SessionID == id && strings.HasPrefix(ev.Type, a.prefix) {
-			types = append(types, ev.Type)
+			events = append(events, map[string]any{
+				"type": ev.Type, "trigger": ev.Trigger, "pre_tokens": ev.PreTokens, "post_tokens": ev.PostTokens,
+			})
 		}
 		return ev.Seq >= tip.Seq
 	})
 	if err != nil {
 		t.Fatalf("journal scan: %v\nstderr:\n%s", err, d.Stderr())
 	}
-	r.record(t, "journal_types", a.as, callResult{Status: http.StatusOK, Body: types})
+	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
 }

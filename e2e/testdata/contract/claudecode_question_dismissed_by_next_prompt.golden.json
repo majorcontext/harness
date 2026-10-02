@@ -112,29 +112,61 @@
     ]
   },
   "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "pick a db",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "interrupt": true,
+          "subtype": "success",
+          "type": "control_response"
+        },
+        {
+          "content": "never mind",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
     "claude_invocations.a": {
       "status": 200,
       "body": [
         {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
           "question_tool_open": true,
-          "resume": null
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
         },
         {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
           "question_tool_open": true,
-          "resume": "fake-session-1"
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
         },
         {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
+          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
           "question_tool_open": true,
-          "resume": "fake-session-1"
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
         }
       ]
     },

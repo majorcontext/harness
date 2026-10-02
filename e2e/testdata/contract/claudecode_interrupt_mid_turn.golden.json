@@ -29,11 +29,15 @@
       "status": 200,
       "body": [
         {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
           "question_tool_open": false,
-          "resume": null
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
         }
       ]
     },

@@ -22,17 +22,17 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 		{
 			name:    "claudecode_turn_text_and_tool",
 			driver:  claudeLaneDriver("normal"),
-			actions: withActions(claudeOneTurn, claudeSession{as: "a"}, claudeInvocations{as: "a"}),
+			actions: withActions(claudeOneTurn, claudeSession{as: "a"}, claudeInvocations{as: "a"}, claudeInputs{as: "a"}),
 		},
 		{
 			name:    "claudecode_resume_across_turns",
 			driver:  claudeLaneDriver("normal"),
-			actions: withActions(claudeOneTurn, append(again, claudeInvocations{as: "a"})...),
+			actions: withActions(claudeOneTurn, append(again, claudeInvocations{as: "a"}, claudeInputs{as: "a"})...),
 		},
 		{
 			name:    "claudecode_resume_survives_restart",
 			driver:  claudeLaneDriver("normal"),
-			actions: withActions(claudeOneTurn, append([]action{restart{}}, append(again, claudeInvocations{as: "a"})...)...),
+			actions: withActions(claudeOneTurn, append([]action{restart{}}, append(again, claudeInvocations{as: "a"}, claudeInputs{as: "a"})...)...),
 		},
 		{
 			name:   "claudecode_interrupt_mid_turn",
@@ -48,9 +48,30 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 			},
 		},
 		{
-			name:    "claudecode_compact_delegated",
-			driver:  claudeLaneDriver("compact_turn"),
-			actions: []action{create{as: "a"}, compact{as: "a"}, claudeJournalTypes{as: "a", prefix: "compaction."}, claudeSession{as: "a"}, claudeInvocations{as: "a"}},
+			name:   "claudecode_compact_delegated",
+			driver: claudeLaneDriver("compact_turn"),
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				restart{},
+				claudeJournalEvents{as: "a", prefix: "compaction."},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+				claudeInputs{as: "a"},
+			},
+		},
+		{
+			name:   "claudecode_queued_prompt_injected_mid_turn",
+			driver: claudeLaneDriver("queue_injection"),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run it"},
+				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			},
 		},
 	})
 }
@@ -99,6 +120,7 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 				waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				claudeInvocations{as: "a"},
+				claudeInputs{as: "a"},
 			),
 		},
 		{
@@ -108,6 +130,16 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 				submit{as: "a", text: "never mind"}, waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				claudeInvocations{as: "a"},
+				claudeInputs{as: "a"},
+			),
+		},
+		{
+			name:   "claudecode_question_dismissed_by_compact",
+			driver: lane,
+			actions: withActions(parked,
+				compact{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
 			),
 		},
 		{

@@ -8,6 +8,16 @@
         "parts": [
           {
             "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
             "text": "/compact"
           }
         ]
@@ -15,15 +25,45 @@
     ]
   },
   "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "run it",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "/compact",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
     "claude_invocations.a": {
       "status": 200,
       "body": [
         {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
           "history_directive": false,
           "mcp_config": true,
           "model": "sonnet",
           "question_tool_open": false,
-          "resume": null
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
         }
       ]
     },
@@ -44,35 +84,39 @@
         "created_at": "\u003ctime\u003e",
         "id": "ses:a",
         "last_activity_at": "\u003ctime\u003e",
-        "lineage": {
-          "children": [],
-          "status": "idle"
+        "last_turn": {
+          "outcome": "completed"
         },
-        "messages": 1,
+        "messages": 2,
         "model": "claude-code/sonnet",
         "plugins": [],
         "queued": 0,
         "state": "idle",
         "status": "idle",
-        "subscription_usage": {
-          "captured_at": "\u003ctime\u003e",
-          "plan": "",
-          "provider": "claude",
-          "session_cost_usd": 0,
-          "windows": []
-        },
+        "subscription_usage": null,
         "usage": {
           "input_tokens": 0,
-          "messages": 1,
+          "messages": 2,
           "output_tokens": 0
         },
         "workdir": "\u003cworkdir\u003e"
       }
     },
-    "journal_types.a": {
+    "journal_events.a": {
       "status": 200,
       "body": [
-        "compaction.claude_code"
+        {
+          "post_tokens": 7039,
+          "pre_tokens": 42010,
+          "trigger": "manual",
+          "type": "compaction.claude_code"
+        },
+        {
+          "post_tokens": 7039,
+          "pre_tokens": 42010,
+          "trigger": "manual",
+          "type": "compaction.claude_code"
+        }
       ]
     }
   }
