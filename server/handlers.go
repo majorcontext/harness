@@ -2138,7 +2138,7 @@ func (s *Server) handleAnswerQuestion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, engine.ErrNoPendingQuestion.Error())
 		return
 	}
-	s.emitDurable(Event{Type: evtSessionStatus, SessionID: id, Status: "busy"})
+	s.emitBusy(id, st)
 	go s.runTurn(ctx, id, st, func(ctx context.Context) (*message.Message, error) {
 		return st.sess.AnswerQuestion(ctx, callID, body.Answers)
 	})

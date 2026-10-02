@@ -70,6 +70,8 @@
 // entries to the file each frame names, and records the config dir and the
 // files it found there at start into FAKE_CLAUDE_MIRROR_SEEN; with
 // FAKE_CLAUDE_MIRROR_CRASH_AFTER=n it exits nonzero after n frames),
+// "question" with FAKE_CLAUDE_QUESTION_MIRROR set also mirrors one frame on
+// the parking turn and one after the dismissal child's result,
 // and "per_call_usage" (several API calls in one turn, each with its own
 // usage, and a result carrying their sum plus a modelUsage window).
 package main
@@ -320,6 +322,7 @@ func main() {
 				emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
 					{"type": "text", "text": "[Request interrupted by user]"}}}})
 				emit(map[string]any{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil})
+				questionMirrorFrame(emit, "dismissal-tail")
 				os.Exit(1)
 			}
 			emit(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
@@ -335,6 +338,7 @@ func main() {
 			emit(map[string]any{"type": "system", "subtype": "init", "session_id": sessionID})
 			emit(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []map[string]any{
 				{"type": "tool_use", "id": "toolu_q", "name": "AskUserQuestion", "input": ask}}}})
+			questionMirrorFrame(emit, "parked")
 			emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
 			return
 		}
@@ -1342,6 +1346,18 @@ func main() {
 		"ttft_ms":        50,
 		"duration_ms":    400,
 	})
+}
+
+// questionMirrorFrame emits one transcript_mirror frame in "question" mode
+// when FAKE_CLAUDE_QUESTION_MIRROR is set. The parking turn sends its frame
+// before its result; the dismissal child sends its own after the result.
+func questionMirrorFrame(emit func(any), tag string) {
+	if os.Getenv("FAKE_CLAUDE_QUESTION_MIRROR") == "" {
+		return
+	}
+	emit(map[string]any{"type": "transcript_mirror",
+		"filePath": filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "p", "sess.jsonl"),
+		"entries":  []map[string]any{{"tag": tag}}})
 }
 
 func replayMirror(emit func(any)) {

@@ -115,3 +115,30 @@ func TestClaudeCodeQuestionAnswerBodyIsBounded(t *testing.T) {
 		t.Errorf("last_turn after a rejected answer = %+v, want the question still parked", got)
 	}
 }
+
+// TestClaudeCodeAnswerTurnBusyCarriesTurnID pins the missing turn_id: the
+// answer route emitted its busy status without one, so a client could not
+// tie that turn's start to its turn.end.
+func TestClaudeCodeAnswerTurnBusyCarriesTurnID(t *testing.T) {
+	h, id := claudeCodeQuestionHarness(t, &scriptedProvider{name: "codex"})
+	promptAndWait(t, h, id, "pick a db")
+
+	sse := h.openSSEFromHead()
+	resp, data := h.do("POST", "/session/"+id+"/question/toolu_q/answer", map[string]any{
+		"answers": map[string]string{"Which database?": "SQLite"},
+	})
+	if resp.StatusCode != 202 {
+		t.Fatalf("answer status %d: %s", resp.StatusCode, data)
+	}
+	var busy Event
+	for {
+		busy = sse.waitFor(t, "session.status")
+		if busy.Status == "busy" {
+			break
+		}
+	}
+	end := sse.waitFor(t, "turn.end")
+	if busy.TurnID == "" || busy.TurnID != end.TurnID {
+		t.Errorf("answer turn busy turn_id = %q, turn.end turn_id = %q, want the same non-empty id", busy.TurnID, end.TurnID)
+	}
+}

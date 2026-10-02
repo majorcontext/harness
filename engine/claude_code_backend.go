@@ -164,6 +164,10 @@ func (s *Session) claudeCodeAsksQuestions() bool {
 // continuation prompt, and text written alongside it would be answered in a
 // second result this driver never reads.
 func (s *Session) AnswerQuestion(ctx context.Context, callID string, answers map[string]string) (*message.Message, error) {
+	if err := s.ConfigErr(); err != nil {
+		s.emitSessionError(err)
+		return nil, err
+	}
 	if callID == "" || callID != s.PendingQuestion() || !s.claudeCodeDelegated() {
 		return nil, ErrNoPendingQuestion
 	}
@@ -197,12 +201,20 @@ func (s *Session) dismissClaudeCodeQuestion(ctx context.Context) error {
 		return nil
 	}
 	caughtUp := s.claudeCodeHistoryWatermarkCount() == len(s.History())
-	if _, err := s.runClaudeCodeChild(ctx, "", nil, &claudeCodeResolution{
-		callID:   callID,
-		decision: map[string]any{"behavior": "deny", "message": "The user dismissed this question without answering.", "interrupt": true},
-		dismiss:  true,
-	}); err != nil {
-		return err
+	if s.cfg.ClaudeCode.DisableBuiltinTools {
+		// The dismissal child emits no init, so the fail-closed tool check
+		// would reject it and wedge every prompt. A question parked under an
+		// earlier config is closed here, with the result the child would
+		// have reported.
+		s.dismissClaudeCodeQuestionLocally(callID)
+	} else {
+		if _, err := s.runClaudeCodeChild(ctx, "", nil, &claudeCodeResolution{
+			callID:   callID,
+			decision: map[string]any{"behavior": "deny", "message": claudeCodeDismissMessage, "interrupt": true},
+			dismiss:  true,
+		}); err != nil {
+			return err
+		}
 	}
 	if s.PendingQuestion() != "" {
 		return fmt.Errorf("engine: claude-code: question %s was not dismissed", callID)
@@ -214,6 +226,29 @@ func (s *Session) dismissClaudeCodeQuestion(ctx context.Context) error {
 		s.recordClaudeCodeHistoryWatermark(len(s.History()))
 	}
 	return nil
+}
+
+const claudeCodeDismissMessage = "The user dismissed this question without answering."
+
+// dismissClaudeCodeQuestionLocally journals the denial result a dismissal
+// child reports, then clears the pending question, in that order: a crash
+// between the two records leaves the call parked, never half-closed.
+func (s *Session) dismissClaudeCodeQuestionLocally(callID string) {
+	msg := message.Message{
+		ID:   newID("msg"),
+		Role: message.RoleTool,
+		Parts: message.Parts{&message.ToolResult{
+			CallID:  callID,
+			Content: message.Parts{&message.Text{Text: claudeCodeDismissMessage}},
+			IsError: true,
+		}},
+		Origin:    message.OriginClaudeCode,
+		CreatedAt: time.Now().UTC(),
+	}
+	s.emit(Event{Type: EventToolEnd, ToolCall: &message.ToolCall{CallID: callID}, Output: msg.Parts[0].(*message.ToolResult).Content, IsError: true})
+	s.append(msg)
+	s.recordClaudeCodeQuestion("")
+	s.emit(Event{Type: EventMessage, Message: &msg})
 }
 
 // claudeCodeAnsweredInput rebuilds the parked call's input with answers
@@ -1786,6 +1821,9 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 				// and reaching this result is what makes its exit expected.
 				dismissed = true
 				settleCompaction()
+				if m := s.claudeCodeMirror; m != nil {
+					m.startDrain(scanner)
+				}
 				return finalMsg, started, turnErr, zeroMessageOK, dismissed
 			}
 			usage := mapClaudeCodeUsage(env.Usage)

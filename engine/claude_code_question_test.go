@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -362,5 +364,91 @@ func TestClaudeCodeDismissalChildDeathSurfaces(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_DISMISS_DIES", "1")
 	if _, err := s.Prompt(context.Background(), "use the default"); err == nil {
 		t.Fatal("second Prompt succeeded; want the dismissal child's own failure")
+	}
+}
+
+// TestClaudeCodeDismissalMirrorsFramesAfterItsResult pins the lost-tail
+// defect: the dismissal child's last transcript_mirror frames arrive after
+// its result, and the dismiss return skipped the drain that appends them.
+func TestClaudeCodeDismissalMirrorsFramesAfterItsResult(t *testing.T) {
+	t.Setenv("FAKE_CLAUDE_QUESTION_MIRROR", "1")
+	t.Setenv("FAKE_CLAUDE_MODE", "question")
+	store := NewMemStore()
+	s := NewSession(Config{
+		SessionStore: store,
+		Model:        message.ModelRef{Provider: ClaudeCodeProviderFamily, Model: "sonnet"},
+		ClaudeCode:   ClaudeCodeConfig{BinaryPath: buildFakeClaude(t), AskUserQuestion: true, MirrorCLISession: true, ConfigRoot: t.TempDir()},
+	})
+	dir := t.TempDir()
+	t.Setenv("FAKE_CLAUDE_STATE", filepath.Join(dir, "parked"))
+	if _, err := s.Prompt(context.Background(), "pick a db"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if _, err := s.Prompt(context.Background(), "use the default"); err != nil {
+		t.Fatalf("second Prompt: %v", err)
+	}
+	_, entries := mirrorEntries(t, store, s.ID)
+	var tags []string
+	for _, e := range entries {
+		tags = append(tags, e.(map[string]any)["tag"].(string))
+	}
+	if want := []string{"parked", "dismissal-tail"}; !reflect.DeepEqual(tags, want) {
+		t.Errorf("mirrored entries = %v, want %v", tags, want)
+	}
+}
+
+// TestClaudeCodeAnswerQuestionRefusesConfigErr pins the missing refusal:
+// every other turn entry returns ConfigErr before it spawns a child.
+func TestClaudeCodeAnswerQuestionRefusesConfigErr(t *testing.T) {
+	s, _ := claudeCodeQuestionSession(t)
+	logPath := os.Getenv("FAKE_CLAUDE_LOG")
+	if _, err := s.Prompt(context.Background(), "pick a db"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	want := errors.New("engine: config refused")
+	s.configErr = want
+	before := len(readInvocations(t, logPath))
+	_, err := s.AnswerQuestion(context.Background(), "toolu_q", map[string]string{"Which database?": "SQLite"})
+	if !errors.Is(err, want) {
+		t.Fatalf("AnswerQuestion error = %v, want ConfigErr", err)
+	}
+	if got := len(readInvocations(t, logPath)); got != before {
+		t.Errorf("AnswerQuestion spawned %d child(ren) under ConfigErr, want none", got-before)
+	}
+	if s.PendingQuestion() != "toolu_q" {
+		t.Errorf("PendingQuestion() = %q, want the question left parked", s.PendingQuestion())
+	}
+}
+
+// TestClaudeCodeDisableBuiltinToolsDismissesQuestionLocally pins the wedge:
+// a question parked under an old config, then a restart with
+// DisableBuiltinTools, spawned a dismissal child that emits no init, which
+// the fail-closed init check rejected on every prompt.
+func TestClaudeCodeDisableBuiltinToolsDismissesQuestionLocally(t *testing.T) {
+	s, _ := claudeCodeQuestionSession(t)
+	logPath := os.Getenv("FAKE_CLAUDE_LOG")
+	if _, err := s.Prompt(context.Background(), "pick a db"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if s.PendingQuestion() != "toolu_q" {
+		t.Fatalf("PendingQuestion() = %q, want toolu_q", s.PendingQuestion())
+	}
+	s.cfg.ClaudeCode.DisableBuiltinTools = true
+	t.Setenv("FAKE_CLAUDE_INIT_TOOLS", "[]")
+	_ = os.Remove(os.Getenv("FAKE_CLAUDE_STATE"))
+	before := len(readInvocations(t, logPath))
+	_, err := s.Prompt(context.Background(), "use the default")
+	if err != nil {
+		t.Fatalf("Prompt with a stale question: %v", err)
+	}
+	invocations := readInvocations(t, logPath)
+	if got := len(invocations) - before; got != 1 {
+		t.Fatalf("children spawned = %d, want 1 (the prompt itself, no dismissal child)", got)
+	}
+	if s.PendingQuestion() != "" {
+		t.Errorf("PendingQuestion() = %q, want cleared", s.PendingQuestion())
+	}
+	if questionResults(s) != 1 {
+		t.Errorf("tool results for the parked call = %d, want 1 dismissal result", questionResults(s))
 	}
 }
