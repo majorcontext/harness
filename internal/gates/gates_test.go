@@ -45,6 +45,11 @@ var checkCases = []struct {
 		want: []string{"a/a.go:ratchet"},
 	},
 	{
+		name: "baseline_file_may_grow_code_while_share_falls",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\n// y\n// z\nvar A = 1\nvar B = 2\n")},
+		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 3, CodeLines: 2}}},
+	},
+	{
 		name: "baseline_file_may_shrink",
 		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\nvar A = 1\n")},
 		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 3, CodeLines: 2}}},
@@ -272,12 +277,11 @@ func TestLineDirectiveIsNotAComment(t *testing.T) {
 }
 
 func TestRatchetRefusesRise(t *testing.T) {
-	file := FileMetrics{Lines: 10, CommentLines: 2, CodeLines: 8, LongFuncs: 1, HistoryMarkers: 1, SleepAfter: 1}
+	file := FileMetrics{Lines: 900, CommentLines: 300, CodeLines: 600, LongFuncs: 1, HistoryMarkers: 1, SleepAfter: 1}
 	pkg := PackageMetrics{TestLines: 10, CodeLines: 4}
 	rises := map[string]func(*FileMetrics){
 		"lines":           func(m *FileMetrics) { m.Lines++ },
 		"comment_lines":   func(m *FileMetrics) { m.CommentLines++ },
-		"code_lines":      func(m *FileMetrics) { m.CodeLines++ },
 		"long_funcs":      func(m *FileMetrics) { m.LongFuncs++ },
 		"history_markers": func(m *FileMetrics) { m.HistoryMarkers++ },
 		"sleep_after":     func(m *FileMetrics) { m.SleepAfter++ },

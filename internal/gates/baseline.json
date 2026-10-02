@@ -2459,8 +2459,8 @@
 			"code_lines": 265
 		},
 		"internal/gates": {
-			"test_lines": 365,
-			"code_lines": 281
+			"test_lines": 369,
+			"code_lines": 303
 		},
 		"internal/testpoll": {
 			"test_lines": 0,

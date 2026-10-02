@@ -205,9 +205,35 @@ func absolutes(m FileMetrics) []Violation {
 	return vs
 }
 
-func exceeds(m, b FileMetrics) bool {
-	return m.Lines > b.Lines || m.CommentLines > b.CommentLines || m.CodeLines > b.CodeLines ||
-		m.LongFuncs > b.LongFuncs || m.HistoryMarkers > b.HistoryMarkers || m.SleepAfter > b.SleepAfter
+type limit struct {
+	share                            float64
+	lines, longFuncs, history, sleep int
+}
+
+// limitOf returns what a baselined file may reach: each dimension may rise to
+// its absolute ceiling, or stay at the baseline when the baseline is worse.
+func limitOf(b FileMetrics) limit {
+	return limit{max(maxShare, commentShare(b)), max(maxFileLines, b.Lines), b.LongFuncs, b.HistoryMarkers, b.SleepAfter}
+}
+
+func over(m FileMetrics, l limit) []string {
+	var out []string
+	if s := commentShare(m); s > l.share {
+		out = append(out, fmt.Sprintf("comment share %.1f%% above limit %.1f%%", s*100, l.share*100))
+	}
+	if m.Lines > l.lines {
+		out = append(out, fmt.Sprintf("%d lines above limit %d", m.Lines, l.lines))
+	}
+	if m.LongFuncs > l.longFuncs {
+		out = append(out, fmt.Sprintf("%d long functions above limit %d", m.LongFuncs, l.longFuncs))
+	}
+	if m.HistoryMarkers > l.history {
+		out = append(out, fmt.Sprintf("%d history markers above limit %d", m.HistoryMarkers, l.history))
+	}
+	if m.SleepAfter > l.sleep {
+		out = append(out, fmt.Sprintf("%d time.Sleep or time.After calls above limit %d", m.SleepAfter, l.sleep))
+	}
+	return out
 }
 
 func ratioRises(m, b PackageMetrics) bool {
@@ -239,8 +265,8 @@ func Check(r Report, base Report) []Violation {
 	var vs []Violation
 	for p, m := range r.Files {
 		if b, ok := base.Files[p]; ok {
-			if exceeds(m, b) {
-				vs = append(vs, Violation{p, "ratchet", fmt.Sprintf("%+v exceeds baseline %+v", m, b)})
+			if o := over(m, limitOf(b)); len(o) > 0 {
+				vs = append(vs, Violation{p, "ratchet", strings.Join(o, "; ")})
 			}
 			continue
 		}
@@ -298,8 +324,8 @@ func Lower(r Report, base Report) (Report, error) {
 		if !ok {
 			continue
 		}
-		if exceeds(m, b) {
-			return Report{}, fmt.Errorf("%s: %+v exceeds baseline %+v", p, m, b)
+		if o := over(m, limitOf(b)); len(o) > 0 {
+			return Report{}, fmt.Errorf("%s: %s", p, strings.Join(o, "; "))
 		}
 		if len(absolutes(m)) > 0 {
 			next.Files[p] = m
