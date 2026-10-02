@@ -63,11 +63,12 @@ type Request struct {
 	ServiceTier    string
 	Messages       []Message
 	Tools          []string // sorted names
+	// Header holds the HTTP request headers. Only NewChat fills it.
+	Header http.Header
 	// Chat-completions requests only.
 	ReasoningEffort string // top-level reasoning_effort
 	User            string // top-level user
 	PromptCacheKey  string // top-level prompt_cache_key
-	Header          http.Header
 }
 
 // Message is one conversation turn in a Request.
