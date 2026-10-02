@@ -587,7 +587,7 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 - The suite exists before any internal change. It pins today's behavior, so each later phase is checked against it.
 - An action that returns a result records its status and body in the golden under `calls`, keyed `<action>.<alias>`, with `#2`, `#3` on a repeat. Ids in a body become `ses:<alias>`, `msg#N`, and so on. A scenario binds each child with `bindChild` before it lists sessions, so no id gets a run-dependent number.
 - `scenario.config` adds top-level keys to the served config, for example `context_window_tokens` or `compaction_keep_turns`.
-- `scripts/contract-coverage.sh` builds an instrumented binary (`HARNESS_E2E_COVER=1`), runs `TestContract*`, and prints the statement coverage by package and the least covered functions. Test cleanup sends SIGTERM before SIGKILL so a serve process flushes its counters. CI runs the script without gating.
+- `HARNESS_E2E_COVER=1 go test -race ./e2e/ -run TestContract` builds an instrumented binary, runs the contract scenarios, and prints the statement coverage by package from `TestMain`. It appends a Markdown table to `$GITHUB_STEP_SUMMARY` when that variable is set. Test cleanup sends SIGTERM before SIGKILL so a serve process flushes its counters. CI runs the command without gating.
 
 Today ~70% of 127k test lines read unexported state and will not survive the restructure. The target is 40k–50k test lines.
 

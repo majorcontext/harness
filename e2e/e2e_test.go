@@ -48,6 +48,11 @@ var harnessBin string
 func TestMain(m *testing.M) {
 	flag.Parse()
 	if !testing.Short() {
+		finishCover, err := startCover()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: coverage setup:", err)
+			os.Exit(1)
+		}
 		bin, cleanup, err := buildHarness()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "e2e: building harness:", err)
@@ -61,6 +66,10 @@ func TestMain(m *testing.M) {
 			code = 1
 		}
 		cleanup()
+		if err := finishCover(); err != nil {
+			fmt.Fprintln(os.Stderr, "e2e: coverage report:", err)
+			code = 1
+		}
 		os.Exit(code)
 	}
 	os.Exit(m.Run())
@@ -82,10 +91,6 @@ func buildHarness() (string, func(), error) {
 	bin := filepath.Join(dir, "harness")
 	args := []string{"build", "-o", bin}
 	if os.Getenv("HARNESS_E2E_COVER") == "1" {
-		if os.Getenv("GOCOVERDIR") == "" {
-			_ = os.RemoveAll(dir)
-			return "", nil, fmt.Errorf("HARNESS_E2E_COVER=1 needs GOCOVERDIR to collect counters")
-		}
 		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/...")
 	}
 	cmd := exec.Command("go", append(args, "./cmd/harness")...)

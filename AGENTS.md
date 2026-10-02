@@ -38,6 +38,7 @@ Add none of these without a new design decision:
 - A comment never states history: no issue numbers, dates, "previously", or "no longer".
 - An exported identifier gets a one-line doc comment.
 - Use ASD-STE100 Simplified Technical English for prose. Never print a secret value.
+- Write tooling in Go (a test helper or `go run ./internal/...`), not shell scripts.
 
 ## Tests
 - The contract suite in `e2e/` pins behavior: scenario tables, `harnesstest`, golden observations.

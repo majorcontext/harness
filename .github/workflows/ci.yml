@@ -53,7 +53,7 @@ jobs:
         # Reports what the contract suite reaches in the real binary. It never
         # gates; the table goes to the job summary.
         continue-on-error: true
-        run: bash scripts/contract-coverage.sh
+        run: HARNESS_E2E_COVER=1 go test -race -count=1 ./e2e/ -run TestContract
 
       - name: Startup budget
         # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
