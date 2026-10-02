@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +32,10 @@ type driver interface {
 // waitBound is a failure bound for a wait on the serve process, not a delay.
 // It is far above any real latency; a wait that reaches it fails the test.
 var waitBound = 60 * time.Second
+
+// waitMargin is the time a request may run past waitBound for the server to
+// honor a timeout_s of waitBound and answer.
+var waitMargin = 10 * time.Second
 
 type httpDriver struct {
 	sessDir, workDir, config string
@@ -178,8 +184,18 @@ func (d *httpDriver) AwaitTurnEnd(t *testing.T, outcome string) {
 func TestWaitsFailAtTheirBound(t *testing.T) {
 	skipShort(t)
 	old := waitBound
-	waitBound = 100 * time.Millisecond
-	t.Cleanup(func() { waitBound = old })
+	oldMargin := waitMargin
+	waitBound, waitMargin = 100*time.Millisecond, 0
+	t.Cleanup(func() { waitBound, waitMargin = old, oldMargin })
+
+	t.Run("request", func(t *testing.T) {
+		stuck := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+		t.Cleanup(stuck.Close)
+		p := &serveProc{t: t, addr: strings.TrimPrefix(stuck.URL, "http://")}
+		if _, _, err := p.send(http.MethodGet, "/health", nil); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("send to a server that never answers = %v, want context deadline exceeded", err)
+		}
+	})
 
 	t.Run("event stream", func(t *testing.T) {
 		fake := harnesstest.New(t)

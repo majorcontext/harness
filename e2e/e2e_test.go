@@ -304,6 +304,17 @@ func cleanEnv(overrides map[string]string) []string {
 
 func (p *serveProc) do(method, path string, body any) (*http.Response, []byte) {
 	p.t.Helper()
+	resp, data, err := p.send(method, path, body)
+	if err != nil {
+		p.t.Fatalf("%s %s: %v\nserve stderr:\n%s", method, path, err, p.stderr.String())
+	}
+	return resp, data
+}
+
+// send fails at waitBound plus waitMargin, so a serve process that stops
+// answering fails the call, not the whole test binary.
+func (p *serveProc) send(method, path string, body any) (*http.Response, []byte, error) {
+	p.t.Helper()
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -312,18 +323,20 @@ func (p *serveProc) do(method, path string, body any) (*http.Response, []byte) {
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "http://"+p.addr+path, rdr)
+	ctx, cancel := context.WithTimeout(p.t.Context(), waitBound+waitMargin)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+p.addr+path, rdr)
 	if err != nil {
 		p.t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		p.t.Fatalf("%s %s: %v", method, path, err)
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return resp, data
+	data, err := io.ReadAll(resp.Body)
+	return resp, data, err
 }
 
 // createSession creates a session and returns its id.
