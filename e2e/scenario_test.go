@@ -145,11 +145,11 @@ func runScenario(t *testing.T, sc scenario) observation {
 	for _, alias := range r.aliases {
 		msgs := r.drv.Messages(t, r.ids[alias])
 		sessions[alias] = msgs
-		for _, v := range invariantViolations(msgs, nil) {
+		for _, v := range messageViolations(msgs) {
 			t.Errorf("session %s: %s", alias, v)
 		}
 	}
-	for _, v := range invariantViolations(nil, r.drv.Events(t)) {
+	for _, v := range journalViolations(r.drv.Events(t)) {
 		t.Errorf("journal: %s", v)
 	}
 	return normalize(fake.Requests(), sessions)

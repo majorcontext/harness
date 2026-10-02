@@ -587,45 +587,24 @@ func writeConfigWithSessionSync(t *testing.T, baseURL, sessionSync string) strin
 
 // --- shared assertions -------------------------------------------------
 
-// assertContiguousSeqs asserts the durable events have strictly increasing,
-// gap-free sequence numbers 1..max, and that no message id repeats (boot
-// reconcile must not duplicate).
+// assertContiguousSeqs asserts the durable events have gap-free sequence
+// numbers 1..max, and that no message id repeats (boot reconcile must not
+// duplicate).
 func assertContiguousSeqs(t *testing.T, events []apiEvent) {
 	t.Helper()
 	if len(events) == 0 {
 		t.Fatal("no durable events replayed")
 	}
-	var prev int64
-	msgIDs := map[string]bool{}
-	for i, ev := range events {
-		if ev.Seq <= prev {
-			t.Fatalf("event %d seq %d not strictly increasing (prev %d)", i, ev.Seq, prev)
-		}
-		if ev.Seq != prev+1 {
-			t.Fatalf("gap in seqs: event %d seq %d, prev %d", i, ev.Seq, prev)
-		}
-		prev = ev.Seq
-		if ev.Type == "message" && ev.Message != nil {
-			if msgIDs[ev.Message.ID] {
-				t.Fatalf("duplicate message id in journal: %s", ev.Message.ID)
-			}
-			msgIDs[ev.Message.ID] = true
-		}
+	if v := journalViolations(events); len(v) > 0 {
+		t.Fatal(strings.Join(v, "; "))
 	}
 }
 
-// assertUniqueMessageIDs asserts every message id is distinct.
+// assertUniqueMessageIDs asserts every message id is distinct and non-empty.
 func assertUniqueMessageIDs(t *testing.T, msgs []apiMessage) {
 	t.Helper()
-	seen := map[string]bool{}
-	for _, m := range msgs {
-		if m.ID == "" {
-			t.Fatalf("message with empty id: %+v", m)
-		}
-		if seen[m.ID] {
-			t.Fatalf("duplicate message id: %s", m.ID)
-		}
-		seen[m.ID] = true
+	if v := messageIDViolations(msgs); len(v) > 0 {
+		t.Fatal(strings.Join(v, "; "))
 	}
 }
 

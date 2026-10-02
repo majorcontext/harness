@@ -20,7 +20,7 @@ var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
 var enginePattern = regexp.MustCompile(`engine: harness \S+`)
 
-func maskTime(s string) string {
+func maskUnstable(s string) string {
 	s = timePattern.ReplaceAllString(s, "<time>")
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
 	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
@@ -99,7 +99,7 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 			nm := normReqMessage{Role: m.Role}
 			for _, p := range m.Parts {
 				nm.Parts = append(nm.Parts, normReqPart{
-					Kind: p.Kind, Text: maskTime(p.Text), ToolName: p.ToolName, ToolInput: p.ToolInput,
+					Kind: p.Kind, Text: maskUnstable(p.Text), ToolName: p.ToolName, ToolInput: p.ToolInput,
 					ToolUseID: n.id(p.ToolUseID), IsError: p.IsError,
 				})
 			}
@@ -112,7 +112,7 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 		for _, m := range sessions[alias] {
 			nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
 			for _, p := range m.Parts {
-				np := normPart{Type: p.Type, Text: maskTime(p.Text), CallID: n.id(p.CallID), Name: p.Name, IsError: p.IsError}
+				np := normPart{Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name, IsError: p.IsError}
 				if len(p.Arguments) > 0 {
 					_ = json.Unmarshal(p.Arguments, &np.Arguments)
 				}
@@ -120,7 +120,7 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 				for _, c := range p.Content {
 					content = append(content, c.Text)
 				}
-				np.Content = maskTime(strings.Join(content, "\n"))
+				np.Content = maskUnstable(strings.Join(content, "\n"))
 				nm.Parts = append(nm.Parts, np)
 			}
 			msgs = append(msgs, nm)
@@ -130,48 +130,88 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 	return obs
 }
 
-func invariantViolations(msgs []apiMessage, events []apiEvent) []string {
+func uniqueIDViolations(kind string, ids []string) []string {
 	var out []string
 	seen := map[string]bool{}
-	calls, results := map[string]bool{}, map[string]bool{}
-	var callOrder []string
-	for _, m := range msgs {
-		if m.ID == "" || seen[m.ID] {
-			out = append(out, fmt.Sprintf("duplicate message id %s", m.ID))
+	for _, id := range ids {
+		switch {
+		case id == "":
+			out = append(out, kind+" with empty id")
+		case seen[id]:
+			out = append(out, fmt.Sprintf("duplicate %s id %s", kind, id))
 		}
-		seen[m.ID] = true
+		seen[id] = true
+	}
+	return out
+}
+
+func messageIDViolations(msgs []apiMessage) []string {
+	ids := make([]string, len(msgs))
+	for i, m := range msgs {
+		ids[i] = m.ID
+	}
+	return uniqueIDViolations("message", ids)
+}
+
+func toolPairingViolations(msgs []apiMessage) []string {
+	var out, callOrder, resultOrder []string
+	calls, results := map[string]int{}, map[string]int{}
+	for _, m := range msgs {
 		for _, p := range m.Parts {
 			switch p.Type {
 			case "tool_call":
-				calls[p.CallID] = true
-				callOrder = append(callOrder, p.CallID)
+				if calls[p.CallID]++; calls[p.CallID] == 1 {
+					callOrder = append(callOrder, p.CallID)
+				}
 			case "tool_result":
-				results[p.CallID] = true
+				if results[p.CallID]++; results[p.CallID] == 1 {
+					resultOrder = append(resultOrder, p.CallID)
+				}
 			}
 		}
 	}
 	for _, id := range callOrder {
-		if !results[id] {
+		switch n := results[id]; {
+		case n == 0:
 			out = append(out, fmt.Sprintf("tool call %s has no result", id))
+		case n > 1:
+			out = append(out, fmt.Sprintf("tool call %s has %d results", id, n))
 		}
 	}
+	for _, id := range resultOrder {
+		if calls[id] == 0 {
+			out = append(out, fmt.Sprintf("tool result %s has no call", id))
+		}
+	}
+	return out
+}
+
+func messageViolations(msgs []apiMessage) []string {
+	return append(messageIDViolations(msgs), toolPairingViolations(msgs)...)
+}
+
+func journalViolations(events []apiEvent) []string {
+	var out, msgIDs []string
 	var prev int64
 	for _, ev := range events {
 		if ev.Seq != prev+1 {
 			out = append(out, fmt.Sprintf("event seq %d follows %d", ev.Seq, prev))
 		}
 		prev = ev.Seq
+		if ev.Type == "message" && ev.Message != nil {
+			msgIDs = append(msgIDs, ev.Message.ID)
+		}
 	}
-	return out
+	return append(out, uniqueIDViolations("journal message", msgIDs)...)
 }
 
-func mustMessages(t *testing.T, raw string) []apiMessage {
+func mustDecode[T any](t *testing.T, raw string) T {
 	t.Helper()
-	var msgs []apiMessage
-	if err := json.Unmarshal([]byte(raw), &msgs); err != nil {
-		t.Fatalf("decode messages: %v", err)
+	var v T
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("decode %T: %v", v, err)
 	}
-	return msgs
+	return v
 }
 
 func TestNormalize(t *testing.T) {
@@ -228,7 +268,7 @@ func TestNormalize(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sessions := map[string][]apiMessage{}
 			if tc.msgs != "" {
-				sessions["a"] = mustMessages(t, tc.msgs)
+				sessions["a"] = mustDecode[[]apiMessage](t, tc.msgs)
 			}
 			got, err := json.Marshal(normalize(tc.reqs, sessions))
 			if err != nil {
@@ -246,41 +286,43 @@ func TestNormalize(t *testing.T) {
 
 func TestInvariants(t *testing.T) {
 	skipShort(t)
+	call := func(id string) string {
+		return `{"id":"m` + id + `","role":"assistant","parts":[{"type":"tool_call","call_id":"` + id + `","name":"bash"}]}`
+	}
+	result := func(mid, id string) string {
+		return `{"id":"` + mid + `","role":"tool","parts":[{"type":"tool_result","call_id":"` + id + `"}]}`
+	}
 	tests := []struct {
 		name   string
 		msgs   string
-		events []apiEvent
+		events string
 		want   string // substring of the single violation; empty means none
 	}{
+		{name: "tool_call_without_result", msgs: `[` + call("c1") + `]`, want: "tool call c1 has no result"},
+		{name: "tool_result_without_call", msgs: `[` + result("r1", "c1") + `]`, want: "tool result c1 has no call"},
+		{name: "doubled_tool_result", msgs: `[` + call("c1") + `,` + result("r1", "c1") + `,` + result("r2", "c1") + `]`, want: "tool call c1 has 2 results"},
+		{name: "duplicate_message_id", msgs: `[{"id":"msg_1","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`, want: "duplicate message id msg_1"},
+		{name: "empty_message_id", msgs: `[{"id":"","role":"user","parts":[]}]`, want: "message with empty id"},
+		{name: "paired_calls", msgs: `[` + call("c1") + `,` + result("r1", "c1") + `]`, events: `[{"seq":1},{"seq":2}]`},
+		{name: "seq_gap", events: `[{"seq":1},{"seq":3}]`, want: "seq 3 follows 1"},
 		{
-			name: "tool_call_without_result",
-			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"c1","name":"bash"}]}]`,
-			want: "tool call c1 has no result",
+			name:   "duplicate_journal_message_id",
+			events: `[{"seq":1,"type":"message","message":{"id":"msg_1"}},{"seq":2,"type":"message","message":{"id":"msg_1"}}]`,
+			want:   "duplicate journal message id msg_1",
 		},
-		{
-			name: "duplicate_message_id",
-			msgs: `[{"id":"msg_1","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`,
-			want: "duplicate message id msg_1",
-		},
-		{
-			name: "paired_calls",
-			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"c1","name":"bash"}]},` +
-				`{"id":"msg_2","role":"tool","parts":[{"type":"tool_result","call_id":"c1"}]}]`,
-			events: []apiEvent{{Seq: 1}, {Seq: 2}},
-		},
-		{
-			name:   "seq_gap",
-			events: []apiEvent{{Seq: 1}, {Seq: 3}},
-			want:   "seq 3 follows 1",
-		},
+		{name: "empty_journal_message_id", events: `[{"seq":1,"type":"message","message":{"id":""}}]`, want: "journal message with empty id"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var msgs []apiMessage
+			var events []apiEvent
 			if tc.msgs != "" {
-				msgs = mustMessages(t, tc.msgs)
+				msgs = mustDecode[[]apiMessage](t, tc.msgs)
 			}
-			got := invariantViolations(msgs, tc.events)
+			if tc.events != "" {
+				events = mustDecode[[]apiEvent](t, tc.events)
+			}
+			got := append(messageViolations(msgs), journalViolations(events)...)
 			if tc.want == "" {
 				if len(got) != 0 {
 					t.Fatalf("violations = %v, want none", got)
