@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -255,8 +256,10 @@ func ServeMCPStdio(r io.Reader, w io.Writer, spec MCPSpec) error {
 	}
 }
 
-// MCPServer is a fake MCP server over Streamable HTTP. It requires the
-// Mcp-Session-Id it issued at initialize on every later request.
+// MCPServer is a fake MCP server over Streamable HTTP. Like a real server
+// it requires an Accept header that names both response media types, and,
+// after initialize, the Mcp-Session-Id it issued, the Mcp-Protocol-Version
+// it negotiated, and a prior notifications/initialized.
 type MCPServer struct {
 	srv *httptest.Server
 	h   *mcpHandler
@@ -266,6 +269,7 @@ type MCPServer struct {
 	failInit int
 	sse      bool
 	wantAuth string
+	ready    bool
 }
 
 // NewMCPServer starts a server that serves spec until t ends.
@@ -361,15 +365,31 @@ func (s *MCPServer) reject(r *http.Request, method string) (int, string) {
 	if s.wantAuth != "" && r.Header.Get("Authorization") != s.wantAuth {
 		return http.StatusUnauthorized, "harnesstest: bad authorization"
 	}
-	if method != "initialize" {
-		if r.Header.Get("Mcp-Session-Id") != mcpSessionID {
-			return http.StatusBadRequest, "harnesstest: missing Mcp-Session-Id"
+	if !acceptsMCPResponses(r.Header.Get("Accept")) {
+		return http.StatusNotAcceptable, "harnesstest: Accept must name application/json and text/event-stream"
+	}
+	if method == "initialize" {
+		if s.failInit > 0 {
+			s.failInit--
+			return http.StatusServiceUnavailable, "harnesstest: initialize unavailable"
 		}
+		s.ready = false
 		return 0, ""
 	}
-	if s.failInit > 0 {
-		s.failInit--
-		return http.StatusServiceUnavailable, "harnesstest: initialize unavailable"
+	if r.Header.Get("Mcp-Session-Id") != mcpSessionID {
+		return http.StatusBadRequest, "harnesstest: missing Mcp-Session-Id"
+	}
+	if r.Header.Get("Mcp-Protocol-Version") != mcp.LatestProtocolVersion {
+		return http.StatusBadRequest, "harnesstest: missing Mcp-Protocol-Version"
+	}
+	if method == "notifications/initialized" {
+		s.ready = true
+	} else if !s.ready {
+		return http.StatusBadRequest, "harnesstest: request before notifications/initialized"
 	}
 	return 0, ""
+}
+
+func acceptsMCPResponses(accept string) bool {
+	return strings.Contains(accept, "application/json") && strings.Contains(accept, "text/event-stream")
 }

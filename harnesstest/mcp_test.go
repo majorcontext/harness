@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -109,5 +110,75 @@ func TestServeMCPStdioAnswersRequestsAndSkipsNotifications(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil || second.Error == nil || second.Error.Code != -32601 {
 		t.Fatalf("second response = %s", lines[1])
+	}
+}
+
+func TestMCPServerEnforcesProtocolHeaders(t *testing.T) {
+	const both = "application/json, text/event-stream"
+	post := func(t *testing.T, srv *MCPServer, method string, h map[string]string) int {
+		t.Helper()
+		id := `"id":1,`
+		if strings.HasPrefix(method, "notifications/") {
+			id = ""
+		}
+		body := `{"jsonrpc":"2.0",` + id + `"method":"` + method + `"}`
+		req, err := http.NewRequest(http.MethodPost, srv.URL(), strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range h {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	session := map[string]string{"Accept": both, "Mcp-Session-Id": mcpSessionID, "Mcp-Protocol-Version": mcp.LatestProtocolVersion}
+	without := func(k string) map[string]string {
+		h := map[string]string{}
+		for hk, hv := range session {
+			if hk != k {
+				h[hk] = hv
+			}
+		}
+		return h
+	}
+	tests := []struct {
+		name     string
+		initDone bool
+		method   string
+		headers  map[string]string
+		want     int
+	}{
+		{"initialize without Accept", false, "initialize", map[string]string{}, http.StatusNotAcceptable},
+		{"initialize with JSON-only Accept", false, "initialize", map[string]string{"Accept": "application/json"}, http.StatusNotAcceptable},
+		{"initialize with both media types", false, "initialize", map[string]string{"Accept": both}, http.StatusOK},
+		{"tools/list without Accept", true, "tools/list", without("Accept"), http.StatusNotAcceptable},
+		{"tools/list without protocol version", true, "tools/list", without("Mcp-Protocol-Version"), http.StatusBadRequest},
+		{"tools/list without session", true, "tools/list", without("Mcp-Session-Id"), http.StatusBadRequest},
+		{"tools/list before notifications/initialized", false, "tools/list", session, http.StatusBadRequest},
+		{"tools/list after notifications/initialized", true, "tools/list", session, http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := NewMCPServer(t, mcpTestSpec())
+			if tt.method != "initialize" {
+				if got := post(t, srv, "initialize", map[string]string{"Accept": both}); got != http.StatusOK {
+					t.Fatalf("setup initialize = %d", got)
+				}
+			}
+			if tt.initDone {
+				if got := post(t, srv, "notifications/initialized", session); got != http.StatusOK && got != http.StatusAccepted {
+					t.Fatalf("setup notifications/initialized = %d", got)
+				}
+			}
+			if got := post(t, srv, tt.method, tt.headers); got != tt.want {
+				t.Fatalf("status = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
