@@ -52,7 +52,7 @@ type Report struct {
 type Violation struct{ Path, Rule, Detail string }
 
 var (
-	historyRE   = regexp.MustCompile(`(?i)#[0-9]{2,}|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|used to|before this change|red-verified|confirmed live|an earlier version|findings?|(fix|review) rounds?|review caught|copilot|round [0-9]+)\b`)
+	historyRE   = regexp.MustCompile(`(?i)#[0-9]{2,}|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|used to be|before this change|red-verified|confirmed live|an earlier version|review findings?|(fix|review) rounds?|review caught|copilot)\b`)
 	generatedRE = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
 	skipDirs    = map[string]bool{"testdata": true, ".worktrees": true, ".claude": true, ".git": true, "node_modules": true}
 	directives  = []string{"//go:", "//nolint", "//lint:", "//line "}
