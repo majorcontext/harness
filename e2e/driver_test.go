@@ -70,11 +70,9 @@ func (d *httpDriver) Submit(t *testing.T, id, text string) {
 func (d *httpDriver) Enqueue(t *testing.T, id, text string) {
 	t.Helper()
 	d.enqSeq[id]++
-	body := map[string]any{
-		"parts": []map[string]string{{"type": "text", "text": text}},
-		"seq":   d.enqSeq[id],
+	if status, _ := d.p.enqueue(id, text, d.enqSeq[id]); status != http.StatusAccepted {
+		t.Fatalf("enqueue on %s: status %d, want %d\nstderr:\n%s", id, status, http.StatusAccepted, d.Stderr())
 	}
-	d.expect(t, http.StatusAccepted, http.MethodPost, "/session/"+id+"/enqueue", body)
 }
 
 func (d *httpDriver) Stderr() string { return d.p.stderr.String() }
