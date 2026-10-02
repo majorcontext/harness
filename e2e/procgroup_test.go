@@ -119,7 +119,7 @@ func killLiveGroups() []int {
 
 // guardProcessGroups kills every live group when the test binary receives
 // SIGINT or SIGTERM, and shortly before the go test timeout. Those two paths
-// skip t.Cleanup, and a group leader no longer shares the terminal's
+// skip t.Cleanup, and a group leader does not share the terminal's
 // foreground group, so it would otherwise outlive the binary.
 func guardProcessGroups() (stop func()) {
 	sigs := make(chan os.Signal, 1)

@@ -100,7 +100,8 @@ func (r *run) waitForRequests(n int, bound time.Duration) bool {
 	defer timer.Stop()
 	for r.seen < n {
 		select {
-		case r.seen = <-r.reqs:
+		case v := <-r.reqs:
+			r.seen = max(r.seen, v)
 		case <-timer.C:
 			return false
 		}
