@@ -699,7 +699,7 @@ components:
       properties:
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input, lost]
           description: >
             "completed": the turn (or goal) finished successfully —for a
             goal, the evaluator returned MET. "error": the turn failed
@@ -752,6 +752,9 @@ components:
             question_call_id names the call. POST
             /session/{id}/question/{call_id}/answer resumes the turn. Any
             other prompt dismisses the question before it runs.
+            "lost": the turn was in flight when the process stopped, and the
+            resume cap was reached or is zero, so the turn closed with the
+            lost-to-restart marker instead of resuming.
         error:
           type: string
           description: >
@@ -1881,6 +1884,12 @@ components:
             The prompt turn's id. On the `session.status` busy event of a
             prompt turn, and on the `session.aborted` and `turn.end` events
             that close it.
+        resume_count:
+          type: integer
+          description: >
+            On `turn.resumed`: the resume number of the turn, counted from 1.
+            The event is durable. It comes before the resumed turn's reply and
+            marks a turn that continued after a restart or a change of owner.
         message_id:
           type: string
           description: >
@@ -1895,6 +1904,7 @@ components:
             - session.error
             - session.aborted
             - turn.end
+            - turn.resumed
             - message
             - model
             - effort
@@ -2227,7 +2237,7 @@ components:
             turn.end; see LastTurn.error.
         outcome:
           type: string
-          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input]
+          enum: [completed, error, context_exhausted, max_turns_exceeded, evaluator_exhausted, worker_parked, awaiting_input, lost]
           description: >
             Turn result for turn.end events — see LastTurn.outcome for the
             full meaning of each value, including why a goal that exhausts

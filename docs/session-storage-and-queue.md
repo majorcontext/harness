@@ -636,6 +636,26 @@ is not the active turn is a no-op. A root turn that ends because the caller's co
 handoff) stays unsettled when `MaxTurnResumes` is above zero, so the next
 holder of the session resumes it.
 
+### Embedder-triggered resume
+
+`Server.ResumeSession(ctx, id)` resumes the unfinished turn of a session
+without a client request. An embedder calls it after it claims the session's
+lease. It loads the session through the normal path, so `SessionOwner.Acquire`
+runs there once. `ctx` bounds the load and the dispatch only. The resumed turn
+runs on the server's run context, like a prompt.
+
+| State | Result |
+|---|---|
+| Unknown session | error that wraps `fs.ErrNotExist` |
+| `Acquire` refuses | `ErrSessionNotOwned` |
+| A turn already runs | no-op, nil |
+| No unfinished turn, or the turn was stopped | no-op, nil |
+| Unfinished and `ResumableTurn()` | claims the run slot, emits `session.status` busy with a new `turn_id`, runs `Session.ResumeTurn` in the background, returns nil |
+| Unfinished, cap reached or `MaxTurnResumes` is zero | closes the turn with the lost-to-restart marker, emits `turn.end` with outcome `lost`, returns nil |
+
+The server emits a durable `turn.resumed` event with `resume_count` for each
+resume. It comes after the busy event and before the reply.
+
 ## Command records
 
 A resolved slash command (`docs/design/slash-commands.md`'s "Serve-mode

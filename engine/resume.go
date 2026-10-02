@@ -36,6 +36,10 @@ func (s *Session) TurnStopped() bool {
 	return s.turnStopped
 }
 
+// TurnUnfinished reports whether a turn started and never settled: the
+// journal holds messages of a turn that no outcome closed.
+func (s *Session) TurnUnfinished() bool { return s.hasUnfinalizedTurn() }
+
 // RecordTurnStopped durably settles the current turn as stopped. The turn
 // never resumes. partialMessageID names the partial assistant message the
 // stop kept, or is empty when the stop came before any reply text.

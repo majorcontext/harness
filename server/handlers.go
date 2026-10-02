@@ -2720,9 +2720,11 @@ func (s *Server) runPrompt(ctx context.Context, id string, st *sessionState, tex
 	})
 }
 
-// runTurn is runPrompt's body for any turn that ends like a prompt turn,
-// including an answer to a parked question (handleAnswerQuestion).
-func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, turn func(context.Context) (*message.Message, error)) {
+// runTurn is the run path every claimed turn shares. The caller holds a
+// claimForPrompt claim and has done wg.Add(1); runTurn releases both. run
+// does the model work; the bookkeeping around it is runPrompt's own, see the
+// comments below.
+func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, run func(context.Context) (*message.Message, error)) {
 	defer s.wg.Done()
 	// ReportTurnStart/ReportTurnEnd bracket the ONE choke point every
 	// ordinary (non-goal-loop) turn on a resident session funnels through
@@ -2743,7 +2745,7 @@ func (s *Server) runTurn(ctx context.Context, id string, st *sessionState, turn 
 	// A question parked by an EARLIER turn stays pending across a switch to
 	// a native model. Only the turn that parked one awaits input.
 	parked := st.sess.PendingQuestion()
-	msg, err := turn(ctx)
+	msg, err := run(ctx)
 	s.syncMessages(id) // catch any message not yet journaled
 	question := st.sess.PendingQuestion()
 	switch {

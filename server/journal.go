@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,9 +129,12 @@ type Event struct {
 	// Error (above) carries the sanitized failure detail when Outcome is
 	// "error", empty on a clean completion. See runPrompt/runGoal's
 	// recordTurnEnd.
-	Outcome   string `json:"outcome,omitempty"`
-	TurnID    string `json:"turn_id,omitempty"`
-	MessageID string `json:"message_id,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	// ResumeCount is carried by evtTurnResumed only: the resume number the
+	// engine journaled before it re-issued the model call.
+	ResumeCount int    `json:"resume_count,omitempty"`
+	TurnID      string `json:"turn_id,omitempty"`
+	MessageID   string `json:"message_id,omitempty"`
 	// QuestionCallID carries a turn.end record's parked AskUserQuestion
 	// call id when Outcome is outcomeAwaitingInput.
 	QuestionCallID string `json:"question_call_id,omitempty"`
@@ -265,6 +269,7 @@ const (
 	evtSessionError   = "session.error"
 	evtSessionAborted = "session.aborted"
 	evtTurnEnd        = "turn.end"
+	evtTurnResumed    = engine.EventTurnResumed
 	evtMessage        = "message"
 	evtModel          = "model"
 	evtEffort         = "effort"
@@ -474,6 +479,9 @@ func (s *Server) Publish(ev engine.Event) {
 		// stale partial before the retry's deltas arrive — see
 		// engine.EventTurnRestart. Live only (Seq 0); it is never journaled.
 		s.publishLive(Event{Type: engine.EventTurnRestart, SessionID: ev.SessionID})
+	case engine.EventTurnResumed:
+		n, _ := strconv.Atoi(ev.Text)
+		s.emitDurable(Event{Type: evtTurnResumed, SessionID: ev.SessionID, ResumeCount: n})
 	case engine.EventToolStart:
 		s.publishLive(Event{Type: engine.EventToolStart, SessionID: ev.SessionID, ToolCall: ev.ToolCall, ID: ev.ID, CreatedAt: ev.CreatedAt})
 	case engine.EventToolEnd:
