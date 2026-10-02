@@ -160,6 +160,7 @@ func TestContractSessionOps(t *testing.T) {
 				setThinking{as: "a", level: "high"},
 				// Defect: any service tier is accepted.
 				setServiceTier{as: "a", tier: "bogus"},
+				// Defect: the anthropic adapter sends no service_tier.
 				setServiceTier{as: "a", tier: "priority"},
 				getSession{as: "a"},
 				submit{as: "a", text: "go"},
@@ -169,6 +170,22 @@ func TestContractSessionOps(t *testing.T) {
 				setThinking{as: "a", level: ""},
 				setServiceTier{as: "a", tier: ""},
 				getSession{as: "a"},
+				submit{as: "a", text: "again"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name:  "builtin_commands_run_and_record",
+			model: []harnesstest.Step{agentStep("rest", "ok", true)},
+			actions: []action{
+				commands{},
+				create{as: "a"},
+				command{as: "a", text: "/thinking high"},
+				command{as: "a", text: "/compact abc"},
+				command{as: "a", text: "/cost"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+				bootstrap{as: "a"},
 			},
 		},
 		{

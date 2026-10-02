@@ -1,43 +1,11 @@
 package e2e
 
 import (
-	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
-
-type captureWorkdir struct{ dst *string }
-
-func (a captureWorkdir) run(_ *testing.T, r *run) {
-	*a.dst = r.drv.Workdir()
-}
-
-// scrubWorkdir rewrites the session workdir to "<workdir>" in every string of
-// the observation: tool results quote the absolute path they resolved.
-func scrubWorkdir(t *testing.T, obs observation, workdir string) observation {
-	t.Helper()
-	raw := string(mustJSON(t, obs))
-	paths := []string{workdir}
-	if real, err := filepath.EvalSymlinks(workdir); err == nil && real != workdir {
-		paths = []string{real, workdir}
-	}
-	for _, p := range paths {
-		quoted, err := json.Marshal(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		raw = strings.ReplaceAll(raw, strings.Trim(string(quoted), `"`), "<workdir>")
-	}
-	var out observation
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		t.Fatalf("unmarshal scrubbed observation: %v", err)
-	}
-	return out
-}
 
 func assistantTurns(n int) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool {
@@ -163,15 +131,12 @@ func TestContractFileTools(t *testing.T) {
 	for _, sc := range table {
 		t.Run(sc.name, func(t *testing.T) {
 			t.Parallel()
-			var workdir string
 			sc.actions = []action{
-				captureWorkdir{dst: &workdir},
 				create{as: "a"},
 				submit{as: "a", text: "go"},
 				waitIdle{as: "a"},
 			}
-			obs := runScenario(t, sc)
-			compareGolden(t, sc.name, scrubWorkdir(t, obs, workdir))
+			compareGolden(t, sc.name, runScenario(t, sc))
 		})
 	}
 }

@@ -2,6 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -35,6 +36,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -93,6 +95,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -175,6 +178,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -283,6 +287,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -416,6 +421,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -575,6 +581,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -760,6 +767,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -971,6 +979,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -1204,6 +1213,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -1461,6 +1471,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -1742,6 +1753,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -2049,6 +2061,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -2378,6 +2391,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -2731,6 +2745,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -3108,6 +3123,7 @@
     },
     {
       "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",

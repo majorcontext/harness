@@ -52,6 +52,8 @@ type driver interface {
 	JournalPage(t *testing.T, id string, from, limit int) callResult
 	SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult
 	Child(t *testing.T, parentID string, nth int) string
+	Command(t *testing.T, id, text string) callResult
+	Commands(t *testing.T) callResult
 }
 
 // callResult is what a driver reports for a call: the status and the decoded
@@ -382,6 +384,17 @@ func (d *httpDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
 func (d *httpDriver) JournalPage(t *testing.T, id string, from, limit int) callResult {
 	t.Helper()
 	return d.call(t, http.MethodGet, withQuery("/session/"+id+"/journal", "from", from, "limit", limit), nil)
+}
+
+func (d *httpDriver) Command(t *testing.T, id, text string) callResult {
+	t.Helper()
+	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": text}}, "source": "typed"}
+	return withoutSeq(d.call(t, http.MethodPost, "/session/"+id+"/prompt_async", body))
+}
+
+func (d *httpDriver) Commands(t *testing.T) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, "/commands", nil)
 }
 
 type sseFrame struct {

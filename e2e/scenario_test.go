@@ -144,12 +144,14 @@ type cancelTree struct{ as string }
 type deleteQueued struct{ as string }
 type updateGoal struct{ as, condition string }
 type clearGoal struct{ as string }
+type command struct{ as, text string }
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
 // listSessions needs at most one resident session: the server lists them in map order.
 type listSessions struct{}
 type getSession struct{ as string }
 type sessionStatus struct{}
+type commands struct{}
 type messagesPage struct {
 	as               string
 	beforeSeq, limit int
@@ -210,6 +212,12 @@ func (a updateGoal) run(t *testing.T, r *run) {
 }
 func (a clearGoal) run(t *testing.T, r *run) {
 	r.record(t, "clear_goal", a.as, r.drv.ClearGoal(t, r.id(t, a.as)))
+}
+func (a command) run(t *testing.T, r *run) {
+	r.record(t, "command", a.as, r.drv.Command(t, r.id(t, a.as), a.text))
+}
+func (commands) run(t *testing.T, r *run) {
+	r.record(t, "commands", "", r.drv.Commands(t))
 }
 func (listSessions) run(t *testing.T, r *run) {
 	r.record(t, "list_sessions", "", r.drv.ListSessions(t))
@@ -280,7 +288,7 @@ func runScenario(t *testing.T, sc scenario) observation {
 	if sc.concurrent {
 		reqs = groupByConversation(reqs)
 	}
-	return normalizeRun(reqs, sessions, r.calls, r.ids)
+	return normalizeRun(reqs, sessions, r.calls, r.ids, r.drv.Workdir())
 }
 
 func runScenarios(t *testing.T, table []scenario) {

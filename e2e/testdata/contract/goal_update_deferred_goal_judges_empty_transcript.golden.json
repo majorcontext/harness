@@ -2,6 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": true,
+      "model": "eval-model",
       "tools": null,
       "messages": [
         {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -56,6 +57,10 @@ type journalEntry struct {
 
 type normRequest struct {
 	SystemHasGoalEvaluator bool             `json:"system_has_goal_evaluator"`
+	Model                  string           `json:"model,omitempty"`
+	ThinkingType           string           `json:"thinking_type,omitempty"`
+	ThinkingBudgetTokens   int              `json:"thinking_budget_tokens,omitempty"`
+	ServiceTier            string           `json:"service_tier,omitempty"`
 	Tools                  []string         `json:"tools"`
 	Messages               []normReqMessage `json:"messages"`
 }
@@ -91,8 +96,52 @@ type normPart struct {
 }
 
 type normalizer struct {
-	aliases map[string]string
-	counts  map[string]int
+	aliases  map[string]string
+	counts   map[string]int
+	workdirs []string
+}
+
+// workdirPaths lists the workdir as given and as the OS resolves it, longest
+// first, so a symlinked temp dir masks under either spelling.
+func workdirPaths(workdir string) []string {
+	if workdir == "" {
+		return nil
+	}
+	if real, err := filepath.EvalSymlinks(workdir); err == nil && real != workdir {
+		return []string{real, workdir}
+	}
+	return []string{workdir}
+}
+
+func (n *normalizer) mask(s string) string {
+	for _, w := range n.workdirs {
+		s = strings.ReplaceAll(s, w, "<workdir>")
+	}
+	return maskUnstable(s)
+}
+
+// scrub masks the workdir in every string of a decoded JSON value.
+func (n *normalizer) scrub(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = n.scrub(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = n.scrub(e)
+		}
+		return out
+	case string:
+		for _, w := range n.workdirs {
+			x = strings.ReplaceAll(x, w, "<workdir>")
+		}
+		return x
+	}
+	return v
 }
 
 func (n *normalizer) id(s string) string {
@@ -111,7 +160,7 @@ func (n *normalizer) id(s string) string {
 }
 
 func normalize(reqs []harnesstest.Request, sessions map[string][]transcriptMessage) observation {
-	return normalizeRun(reqs, sessions, nil, nil)
+	return normalizeRun(reqs, sessions, nil, nil, "")
 }
 
 // normCall is a recorded call result. Ids are aliased and times masked.
@@ -153,7 +202,14 @@ func (n *normalizer) str(s string) string {
 	if fullIDPattern.MatchString(s) {
 		return n.id(s)
 	}
-	return maskUnstable(s)
+	return n.mask(s)
+}
+
+func scrubInput(n *normalizer, in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	return n.scrub(in).(map[string]any)
 }
 
 func (n *normalizer) messages(msgs []transcriptMessage) []normMessage {
@@ -162,8 +218,8 @@ func (n *normalizer) messages(msgs []transcriptMessage) []normMessage {
 		nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
 		for _, p := range m.Parts {
 			nm.Parts = append(nm.Parts, normPart{
-				Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name,
-				Arguments: p.Arguments, IsError: p.IsError, Content: maskUnstable(p.Content),
+				Type: p.Type, Text: n.mask(p.Text), CallID: n.id(p.CallID), Name: p.Name,
+				Arguments: n.scrub(p.Arguments), IsError: p.IsError, Content: n.mask(p.Content),
 			})
 		}
 		out = append(out, nm)
@@ -173,8 +229,8 @@ func (n *normalizer) messages(msgs []transcriptMessage) []normMessage {
 
 // normalizeRun is normalize plus the recorded calls. ids maps scenario aliases
 // to session ids, which normalize to "ses:<alias>".
-func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMessage, calls []recordedCall, ids map[string]string) observation {
-	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}}
+func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMessage, calls []recordedCall, ids map[string]string, workdir string) observation {
+	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}, workdirs: workdirPaths(workdir)}
 	for alias, id := range ids {
 		n.aliases[id] = "ses:" + alias
 	}
@@ -182,6 +238,10 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 	for _, r := range reqs {
 		nr := normRequest{
 			SystemHasGoalEvaluator: strings.Contains(r.System, goalEvaluatorMarker),
+			Model:                  r.Model,
+			ThinkingType:           r.ThinkingType,
+			ThinkingBudgetTokens:   r.ThinkingBudget,
+			ServiceTier:            r.ServiceTier,
 			Tools:                  slices.Sorted(slices.Values(r.Tools)),
 		}
 		if len(r.Tools) == 0 {
@@ -191,7 +251,7 @@ func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMe
 			nm := normReqMessage{Role: m.Role}
 			for _, p := range m.Parts {
 				nm.Parts = append(nm.Parts, normReqPart{
-					Kind: p.Kind, Text: maskUnstable(p.Text), ToolName: p.ToolName, ToolInput: p.ToolInput,
+					Kind: p.Kind, Text: n.mask(p.Text), ToolName: p.ToolName, ToolInput: scrubInput(n, p.ToolInput),
 					ToolUseID: n.id(p.ToolUseID), IsError: p.IsError,
 				})
 			}
@@ -374,6 +434,11 @@ func TestNormalize(t *testing.T) {
 			want: `{"requests":[{"system_has_goal_evaluator":true,"tools":null,"messages":null},{"system_has_goal_evaluator":false,"tools":null,"messages":null}],"sessions":{}}`,
 		},
 		{
+			name: "model_thinking_and_service_tier_kept",
+			reqs: []harnesstest.Request{{Model: "claude-fable-5", ThinkingType: "enabled", ThinkingBudget: 16384, ServiceTier: "priority"}},
+			want: `{"requests":[{"system_has_goal_evaluator":false,"model":"claude-fable-5","thinking_type":"enabled","thinking_budget_tokens":16384,"service_tier":"priority","tools":null,"messages":null}],"sessions":{}}`,
+		},
+		{
 			name: "timestamps_in_text_masked",
 			reqs: []harnesstest.Request{{Messages: []harnesstest.Message{{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: "engine started 2026-10-02T15:29:58Z"}}}}}},
 			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"user","parts":[{"kind":"text","text":"engine started \u003ctime\u003e"}]}]}],"sessions":{}}`,
@@ -402,11 +467,19 @@ func TestNormalize(t *testing.T) {
 func TestNormalizeCalls(t *testing.T) {
 	skipShort(t)
 	tests := []struct {
-		name string
-		body string
-		msgs string
-		want string
+		name    string
+		body    string
+		msgs    string
+		workdir string
+		want    string
 	}{
+		{
+			name:    "workdir_masked_in_body_strings_and_messages",
+			body:    `{"note":"saved to /w/proj/a.txt"}`,
+			msgs:    `[{"id":"msg_1","role":"tool","parts":[{"type":"tool_result","call_id":"c","content":[{"type":"text","text":"/w/proj/a.txt: 1 line"}]}]}]`,
+			workdir: "/w",
+			want:    `{"status":200,"body":{"note":"saved to \u003cworkdir\u003e/proj/a.txt"},"messages":[{"id":"msg#1","role":"tool","parts":[{"type":"tool_result","call_id":"c","content":"\u003cworkdir\u003e/proj/a.txt: 1 line"}]}]}`,
+		},
 		{
 			name: "known_session_is_its_alias_unknown_is_numbered",
 			body: `{"id":"ses_abc","children":["ses_def"],"workdir":"/tmp/x","created_at":"2026-10-02T10:00:00Z"}`,
@@ -430,7 +503,7 @@ func TestNormalizeCalls(t *testing.T) {
 			if tc.msgs != "" {
 				res.Messages = transcriptOf(mustDecode[[]apiMessage](t, tc.msgs))
 			}
-			obs := normalizeRun(nil, nil, []recordedCall{{key: "k", res: res}}, map[string]string{"a": "ses_abc"})
+			obs := normalizeRun(nil, nil, []recordedCall{{key: "k", res: res}}, map[string]string{"a": "ses_abc"}, tc.workdir)
 			got, err := json.Marshal(obs.Calls["k"])
 			if err != nil {
 				t.Fatal(err)
