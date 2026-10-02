@@ -81,6 +81,27 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 	}
 }
 
+func TestOpenAIToolResultNameComesFromTheRequestsOwnHistory(t *testing.T) {
+	s := NewOpenAI(t, OpenAIOptions{},
+		Step{Name: "call", Match: LastUserText("run"), Reply: Reply{ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}}},
+		Step{Name: "other", Match: LastUserText("again"), Reply: Reply{Text: "ok"}},
+	)
+	c := codexClient(s, false)
+	codexTurn(t, c, codexRequest(codexUser("run")))
+	asst := message.Message{Role: message.RoleAssistant, Parts: message.Parts{
+		&message.ToolCall{CallID: "call_1", Name: "grep", Arguments: json.RawMessage(`{}`)},
+	}}
+	results := message.Message{Role: message.RoleTool, Parts: message.Parts{
+		&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "out"}}},
+	}}
+	codexTurn(t, c, codexRequest(codexUser("again"), asst, results))
+	reqs := s.Requests()
+	last := reqs[1].Messages[len(reqs[1].Messages)-1].Parts[0]
+	if last.Kind != "tool_result" || last.ToolName != "grep" {
+		t.Errorf("tool result = %+v, want the name grep from the request's own function_call", last)
+	}
+}
+
 func TestOpenAIReasoningItemSurfacesAndReplays(t *testing.T) {
 	s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"think": {Reasoning: []string{"plan", "check"}}}},
 		Step{Name: "think", Match: LastUserText("go"), Reply: Reply{ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}}},

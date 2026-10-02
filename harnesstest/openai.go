@@ -110,7 +110,7 @@ type OpenAI struct {
 	wire      []WireEvent
 	conns     int
 	responses map[string]int    // by id prefix
-	callNames map[string]string // call id -> tool name, for the calls this server issued
+	callNames map[string]string // call id -> tool name, for chained requests that omit the call
 	known     map[string]bool   // "conn/response id" of every completed response
 	faults    []string
 }

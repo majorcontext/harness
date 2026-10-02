@@ -1,10 +1,15 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
+	"maps"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/mcpserver"
 )
 
 // codexScenario runs against the scripted Responses server, with the model
@@ -14,6 +19,23 @@ type codexScenario struct {
 	scenario
 	opts      harnesstest.OpenAIOptions
 	websocket bool
+	// mcpSchema, when set, serves one MCP tool named "send" with this input
+	// schema as the server "srv".
+	mcpSchema string
+}
+
+const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
+
+func serveMCPTool(t *testing.T, schema string) string {
+	t.Helper()
+	reg := mcpserver.NewRegistry("srv", "1")
+	reg.RegisterTool(mcp.Tool{Name: "send", Description: "send a message", InputSchema: json.RawMessage(schema)},
+		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: "text", Text: "sent"}}}, nil
+		})
+	srv := httptest.NewServer(reg)
+	t.Cleanup(srv.Close)
+	return srv.URL
 }
 
 // codexAPIKey is the value startServeIn gives ANTHROPIC_API_KEY.
@@ -82,8 +104,16 @@ func runCodexScenario(t *testing.T, sc codexScenario) observation {
 	t.Helper()
 	sc.opts.APIKey = codexAPIKey
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
+	extra := maps.Clone(sc.config)
+	if sc.mcpSchema != "" {
+		if extra == nil {
+			extra = map[string]any{}
+		}
+		extra["mcp_tool_loading"] = "eager"
+		extra["mcp_servers"] = map[string]any{"srv": map[string]any{"url": serveMCPTool(t, sc.mcpSchema)}}
+	}
 	r := &run{
-		drv:    newHTTPDriverWith(t, o.URL(), codexConfig(o.URL(), sc.websocket, sc.config)),
+		drv:    newHTTPDriverWith(t, o.URL(), codexConfig(o.URL(), sc.websocket, extra)),
 		fake:   o.Server,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
@@ -234,6 +264,10 @@ func codexWebSocketRows() []codexScenario {
 
 func codexHTTPRows() []codexScenario {
 	return []codexScenario{
+		{
+			scenario:  scenario{name: "codex_http_mcp_tool_schema_is_sanitized", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})},
+			mcpSchema: mcpToolSchemaWithRejectedKeywords,
+		},
 		{scenario: scenario{name: "codex_http_sse_text_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})}},
 		{scenario: scenario{name: "codex_http_sse_tool_round_trip_resends_history", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), []action{recordWire{}})}},
 		{

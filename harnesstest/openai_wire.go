@@ -168,6 +168,7 @@ func (o *OpenAI) request(b openAIBody) Request {
 	}
 	o.wmu.Lock()
 	defer o.wmu.Unlock()
+	inRequest := map[string]string{}
 	for _, raw := range b.Input {
 		var it wireItem
 		if json.Unmarshal(raw, &it) != nil {
@@ -183,9 +184,14 @@ func (o *OpenAI) request(b openAIBody) Request {
 		case "function_call":
 			var input map[string]any
 			_ = json.Unmarshal([]byte(it.Arguments), &input)
+			inRequest[it.CallID] = it.Name
 			add("assistant", Part{Kind: "tool_use", ToolName: it.Name, ToolInput: input, ToolUseID: it.CallID})
 		case "function_call_output":
-			add("user", Part{Kind: "tool_result", Text: it.Output, ToolName: o.callNames[it.CallID], ToolUseID: it.CallID})
+			name, ok := inRequest[it.CallID]
+			if !ok {
+				name = o.callNames[it.CallID]
+			}
+			add("user", Part{Kind: "tool_result", Text: it.Output, ToolName: name, ToolUseID: it.CallID})
 		}
 	}
 	return req
