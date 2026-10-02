@@ -24,16 +24,6 @@ func evaluatorStep(name, verdict string, repeat bool) fakemodel.Step {
 	}
 }
 
-// An exhausted goal stays active, so the session never reads idle and the
-// runner's final waitIdle would block.
-type createActive struct{ as string }
-
-func (a createActive) run(t *testing.T, r *run) {
-	r.ids[a.as] = r.drv.Create(t)
-	r.aliases = append(r.aliases, a.as)
-	r.noIdle[a.as] = true
-}
-
 type awaitMaxTurnsExceeded struct{}
 
 func (awaitMaxTurnsExceeded) run(t *testing.T, r *run) {
@@ -82,7 +72,7 @@ func TestContractGoal(t *testing.T) {
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},
 			actions: []action{
-				createActive{as: "a"},
+				create{as: "a", staysActive: true},
 				setGoal{as: "a", condition: "say done", maxTurns: 2},
 				awaitMaxTurnsExceeded{},
 			},

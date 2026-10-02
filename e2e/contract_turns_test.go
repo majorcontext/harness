@@ -11,13 +11,13 @@ func TestContractTurns(t *testing.T) {
 		return fakemodel.ToolCall{ID: id, Name: "bash", Input: map[string]any{"command": cmd}}
 	}
 	text := func(s string) fakemodel.Reply { return fakemodel.Reply{Text: s} }
-	oneTurn := []action{create{"a"}, submit{"a", "run"}, waitIdle{"a"}}
+	oneTurn := []action{create{as: "a"}, submit{as: "a", text: "run"}, waitIdle{as: "a"}}
 
 	runScenarios(t, []scenario{
 		{
 			name:    "text_reply",
 			model:   []fakemodel.Step{{Name: "reply", Reply: text("hi")}},
-			actions: []action{create{"a"}, submit{"a", "hello"}, waitIdle{"a"}},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "hello"}, waitIdle{as: "a"}},
 		},
 		{
 			name: "one_tool_round_trip",
@@ -49,7 +49,7 @@ func TestContractTurns(t *testing.T) {
 				{Name: "one", Match: fakemodel.LastUserText("one"), Reply: text("1")},
 				{Name: "two", Match: fakemodel.LastUserText("two"), Reply: text("2")},
 			},
-			actions: []action{create{"a"}, submit{"a", "one"}, waitIdle{"a"}, submit{"a", "two"}, waitIdle{"a"}},
+			actions: []action{create{as: "a"}, submit{as: "a", text: "one"}, waitIdle{as: "a"}, submit{as: "a", text: "two"}, waitIdle{as: "a"}},
 		},
 	})
 }

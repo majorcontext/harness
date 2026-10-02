@@ -25,7 +25,10 @@ type scenario struct {
 
 type action interface{ run(t *testing.T, r *run) }
 
-type create struct{ as string }
+type create struct {
+	as          string
+	staysActive bool // the session never reads idle, so the final waitIdle skips it
+}
 type submit struct{ as, text string }
 type enqueue struct{ as, text string }
 type waitIdle struct{ as string }
@@ -73,6 +76,7 @@ func (a create) run(t *testing.T, r *run) {
 	}
 	r.ids[a.as] = r.drv.Create(t)
 	r.aliases = append(r.aliases, a.as)
+	r.noIdle[a.as] = a.staysActive
 }
 func (a submit) run(t *testing.T, r *run)   { r.drv.Submit(t, r.id(t, a.as), a.text) }
 func (a enqueue) run(t *testing.T, r *run)  { r.drv.Enqueue(t, r.id(t, a.as), a.text) }
