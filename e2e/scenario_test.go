@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
@@ -57,8 +56,6 @@ type run struct {
 	ids     map[string]string
 	aliases []string
 	noIdle  map[string]bool
-	reqs    chan int
-	seen    int
 }
 
 func (r *run) id(t *testing.T, alias string) string {
@@ -90,23 +87,10 @@ func (a setGoal) run(t *testing.T, r *run) {
 func (a release) run(_ *testing.T, r *run) { r.fake.Release(a.step) }
 func (a awaitRequests) run(t *testing.T, r *run) {
 	t.Helper()
-	if !r.waitForRequests(a.n, waitBound) {
-		t.Fatalf("waited %s for %d model requests; saw %d: %s\nserve stderr:\n%s", waitBound, a.n, r.seen, requestSummary(r.fake.Requests()), r.drv.Stderr())
+	if !r.fake.AwaitRequests(a.n, waitBound) {
+		reqs := r.fake.Requests()
+		t.Fatalf("waited %s for %d model requests; saw %d: %s\nserve stderr:\n%s", waitBound, a.n, len(reqs), requestSummary(reqs), r.drv.Stderr())
 	}
-}
-
-func (r *run) waitForRequests(n int, bound time.Duration) bool {
-	timer := time.NewTimer(bound)
-	defer timer.Stop()
-	for r.seen < n {
-		select {
-		case v := <-r.reqs:
-			r.seen = max(r.seen, v)
-		case <-timer.C:
-			return false
-		}
-	}
-	return true
 }
 
 func requestSummary(reqs []harnesstest.Request) string {
@@ -131,14 +115,7 @@ func runScenario(t *testing.T, sc scenario) observation {
 		fake:   fake,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
-		reqs:   make(chan int, 1024),
 	}
-	fake.OnRequest(func(n int) {
-		select {
-		case r.reqs <- n:
-		default:
-		}
-	})
 	for _, a := range sc.actions {
 		a.run(t, r)
 	}

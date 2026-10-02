@@ -5,9 +5,6 @@ import "strings"
 // Matcher reports whether a Step answers a Request.
 type Matcher func(Request) bool
 
-// Any matches every request.
-func Any() Matcher { return func(Request) bool { return true } }
-
 // LastUserText matches a request whose last user text contains substr.
 func LastUserText(substr string) Matcher {
 	return func(r Request) bool { return strings.Contains(r.LastUserText(), substr) }
@@ -30,17 +27,5 @@ func LastToolResult(toolName string) Matcher {
 			}
 		}
 		return false
-	}
-}
-
-// And matches when every matcher matches.
-func And(ms ...Matcher) Matcher {
-	return func(r Request) bool {
-		for _, m := range ms {
-			if !m(r) {
-				return false
-			}
-		}
-		return true
 	}
 }

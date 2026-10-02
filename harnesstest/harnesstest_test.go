@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -68,7 +69,7 @@ func textOf(evs []provider.Event) string {
 }
 
 func TestTextReply(t *testing.T) {
-	s := New(t, Step{Match: Any(), Reply: Reply{Text: "hello"}})
+	s := New(t, Step{Reply: Reply{Text: "hello"}})
 	st, err := ask(t, s, "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +88,7 @@ func TestTextReply(t *testing.T) {
 }
 
 func TestToolCallReply(t *testing.T) {
-	s := New(t, Step{Match: Any(), Reply: Reply{ToolCalls: []ToolCall{
+	s := New(t, Step{Reply: Reply{ToolCalls: []ToolCall{
 		{ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "echo hi"}},
 	}}})
 	st, err := ask(t, s, "hi")
@@ -210,7 +211,7 @@ func TestBlockUntilRelease(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				br := startBlocked(context.Background(), tc.reply)
 				select {
-				case <-br.s.Blocked("slow"):
+				case <-br.s.blockedCh("slow"):
 				default:
 					t.Fatal("handler is not waiting on Release")
 				}
@@ -262,7 +263,7 @@ func TestBlockedStreamExits(t *testing.T) {
 
 func TestUndecodableRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
-	s := New(rec, Step{Match: Any(), Repeat: true, Reply: Reply{Text: "x"}})
+	s := New(rec, Step{Repeat: true, Reply: Reply{Text: "x"}})
 	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages": [`))
 	if err != nil {
 		t.Fatal(err)
@@ -309,7 +310,7 @@ func TestStepConsumption(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recorder{TB: t}
-			s := New(rec, Step{Match: Any(), Repeat: tc.repeat, Reply: Reply{Text: "x"}})
+			s := New(rec, Step{Repeat: tc.repeat, Reply: Reply{Text: "x"}})
 			var got []int
 			for range tc.wantReplies {
 				resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"q"}]}`))
@@ -330,6 +331,8 @@ func TestStepConsumption(t *testing.T) {
 	}
 }
 
+func both(a, b Matcher) Matcher { return func(r Request) bool { return a(r) && b(r) } }
+
 func TestRequestDecodeAndMatchers(t *testing.T) {
 	const body = `{
 	  "system": [{"type":"text","text":"sys a"},{"type":"text","text":"sys b"}],
@@ -339,12 +342,10 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 	    {"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"bash","input":{"command":"ls"}}]},
 	    {"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","is_error":true,"content":[{"type":"text","text":"boom"}]}]}
 	  ]}`
-	var seen []int
 	s := New(t,
-		Step{Name: "no", Match: And(LastToolResult("bash"), SystemContains("absent")), Repeat: true, Reply: Reply{Text: "no"}},
-		Step{Name: "yes", Match: And(LastToolResult("bash"), SystemContains("sys b")), Reply: Reply{Text: "yes"}},
+		Step{Name: "no", Match: both(LastToolResult("bash"), SystemContains("absent")), Repeat: true, Reply: Reply{Text: "no"}},
+		Step{Name: "yes", Match: both(LastToolResult("bash"), SystemContains("sys b")), Reply: Reply{Text: "yes"}},
 	)
-	s.OnRequest(func(n int) { seen = append(seen, n) })
 	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -366,18 +367,30 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 	if got := s.Requests(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
 		t.Errorf("requests = %+v, want [%+v]", got, want)
 	}
-	if !slices.Equal(seen, []int{1}) {
-		t.Errorf("OnRequest calls = %v, want [1]", seen)
-	}
 }
 
 func TestHTTPErrorReply(t *testing.T) {
-	s := New(t, Step{Match: Any(), Reply: Reply{HTTPStatus: 529}})
+	s := New(t, Step{Reply: Reply{HTTPStatus: 529}})
 	_, err := ask(t, s, "hi")
 	if err == nil {
 		t.Fatal("err = nil, want an HTTP error")
 	}
 	if _, ok := provider.AsRetryable(err); !ok {
 		t.Errorf("AsRetryable(%v) = false, want retryable", err)
+	}
+}
+
+func TestAwaitRequests(t *testing.T) {
+	const miss, hit = 20 * time.Millisecond, time.Minute
+	s := New(t, Step{Repeat: true, Reply: Reply{Text: "x"}})
+	if s.AwaitRequests(1, miss) {
+		t.Fatal("AwaitRequests(1) = true with no request, want false at the bound")
+	}
+	go ask(t, s, "one")
+	if !s.AwaitRequests(1, hit) {
+		t.Fatal("AwaitRequests(1) = false after a request arrived")
+	}
+	if s.AwaitRequests(2, miss) {
+		t.Fatal("AwaitRequests(2) = true with one request, want false at the bound")
 	}
 }

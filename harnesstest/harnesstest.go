@@ -9,14 +9,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Step is one scripted reply and the requests it answers.
 type Step struct {
-	Name   string
-	Match  Matcher
+	Name   string  // key for Release; names the step in failure messages
+	Match  Matcher // nil matches every request
 	Reply  Reply
-	Repeat bool // stays available after it matches
+	Repeat bool // stays available after it matches, and may go unused
 }
 
 // Reply is what the server sends when a Step matches.
@@ -93,16 +94,23 @@ type Server struct {
 	undecoded []string
 	releases  map[string]chan struct{}
 	blocked   map[string]chan struct{}
-	onRequest func(n int)
+	arrived   chan struct{} // closed and replaced when a request is recorded
 }
 
-// New starts a Server that answers requests from steps and fails t on any request no step matches.
+// New starts a Server that answers each request with the first step, in
+// declaration order, that has not been consumed and whose Match accepts it.
+// A step without Repeat is consumed when it matches.
+//
+// A request that no step matches gets HTTP 500, and so does a request whose
+// body does not decode (HTTP 400). At cleanup New fails t for each such
+// request and for each non-Repeat step that never matched, unless t has
+// already failed.
 func New(t testing.TB, steps ...Step) *Server {
 	t.Helper()
 	steps = append([]Step(nil), steps...)
 	for i := range steps {
 		if steps[i].Match == nil {
-			steps[i].Match = Any()
+			steps[i].Match = func(Request) bool { return true }
 		}
 	}
 	s := &Server{
@@ -111,6 +119,7 @@ func New(t testing.TB, steps ...Step) *Server {
 		consumed: make([]bool, len(steps)),
 		releases: map[string]chan struct{}{},
 		blocked:  map[string]chan struct{}{},
+		arrived:  make(chan struct{}),
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.handle))
 	t.Cleanup(func() {
@@ -149,15 +158,15 @@ func (s *Server) Requests() []Request {
 	return append([]Request(nil), s.requests...)
 }
 
-// Release lets the named Block step finish.
+// Release lets the named Block step finish. A Release before the request arrives still counts.
 func (s *Server) Release(stepName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	closeOnce(s.chanFor(s.releases, stepName))
 }
 
-// Blocked is closed once a request for the named Block step is waiting.
-func (s *Server) Blocked(stepName string) <-chan struct{} {
+// blockedCh is closed once a request for the named Block step is waiting.
+func (s *Server) blockedCh(stepName string) <-chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.chanFor(s.blocked, stepName)
@@ -171,11 +180,27 @@ func closeOnce(ch chan struct{}) {
 	}
 }
 
-// OnRequest sets a callback that runs with the running request count for each request.
-func (s *Server) OnRequest(f func(n int)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onRequest = f
+// AwaitRequests reports whether the server has received at least n requests
+// within bound. It reads the recorded total, so it does not depend on the
+// order in which concurrent handlers finish.
+func (s *Server) AwaitRequests(n int, bound time.Duration) bool {
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	for {
+		s.mu.Lock()
+		got, arrived := len(s.requests), s.arrived
+		s.mu.Unlock()
+		if got >= n {
+			return true
+		}
+		select {
+		case <-arrived:
+		case <-timer.C:
+			return false
+		case <-s.closing:
+			return false
+		}
+	}
 }
 
 func (s *Server) chanFor(m map[string]chan struct{}, name string) chan struct{} {
@@ -219,6 +244,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.requests = append(s.requests, req)
 	n := len(s.requests)
+	close(s.arrived)
+	s.arrived = make(chan struct{})
 	matched := -1
 	for i, st := range s.steps {
 		if s.consumed[i] || !st.Match(req) {
@@ -234,12 +261,8 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	} else {
 		step = s.steps[matched]
 	}
-	onRequest := s.onRequest
 	s.mu.Unlock()
 
-	if onRequest != nil {
-		onRequest(n)
-	}
 	switch {
 	case matched < 0:
 		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")

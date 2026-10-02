@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -182,26 +181,6 @@ func TestWaitsFailAtTheirBound(t *testing.T) {
 	waitBound = 100 * time.Millisecond
 	t.Cleanup(func() { waitBound = old })
 
-	t.Run("model requests", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			r := &run{reqs: make(chan int, 4)}
-			r.reqs <- 1
-			if r.waitForRequests(2, waitBound) {
-				t.Fatal("waitForRequests(2) = true with one request seen, want false at the bound")
-			}
-			r.reqs <- 2
-			if !r.waitForRequests(2, waitBound) {
-				t.Fatal("waitForRequests(2) = false with two requests seen")
-			}
-			r.reqs <- 1
-			if r.waitForRequests(3, waitBound) {
-				t.Fatal("waitForRequests(3) = true with two requests seen, want false at the bound")
-			}
-			if r.seen != 2 {
-				t.Fatalf("seen = %d after counts 1, 2, 1 arrived, want 2", r.seen)
-			}
-		})
-	})
 	t.Run("event stream", func(t *testing.T) {
 		fake := harnesstest.New(t)
 		d := newHTTPDriver(t, fake.URL())
