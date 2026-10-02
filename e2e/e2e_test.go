@@ -53,7 +53,12 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 		harnessBin = bin
+		stop := guardProcessGroups()
 		code := m.Run()
+		stop()
+		if reportLeakedGroups() && code == 0 {
+			code = 1
+		}
 		cleanup()
 		os.Exit(code)
 	}
@@ -197,17 +202,14 @@ func (b *lockedBuffer) String() string {
 
 // serveProc is a running `harness serve` subprocess.
 type serveProc struct {
+	*procGroup
 	t      *testing.T
-	cmd    *exec.Cmd
 	addr   string
 	stderr *lockedBuffer
-
-	mu     sync.Mutex
-	waited bool
 }
 
 // startServe launches `harness serve` on a free port with the given session
-// dir and config, then waits (bounded) for /health. The process is killed at
+// dir and config, then waits (bounded) for /health. The process group is killed at
 // test cleanup. Its working directory is a throwaway temp dir.
 func startServe(t *testing.T, sessDir, configPath string) *serveProc {
 	t.Helper()
@@ -230,25 +232,9 @@ func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc 
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting serve: %v", err)
-	}
-	p := &serveProc{t: t, cmd: cmd, addr: addr, stderr: stderr}
-	t.Cleanup(p.kill)
+	p := &serveProc{procGroup: startGroup(t, cmd), t: t, addr: addr, stderr: stderr}
 	p.waitHealthy()
 	return p
-}
-
-// kill terminates the process with SIGKILL and reaps it. Idempotent.
-func (p *serveProc) kill() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.waited {
-		return
-	}
-	p.waited = true
-	_ = p.cmd.Process.Kill()
-	_ = p.cmd.Wait()
 }
 
 // waitHealthy polls GET /health until 200 or a deadline. Real cross-process
@@ -318,6 +304,17 @@ func cleanEnv(overrides map[string]string) []string {
 
 func (p *serveProc) do(method, path string, body any) (*http.Response, []byte) {
 	p.t.Helper()
+	resp, data, err := p.send(method, path, body)
+	if err != nil {
+		p.t.Fatalf("%s %s: %v\nserve stderr:\n%s", method, path, err, p.stderr.String())
+	}
+	return resp, data
+}
+
+// send fails at waitBound plus waitMargin, so a serve process that stops
+// answering fails the call, not the whole test binary.
+func (p *serveProc) send(method, path string, body any) (*http.Response, []byte, error) {
+	p.t.Helper()
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -326,18 +323,20 @@ func (p *serveProc) do(method, path string, body any) (*http.Response, []byte) {
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, "http://"+p.addr+path, rdr)
+	ctx, cancel := context.WithTimeout(p.t.Context(), waitBound+waitMargin)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, "http://"+p.addr+path, rdr)
 	if err != nil {
 		p.t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+testToken)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		p.t.Fatalf("%s %s: %v", method, path, err)
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
-	return resp, data
+	data, err := io.ReadAll(resp.Body)
+	return resp, data, err
 }
 
 // createSession creates a session and returns its id.
@@ -370,11 +369,19 @@ func (p *serveProc) prompt(id, text string) {
 }
 
 type apiMessage struct {
-	ID    string `json:"id"`
-	Role  string `json:"role"`
-	Parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+	Parts     []struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		CallID    string          `json:"call_id"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		IsError   bool            `json:"is_error"`
+		Content   []struct {
+			Text string `json:"text"`
+		} `json:"content"`
 	} `json:"parts"`
 }
 
@@ -445,15 +452,11 @@ type apiEvent struct {
 	CompactSummaryID   string `json:"compact_summary_id"`
 }
 
-// eventReplay connects to GET /event?from=0, reads the durable replay batch,
-// and disconnects. /event is a long-lived stream (replay, then live, then
-// heartbeats), so the read is bounded by a context deadline: the replay is
-// written and flushed immediately on connect, and the subsequent block hits
-// the deadline, at which point we return what we collected.
-func (p *serveProc) eventReplay() []apiEvent {
+// scanEvents opens GET /event?from=0 and passes each frame to visit until it
+// returns true. It returns nil on that, or the stream error that ended the read
+// first, such as ctx expiring.
+func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool) error {
 	p.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?from=0", nil)
 	if err != nil {
 		p.t.Fatalf("event request: %v", err)
@@ -464,19 +467,35 @@ func (p *serveProc) eventReplay() []apiEvent {
 		p.t.Fatalf("GET /event: %v", err)
 	}
 	defer resp.Body.Close()
-	var events []apiEvent
-	dec := newSSEScanner(resp.Body)
+	sc := newSSEScanner(resp.Body)
 	for {
-		data, err := dec.next()
+		raw, err := sc.next()
 		if err != nil {
-			break // deadline reached or stream ended: replay already consumed
+			return err
 		}
-		var ev apiEvent
-		if err := json.Unmarshal(data, &ev); err != nil {
-			continue
+		if visit(raw) {
+			return nil
 		}
-		events = append(events, ev)
 	}
+}
+
+// eventReplay reads the durable replay batch of GET /event?from=0. /event is a
+// long-lived stream (replay, then live, then heartbeats), so the read is
+// bounded by a context deadline: the replay is written and flushed immediately
+// on connect, and the subsequent block hits the deadline, at which point we
+// return what we collected.
+func (p *serveProc) eventReplay() []apiEvent {
+	p.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	var events []apiEvent
+	_ = p.scanEvents(ctx, func(raw []byte) bool {
+		var ev apiEvent
+		if json.Unmarshal(raw, &ev) == nil {
+			events = append(events, ev)
+		}
+		return false
+	})
 	return events
 }
 
@@ -581,45 +600,24 @@ func writeConfigWithSessionSync(t *testing.T, baseURL, sessionSync string) strin
 
 // --- shared assertions -------------------------------------------------
 
-// assertContiguousSeqs asserts the durable events have strictly increasing,
-// gap-free sequence numbers 1..max, and that no message id repeats (boot
-// reconcile must not duplicate).
+// assertContiguousSeqs asserts the durable events have gap-free sequence
+// numbers 1..max, and that no message id repeats (boot reconcile must not
+// duplicate).
 func assertContiguousSeqs(t *testing.T, events []apiEvent) {
 	t.Helper()
 	if len(events) == 0 {
 		t.Fatal("no durable events replayed")
 	}
-	var prev int64
-	msgIDs := map[string]bool{}
-	for i, ev := range events {
-		if ev.Seq <= prev {
-			t.Fatalf("event %d seq %d not strictly increasing (prev %d)", i, ev.Seq, prev)
-		}
-		if ev.Seq != prev+1 {
-			t.Fatalf("gap in seqs: event %d seq %d, prev %d", i, ev.Seq, prev)
-		}
-		prev = ev.Seq
-		if ev.Type == "message" && ev.Message != nil {
-			if msgIDs[ev.Message.ID] {
-				t.Fatalf("duplicate message id in journal: %s", ev.Message.ID)
-			}
-			msgIDs[ev.Message.ID] = true
-		}
+	if v := journalViolations(journalOf(events)); len(v) > 0 {
+		t.Fatal(strings.Join(v, "; "))
 	}
 }
 
-// assertUniqueMessageIDs asserts every message id is distinct.
+// assertUniqueMessageIDs asserts every message id is distinct and non-empty.
 func assertUniqueMessageIDs(t *testing.T, msgs []apiMessage) {
 	t.Helper()
-	seen := map[string]bool{}
-	for _, m := range msgs {
-		if m.ID == "" {
-			t.Fatalf("message with empty id: %+v", m)
-		}
-		if seen[m.ID] {
-			t.Fatalf("duplicate message id: %s", m.ID)
-		}
-		seen[m.ID] = true
+	if v := messageIDViolations(transcriptOf(msgs)); len(v) > 0 {
+		t.Fatal(strings.Join(v, "; "))
 	}
 }
 
