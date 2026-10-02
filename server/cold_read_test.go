@@ -328,6 +328,7 @@ func TestColdPluginsAreAskedPerSession(t *testing.T) {
 // The session must stay usable: the next persist reopens both handles, and
 // the index it then writes must still describe the whole journal.
 func TestEvictionReleasesSessionFileHandles(t *testing.T) {
+	requireDiskStore(t)
 	dir := t.TempDir()
 	prov := &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("one"), asstTurn("two"), asstTurn("three")}}
 	h := newHarnessOpts(t, dir, prov, 1) // MaxResident 1: the next create evicts
