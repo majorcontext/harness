@@ -22,6 +22,9 @@ type codexScenario struct {
 	// mcpSchema, when set, serves one MCP tool named "send" with this input
 	// schema as the server "srv".
 	mcpSchema string
+	// bareKey configures the lane under the built-in "openai" provider key
+	// with no type, as a deployment that points "openai" at the endpoint.
+	bareKey bool
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -100,6 +103,15 @@ func (a getSessionUsage) runWire(t *testing.T, r *run, _ *harnesstest.OpenAI) {
 	r.record(t, "get_session", a.as, res)
 }
 
+func bareOpenAIKey(cfg map[string]any) map[string]any {
+	providers := cfg["providers"].(map[string]any)
+	entry := providers["codex"].(map[string]any)
+	delete(entry, "type")
+	cfg["model"] = "openai/gpt-5.6-sol"
+	cfg["providers"] = map[string]any{"openai": entry}
+	return cfg
+}
+
 func runCodexScenario(t *testing.T, sc codexScenario) observation {
 	t.Helper()
 	sc.opts.APIKey = codexAPIKey
@@ -112,8 +124,12 @@ func runCodexScenario(t *testing.T, sc codexScenario) observation {
 		extra["mcp_tool_loading"] = "eager"
 		extra["mcp_servers"] = map[string]any{"srv": map[string]any{"url": serveMCPTool(t, sc.mcpSchema)}}
 	}
+	cfg := codexConfig(o.URL(), sc.websocket, extra)
+	if sc.bareKey {
+		cfg = bareOpenAIKey(cfg)
+	}
 	r := &run{
-		drv:    newHTTPDriverWith(t, o.URL(), codexConfig(o.URL(), sc.websocket, extra)),
+		drv:    newHTTPDriverWith(t, o.URL(), cfg),
 		fake:   o.Server,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
@@ -267,6 +283,10 @@ func codexHTTPRows() []codexScenario {
 		{
 			scenario:  scenario{name: "codex_http_mcp_tool_schema_is_sanitized", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})},
 			mcpSchema: mcpToolSchemaWithRejectedKeywords,
+		},
+		{
+			scenario: scenario{name: "openai_key_http_sse_text_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})},
+			bareKey:  true,
 		},
 		{scenario: scenario{name: "codex_http_sse_text_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})}},
 		{scenario: scenario{name: "codex_http_sse_tool_round_trip_resends_history", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), []action{recordWire{}})}},

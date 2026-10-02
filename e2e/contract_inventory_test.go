@@ -13,7 +13,9 @@ import (
 var rowNamePattern = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)+$`)
 
 // contractRowNames maps each scenario row name found in the contract_*_test.go
-// tables to the test function that declares it.
+// tables to the test function that declares it. A row is a keyed name field,
+// the first field of a positional struct row, or the first argument of a
+// row(...) helper call.
 func contractRowNames(t *testing.T) map[string]string {
 	t.Helper()
 	files, err := filepath.Glob("contract_*_test.go")
@@ -33,30 +35,8 @@ func contractRowNames(t *testing.T) map[string]string {
 				continue
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "mcpServerDef" {
-					return true
-				}
-				for i, el := range lit.Elts {
-					var val ast.Expr
-					switch e := el.(type) {
-					case *ast.KeyValueExpr:
-						if k, ok := e.Key.(*ast.Ident); ok && k.Name == "name" {
-							val = e.Value
-						}
-					default:
-						if i == 0 {
-							val = el
-						}
-					}
-					bl, ok := val.(*ast.BasicLit)
-					if !ok || bl.Kind != token.STRING {
-						continue
-					}
-					if s, err := strconv.Unquote(bl.Value); err == nil && rowNamePattern.MatchString(s) {
+				for _, v := range rowNameLiterals(n) {
+					if s, err := strconv.Unquote(v.Value); err == nil && rowNamePattern.MatchString(s) {
 						names[s] = fn.Name.Name
 					}
 				}
@@ -67,6 +47,41 @@ func contractRowNames(t *testing.T) map[string]string {
 	return names
 }
 
+func rowNameLiterals(n ast.Node) []*ast.BasicLit {
+	var vals []ast.Expr
+	switch n := n.(type) {
+	case *ast.CallExpr:
+		if id, ok := n.Fun.(*ast.Ident); ok && id.Name == "row" && len(n.Args) > 0 {
+			vals = append(vals, n.Args[0])
+		}
+	case *ast.CompositeLit:
+		switch typ := n.Type.(type) {
+		case *ast.ArrayType, *ast.MapType:
+			return nil
+		case *ast.Ident:
+			if typ.Name == "mcpServerDef" {
+				return nil
+			}
+		}
+		for i, el := range n.Elts {
+			if kv, ok := el.(*ast.KeyValueExpr); ok {
+				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "name" {
+					vals = append(vals, kv.Value)
+				}
+			} else if i == 0 && len(n.Elts) > 1 {
+				vals = append(vals, el)
+			}
+		}
+	}
+	var lits []*ast.BasicLit
+	for _, v := range vals {
+		if bl, ok := v.(*ast.BasicLit); ok && bl.Kind == token.STRING {
+			lits = append(lits, bl)
+		}
+	}
+	return lits
+}
+
 // boxesFeatures lists every harness feature that boxes uses, each with the
 // contract rows that exercise it.
 var boxesFeatures = []struct {
@@ -75,7 +90,7 @@ var boxesFeatures = []struct {
 }{
 	{"config providers.anthropic", []string{"text_reply", "one_tool_round_trip", "provider_429_then_ok"}},
 	{"config providers.bifrost", []string{"bifrost_text_reply", "bifrost_tool_round_trip"}},
-	{"config providers.openai", []string{"codex_http_sse_text_turn", "codex_ws_tool_round_trip"}},
+	{"config providers.openai", []string{"openai_key_http_sse_text_turn"}},
 	{"config providers.codex", []string{"codex_http_sse_tool_round_trip_resends_history", "codex_ws_chains_two_turns"}},
 	{"config providers.claude-code", []string{"claudecode_turn_text_and_tool", "claudecode_resume_across_turns"}},
 	{"config goal_evaluator_model", []string{"bifrost_goal_met_first_turn", "bifrost_goal_not_met_then_met"}},
