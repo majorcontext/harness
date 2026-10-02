@@ -27,6 +27,7 @@ a standalone document.
 
 | Design | Subject |
 |---|---|
+| [architecture.md](architecture.md) | Target architecture and migration phases |
 | [context-compaction.md](design/context-compaction.md) | Automatic and manual context compaction |
 | [codex-websocket-chaining.md](design/codex-websocket-chaining.md) | Codex response chaining and startup prewarm |
 | [event-sink.md](design/event-sink.md) | Outbound journal forwarding to a configured HTTP receiver |
