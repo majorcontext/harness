@@ -10,6 +10,7 @@
         "fixture_crash",
         "fixture_echo",
         "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -48,6 +49,7 @@
         "fixture_crash",
         "fixture_echo",
         "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -110,6 +112,7 @@
         "fixture_crash",
         "fixture_echo",
         "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -194,6 +197,7 @@
         "fixture_crash",
         "fixture_echo",
         "fixture_fail",
+        "fixture_report",
         "glob",
         "goal",
         "grep",
@@ -408,7 +412,8 @@
             "hooks": [
               "system.transform",
               "tool.execute.before",
-              "tool.execute.after"
+              "tool.execute.after",
+              "event"
             ],
             "name": "fixture",
             "state": "not-spawned",
@@ -416,7 +421,8 @@
               "fixture_echo",
               "fixture_fail",
               "fixture_config",
-              "fixture_crash"
+              "fixture_crash",
+              "fixture_report"
             ]
           }
         ],
@@ -456,7 +462,8 @@
             "hooks": [
               "system.transform",
               "tool.execute.before",
-              "tool.execute.after"
+              "tool.execute.after",
+              "event"
             ],
             "name": "fixture",
             "state": "running",
@@ -464,7 +471,8 @@
               "fixture_echo",
               "fixture_fail",
               "fixture_config",
-              "fixture_crash"
+              "fixture_crash",
+              "fixture_report"
             ]
           }
         ],

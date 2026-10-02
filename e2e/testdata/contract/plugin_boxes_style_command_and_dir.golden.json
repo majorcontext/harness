@@ -81,9 +81,9 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "ls",
+              "tool_name": "fixture_report",
               "tool_input": {
-                "path": "."
+                "process": true
               },
               "tool_use_id": "toolu#1"
             }
@@ -94,8 +94,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "(empty directory)",
-              "tool_name": "ls",
+              "text": "{\"argv\":[\"fixture.ts\"],\"cwd\":\"plugin-cwd\"}",
+              "tool_name": "fixture_report",
               "tool_use_id": "toolu#1"
             }
           ]
@@ -122,9 +122,9 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "ls",
+            "name": "fixture_report",
             "arguments": {
-              "path": "."
+              "process": true
             }
           }
         ]
@@ -136,7 +136,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "(empty directory)"
+            "content": "{\"argv\":[\"fixture.ts\"],\"cwd\":\"plugin-cwd\"}"
           }
         ]
       },

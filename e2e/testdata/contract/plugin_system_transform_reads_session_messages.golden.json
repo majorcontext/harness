@@ -29,7 +29,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "first"
             },
             {
               "kind": "text",
@@ -68,7 +68,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "first"
             },
             {
               "kind": "text",
@@ -80,12 +80,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "ls",
-              "tool_input": {
-                "path": "."
-              },
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "ok1"
             }
           ]
         },
@@ -93,10 +89,8 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "(empty directory)",
-              "tool_name": "ls",
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "second"
             }
           ]
         }
@@ -111,7 +105,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "first"
           }
         ]
       },
@@ -120,23 +114,18 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "ls",
-            "arguments": {
-              "path": "."
-            }
+            "type": "text",
+            "text": "ok1"
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "tool",
+        "role": "user",
         "parts": [
           {
-            "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "(empty directory)"
+            "type": "text",
+            "text": "second"
           }
         ]
       },
@@ -146,7 +135,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "done"
+            "text": "ok2"
           }
         ]
       }

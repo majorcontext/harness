@@ -29,7 +29,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "crash"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -68,191 +68,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "crash"
+              "text": "go"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "plugin: connection closed: EOF",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1",
-              "is_error": true
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "fixture_config",
-        "fixture_crash",
-        "fixture_echo",
-        "fixture_fail",
-        "fixture_report",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "crash"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "plugin: connection closed: EOF",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1",
-              "is_error": true
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "plugin died"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "again"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "fixture_config",
-        "fixture_crash",
-        "fixture_echo",
-        "fixture_fail",
-        "fixture_report",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "crash"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "tool_use",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "tool_result",
-              "text": "plugin: connection closed: EOF",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1",
-              "is_error": true
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "plugin died"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "again"
             }
           ]
         },
@@ -265,6 +85,94 @@
               "tool_input": {
                 "command": "echo rewrite-me"
               },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "after-hook saw: rewritten\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "fixture_config",
+        "fixture_crash",
+        "fixture_echo",
+        "fixture_fail",
+        "fixture_report",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo rewrite-me"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "after-hook saw: rewritten\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "edited.txt"
+              },
               "tool_use_id": "toolu#2"
             }
           ]
@@ -274,8 +182,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "rewrite-me\n",
-              "tool_name": "bash",
+              "text": "wrote 1 bytes to \u003cworkdir\u003e/edited.txt",
+              "tool_name": "write_file",
               "tool_use_id": "toolu#2"
             }
           ]
@@ -311,7 +219,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "crash"
+              "text": "go"
             },
             {
               "kind": "text",
@@ -324,7 +232,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "fixture_crash",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo rewrite-me"
+              },
               "tool_use_id": "toolu#1"
             }
           ]
@@ -334,28 +245,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "plugin: connection closed: EOF",
-              "tool_name": "fixture_crash",
-              "tool_use_id": "toolu#1",
-              "is_error": true
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "plugin died"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "again"
+              "text": "after-hook saw: rewritten\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -364,9 +256,10 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "bash",
+              "tool_name": "write_file",
               "tool_input": {
-                "command": "echo rewrite-me"
+                "content": "x",
+                "path": "edited.txt"
               },
               "tool_use_id": "toolu#2"
             }
@@ -377,8 +270,8 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "rewrite-me\n",
-              "tool_name": "bash",
+              "text": "wrote 1 bytes to \u003cworkdir\u003e/edited.txt",
+              "tool_name": "write_file",
               "tool_use_id": "toolu#2"
             }
           ]
@@ -388,9 +281,9 @@
           "parts": [
             {
               "kind": "tool_use",
-              "tool_name": "fixture_echo",
+              "tool_name": "fixture_report",
               "tool_input": {
-                "text": "hi"
+                "edits": 1
               },
               "tool_use_id": "toolu#3"
             }
@@ -401,10 +294,9 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "write |1: broken pipe",
-              "tool_name": "fixture_echo",
-              "tool_use_id": "toolu#3",
-              "is_error": true
+              "text": "{\"after_args\":{\"bash\":{\"command\":\"echo rewritten\"},\"write_file\":{\"content\":\"x\",\"path\":\"edited.txt\"}},\"edited\":[\"edited.txt\"],\"session_ids_match\":{\"after\":true,\"event\":true,\"system_transform\":true}}",
+              "tool_name": "fixture_report",
+              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -419,7 +311,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "crash"
+            "text": "go"
           }
         ]
       },
@@ -430,8 +322,10 @@
           {
             "type": "tool_call",
             "call_id": "toolu#1",
-            "name": "fixture_crash",
-            "arguments": {}
+            "name": "bash",
+            "arguments": {
+              "command": "echo rewrite-me"
+            }
           }
         ]
       },
@@ -442,8 +336,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "is_error": true,
-            "content": "plugin: connection closed: EOF"
+            "content": "after-hook saw: rewritten\n"
           }
         ]
       },
@@ -452,18 +345,24 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "plugin died"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "write_file",
+            "arguments": {
+              "content": "x",
+              "path": "edited.txt"
+            }
           }
         ]
       },
       {
         "id": "msg#5",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "again"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "wrote 1 bytes to \u003cworkdir\u003e/edited.txt"
           }
         ]
       },
@@ -473,10 +372,10 @@
         "parts": [
           {
             "type": "tool_call",
-            "call_id": "toolu#2",
-            "name": "bash",
+            "call_id": "toolu#3",
+            "name": "fixture_report",
             "arguments": {
-              "command": "echo rewrite-me"
+              "edits": 1
             }
           }
         ]
@@ -487,8 +386,8 @@
         "parts": [
           {
             "type": "tool_result",
-            "call_id": "toolu#2",
-            "content": "rewrite-me\n"
+            "call_id": "toolu#3",
+            "content": "{\"after_args\":{\"bash\":{\"command\":\"echo rewritten\"},\"write_file\":{\"content\":\"x\",\"path\":\"edited.txt\"}},\"edited\":[\"edited.txt\"],\"session_ids_match\":{\"after\":true,\"event\":true,\"system_transform\":true}}"
           }
         ]
       },
@@ -497,90 +396,11 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#3",
-            "name": "fixture_echo",
-            "arguments": {
-              "text": "hi"
-            }
-          }
-        ]
-      },
-      {
-        "id": "msg#9",
-        "role": "tool",
-        "parts": [
-          {
-            "type": "tool_result",
-            "call_id": "toolu#3",
-            "is_error": true,
-            "content": "write |1: broken pipe"
-          }
-        ]
-      },
-      {
-        "id": "msg#10",
-        "role": "assistant",
-        "parts": [
-          {
             "type": "text",
-            "text": "still here"
+            "text": "done"
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "get_session.a": {
-      "status": 200,
-      "body": {
-        "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
-        "last_turn": {
-          "outcome": "completed"
-        },
-        "lineage": {
-          "children": [],
-          "status": "idle"
-        },
-        "messages": 10,
-        "model": "anthropic/claude-fable-5",
-        "plugins": [
-          {
-            "hooks": [
-              "system.transform",
-              "tool.execute.before",
-              "tool.execute.after",
-              "event"
-            ],
-            "name": "fixture",
-            "state": "errored",
-            "tools": [
-              "fixture_echo",
-              "fixture_fail",
-              "fixture_config",
-              "fixture_crash",
-              "fixture_report"
-            ]
-          }
-        ],
-        "queued": 0,
-        "state": "idle",
-        "status": "idle",
-        "subscription_usage": null,
-        "usage": {
-          "input_tokens": 25,
-          "last_input_tokens": 5,
-          "messages": 10,
-          "output_tokens": 15
-        },
-        "workdir": "\u003cworkdir\u003e"
-      }
-    }
   }
 }
