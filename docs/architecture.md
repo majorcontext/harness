@@ -596,12 +596,14 @@ Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`.
 
 | Gate | Threshold |
 | --- | --- |
-| Whole-line comments per file | Warn above 15%; fail above 25% |
-| History markers in comments | Fail on issue numbers, dates, "no longer", "previously", "instead of" |
-| File size | Fail above 800 lines; target 600 |
+| Whole-line comments per file | Warn above 15%; fail above 25%. A baselined file may not rise above its baseline share. The `doc.go` package comment does not count |
+| History markers in comments | Fail on issue numbers, dates, "no longer", "previously", "used to be", "review finding". A baselined file may not gain one |
+| File size | Fail above 800 lines |
 | Function size | Fail above 80 lines |
-| Test lines vs code lines per package | Ratchet; never rises |
-| `time.Sleep`, `time.After` in tests | Fail outside `internal/testpoll` |
+| Test lines vs code lines per package | A new package fails above 1.5 test lines per code line. A baselined package may not raise its ratio by adding tests |
+| `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file. A baselined file may not gain one |
+| `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
+| Baseline | Only lowers. `TestRepository` fails on a stale entry; CI fails when `baseline.json` rises above the target branch's copy |
 | Protocol drift | Regenerate; fail on a diff |
 | Imports | `depguard`: internal packages never import `server` or `cmd` |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
