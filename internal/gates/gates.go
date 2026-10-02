@@ -294,6 +294,10 @@ func Check(r Report, base Report) []Violation {
 			vs = append(vs, Violation{p, "agents_cap", fmt.Sprintf("%d lines, limit %d", n, limit)})
 		}
 	}
+	return sorted(vs)
+}
+
+func sorted(vs []Violation) []Violation {
 	sort.Slice(vs, func(i, j int) bool {
 		if vs[i].Path != vs[j].Path {
 			return vs[i].Path < vs[j].Path
@@ -301,6 +305,67 @@ func Check(r Report, base Report) []Violation {
 		return vs[i].Rule < vs[j].Rule
 	})
 	return vs
+}
+
+// Stale returns baseline entries that are looser than the current metrics: a
+// file that is gone, meets the rules, or has tighter limits than recorded; a
+// package that is gone, unrecorded, or has a lower test:code ratio.
+func Stale(r, base Report) []Violation {
+	var vs []Violation
+	for p, b := range base.Files {
+		if m, ok := r.Files[p]; !ok {
+			vs = append(vs, Violation{p, "baseline_stale", "file is gone"})
+		} else if limitOf(m) != limitOf(b) {
+			vs = append(vs, Violation{p, "baseline_stale", "file is within a tighter limit than recorded"})
+		}
+	}
+	for p, b := range base.Packages {
+		m, ok := r.Packages[p]
+		switch {
+		case !ok:
+			vs = append(vs, Violation{p, "baseline_stale", "package is gone"})
+		case m.CodeLines > 0 && b.TestLines > 0 && m.TestLines*b.CodeLines < b.TestLines*m.CodeLines,
+			b.TestLines == 0 && m.TestLines > 0:
+			vs = append(vs, Violation{p, "baseline_stale", fmt.Sprintf("test:code %d:%d is below recorded %d:%d", m.TestLines, m.CodeLines, b.TestLines, b.CodeLines)})
+		}
+	}
+	for p := range r.Packages {
+		if _, ok := base.Packages[p]; !ok {
+			vs = append(vs, Violation{p, "baseline_stale", "package is not recorded"})
+		}
+	}
+	return sorted(vs)
+}
+
+func packageRises(n, pb PackageMetrics) bool {
+	if n.CodeLines == 0 {
+		return false
+	}
+	if pb.TestLines == 0 {
+		return ratioFailure(n, pb, true) != ""
+	}
+	return ratioRises(n, pb)
+}
+
+// Rises returns the entries of next that are looser than prev: a file that
+// enters the baseline, a file over a limit that prev set, or a package whose
+// ratio rises. A package absent from prev is new and passes.
+func Rises(next, prev Report) []Violation {
+	var vs []Violation
+	for p, n := range next.Files {
+		if pb, ok := prev.Files[p]; !ok {
+			vs = append(vs, Violation{p, "baseline_rise", "file is new to the baseline"})
+		} else if o := over(n, limitOf(pb)); len(o) > 0 {
+			vs = append(vs, Violation{p, "baseline_rise", strings.Join(o, "; ")})
+		}
+	}
+	for p, n := range next.Packages {
+		pb, ok := prev.Packages[p]
+		if ok && packageRises(n, pb) {
+			vs = append(vs, Violation{p, "baseline_rise", fmt.Sprintf("test:code %d:%d rises above %d:%d", n.TestLines, n.CodeLines, pb.TestLines, pb.CodeLines)})
+		}
+	}
+	return sorted(vs)
 }
 
 // Seed builds a first baseline: every package ratio and every file that
@@ -339,6 +404,9 @@ func Lower(r Report, base Report) (Report, error) {
 		b, ok := base.Packages[p]
 		if d := ratioFailure(m, b, ok); d != "" {
 			return Report{}, fmt.Errorf("%s: %s", p, d)
+		}
+		if ok && b.TestLines > 0 && m.CodeLines > 0 && ratioRises(m, b) {
+			m = b
 		}
 		next.Packages[p] = m
 	}

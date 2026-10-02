@@ -32,6 +32,7 @@ Add none of these without a new design decision:
 
 ## Code
 - Keep files under 800 lines and functions under 80. `internal/gates` enforces the ceilings.
+- After a change lowers a baselined file or package, run `go test ./internal/gates -run TestRepository -update-baseline`. Never edit `internal/gates/baseline.json` by hand.
 - Write no comment by default. A comment states a constraint, a hazard, or a non-obvious reason.
 - A comment never states history: no issue numbers, dates, "previously", or "no longer".
 - An exported identifier gets a one-line doc comment.

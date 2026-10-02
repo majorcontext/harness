@@ -12,6 +12,8 @@ import (
 
 var updateBaseline = flag.Bool("update-baseline", false, "lower baseline.json to the current metrics")
 
+var prevBaseline = flag.String("prev-baseline", "", "baseline.json of the target branch; fail when baseline.json rises above it")
+
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
 func longFunc(n int) string {
@@ -333,6 +335,52 @@ func TestLowerShrinksAndRemoves(t *testing.T) {
 	}
 }
 
+func baselineOf(lines, test, code int) Report {
+	return Report{
+		Files:    map[string]FileMetrics{"a.go": {Lines: lines, CodeLines: lines}},
+		Packages: map[string]PackageMetrics{"a": {TestLines: test, CodeLines: code}},
+	}
+}
+
+func TestStale(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tree, base Report
+		want       []string
+	}{
+		"equal":                       {baselineOf(900, 4, 4), baselineOf(900, 4, 4), nil},
+		"file_shrunk":                 {baselineOf(850, 4, 4), baselineOf(900, 4, 4), []string{"a.go:baseline_stale"}},
+		"file_gone":                   {Report{Packages: baselineOf(0, 4, 4).Packages}, baselineOf(900, 4, 4), []string{"a.go:baseline_stale"}},
+		"ratio_fell":                  {baselineOf(900, 4, 4), baselineOf(900, 4, 2), []string{"a:baseline_stale"}},
+		"code_deleted_keeps_baseline": {baselineOf(900, 4, 2), baselineOf(900, 4, 4), nil},
+		"package_unrecorded":          {baselineOf(900, 4, 4), Report{Files: baselineOf(900, 0, 0).Files}, []string{"a:baseline_stale"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := rules(Stale(tc.tree, tc.base)); !slices.Equal(got, tc.want) {
+				t.Errorf("Stale = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRises(t *testing.T) {
+	for name, tc := range map[string]struct {
+		next, prev Report
+		want       []string
+	}{
+		"lowered":      {baselineOf(850, 4, 4), baselineOf(900, 4, 4), nil},
+		"file_raised":  {baselineOf(900, 4, 4), baselineOf(850, 4, 4), []string{"a.go:baseline_rise"}},
+		"file_added":   {baselineOf(900, 4, 4), Report{Packages: baselineOf(0, 4, 4).Packages}, []string{"a.go:baseline_rise"}},
+		"ratio_raised": {baselineOf(900, 4, 2), baselineOf(900, 4, 4), []string{"a:baseline_rise"}},
+		"package_new":  {baselineOf(900, 4, 4), Report{Files: baselineOf(900, 0, 0).Files}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := rules(Rises(tc.next, tc.prev)); !slices.Equal(got, tc.want) {
+				t.Errorf("Rises = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLowerAddsNewPackage(t *testing.T) {
 	cur := Report{Packages: map[string]PackageMetrics{"new": {TestLines: 3, CodeLines: 10}}}
 	got, err := Lower(cur, Report{})
@@ -344,23 +392,29 @@ func TestLowerAddsNewPackage(t *testing.T) {
 	}
 }
 
+func readReport(t *testing.T, path string) (Report, bool) {
+	t.Helper()
+	var r Report
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return r, true
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	return r, false
+}
+
 func TestRepository(t *testing.T) {
 	const path = "baseline.json"
 	r, err := Collect(os.DirFS("../.."))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var base Report
-	data, err := os.ReadFile(path)
-	missing := os.IsNotExist(err)
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &base); err != nil {
-			t.Fatal(err)
-		}
-	case !missing:
-		t.Fatal(err)
-	}
+	base, missing := readReport(t, path)
 	if *updateBaseline {
 		next := Seed(r)
 		if !missing {
@@ -383,6 +437,23 @@ func TestRepository(t *testing.T) {
 		}
 	}
 	for _, v := range Check(r, base) {
+		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
+	}
+	for _, v := range Stale(r, base) {
+		t.Errorf("%s: %s: %s; run go test ./internal/gates -run TestRepository -update-baseline", v.Path, v.Rule, v.Detail)
+	}
+}
+
+func TestBaselineNeverRises(t *testing.T) {
+	if *prevBaseline == "" {
+		t.Skip("set -prev-baseline to the target branch's baseline.json")
+	}
+	prev, missing := readReport(t, *prevBaseline)
+	if missing {
+		t.Fatalf("%s does not exist", *prevBaseline)
+	}
+	next, _ := readReport(t, "baseline.json")
+	for _, v := range Rises(next, prev) {
 		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
 	}
 }
