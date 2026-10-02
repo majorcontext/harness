@@ -1,0 +1,3127 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:3:needle three\nb.txt:2:needle two",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:3:needle three\nb.txt:2:needle two",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "case_insensitive": true,
+                "glob": "a.*",
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:2:Needle one\na.txt:3:needle three",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:3:needle three\nb.txt:2:needle two",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "case_insensitive": true,
+                "glob": "a.*",
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:2:Needle one\na.txt:3:needle three",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "**/*.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\nb.txt\nsub/c.txt",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:3:needle three\nb.txt:2:needle two",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "case_insensitive": true,
+                "glob": "a.*",
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:2:Needle one\na.txt:3:needle three",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "**/*.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\nb.txt\nsub/c.txt",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "ls",
+              "tool_input": {
+                "path": "proj"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "sub/\na.txt\nb.txt",
+              "tool_name": "ls",
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "gamma\n",
+                "path": "proj/sub/c.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "beta\nneedle two\n",
+                "path": "proj/b.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "alpha\nNeedle one\nneedle three\n",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→alpha\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "limit": 1,
+                "offset": 2,
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "2→Needle one\n[truncated: showing lines 2-2 of 3]",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "ALPHA",
+                "old_string": "alpha",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "absent",
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/a.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→ALPHA\n2→Needle one\n3→needle three",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:3:needle three\nb.txt:2:needle two",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "grep",
+              "tool_input": {
+                "case_insensitive": true,
+                "glob": "a.*",
+                "path": "proj",
+                "pattern": "needle"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt:2:Needle one\na.txt:3:needle three",
+              "tool_name": "grep",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "glob",
+              "tool_input": {
+                "path": "proj",
+                "pattern": "**/*.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "a.txt\nb.txt\nsub/c.txt",
+              "tool_name": "glob",
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "ls",
+              "tool_input": {
+                "path": "proj"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "sub/\na.txt\nb.txt",
+              "tool_name": "ls",
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/missing.txt"
+              },
+              "tool_use_id": "toolu#13"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "read_file: stat \u003cworkdir\u003e/proj/missing.txt: no such file or directory",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#13",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "write_file",
+            "arguments": {
+              "content": "gamma\n",
+              "path": "proj/sub/c.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "wrote 6 bytes to \u003cworkdir\u003e/proj/sub/c.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "write_file",
+            "arguments": {
+              "content": "beta\nneedle two\n",
+              "path": "proj/b.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "wrote 16 bytes to \u003cworkdir\u003e/proj/b.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "write_file",
+            "arguments": {
+              "content": "alpha\nNeedle one\nneedle three\n",
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "wrote 30 bytes to \u003cworkdir\u003e/proj/a.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "content": "1→alpha\n2→Needle one\n3→needle three"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "read_file",
+            "arguments": {
+              "limit": 1,
+              "offset": 2,
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "2→Needle one\n[truncated: showing lines 2-2 of 3]"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "ALPHA",
+              "old_string": "alpha",
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "content": "replaced 1 occurrence(s) in \u003cworkdir\u003e/proj/a.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "x",
+              "old_string": "absent",
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "is_error": true,
+            "content": "edit_file: old_string not found in \u003cworkdir\u003e/proj/a.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/a.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "content": "1→ALPHA\n2→Needle one\n3→needle three"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "grep",
+            "arguments": {
+              "path": "proj",
+              "pattern": "needle"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "content": "a.txt:3:needle three\nb.txt:2:needle two"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#10",
+            "name": "grep",
+            "arguments": {
+              "case_insensitive": true,
+              "glob": "a.*",
+              "path": "proj",
+              "pattern": "needle"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#10",
+            "content": "a.txt:2:Needle one\na.txt:3:needle three"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#11",
+            "name": "glob",
+            "arguments": {
+              "path": "proj",
+              "pattern": "**/*.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#23",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#11",
+            "content": "a.txt\nb.txt\nsub/c.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#24",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#12",
+            "name": "ls",
+            "arguments": {
+              "path": "proj"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#25",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#12",
+            "content": "sub/\na.txt\nb.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#26",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#13",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/missing.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#27",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#13",
+            "is_error": true,
+            "content": "read_file: stat \u003cworkdir\u003e/proj/missing.txt: no such file or directory"
+          }
+        ]
+      },
+      {
+        "id": "msg#28",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

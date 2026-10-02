@@ -1,0 +1,3544 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→one\n2→2\n3→2",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→one\n2→2\n3→2",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "one",
+                "old_string": "one",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string and new_string are identical",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→one\n2→2\n3→2",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "one",
+                "old_string": "one",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string and new_string are identical",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/nope.txt"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: open \u003cworkdir\u003e/proj/nope.txt: no such file or directory",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→one\n2→2\n3→2",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "one",
+                "old_string": "one",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string and new_string are identical",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/nope.txt"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: open \u003cworkdir\u003e/proj/nope.txt: no such file or directory",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "path": "proj/x.txt"
+              },
+              "tool_use_id": "toolu#13"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: missing path or content argument",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#13",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "one\ntwo\ntwo\n",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'seed\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "x",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→seed",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "replaced\n",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "printf 'outside\\n' \u003e proj/seed.txt"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "again",
+                "path": "proj/seed.txt"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "2",
+                "old_string": "two",
+                "path": "proj/g.txt",
+                "replace_all": true
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→one\n2→2\n3→2",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#10"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "one",
+                "old_string": "one",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#11"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: old_string and new_string are identical",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#11",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "b",
+                "old_string": "a",
+                "path": "proj/nope.txt"
+              },
+              "tool_use_id": "toolu#12"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: open \u003cworkdir\u003e/proj/nope.txt: no such file or directory",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#12",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "path": "proj/x.txt"
+              },
+              "tool_use_id": "toolu#13"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: missing path or content argument",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#13",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "edit_file",
+              "tool_input": {
+                "new_string": "x",
+                "old_string": "",
+                "path": "proj/g.txt"
+              },
+              "tool_use_id": "toolu#14"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "edit_file: missing path or old_string argument",
+              "tool_name": "edit_file",
+              "tool_use_id": "toolu#14",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "write_file",
+            "arguments": {
+              "content": "one\ntwo\ntwo\n",
+              "path": "proj/g.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "wrote 12 bytes to \u003cworkdir\u003e/proj/g.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "printf 'seed\\n' \u003e proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "(no output)"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "write_file",
+            "arguments": {
+              "content": "x",
+              "path": "proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "write_file: \u003cworkdir\u003e/proj/seed.txt exists and has not been read this session; read it first (or use edit_file)"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "content": "1→seed"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "write_file",
+            "arguments": {
+              "content": "replaced\n",
+              "path": "proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "wrote 9 bytes to \u003cworkdir\u003e/proj/seed.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "bash",
+            "arguments": {
+              "command": "printf 'outside\\n' \u003e proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "content": "(no output)"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "write_file",
+            "arguments": {
+              "content": "again",
+              "path": "proj/seed.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "is_error": true,
+            "content": "write_file: \u003cworkdir\u003e/proj/seed.txt changed on disk since it was read; read it again before overwriting"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "2",
+              "old_string": "two",
+              "path": "proj/g.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "is_error": true,
+            "content": "edit_file: old_string matches 2 times in \u003cworkdir\u003e/proj/g.txt; provide more surrounding context to make it unique, or set replace_all to true"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "2",
+              "old_string": "two",
+              "path": "proj/g.txt",
+              "replace_all": true
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "content": "replaced 2 occurrence(s) in \u003cworkdir\u003e/proj/g.txt"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#10",
+            "name": "read_file",
+            "arguments": {
+              "path": "proj/g.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#21",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#10",
+            "content": "1→one\n2→2\n3→2"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#11",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "one",
+              "old_string": "one",
+              "path": "proj/g.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#23",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#11",
+            "is_error": true,
+            "content": "edit_file: old_string and new_string are identical"
+          }
+        ]
+      },
+      {
+        "id": "msg#24",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#12",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "b",
+              "old_string": "a",
+              "path": "proj/nope.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#25",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#12",
+            "is_error": true,
+            "content": "edit_file: open \u003cworkdir\u003e/proj/nope.txt: no such file or directory"
+          }
+        ]
+      },
+      {
+        "id": "msg#26",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#13",
+            "name": "write_file",
+            "arguments": {
+              "path": "proj/x.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#27",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#13",
+            "is_error": true,
+            "content": "write_file: missing path or content argument"
+          }
+        ]
+      },
+      {
+        "id": "msg#28",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#14",
+            "name": "edit_file",
+            "arguments": {
+              "new_string": "x",
+              "old_string": "",
+              "path": "proj/g.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#29",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#14",
+            "is_error": true,
+            "content": "edit_file: missing path or old_string argument"
+          }
+        ]
+      },
+      {
+        "id": "msg#30",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}
