@@ -204,8 +204,9 @@ func TestResumeUnresolvedToolCallsSynthetic(t *testing.T) {
 	if last.Role != message.RoleTool || !ok || res.CallID != "t1" {
 		t.Fatalf("last request message = %+v, want a tool result for t1", last)
 	}
-	if res.Content.Text() != interruptedTurnErrorText || !res.IsError {
-		t.Errorf("result = %q (error=%v), want the interrupted text as an error", res.Content.Text(), res.IsError)
+	const want = "The process restarted while this tool call was running; its outcome is unknown."
+	if res.Content.Text() != want || !res.IsError {
+		t.Errorf("result = %q (error=%v), want %q as an error", res.Content.Text(), res.IsError, want)
 	}
 	if probe.ran() != 0 {
 		t.Errorf("tool ran %d times, want 0", probe.ran())

@@ -10,6 +10,8 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
+const resumedToolCallErrorText = "The process restarted while this tool call was running; its outcome is unknown."
+
 const delegatedResumeText = "Your previous turn was interrupted by a restart. Continue from where you left off."
 
 // ErrNotResumable is returned by ResumeTurn when no turn may resume.
@@ -219,7 +221,7 @@ func hasToolCall(m message.Message) bool {
 
 func (s *Session) resumeToolResults(ctx context.Context, asst *message.Message) message.Message {
 	if !s.cfg.ResumeRerunTools {
-		return interruptedToolResults(asst)
+		return syntheticUnexecutedToolResults(asst, resumedToolCallErrorText)
 	}
 	return message.Message{
 		ID:        newID("msg"),
