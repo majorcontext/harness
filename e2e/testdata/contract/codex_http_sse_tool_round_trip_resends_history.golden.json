@@ -150,13 +150,21 @@
           {
             "content_encoding": "zstd",
             "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
             "input_items": 2,
+            "reasoning_summary": "auto",
             "transport": "sse"
           },
           {
             "content_encoding": "zstd",
             "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
             "input_items": 4,
+            "reasoning_summary": "auto",
             "transport": "sse"
           }
         ]

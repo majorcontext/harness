@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "run"
             },
             {
               "kind": "text",
@@ -58,7 +58,35 @@
           "parts": [
             {
               "kind": "text",
-              "text": "two"
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo codex"
+              },
+              "tool_use_id": "call#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "codex\n",
+              "tool_name": "bash",
+              "tool_use_id": "call#1"
             }
           ]
         }
@@ -73,7 +101,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "one"
+            "text": "run"
           }
         ]
       },
@@ -82,18 +110,27 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "1"
+            "type": "reasoning",
+            "text": "plan the call\n\ncheck the args"
+          },
+          {
+            "type": "tool_call",
+            "call_id": "call#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo codex"
+            }
           }
         ]
       },
       {
         "id": "msg#2",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "two"
+            "type": "tool_result",
+            "call_id": "call#1",
+            "content": "codex\n"
           }
         ]
       },
@@ -103,7 +140,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "2"
+            "text": "ran"
           }
         ]
       }
@@ -115,41 +152,25 @@
       "body": {
         "events": [
           {
-            "beta_header": true,
-            "conn": 1,
-            "event": "dial",
-            "transport": "ws"
-          },
-          {
-            "conn": 1,
-            "event": "prewarm",
-            "include": [
-              "reasoning.encrypted_content"
-            ],
-            "reasoning_summary": "auto",
-            "transport": "ws"
-          },
-          {
-            "conn": 1,
+            "content_encoding": "zstd",
             "event": "request",
             "include": [
               "reasoning.encrypted_content"
             ],
             "input_items": 2,
-            "previous_response_id": "resp_warm_1",
             "reasoning_summary": "auto",
-            "transport": "ws"
+            "transport": "sse"
           },
           {
-            "conn": 1,
+            "content_encoding": "zstd",
             "event": "request",
             "include": [
               "reasoning.encrypted_content"
             ],
-            "input_items": 1,
-            "previous_response_id": "resp_1",
+            "input_items": 5,
+            "reasoning_items": 1,
             "reasoning_summary": "auto",
-            "transport": "ws"
+            "transport": "sse"
           }
         ]
       }

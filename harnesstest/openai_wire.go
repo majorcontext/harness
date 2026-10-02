@@ -25,11 +25,17 @@ type openAIBody struct {
 	ServiceTier        string            `json:"service_tier"`
 	PreviousResponseID string            `json:"previous_response_id"`
 	Generate           *bool             `json:"generate"`
-	Tools              []struct {
+	Include            []string          `json:"include"`
+	Reasoning          struct {
+		Effort  string `json:"effort"`
+		Summary string `json:"summary"`
+	} `json:"reasoning"`
+	Tools []struct {
 		Name string `json:"name"`
 	} `json:"tools"`
 
-	params []string // optional params present on the wire
+	params         []string // optional params present on the wire
+	reasoningItems int      // reasoning items replayed in Input
 }
 
 func decodeOpenAIBody(raw []byte) (openAIBody, error) {
@@ -40,6 +46,14 @@ func decodeOpenAIBody(raw []byte) (openAIBody, error) {
 	var keys map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &keys); err != nil {
 		return b, err
+	}
+	for _, raw := range b.Input {
+		var it struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &it) == nil && it.Type == "reasoning" {
+			b.reasoningItems++
+		}
 	}
 	for _, p := range optionalParams {
 		if _, ok := keys[p]; ok {
@@ -172,6 +186,10 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		frames = append(frames, rl.frame())
 	}
 	idx := 0
+	if parts := o.opts.Replies[step.Name].Reasoning; len(parts) > 0 {
+		frames = append(frames, reasoningFrames(idx, id, parts)...)
+		idx++
+	}
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
 		msg := obj{"type": "message", "role": "assistant", "content": []obj{{"type": "output_text", "text": rep.Text}}}
 		frames = append(frames,
@@ -194,6 +212,21 @@ func (o *OpenAI) replyFrames(step Step, ws bool) (string, []frame) {
 		idx++
 	}
 	return id, append(frames, completedFrame(id, usage))
+}
+
+// reasoningFrames builds a reasoning output item with one summary part per
+// element of parts and the encrypted content a replay carries.
+func reasoningFrames(idx int, respID string, parts []string) []frame {
+	summary := make([]obj, len(parts))
+	for i, p := range parts {
+		summary[i] = obj{"type": "summary_text", "text": p}
+	}
+	item := obj{"type": "reasoning", "id": "rs_" + respID, "summary": summary, "encrypted_content": "enc_" + respID}
+	frames := []frame{newFrame("response.output_item.added", obj{"output_index": idx, "item": obj{"type": "reasoning", "id": "rs_" + respID, "summary": []obj{}}})}
+	for i, p := range parts {
+		frames = append(frames, newFrame("response.reasoning_summary_text.delta", obj{"output_index": idx, "summary_index": i, "delta": p}))
+	}
+	return append(frames, newFrame("response.output_item.done", obj{"output_index": idx, "item": item}))
 }
 
 func orEmpty(m map[string]any) map[string]any {

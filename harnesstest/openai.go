@@ -40,6 +40,9 @@ type CodexReply struct {
 	// RateLimits reports a subscription usage snapshot: x-codex-* response
 	// headers over SSE, a codex.rate_limits frame over websocket.
 	RateLimits *RateLimits
+	// Reasoning is the summary parts of a reasoning item that the response
+	// carries before its text or tool calls, with encrypted content.
+	Reasoning []string
 	// Drop ends the response without a terminal event after the first text
 	// delta. It closes the websocket, or aborts the SSE response. The Step
 	// needs Reply.Text.
@@ -79,6 +82,22 @@ type WireRequest struct {
 	// Params lists the optional request params present on the wire, from
 	// max_output_tokens, temperature, top_p, and metadata.
 	Params []string `json:"params,omitempty"`
+	// Include is the request include list.
+	Include []string `json:"include,omitempty"`
+	// ReasoningEffort and ReasoningSummary are the reasoning control of the
+	// request.
+	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
+	ReasoningSummary string `json:"reasoning_summary,omitempty"`
+	// ReasoningItems counts the reasoning items that the request replays.
+	ReasoningItems int `json:"reasoning_items,omitempty"`
+}
+
+func newWireRequest(transport, event string, conn int, b openAIBody) WireRequest {
+	return WireRequest{
+		Transport: transport, Event: event, Conn: conn, PreviousResponseID: b.PreviousResponseID,
+		InputItems: len(b.Input), Params: b.params, Include: b.Include,
+		ReasoningEffort: b.Reasoning.Effort, ReasoningSummary: b.Reasoning.Summary, ReasoningItems: b.reasoningItems,
+	}
 }
 
 // OpenAI is a scripted OpenAI Responses server that speaks the ChatGPT Codex
@@ -242,10 +261,9 @@ func (o *OpenAI) serveSSE(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	o.logWire(WireRequest{
-		Transport: "sse", Event: "request", PreviousResponseID: b.PreviousResponseID,
-		InputItems: len(b.Input), ContentEncoding: r.Header.Get("Content-Encoding"), Params: b.params,
-	})
+	wr := newWireRequest("sse", "request", 0, b)
+	wr.ContentEncoding = r.Header.Get("Content-Encoding")
+	o.logWire(wr)
 	step, ok := o.pick(o.request(b))
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
@@ -329,10 +347,7 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 	if prewarm {
 		event = "prewarm"
 	}
-	o.logWire(WireRequest{
-		Transport: "ws", Event: event, Conn: n, PreviousResponseID: b.PreviousResponseID,
-		InputItems: len(b.Input), Params: b.params,
-	})
+	o.logWire(newWireRequest("ws", event, n, b))
 	if b.PreviousResponseID != "" && !o.isKnown(n, b.PreviousResponseID) {
 		return writeFrames(ctx, conn, previousResponseNotFound(b.PreviousResponseID))
 	}

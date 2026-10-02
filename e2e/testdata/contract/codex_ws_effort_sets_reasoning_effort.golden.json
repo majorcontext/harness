@@ -65,16 +65,38 @@
       "body": {
         "events": [
           {
-            "content_encoding": "zstd",
+            "beta_header": true,
+            "conn": 1,
+            "event": "dial",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
+            "event": "prewarm",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "reasoning_summary": "auto",
+            "transport": "ws"
+          },
+          {
+            "conn": 1,
             "event": "request",
             "include": [
               "reasoning.encrypted_content"
             ],
             "input_items": 2,
+            "reasoning_effort": "high",
             "reasoning_summary": "auto",
-            "transport": "sse"
+            "transport": "ws"
           }
         ]
+      }
+    },
+    "set_thinking.a": {
+      "status": 200,
+      "body": {
+        "effort": "high"
       }
     }
   }

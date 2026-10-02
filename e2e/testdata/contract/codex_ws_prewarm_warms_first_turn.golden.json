@@ -73,13 +73,21 @@
           {
             "conn": 1,
             "event": "prewarm",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
+            "reasoning_summary": "auto",
             "transport": "ws"
           },
           {
             "conn": 1,
             "event": "request",
+            "include": [
+              "reasoning.encrypted_content"
+            ],
             "input_items": 2,
             "previous_response_id": "resp_warm_1",
+            "reasoning_summary": "auto",
             "transport": "ws"
           }
         ]

@@ -15,6 +15,11 @@ import (
 	"github.com/majorcontext/harness/provider/openai"
 )
 
+var (
+	codexInclude = []string{"reasoning.encrypted_content"}
+	maxOutput    = []string{"max_output_tokens"}
+)
+
 func codexClient(s *OpenAI, websocket bool) *openai.Client {
 	return &openai.Client{
 		APIKey: "k", BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
@@ -62,9 +67,9 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 
 	want := []WireRequest{
 		{Transport: "ws", Event: "dial", Conn: 1, ResponsesWebsockets: true},
-		{Transport: "ws", Event: "prewarm", Conn: 1, Params: []string{"max_output_tokens"}},
-		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_warm_1", InputItems: 1, Params: []string{"max_output_tokens"}},
-		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_1", InputItems: 1, Params: []string{"max_output_tokens"}},
+		{Transport: "ws", Event: "prewarm", Conn: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
+		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_warm_1", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
+		{Transport: "ws", Event: "request", Conn: 1, PreviousResponseID: "resp_1", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"},
 	}
 	if got := s.WireRequests(); !reflect.DeepEqual(got, want) {
 		t.Errorf("wire = %+v\nwant %+v", got, want)
@@ -76,6 +81,33 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 	}
 }
 
+func TestOpenAIReasoningItemSurfacesAndReplays(t *testing.T) {
+	s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"think": {Reasoning: []string{"plan", "check"}}}},
+		Step{Name: "think", Match: LastUserText("go"), Reply: Reply{ToolCalls: []ToolCall{{ID: "call_1", Name: "bash"}}}},
+		Step{Name: "after", Match: LastToolResult("bash"), Reply: Reply{Text: "ok"}},
+	)
+	c := codexClient(s, false)
+	first := codexTurn(t, c, codexRequest(codexUser("go")))
+	var got *message.Reasoning
+	for _, p := range first.Message.Parts {
+		if r, ok := p.(*message.Reasoning); ok {
+			got = r
+		}
+	}
+	if got == nil || got.Text != "plan\n\ncheck" {
+		t.Fatalf("reasoning part = %+v, want the two summary parts joined", got)
+	}
+	asst := *first.Message
+	asst.Role = message.RoleAssistant
+	results := message.Message{Role: message.RoleTool, Parts: message.Parts{
+		&message.ToolResult{CallID: "call_1", Content: message.Parts{&message.Text{Text: "out"}}},
+	}}
+	codexTurn(t, c, codexRequest(codexUser("go"), asst, results))
+	if w := s.WireRequests(); len(w) != 2 || w[0].ReasoningItems != 0 || w[1].ReasoningItems != 1 {
+		t.Errorf("wire = %+v, want the second request to replay one reasoning item", w)
+	}
+}
+
 func TestOpenAISSEDecodesZstdAndReportsRateLimitHeaders(t *testing.T) {
 	s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"r": {RateLimits: &RateLimits{
 		Plan: "pro", Primary: &RateWindow{UsedPercent: 12.5, WindowMinutes: 10080, ResetAt: 99},
@@ -84,7 +116,7 @@ func TestOpenAISSEDecodesZstdAndReportsRateLimitHeaders(t *testing.T) {
 	if got := ev.SubscriptionUsage; got == nil || got.Plan != "pro" || len(got.Windows) != 1 || got.Windows[0].Label != "Weekly" || got.Windows[0].UsedPercent != 12.5 {
 		t.Errorf("subscription usage = %+v, want pro plan with a Weekly 12.5%% window", got)
 	}
-	want := []WireRequest{{Transport: "sse", Event: "request", ContentEncoding: "zstd", InputItems: 1, Params: []string{"max_output_tokens"}}}
+	want := []WireRequest{{Transport: "sse", Event: "request", ContentEncoding: "zstd", InputItems: 1, Params: maxOutput, Include: codexInclude, ReasoningSummary: "auto"}}
 	if got := s.WireRequests(); !reflect.DeepEqual(got, want) {
 		t.Errorf("wire = %+v, want %+v", got, want)
 	}

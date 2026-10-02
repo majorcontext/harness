@@ -144,6 +144,10 @@ func codexSession(rest ...[]action) []action {
 	return actions
 }
 
+func codexReasoning() harnesstest.OpenAIOptions {
+	return harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan the call", "check the args"}}}}
+}
+
 func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 	limits := &harnesstest.RateLimits{
 		Plan:      "pro",
@@ -180,6 +184,19 @@ func codexWebSocketRows() []codexScenario {
 			websocket: true,
 		},
 		{
+			scenario:  scenario{name: "codex_ws_reasoning_chains_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), wire)},
+			websocket: true,
+			opts:      codexReasoning(),
+		},
+		{
+			scenario: scenario{
+				name:    "codex_ws_effort_sets_reasoning_effort",
+				model:   codexHi,
+				actions: codexSession([]action{setThinking{as: "a", level: "high"}}, codexTurn("a", "hello"), wire),
+			},
+			websocket: true,
+		},
+		{
 			scenario:  scenario{name: "codex_ws_usage_frame_reaches_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}, recordWire{}})},
 			websocket: true,
 			opts:      codexUsage(false),
@@ -209,6 +226,10 @@ func codexHTTPRows() []codexScenario {
 	return []codexScenario{
 		{scenario: scenario{name: "codex_http_sse_text_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})}},
 		{scenario: scenario{name: "codex_http_sse_tool_round_trip_resends_history", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), []action{recordWire{}})}},
+		{
+			scenario: scenario{name: "codex_http_reasoning_replays_on_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), []action{recordWire{}})},
+			opts:     codexReasoning(),
+		},
 		{
 			scenario: scenario{name: "codex_http_usage_headers_reach_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}})},
 			opts:     codexUsage(true),
