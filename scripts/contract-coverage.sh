@@ -85,6 +85,6 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		echo "| Package | Statements covered |"
 		echo "| --- | --- |"
 		sed -E 's#^[[:space:]]*github.com/majorcontext/harness/?##; s#[[:space:]]+coverage:[[:space:]]+# | #; s#[[:space:]]+of statements##' "$work/percent.txt" |
-			sed -E 's#^\| #(root) | #; s#^#| #; s#$# |#'
+			sed -E 's#^[[:space:]]*\| #(root) | #; s#^#| #; s#$# |#'
 	} >>"$GITHUB_STEP_SUMMARY"
 fi
