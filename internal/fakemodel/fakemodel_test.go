@@ -146,15 +146,19 @@ func (r *recorder) Helper()                   {}
 func (r *recorder) Cleanup(f func())          { r.cleanups = append(r.cleanups, f) }
 func (r *recorder) Errorf(f string, a ...any) { r.errors = append(r.errors, fmt.Sprintf(f, a...)) }
 
+func (r *recorder) runCleanups() {
+	for i := len(r.cleanups) - 1; i >= 0; i-- {
+		r.cleanups[i]()
+	}
+}
+
 func TestUnmatchedRequestFailsLoudly(t *testing.T) {
 	rec := &recorder{TB: t}
 	s := New(rec, Step{Match: LastUserText("expected"), Reply: Reply{Text: "x"}})
 	if _, err := ask(t, s, "surprise title request"); err == nil {
 		t.Fatal("unmatched request succeeded, want an HTTP error")
 	}
-	for i := len(rec.cleanups) - 1; i >= 0; i-- {
-		rec.cleanups[i]()
-	}
+	rec.runCleanups()
 	if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], "surprise title request") || !strings.Contains(rec.errors[0], "sys one") {
 		t.Errorf("errors = %q, want one naming the last user text and system prefix", rec.errors)
 	}
@@ -229,10 +233,28 @@ func TestBlockedStreamExits(t *testing.T) {
 		s := New(rec, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "x", Block: true}})
 		blockedStream(t, s, context.Background())
 		<-s.Blocked("slow")
-		for i := len(rec.cleanups) - 1; i >= 0; i-- {
-			rec.cleanups[i]()
-		}
+		rec.runCleanups()
 	})
+}
+
+func TestUndecodableRequestFailsLoudly(t *testing.T) {
+	rec := &recorder{TB: t}
+	s := New(rec, Step{Match: Any(), Reply: Reply{Text: "x"}})
+	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages": [`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	if got := len(s.Requests()); got != 0 {
+		t.Errorf("recorded %d requests, want 0 for an undecodable body", got)
+	}
+	rec.runCleanups()
+	if len(rec.errors) != 1 || !strings.Contains(rec.errors[0], "undecodable request body") || !strings.Contains(rec.errors[0], `{\"messages\": [`) {
+		t.Errorf("errors = %q, want one naming the undecodable body", rec.errors)
+	}
 }
 
 func TestStepConsumption(t *testing.T) {
@@ -258,9 +280,7 @@ func TestStepConsumption(t *testing.T) {
 				resp.Body.Close()
 				got = append(got, resp.StatusCode)
 			}
-			for i := len(rec.cleanups) - 1; i >= 0; i-- {
-				rec.cleanups[i]()
-			}
+			rec.runCleanups()
 			if !slices.Equal(got, tc.wantReplies) {
 				t.Errorf("statuses = %v, want %v", got, tc.wantReplies)
 			}

@@ -2,6 +2,7 @@
 package fakemodel
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,6 +82,7 @@ type Server struct {
 	consumed  []bool
 	requests  []Request
 	unmatched []Request
+	undecoded []string
 	releases  map[string]chan struct{}
 	blocked   map[string]chan struct{}
 	onRequest func(n int)
@@ -107,6 +109,9 @@ func New(t testing.TB, steps ...Step) *Server {
 		s.srv.Close()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		for _, msg := range s.undecoded {
+			t.Errorf("fakemodel: undecodable request body: %s", msg)
+		}
 		for _, r := range s.unmatched {
 			sys := r.System
 			if len(sys) > 80 {
@@ -184,6 +189,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := decodeRequest(body)
 	if err != nil {
+		s.mu.Lock()
+		s.undecoded = append(s.undecoded, fmt.Sprintf("%v (body prefix %q)", err, body[:min(len(body), 80)]))
+		s.mu.Unlock()
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
