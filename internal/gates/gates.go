@@ -18,6 +18,7 @@ import (
 const (
 	warnShare     = 0.15
 	maxShare      = 0.25
+	maxNewRatio   = 1.5
 	maxFileLines  = 800
 	maxFuncLines  = 80
 	rootAgentsMax = 80
@@ -203,9 +204,18 @@ func exceeds(m, b FileMetrics) bool {
 		m.LongFuncs > b.LongFuncs || m.HistoryMarkers > b.HistoryMarkers || m.SleepAfter > b.SleepAfter
 }
 
-// A package with no non-test code in its baseline, such as e2e, has no ratio gate.
 func ratioRises(m, b PackageMetrics) bool {
 	return m.TestLines*b.CodeLines > b.TestLines*m.CodeLines
+}
+
+// A package with no non-test code, such as e2e, has no ratio gate. Any package
+// may stay within maxNewRatio. Above it, a baselined package may not add test
+// lines while its ratio rises, and a package without a baseline always fails.
+func ratioExceeds(m PackageMetrics, b PackageMetrics, inBase bool) bool {
+	if m.CodeLines == 0 || b.CodeLines == 0 && inBase || float64(m.TestLines) <= maxNewRatio*float64(m.CodeLines) {
+		return false
+	}
+	return !inBase || m.TestLines > b.TestLines && ratioRises(m, b)
 }
 
 // Check returns the violations of absolute rules and of the ratchet against base.
@@ -227,8 +237,8 @@ func Check(r Report, base Report) []Violation {
 		}
 	}
 	for p, m := range r.Packages {
-		if b, ok := base.Packages[p]; ok && ratioRises(m, b) {
-			vs = append(vs, Violation{p, "test_ratio", fmt.Sprintf("test:code %d:%d exceeds baseline %d:%d", m.TestLines, m.CodeLines, b.TestLines, b.CodeLines)})
+		if b, ok := base.Packages[p]; ratioExceeds(m, b, ok) {
+			vs = append(vs, Violation{p, "test_ratio", fmt.Sprintf("test:code %d:%d exceeds baseline %d:%d and limit %.1f", m.TestLines, m.CodeLines, b.TestLines, b.CodeLines, maxNewRatio)})
 		}
 	}
 	for p, n := range r.Agents {
@@ -265,7 +275,8 @@ func Seed(r Report) Report {
 }
 
 // Lower returns base with every entry set to its current value. Entries that
-// now meet the absolute rules leave the baseline. A rise is an error.
+// now meet the absolute rules leave the baseline. Packages new to base enter
+// it. A rise is an error.
 func Lower(r Report, base Report) (Report, error) {
 	next := Report{Files: map[string]FileMetrics{}, Packages: map[string]PackageMetrics{}}
 	for p, b := range base.Files {
@@ -280,13 +291,10 @@ func Lower(r Report, base Report) (Report, error) {
 			next.Files[p] = m
 		}
 	}
-	for p, b := range base.Packages {
-		m, ok := r.Packages[p]
-		if !ok {
-			continue
-		}
-		if ratioRises(m, b) {
-			return Report{}, fmt.Errorf("%s: test:code %d:%d exceeds baseline %d:%d", p, m.TestLines, m.CodeLines, b.TestLines, b.CodeLines)
+	for p, m := range r.Packages {
+		b, ok := base.Packages[p]
+		if ratioExceeds(m, b, ok) {
+			return Report{}, fmt.Errorf("%s: test:code %d:%d exceeds baseline %d:%d and limit %.1f", p, m.TestLines, m.CodeLines, b.TestLines, b.CodeLines, maxNewRatio)
 		}
 		next.Packages[p] = m
 	}

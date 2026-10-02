@@ -41,16 +41,16 @@
 			"sleep_after": 0
 		},
 		"cmd/harness/main.go": {
-			"lines": 2268,
-			"comment_lines": 806,
+			"lines": 2266,
+			"comment_lines": 804,
 			"code_lines": 1363,
 			"long_funcs": 2,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"cmd/harness/main_test.go": {
-			"lines": 1439,
-			"comment_lines": 141,
+			"lines": 1438,
+			"comment_lines": 140,
 			"code_lines": 1234,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -65,8 +65,8 @@
 			"sleep_after": 0
 		},
 		"cmd/harness/plugins.go": {
-			"lines": 687,
-			"comment_lines": 214,
+			"lines": 686,
+			"comment_lines": 213,
 			"code_lines": 445,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -137,8 +137,8 @@
 			"sleep_after": 0
 		},
 		"config/config.go": {
-			"lines": 1861,
-			"comment_lines": 885,
+			"lines": 1858,
+			"comment_lines": 882,
 			"code_lines": 910,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -193,8 +193,8 @@
 			"sleep_after": 0
 		},
 		"engine/agentdef.go": {
-			"lines": 449,
-			"comment_lines": 201,
+			"lines": 445,
+			"comment_lines": 197,
 			"code_lines": 229,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -217,8 +217,8 @@
 			"sleep_after": 0
 		},
 		"engine/bash_pipe_test.go": {
-			"lines": 386,
-			"comment_lines": 123,
+			"lines": 385,
+			"comment_lines": 122,
 			"code_lines": 228,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -241,8 +241,8 @@
 			"sleep_after": 0
 		},
 		"engine/claude_code_backend_test.go": {
-			"lines": 3388,
-			"comment_lines": 764,
+			"lines": 3381,
+			"comment_lines": 757,
 			"code_lines": 2375,
 			"long_funcs": 3,
 			"history_markers": 0,
@@ -257,32 +257,32 @@
 			"sleep_after": 0
 		},
 		"engine/compact.go": {
-			"lines": 1256,
-			"comment_lines": 687,
+			"lines": 1255,
+			"comment_lines": 686,
 			"code_lines": 507,
 			"long_funcs": 3,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/compact_test.go": {
-			"lines": 2985,
-			"comment_lines": 623,
+			"lines": 2963,
+			"comment_lines": 601,
 			"code_lines": 2152,
 			"long_funcs": 2,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/compact_zero_usage_test.go": {
-			"lines": 90,
-			"comment_lines": 26,
+			"lines": 89,
+			"comment_lines": 25,
 			"code_lines": 55,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/context_window.go": {
-			"lines": 192,
-			"comment_lines": 106,
+			"lines": 191,
+			"comment_lines": 105,
 			"code_lines": 73,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -297,16 +297,16 @@
 			"sleep_after": 0
 		},
 		"engine/engine.go": {
-			"lines": 4384,
-			"comment_lines": 2770,
+			"lines": 4371,
+			"comment_lines": 2757,
 			"code_lines": 1393,
 			"long_funcs": 3,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/filetools.go": {
-			"lines": 582,
-			"comment_lines": 207,
+			"lines": 581,
+			"comment_lines": 206,
 			"code_lines": 343,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -321,8 +321,8 @@
 			"sleep_after": 0
 		},
 		"engine/goal_directive_anchor_test.go": {
-			"lines": 211,
-			"comment_lines": 94,
+			"lines": 210,
+			"comment_lines": 93,
 			"code_lines": 95,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -369,40 +369,40 @@
 			"sleep_after": 0
 		},
 		"engine/goal_permanent_error_test.go": {
-			"lines": 202,
-			"comment_lines": 40,
+			"lines": 201,
+			"comment_lines": 39,
 			"code_lines": 150,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/goal_provider_exhausted_test.go": {
-			"lines": 203,
-			"comment_lines": 51,
+			"lines": 202,
+			"comment_lines": 50,
 			"code_lines": 139,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/goal_retry_dedup_test.go": {
-			"lines": 354,
-			"comment_lines": 110,
+			"lines": 352,
+			"comment_lines": 108,
 			"code_lines": 211,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/goal_retry_reuse_test.go": {
-			"lines": 595,
-			"comment_lines": 174,
+			"lines": 592,
+			"comment_lines": 171,
 			"code_lines": 378,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/goal_test.go": {
-			"lines": 1815,
-			"comment_lines": 386,
+			"lines": 1812,
+			"comment_lines": 383,
 			"code_lines": 1315,
 			"long_funcs": 3,
 			"history_markers": 0,
@@ -425,8 +425,8 @@
 			"sleep_after": 0
 		},
 		"engine/goal_update_test.go": {
-			"lines": 1038,
-			"comment_lines": 172,
+			"lines": 1036,
+			"comment_lines": 170,
 			"code_lines": 777,
 			"long_funcs": 3,
 			"history_markers": 0,
@@ -441,24 +441,24 @@
 			"sleep_after": 0
 		},
 		"engine/identity_status.go": {
-			"lines": 105,
-			"comment_lines": 76,
+			"lines": 102,
+			"comment_lines": 73,
 			"code_lines": 25,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/index.go": {
-			"lines": 972,
-			"comment_lines": 375,
+			"lines": 971,
+			"comment_lines": 374,
 			"code_lines": 545,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/index_test.go": {
-			"lines": 1478,
-			"comment_lines": 211,
+			"lines": 1477,
+			"comment_lines": 210,
 			"code_lines": 1192,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -505,24 +505,24 @@
 			"sleep_after": 0
 		},
 		"engine/load_session_empty_tool_result_test.go": {
-			"lines": 127,
-			"comment_lines": 22,
+			"lines": 126,
+			"comment_lines": 21,
 			"code_lines": 96,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/max_tokens_wire_test.go": {
-			"lines": 163,
-			"comment_lines": 41,
+			"lines": 161,
+			"comment_lines": 39,
 			"code_lines": 112,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/mcp.go": {
-			"lines": 1327,
-			"comment_lines": 565,
+			"lines": 1326,
+			"comment_lines": 564,
 			"code_lines": 687,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -593,16 +593,16 @@
 			"sleep_after": 0
 		},
 		"engine/messagepage.go": {
-			"lines": 916,
-			"comment_lines": 336,
+			"lines": 913,
+			"comment_lines": 333,
 			"code_lines": 534,
 			"long_funcs": 2,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/messagepage_test.go": {
-			"lines": 1545,
-			"comment_lines": 256,
+			"lines": 1544,
+			"comment_lines": 255,
 			"code_lines": 1210,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -656,17 +656,9 @@
 			"history_markers": 0,
 			"sleep_after": 0
 		},
-		"engine/prompt_retry_test.go": {
-			"lines": 616,
-			"comment_lines": 146,
-			"code_lines": 432,
-			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
 		"engine/queue.go": {
-			"lines": 853,
-			"comment_lines": 513,
+			"lines": 851,
+			"comment_lines": 511,
 			"code_lines": 307,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -721,8 +713,8 @@
 			"sleep_after": 0
 		},
 		"engine/searchtools.go": {
-			"lines": 484,
-			"comment_lines": 116,
+			"lines": 483,
+			"comment_lines": 115,
 			"code_lines": 350,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -737,8 +729,8 @@
 			"sleep_after": 0
 		},
 		"engine/session_manager.go": {
-			"lines": 5293,
-			"comment_lines": 3606,
+			"lines": 5217,
+			"comment_lines": 3530,
 			"code_lines": 1542,
 			"long_funcs": 10,
 			"history_markers": 0,
@@ -753,16 +745,16 @@
 			"sleep_after": 8
 		},
 		"engine/session_manager_delivery_test.go": {
-			"lines": 4380,
-			"comment_lines": 1614,
+			"lines": 4361,
+			"comment_lines": 1595,
 			"code_lines": 2416,
 			"long_funcs": 17,
 			"history_markers": 0,
 			"sleep_after": 1
 		},
 		"engine/session_manager_orphan_queue_test.go": {
-			"lines": 229,
-			"comment_lines": 55,
+			"lines": 228,
+			"comment_lines": 54,
 			"code_lines": 149,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -777,16 +769,16 @@
 			"sleep_after": 3
 		},
 		"engine/session_manager_test.go": {
-			"lines": 2224,
-			"comment_lines": 589,
+			"lines": 2217,
+			"comment_lines": 582,
 			"code_lines": 1439,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 4
 		},
 		"engine/session_replay_model_test.go": {
-			"lines": 499,
-			"comment_lines": 136,
+			"lines": 498,
+			"comment_lines": 135,
 			"code_lines": 332,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -801,8 +793,8 @@
 			"sleep_after": 0
 		},
 		"engine/snapshot.go": {
-			"lines": 721,
-			"comment_lines": 302,
+			"lines": 719,
+			"comment_lines": 300,
 			"code_lines": 372,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -833,8 +825,8 @@
 			"sleep_after": 0
 		},
 		"engine/store.go": {
-			"lines": 2479,
-			"comment_lines": 1345,
+			"lines": 2471,
+			"comment_lines": 1337,
 			"code_lines": 1071,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -881,8 +873,8 @@
 			"sleep_after": 0
 		},
 		"engine/store_test.go": {
-			"lines": 859,
-			"comment_lines": 120,
+			"lines": 858,
+			"comment_lines": 119,
 			"code_lines": 669,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -913,24 +905,16 @@
 			"sleep_after": 0
 		},
 		"engine/task_tool.go": {
-			"lines": 883,
-			"comment_lines": 385,
+			"lines": 882,
+			"comment_lines": 384,
 			"code_lines": 464,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
-		"engine/task_verbs_revival_test.go": {
-			"lines": 418,
-			"comment_lines": 95,
-			"code_lines": 284,
-			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
 		"engine/task_verbs_test.go": {
-			"lines": 1136,
-			"comment_lines": 199,
+			"lines": 1135,
+			"comment_lines": 198,
 			"code_lines": 809,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -961,16 +945,16 @@
 			"sleep_after": 0
 		},
 		"engine/toolexec.go": {
-			"lines": 434,
-			"comment_lines": 203,
+			"lines": 433,
+			"comment_lines": 202,
 			"code_lines": 206,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"engine/toolexec_adversarial_test.go": {
-			"lines": 896,
-			"comment_lines": 107,
+			"lines": 895,
+			"comment_lines": 106,
 			"code_lines": 710,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1033,10 +1017,10 @@
 			"sleep_after": 0
 		},
 		"engine/toolresult_tool.go": {
-			"lines": 609,
-			"comment_lines": 230,
+			"lines": 608,
+			"comment_lines": 229,
 			"code_lines": 338,
-			"long_funcs": 2,
+			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
@@ -1069,14 +1053,6 @@
 			"comment_lines": 102,
 			"code_lines": 265,
 			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
-		"internal/gates/gates_test.go": {
-			"lines": 212,
-			"comment_lines": 0,
-			"code_lines": 202,
-			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
@@ -1209,8 +1185,8 @@
 			"sleep_after": 0
 		},
 		"message/wire_normalize.go": {
-			"lines": 994,
-			"comment_lines": 543,
+			"lines": 989,
+			"comment_lines": 538,
 			"code_lines": 419,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -1225,8 +1201,8 @@
 			"sleep_after": 0
 		},
 		"message/wire_oracle_meta_test.go": {
-			"lines": 342,
-			"comment_lines": 129,
+			"lines": 341,
+			"comment_lines": 128,
 			"code_lines": 193,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1297,8 +1273,8 @@
 			"sleep_after": 0
 		},
 		"plugin/host_state_test.go": {
-			"lines": 250,
-			"comment_lines": 88,
+			"lines": 247,
+			"comment_lines": 85,
 			"code_lines": 139,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1409,16 +1385,16 @@
 			"sleep_after": 0
 		},
 		"provider/anthropic/stream_fuzz_test.go": {
-			"lines": 104,
-			"comment_lines": 27,
+			"lines": 103,
+			"comment_lines": 26,
 			"code_lines": 69,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"provider/anthropic/stream_test.go": {
-			"lines": 332,
-			"comment_lines": 26,
+			"lines": 331,
+			"comment_lines": 25,
 			"code_lines": 286,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1433,8 +1409,8 @@
 			"sleep_after": 0
 		},
 		"provider/anthropic/transcode_test.go": {
-			"lines": 1104,
-			"comment_lines": 257,
+			"lines": 1103,
+			"comment_lines": 256,
 			"code_lines": 787,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1473,8 +1449,8 @@
 			"sleep_after": 0
 		},
 		"provider/openai/stream_fuzz_test.go": {
-			"lines": 104,
-			"comment_lines": 27,
+			"lines": 103,
+			"comment_lines": 26,
 			"code_lines": 69,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1505,8 +1481,8 @@
 			"sleep_after": 0
 		},
 		"provider/openai/transcode_test.go": {
-			"lines": 943,
-			"comment_lines": 152,
+			"lines": 941,
+			"comment_lines": 150,
 			"code_lines": 745,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1593,8 +1569,8 @@
 			"sleep_after": 0
 		},
 		"provider/openaicompat/transcode_test.go": {
-			"lines": 1086,
-			"comment_lines": 201,
+			"lines": 1085,
+			"comment_lines": 200,
 			"code_lines": 829,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -1625,8 +1601,8 @@
 			"sleep_after": 0
 		},
 		"server/claude_code_model_switch_test.go": {
-			"lines": 279,
-			"comment_lines": 62,
+			"lines": 278,
+			"comment_lines": 61,
 			"code_lines": 199,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1689,8 +1665,8 @@
 			"sleep_after": 0
 		},
 		"server/compact_test.go": {
-			"lines": 943,
-			"comment_lines": 191,
+			"lines": 941,
+			"comment_lines": 189,
 			"code_lines": 672,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1721,8 +1697,8 @@
 			"sleep_after": 0
 		},
 		"server/enqueue_test.go": {
-			"lines": 991,
-			"comment_lines": 169,
+			"lines": 990,
+			"comment_lines": 168,
 			"code_lines": 723,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1777,24 +1753,24 @@
 			"sleep_after": 0
 		},
 		"server/goal_paused_test.go": {
-			"lines": 549,
-			"comment_lines": 89,
+			"lines": 548,
+			"comment_lines": 88,
 			"code_lines": 415,
 			"long_funcs": 3,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/goal_rollback_test.go": {
-			"lines": 151,
-			"comment_lines": 53,
+			"lines": 148,
+			"comment_lines": 50,
 			"code_lines": 84,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 1
 		},
 		"server/goal_test.go": {
-			"lines": 732,
-			"comment_lines": 148,
+			"lines": 729,
+			"comment_lines": 145,
 			"code_lines": 531,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -1809,32 +1785,32 @@
 			"sleep_after": 0
 		},
 		"server/goal_worker_park_test.go": {
-			"lines": 960,
-			"comment_lines": 206,
+			"lines": 959,
+			"comment_lines": 205,
 			"code_lines": 699,
 			"long_funcs": 5,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/handlers.go": {
-			"lines": 4872,
-			"comment_lines": 2483,
+			"lines": 4846,
+			"comment_lines": 2457,
 			"code_lines": 2235,
 			"long_funcs": 7,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/journal.go": {
-			"lines": 1959,
-			"comment_lines": 1047,
+			"lines": 1955,
+			"comment_lines": 1043,
 			"code_lines": 840,
 			"long_funcs": 2,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/journal_spawn_sync_test.go": {
-			"lines": 200,
-			"comment_lines": 96,
+			"lines": 199,
+			"comment_lines": 95,
 			"code_lines": 93,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1865,8 +1841,8 @@
 			"sleep_after": 0
 		},
 		"server/live_events_test.go": {
-			"lines": 266,
-			"comment_lines": 56,
+			"lines": 262,
+			"comment_lines": 52,
 			"code_lines": 192,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1889,8 +1865,8 @@
 			"sleep_after": 0
 		},
 		"server/lookup_live_session_test.go": {
-			"lines": 216,
-			"comment_lines": 80,
+			"lines": 215,
+			"comment_lines": 79,
 			"code_lines": 124,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1905,8 +1881,8 @@
 			"sleep_after": 0
 		},
 		"server/mcp_history_test.go": {
-			"lines": 952,
-			"comment_lines": 206,
+			"lines": 951,
+			"comment_lines": 205,
 			"code_lines": 690,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -1969,24 +1945,24 @@
 			"sleep_after": 0
 		},
 		"server/queue_delete_nonresident_test.go": {
-			"lines": 155,
-			"comment_lines": 43,
+			"lines": 153,
+			"comment_lines": 41,
 			"code_lines": 94,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/queue_test.go": {
-			"lines": 1552,
-			"comment_lines": 344,
+			"lines": 1543,
+			"comment_lines": 335,
 			"code_lines": 1063,
 			"long_funcs": 4,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/restart_recovery_crashed_child_test.go": {
-			"lines": 158,
-			"comment_lines": 45,
+			"lines": 157,
+			"comment_lines": 44,
 			"code_lines": 98,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -2009,8 +1985,8 @@
 			"sleep_after": 0
 		},
 		"server/server.go": {
-			"lines": 1356,
-			"comment_lines": 889,
+			"lines": 1353,
+			"comment_lines": 886,
 			"code_lines": 413,
 			"long_funcs": 1,
 			"history_markers": 0,
@@ -2033,24 +2009,24 @@
 			"sleep_after": 0
 		},
 		"server/session_tree.go": {
-			"lines": 697,
-			"comment_lines": 388,
+			"lines": 688,
+			"comment_lines": 379,
 			"code_lines": 296,
 			"long_funcs": 2,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/session_tree_test.go": {
-			"lines": 2568,
-			"comment_lines": 631,
+			"lines": 2560,
+			"comment_lines": 623,
 			"code_lines": 1738,
 			"long_funcs": 4,
 			"history_markers": 0,
 			"sleep_after": 4
 		},
 		"server/sse.go": {
-			"lines": 138,
-			"comment_lines": 35,
+			"lines": 136,
+			"comment_lines": 33,
 			"code_lines": 92,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -2081,16 +2057,16 @@
 			"sleep_after": 0
 		},
 		"server/transcript_bootstrap_window_test.go": {
-			"lines": 982,
-			"comment_lines": 287,
+			"lines": 978,
+			"comment_lines": 283,
 			"code_lines": 630,
 			"long_funcs": 1,
 			"history_markers": 0,
 			"sleep_after": 0
 		},
 		"server/transcript_live_from_test.go": {
-			"lines": 392,
-			"comment_lines": 92,
+			"lines": 391,
+			"comment_lines": 91,
 			"code_lines": 267,
 			"long_funcs": 0,
 			"history_markers": 0,
@@ -2105,8 +2081,8 @@
 			"sleep_after": 0
 		},
 		"server/transcript_tail_seqs_test.go": {
-			"lines": 367,
-			"comment_lines": 133,
+			"lines": 365,
+			"comment_lines": 131,
 			"code_lines": 211,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -2121,8 +2097,8 @@
 			"sleep_after": 0
 		},
 		"server/wait_test.go": {
-			"lines": 945,
-			"comment_lines": 208,
+			"lines": 944,
+			"comment_lines": 207,
 			"code_lines": 656,
 			"long_funcs": 2,
 			"history_markers": 0,
@@ -2195,7 +2171,7 @@
 			"code_lines": 0
 		},
 		"engine": {
-			"test_lines": 43810,
+			"test_lines": 43809,
 			"code_lines": 15468
 		},
 		"examples/custom-tool": {
@@ -2215,8 +2191,8 @@
 			"code_lines": 265
 		},
 		"internal/gates": {
-			"test_lines": 202,
-			"code_lines": 264
+			"test_lines": 260,
+			"code_lines": 268
 		},
 		"internal/testpoll": {
 			"test_lines": 0,
