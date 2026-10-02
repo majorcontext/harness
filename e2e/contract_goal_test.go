@@ -7,9 +7,11 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-func notEvaluator(r harnesstest.Request) bool {
-	return !strings.Contains(r.System, goalEvaluatorMarker)
+func isEvaluator(r harnesstest.Request) bool {
+	return strings.Contains(r.System, goalEvaluatorMarker)
 }
+
+func notEvaluator(r harnesstest.Request) bool { return !isEvaluator(r) }
 
 func agentStep(name, text string, repeat bool) harnesstest.Step {
 	return harnesstest.Step{Name: name, Match: notEvaluator, Reply: harnesstest.Reply{Text: text}, Repeat: repeat}
@@ -18,7 +20,7 @@ func agentStep(name, text string, repeat bool) harnesstest.Step {
 func evaluatorStep(name, verdict string, repeat bool) harnesstest.Step {
 	return harnesstest.Step{
 		Name:   name,
-		Match:  harnesstest.SystemContains("You are a strict goal-completion evaluator"),
+		Match:  isEvaluator,
 		Reply:  harnesstest.Reply{Text: verdict},
 		Repeat: repeat,
 	}
@@ -72,7 +74,7 @@ func TestContractGoal(t *testing.T) {
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},
 			// Known defect, pinned on purpose: a goal that exhausts max_turns stays
-			// active, so wait?until=idle never returns.
+			// active, so wait?until=idle never reads idle.
 			actions: []action{
 				create{as: "a", staysActive: true},
 				setGoal{as: "a", condition: "say done", maxTurns: 2},
