@@ -1,24 +1,11 @@
-// Package testpoll provides the ONE sanctioned deadline-bounded poll
-// helper for test code that must observe genuinely out-of-process state.
+// Package testpoll provides the deadline-bounded poll helper for test code
+// that must observe state outside the test process.
 //
-// AGENTS.md bans time.Sleep in tests without exception, and names exactly
-// two sanctioned time mechanisms: a testing/synctest bubble, or an injected
-// fake clock/timer seam. Both require the state under observation to live
-// inside the test process. A real OS process's exit, a file a grandchild
-// process flushed, or /proc's view of a zombie is none of those: fake time
-// does not govern kernel scheduling, and no in-process channel crosses a
-// process boundary. AGENTS.md's cross-process carve-out covers exactly that
-// case, and requires the wait to go "through its deadline-bounded poll
-// helper — never a bare sleep loop written inline". This package is that
-// helper, shared so every such wait reads the same and no test grows its
-// own inline sleep loop.
-//
-// Use it ONLY for state that crosses an OS process boundary. In-process
-// state — a manager's status field, a server's session state, a queue
-// depth — has a channel, a production long-poll endpoint, or a seam that
-// can be added to the production code. Reach for one of those instead; a
-// poll loop over in-process state is the guessed-deadline flakiness this
-// package exists to keep contained, not to bless.
+// A real OS process's exit, a file a grandchild process flushed, or /proc's
+// view of a zombie cannot use a testing/synctest bubble or an in-process
+// channel. Use this package ONLY for such state. In-process state has a
+// channel, a long-poll endpoint, or a seam that production code can add; use
+// one of those instead.
 package testpoll
 
 import (

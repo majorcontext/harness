@@ -1,42 +1,16 @@
-# Model metadata instructions
+# Model metadata
 
-These rules apply to `modelmeta/`. Harness does not merge ancestor files. If
-root guidance is not active, locate the Git root and read
-`<repo-root>/AGENTS.md`. Resolve repository paths from that root. Read
-`engine/AGENTS.md` before changing context-window policy.
+Read the root AGENTS.md. `engine/AGENTS.md` owns context-window policy.
 
-## Static metadata
-
-Keep model metadata static and deterministic. This package must not perform a
-network request or refresh in the background.
-
-Never edit `context_windows_gen.go` by hand. Run `go generate ./modelmeta/`.
-Put an entry that models.dev lacks in `overrides.json`. The generator runs only
-by hand or in the `modelmeta-refresh` workflow, never at session creation.
-
-Curate context-window values from the documented source. Keep zero unavailable
-for non-chat models because zero also means unknown to callers.
-
-## Lookup
-
-Keep provider-family matching explicit. Preserve documented handling for dated
-model variants and aliases. An unknown model returns no window; the engine owns
-the refusal or opt-out policy.
-
-Do not add capability guesses from model-name substrings unless a design and
-tests define the contract.
-
-## Server-side tool search
-
-`SupportsToolSearch` uses an explicit first-party Anthropic allowlist. Return
-false for other provider families and for Bedrock-style Anthropic refs. An
-unknown ref must keep the portable client-side search path instead of emitting
-a provider tool that the route can reject.
-
-Keep its Bifrost namespace stripping aligned with context-window lookup.
-
-## Tests
-
-Test exact known refs, supported variant patterns, near misses, unknown
-families, and tool-search refusals. A metadata update must include the source
-and lookup regression tests.
+- Keep metadata static and deterministic. No network or background refresh.
+- Never edit `context_windows_gen.go`. Run `go generate ./modelmeta/`.
+- Put entries that models.dev lacks in `overrides.json`.
+- Run the generator only by hand or in the `modelmeta-refresh` workflow.
+- Keep zero unavailable for non-chat models. Zero means unknown.
+- Keep provider-family matching explicit. Preserve dated variants and aliases.
+- An unknown model returns no window. The engine owns refusal policy.
+- Guess no capability from a model-name substring.
+- `SupportsToolSearch` uses an explicit first-party Anthropic allowlist.
+- Return false for other families and Bedrock-style Anthropic refs.
+- Keep Bifrost namespace stripping aligned with context-window lookup.
+- Test known refs, variants, near misses, unknown families, and tool-search refusals.

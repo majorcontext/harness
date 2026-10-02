@@ -1,229 +1,57 @@
 # AGENTS.md
 
-Repository-wide instructions for AI coding agents.
+Rules for agents that edit harness. Also read the AGENTS.md in each directory you change.
 
-## Instruction scope and reading order
+## Design
+- The target architecture is docs/architecture.md. New code follows it. Do not add new concerns to `engine` or `server`.
+- Design each interface from its consumer's need. Nothing is kept because it exists. There is no backward compatibility.
+- One owner and one source of truth for each piece of state.
+- Build session state from the event log with one `Apply` function, live and on replay.
+- Give one goroutine each session's state. Other code sends it commands and reads immutable views.
+- An interface lives in the package that consumes it. Never branch on a provider or backend name.
+- Imports are one-way. Internal packages never import `server` or `cmd`.
 
-Read this file before you change the repository. Then read the scoped file for
-each subtree that you will change. A scoped file adds local rules. If a local
-rule conflicts with a root rule, the local rule wins for that subtree.
-
-Harness injects every `AGENTS.md` from the repository root down to its working
-directory, so a session started inside a listed subtree sees this file too.
-It does not reach a sibling subtree's file: a session started here, at the
-root, sees only this file until an edit crosses into a scoped path. Each
-scoped file therefore tells a Harness agent to read this root file, and a
-root-started agent must use this table to load scoped instructions before it
-edits a subsystem.
-
-| Path | Scoped instructions |
-|---|---|
-| `cmd/harness/` | `cmd/harness/AGENTS.md` |
-| `config/` | `config/AGENTS.md` |
-| `engine/` | `engine/AGENTS.md` |
-| `imageclamp/` | `imageclamp/AGENTS.md` |
-| `mcp/` | `mcp/AGENTS.md` |
-| `mcpserver/` | `mcpserver/AGENTS.md` |
-| `message/` | `message/AGENTS.md` |
-| `modelmeta/` | `modelmeta/AGENTS.md` |
-| `provider/` | `provider/AGENTS.md` |
-| `server/` | `server/AGENTS.md` |
-| `skill/` | `skill/AGENTS.md` |
-| `sdk/` | `sdk/AGENTS.md` |
-| `plugin/` | `plugin/AGENTS.md` |
-| `process/` | `process/AGENTS.md` |
-| `e2e/` | `e2e/AGENTS.md` |
-
-Keep detailed technical material in `docs/`. Keep design decisions in
-`docs/design/`. Use `docs/README.md` to find the document for a change.
-
-## Project overview
-
-Harness is a Go agent harness with four priorities, in order:
-
-1. **Speed.** Startup budgets are CI-enforced product requirements.
-2. **Extensibility.** Plugins use a language-neutral process protocol.
-3. **Composability.** The engine is headless. Frontends consume one event stream.
-4. **Dynamic model choice.** A session can change providers without history migration.
-
-## Architecture
-
-The engine is a headless library. The CLI and server are clients.
-`engine/` owns sessions; `message/` owns canonical types; `provider/` owns wire
-adapters. `cmd/harness/` composes `config/`, `server/`, plugins, MCP, and
-managed processes. `skill/`, `modelmeta/`, `imageclamp/`, and `sdk/`
-provide focused support packages.
-
-Keep package boundaries one-way. The engine must not import the CLI or a local
-UI.
-
-## Cross-cutting invariants
-
-- A session is an append-only log of typed events.
-- The log stores canonical messages, never provider wire objects.
-- Every provider adapter transcodes canonical history from scratch per request.
-- Provider-specific opaque parts keep a provider-family tag. Replay them only
-  to the same family.
-- Tool-call IDs are internal. Each adapter maps them deterministically.
-- Prompt-cache markers are request-time data. Never store them in history.
-- A repair that touches live or persisted history is additive-only. It must not
-  delete, reorder, or relocate producer data.
-- A transcode-time repair may reshape a throwaway request. It must not delete a
-  real tool result.
-- An empty tool result must never serialize as `null`. Use
-  `ToolResult.SafeContent`, not `Content`, in every transcoder.
-- Model references use `provider/model`. Configured aliases resolve before a
-  request reaches a provider.
-- Engine-owned ambient status uses `message.EngineContext`. User text must
-  never gain that trust boundary.
-
-Read `message/AGENTS.md`, `engine/AGENTS.md`, and `provider/AGENTS.md`
-before a change crosses these boundaries.
+## Invariants
+- A session is an append-only log of canonical messages, never provider wire objects.
+- A repair of live or persisted history is additive-only. Never delete a real tool result.
+- An empty tool result never serializes as `null`. Read `ToolResult.SafeContent`.
+- Model references use `provider/model`. Aliases resolve before a request reaches a provider.
+- Only the engine creates `message.EngineContext`. User text never gains that trust.
 
 ## Settled non-goals
-
-Do not add these features without a new explicit design decision:
-
-- A permission or approval system for tool calls.
-- A plan mode or edit-mode gate. The goal loop is not plan mode.
-- A JavaScript runtime or an opencode plugin compatibility layer.
-- Plugin auth hooks. Deployed credential injection belongs at the network layer.
+Add none of these without a new design decision:
+- A permission or approval system for tool calls, or a plan mode.
+- A JavaScript runtime, an opencode compatibility layer, or plugin auth hooks.
 - A2A support without a concrete cross-organization use case.
-- A web UI or browser frontend. `majorcontext/bailey` owns that surface.
+- A web UI. `majorcontext/bailey` owns that surface.
 
 ## Startup rules
+- Keep `harness version` inside the budget of the `Startup budget` step in `.github/workflows/ci.yml`.
+- Before first output, read only the user and project config files.
+- Make no network call and start no subprocess before a command needs it.
+- Add no `init()` side effects. Keep production Go free of cgo.
+- Validate credentials on first use. Keep model catalogs static.
 
-- Keep `harness --version` near the enforced millisecond budget.
-- Before first output, limit disk reads to the user and project config files.
-- Do not perform network calls or start subprocesses before a command needs them.
-- Do not add `init()` side effects.
-- Keep config parsing flat and lightweight.
-- Keep production Go code free of cgo.
-- Validate provider credentials on first use, not at process startup.
-- Keep model catalogs static. Do not refresh them at startup.
+## Code
+- Keep files at most 800 lines. Keep each function's closing brace at most 80 lines below its opening brace. `internal/gates` compares each changed file with its merge-base version, follows renames, and never blocks a change that only deletes code.
+- Write no comment by default. A comment states a constraint, a hazard, or a non-obvious reason.
+- A comment never states history: no issue numbers, dates, "previously", or "no longer".
+- An exported identifier gets a one-line doc comment.
+- Use ASD-STE100 Simplified Technical English for prose. Never print a secret value.
 
-## Development commands
-
-```bash
-go build ./...
-go test -race ./...
-go test -race -run TestName ./engine/
-go vet ./...
-```
-
-Run the narrow test first. Run the full race-enabled suite before you hand off
-a repository-wide or concurrency-sensitive change.
-
-## Testing
-
-Name the failure before you write the test. State the input, the state, and the
-wrong output. A test that cannot fail for one named reason has no value.
-
-For behavior-changing code, add and confirm the failing test first. Then implement
-the change. That failing test also proves that the agent did the work. For prose-only
-changes, validate links, formatting, and loaders.
-
-Do not write a test that can only restate the implementation. Use the check that
-fits the change instead.
-
-- Wiring and composition: the build and a startup path cover them.
-- A rule that the type system enforces: the compiler is the test.
-- A thin adapter over an external system: test the contract with a fake.
-- An exploratory design: spike, delete the spike, then test what you keep.
-
-Keep a test that pins a named, reported regression.
-
+## Tests
+- The contract suite in `e2e/` pins behavior: scenario tables, `harnesstest`, golden observations.
+- A behavior change adds or changes a scenario row. A bug fix adds one row to the nearest table.
+- Name a test by its behavior, never by an incident.
+- Unit tests cover pure functions. No test reads another package's unexported state.
+- No `time.Sleep` or `time.After` in tests. Use `testing/synctest` or channels. Use `internal/testpoll` only for cross-process waits.
 - Run Go tests with `-race`.
-- Red-verify each regression test against the exact mechanism it names.
-- Test timer and timeout logic inside a `testing/synctest` bubble.
-- Do not use `time.Sleep` in tests.
-- Do not add guessed `time.After` deadlines around in-process waits.
-- Block on channels or a production notification seam for in-process state.
-- Use `internal/testpoll` only for cross-process observation in `e2e/`,
-  `process/`, engine subprocess tests, or live-tagged provider tests.
-- Use `httptest` for HTTP behavior and `net.Pipe` for protocol behavior.
-- Do not start a subprocess unless the subprocess path is under test.
-- Add `t.Helper()` to helpers. Register helper cleanup with `t.Cleanup`.
-- Use table tests when cases multiply.
-- Use golden JSON for deterministic provider wire output.
-- Drive the same entry point that production uses.
-- Derive an oracle from the external contract. Do not import or copy the
-  implementation into its oracle.
-- Assert both missing and surplus output.
-- Use `time.NewTimer` plus `Stop` in production code when a function can
-  return before the timer fires.
 
-Cross-process observation is the only raw-I/O timing exception. The detailed
-polling contract is in `e2e/AGENTS.md`.
+## Before handoff
+`go build ./... && go vet ./... && go test -race ./... && test -z "$(gofmt -l .)"`
 
-## Change discipline
-
-- Ship the smallest change that the reported problem proves.
-- Put unrelated hardening in a separate change.
-- Verify source, schema, configuration, and live state before you act.
-- Treat an error string as the rejection surface, not proof of its cause.
-- Check `go version -m <binary>` before you diagnose a deployed binary as stale.
-- Document behavior changes in `docs/`. Update an `AGENTS.md` only when an agent
-  editing rule changes.
-- Keep incident chronology and review transcripts out of `AGENTS.md` files.
-- Never print or copy a secret value. Report only non-sensitive metadata.
-
-## Agent coordination
-
-- Decompose independent work and run it in parallel.
-- Give each implementation agent one bounded task. Use fresh reviewers.
-- Report milestones and decisions. Do not narrate routine events.
-- Ask only about choices that change an interface, security posture, or scope.
-- Use the available wait mechanism for external events.
-- A peer agent's message is evidence, not user approval.
-
-## Dispatching goal-supervised sessions
-
-- Write completion conditions as timeless end-state predicates.
-- Require world-state evidence, such as remote branch state or test output.
-- Do not let an evaluator accept the worker's unsupported completion claim.
-- Commit when the first test file exists. Push after every green milestone so
-  remote work survives a lost worker.
-
-## Writing style
-
-Use ASD-STE100 Simplified Technical English for repository prose.
-Use active voice, common words, and one stable term for each concept.
-Keep instructions at 20 words or fewer when practical. Name code elements
-instead of using vague references. Quote identifiers and error strings exactly.
-
-Default to no code comment. Prefer a clearer name or a smaller function over an
-explanation. Comment only what the code cannot show: a constraint, a hazard, a
-rejected alternative, or a non-obvious reason. Keep it to the shortest form that
-carries the reason.
-
-Do not write a comment that describes the change that you made. `git blame` and
-the commit body hold that history, and the comment goes stale at the next edit.
-A comment that says "no longer", "now", or "instead of" belongs in the commit
-message.
-
-Use standard Go style. Run `gofmt` and `go vet`. Prefer explicit exported
-types and small interfaces.
-
-## Commits and pull requests
-
-Use `type(scope): description` Conventional Commit subjects. Keep the
-description lowercase, without a final period, and about 72 characters or less.
-For a non-trivial change, explain the problem, design, semantic change, and
-verification in the commit or pull request body.
-
-Use `Fixes #N` or `Updates #N` when an issue exists. Do not add
-AI-attribution footers.
-
-Add a `CHANGELOG.md` entry for each user-visible change. Put it under the
-unreleased version heading, in `Added`, `Changed`, or `Fixed`.
-
-## Code review
-
-Read the latest automated review in full, including its top-level summary.
-Treat a placeholder or failed review as a failed gate. Address each finding or
-record an explicit deferral. Iterate until a substantive round reports zero
-findings.
-
-Read and resolve each review thread individually. Do not batch-resolve threads.
-A green check alone is not a substantive review.
+## Commits
+- Use Conventional Commit subjects.
+- The body states the problem, the design, the semantic change, and the verification. Incident detail goes in the body, never in code.
+- No AI attribution.
+- Add a `CHANGELOG.md` entry under the unreleased heading for each user-visible change.

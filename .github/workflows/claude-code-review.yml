@@ -18,7 +18,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Collapse previous Claude reviews
         env:
@@ -50,8 +50,8 @@ jobs:
             - Startup-speed regressions: init-time network or subprocess work,
               and disk reads beyond the permitted user/project config path,
               are bugs per the root and cmd/harness scoped AGENTS.md files
-            - Testing rules from the root AGENTS.md: TDD, no raw sleeps, synctest for
-              timer logic
+            - Testing rules from the root AGENTS.md: contract scenario rows, no raw
+              sleeps, synctest for timer logic
             - Bugs, logic errors, nil/zero-value pitfalls, unchecked errors
 
             Don't flag pure style preferences or formatting. Be concise and

@@ -22,6 +22,7 @@ import (
 // run against the real serveCmd/server.New entry point (a compiled
 // subprocess), not a hand-built check.
 func TestServeNonLoopbackNoTokenFailsClosed(t *testing.T) {
+	skipShort(t)
 	addr := freeAddrOnHost(t, "0.0.0.0")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -52,6 +53,7 @@ func TestServeNonLoopbackNoTokenFailsClosed(t *testing.T) {
 // never inferred: the ONLY difference from the fail-closed test above is the
 // -unauthenticated flag.
 func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) {
+	skipShort(t)
 	addr := freeAddrOnHost(t, "0.0.0.0")
 	cmd := exec.Command(harnessBin, "serve", "-addr", addr, "-unauthenticated")
 	cmd.Dir = t.TempDir()
@@ -92,6 +94,7 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 // of the flag test above: HARNESS_UNAUTHENTICATED=1 (with no -unauthenticated
 // flag) opts in exactly the same way, against the real binary.
 func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
+	skipShort(t)
 	addr := freeAddrOnHost(t, "0.0.0.0")
 	cmd := exec.Command(harnessBin, "serve", "-addr", addr)
 	cmd.Dir = t.TempDir()

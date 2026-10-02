@@ -1,48 +1,16 @@
-# MCP server-role instructions
+# MCP server role
 
-These rules apply to `mcpserver/`. Harness does not merge ancestor files. If
-root guidance is not active, locate the Git root and read
-`<repo-root>/AGENTS.md`. Resolve repository paths from that root.
-Read `mcp/AGENTS.md` for the client-role counterpart this package mirrors.
+Read the root AGENTS.md. `mcp/AGENTS.md` covers the client role.
 
-## Package boundary
-
-Keep this package independent from `engine` and `server`. It implements the
-MCP server-role JSON-RPC dispatch and the Streamable HTTP transport only, over
-a caller-supplied set of tools. A concrete tool that needs `engine.Session` (or
-any other harness type) is registered by its own caller (see
-`server/mcp_history.go`), never added to this package.
-
-## Scope
-
-Implement initialize, notifications/initialized, tools/list, and tools/call
-only. Do not add prompts, resources, roots, sampling, elicitation, or
-resumable SSE streams without an explicit scope change.
-
-Every response is a single JSON object. Do not add a `text/event-stream`
-response path unless a registered tool needs to push a server-initiated
-message ahead of its own result — none does today.
-
-Do not add `Mcp-Session-Id` issuance or enforcement. This transport's session
-identity is stateless by design; a caller that needs identity carries it in
-its own URL, one layer above this package.
-
-`ServeHTTP` validates the `Origin` header (the transport spec's DNS-rebinding
-MUST) before parsing a request body: absent or loopback passes, a present
-cross-origin value is rejected with 403. Do not remove this check or relax it
-to accept an arbitrary origin.
-
-## Errors
-
-Return a JSON-RPC `RPCError` (`mcp.RPCError`) for a protocol-level failure: an
-unknown method, an unknown tool name, or malformed params. Return a successful
-`CallToolResult` with `IsError` set for a tool-level failure (a registered
-handler's own returned error). Keep this distinction — do not fold one into
-the other.
-
-## Tests
-
-Use `httptest` and drive `Registry.ServeHTTP` directly. Cover initialize,
-tools/list, tools/call (success, handler error, and unknown tool), unknown
-method, and the notification (no-response-body) path. Do not depend on
-`engine` or `server` in this package's own test suite.
+- Keep this package independent from `engine` and `server`.
+- A tool that needs a harness type is registered by its caller, never added here.
+- Implement only initialize, notifications/initialized, tools/list, and tools/call.
+- Add no prompts, resources, roots, sampling, elicitation, or resumable streams.
+- Every response is one JSON object. Add no `text/event-stream` path.
+- Issue and enforce no `Mcp-Session-Id`. Identity lives in the caller's URL.
+- `ServeHTTP` validates `Origin` before parsing the body. Absent or loopback passes.
+- Reject a cross-origin request with 403. Never relax this check.
+- Return `mcp.RPCError` for protocol failures: unknown method, unknown tool, bad params.
+- Return a successful `CallToolResult` with `IsError` for a handler failure.
+- Test through `Registry.ServeHTTP` with `httptest`.
+- Cover success, handler error, unknown tool, unknown method, and notifications.

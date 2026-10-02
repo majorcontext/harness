@@ -596,17 +596,18 @@ Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`.
 
 | Gate | Threshold |
 | --- | --- |
-| Whole-line comments per file | Warn above 15%; fail above 25% |
-| History markers in comments | Fail on issue numbers, dates, "no longer", "previously", "instead of" |
-| File size | Fail above 800 lines; target 600 |
-| Function size | Fail above 80 lines |
-| Test lines vs code lines per package | Ratchet; never rises |
-| `time.Sleep`, `time.After` in tests | Fail outside `internal/testpoll` |
-| Protocol drift | Regenerate; fail on a diff |
+| Whole-line comments per file | Warn above 15%; fail above 25%. The `doc.go` package comment does not count |
+| History markers in comments | Fail on issue numbers, dates, "previously", "no longer", "red-verified", "confirmed live", "an earlier version", "before this change", "round N", review or fix rounds, and "copilot" |
+| File size | Fail above 800 lines |
+| Function size | Fail when the closing brace is more than 80 lines below the opening brace |
+| Test lines vs code lines per package | Fail above 1.5 test lines per code line, unless the ratio does not rise over the merge base. A new package has no base, but a moved package compares with the package it came from. A change that removes code and adds no test lines always passes |
+| `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
+| `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
+| Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |
 | Imports | `depguard`: internal packages never import `server` or `cmd` |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
 
-New packages start strict. Old packages ratchet down from a baseline. `AGENTS.md` shrinks to these gates and the four rules.
+Gates compare a branch with its merge base, so old code never blocks a change and new code starts strict. A protocol drift gate (regenerate; fail on a diff) is planned for phase 4, when `protocol` generation exists. `AGENTS.md` shrinks to these gates and the four rules.
 
 ## Migration
 
@@ -614,7 +615,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 
 | Phase | Work | Consumers |
 | --- | --- | --- |
-| 1 | Contract suite: scenario scripts and `harnesstest`; CI gates in ratchet mode; new `AGENTS.md`; delete history comments | None |
+| 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md`; delete history comments | None |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner`; `Runtime`, `Session.Submit`, `Events`; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; turn resume and stop causes; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it; it is the first consumer |
 | 3 | Leaf cleanups: `httpx`, `wirenorm`, `tool` registry, `prompt.Memo` and agent profiles; move leaves to `internal/` | None |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |

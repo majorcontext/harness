@@ -1,39 +1,15 @@
-# MCP transport instructions
+# MCP client
 
-These rules apply to `mcp/`. Harness does not merge ancestor files. If root
-guidance is not active, locate the Git root and read `<repo-root>/AGENTS.md`.
-Resolve repository paths from that root.
-Read `engine/AGENTS.md` for connection policy and lazy schema loading.
+Read the root AGENTS.md. `engine/AGENTS.md` owns connection policy.
 
-## Package boundary
-
-Keep this package independent from engine, server, and command integration. It
-implements the MCP client protocol and transports only.
-
-Keep JSON-RPC framing dependency-free. Preserve request ID correlation and
-notification handling.
-
-## Transports
-
-- Stdio uses one JSON-RPC message per line over the child process streams.
-- Streamable HTTP accepts a JSON response or SSE response.
-- Preserve `MCP-Session-Id` continuity.
-- Preserve paginated `tools/list` and `resources/list` cursors.
-- Keep static request headers on every HTTP call.
-
-In scope: `tools/list`, `tools/call`, `resources/list`, `resources/read`.
-Do not add OAuth, client-served capabilities, legacy HTTP+SSE fallback,
-`resources/subscribe`, prompts, or other MCP feature families without an
-explicit scope change.
-
-## Content
-
-Preserve text, image, audio, resource-link, embedded-resource, and `isError`
-tool-result fields. Do not collapse structured content into text inside this
-package.
-
-## Tests
-
-Use `net.Pipe` for protocol framing and `httptest` for HTTP. Test split frames,
-multiple SSE events, pagination, cancellation, and malformed responses. Do not
-call a remote MCP server in the unit suite.
+- Keep this package independent from engine, server, and command code.
+- Keep JSON-RPC framing dependency-free. Preserve request ID correlation.
+- Stdio uses one JSON-RPC message per line.
+- Streamable HTTP accepts a JSON or SSE response. Preserve `MCP-Session-Id`.
+- Preserve `tools/list` and `resources/list` pagination cursors.
+- Send static request headers on every HTTP call.
+- In scope: `tools/list`, `tools/call`, `resources/list`, `resources/read`.
+- Add no OAuth, client capabilities, legacy HTTP+SSE, subscriptions, or prompts.
+- Preserve text, image, audio, resource-link, embedded-resource, and `isError` fields.
+- Never collapse structured content into text here.
+- Use `net.Pipe` for framing and `httptest` for HTTP. Make no remote call.

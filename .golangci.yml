@@ -1,0 +1,31 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - revive
+    - depguard
+  settings:
+    depguard:
+      rules:
+        internal-leaf:
+          files:
+            - "**/internal/**"
+          deny:
+            - pkg: github.com/majorcontext/harness/server
+              desc: internal packages never import server
+            - pkg: github.com/majorcontext/harness/cmd
+              desc: internal packages never import cmd
+    revive:
+      rules:
+        - name: exported
+  exclusions:
+    paths:
+      - testdata
+
+issues:
+  new-from-merge-base: origin/main
