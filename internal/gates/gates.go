@@ -55,7 +55,7 @@ var (
 	historyRE   = regexp.MustCompile(`(?i)#[0-9]{2,}|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|used to|instead of|before this change|red-verified|confirmed live|an earlier version)\b`)
 	generatedRE = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
 	skipDirs    = map[string]bool{"testdata": true, ".worktrees": true, ".claude": true, ".git": true, "node_modules": true}
-	directives  = []string{"//go:", "//nolint", "//lint:"}
+	directives  = []string{"//go:", "//nolint", "//lint:", "//line"}
 )
 
 // Collect measures every Go file and AGENTS.md file in fsys.
@@ -127,7 +127,7 @@ func measure(name string, src []byte) (FileMetrics, error) {
 				continue
 			}
 			m.HistoryMarkers += len(historyRE.FindAllString(c.Text, -1))
-			start, end := fset.Position(c.Pos()), fset.Position(c.End())
+			start, end := fset.PositionFor(c.Pos(), false), fset.PositionFor(c.End(), false)
 			if len(bytes.TrimSpace(lines[start.Line-1][:start.Column-1])) > 0 {
 				continue
 			}
@@ -150,7 +150,7 @@ func measure(name string, src []byte) (FileMetrics, error) {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
-			if n.Body != nil && fset.Position(n.Body.End()).Line-fset.Position(n.Body.Pos()).Line > maxFuncLines {
+			if n.Body != nil && fset.PositionFor(n.Body.End(), false).Line-fset.PositionFor(n.Body.Pos(), false).Line > maxFuncLines {
 				m.LongFuncs++
 			}
 		case *ast.SelectorExpr:
@@ -185,7 +185,7 @@ func absolutes(m FileMetrics) []Violation {
 		vs = append(vs, Violation{Rule: rule, Detail: fmt.Sprintf(format, a...)})
 	}
 	if s := commentShare(m); s > maxShare {
-		add("comment_share", "comments are %.0f%% of lines, limit %.0f%%", s*100, maxShare*100)
+		add("comment_share", "%d of %d lines are comments, limit %.0f%%", m.CommentLines, m.CommentLines+m.CodeLines, maxShare*100)
 	}
 	if m.Lines > maxFileLines {
 		add("file_size", "%d lines, limit %d", m.Lines, maxFileLines)

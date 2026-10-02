@@ -57,13 +57,29 @@ var checkCases = []struct {
 	},
 	{
 		name: "long_func_new_file_fails",
-		fs:   fstest.MapFS{"a/a.go": file(longFunc(81))},
+		fs:   fstest.MapFS{"a/a.go": file(longFunc(80))},
 		want: []string{"a/a.go:long_func"},
+	},
+	{
+		name: "func_at_limit_passes",
+		fs:   fstest.MapFS{"a/a.go": file(longFunc(79))},
 	},
 	{
 		name: "file_size_new_file_fails",
 		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("var _ = 1\n", 800))},
 		want: []string{"a/a.go:file_size"},
+	},
+	{
+		name: "file_at_size_limit_passes",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("var _ = 1\n", 799))},
+	},
+	{
+		name: "sleep_in_non_test_file_passes",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\nimport \"time\"\n\nfunc F() { time.Sleep(1) }\n")},
+	},
+	{
+		name: "line_directive_does_not_remap_positions",
+		fs:   fstest.MapFS{"a/a.go": file("package a\n\n//line other.go:500\nvar A = 1 // tail\nvar B = 2\n")},
 	},
 	{
 		name: "generated_file_skipped",
@@ -148,6 +164,13 @@ func TestCheck(t *testing.T) {
 				t.Fatalf("violations = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestCommentShareDetailNamesCounts(t *testing.T) {
+	vs := absolutes(FileMetrics{CommentLines: 26, CodeLines: 74})
+	if len(vs) != 1 || vs[0].Detail != "26 of 100 lines are comments, limit 25%" {
+		t.Fatalf("violations = %+v", vs)
 	}
 }
 
