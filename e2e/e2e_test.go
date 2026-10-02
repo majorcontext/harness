@@ -89,15 +89,9 @@ func buildHarness() (string, func(), error) {
 		return "", nil, err
 	}
 	bin := filepath.Join(dir, "harness")
-	args := []string{"build", "-o", dir + string(filepath.Separator)}
-	if os.Getenv("HARNESS_E2E_COVER") == "1" {
-		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/...")
-	}
-	cmd := exec.Command("go", append(args, "./cmd/harness", "./harnesstest/fakeclaude")...)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := goBuild(root, dir); err != nil {
 		os.RemoveAll(dir)
-		return "", nil, fmt.Errorf("go build: %v\n%s", err, out)
+		return "", nil, err
 	}
 	return bin, func() { os.RemoveAll(dir) }, nil
 }
