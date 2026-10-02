@@ -202,6 +202,16 @@ func codexWebSocketRows() []codexScenario {
 			opts:      codexUsage(false),
 		},
 		{
+			scenario:  scenario{name: "codex_ws_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			websocket: true,
+			opts:      harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
+		},
+		{
+			scenario:  scenario{name: "codex_ws_uncoded_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			websocket: true,
+			opts:      harnesstest.OpenAIOptions{UncodedChainMiss: true, Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
+		},
+		{
 			scenario: scenario{
 				name: "codex_ws_drop_mid_turn_resends_full_history",
 				model: []harnesstest.Step{

@@ -108,6 +108,30 @@ func TestOpenAIReasoningItemSurfacesAndReplays(t *testing.T) {
 	}
 }
 
+func TestOpenAIRecordsSchemaKeywordsTheBackendRejects(t *testing.T) {
+	schema := json.RawMessage(`{"type":"object","properties":{"email":{"type":"string","pattern":"^a","format":"email"},"n":{"type":"array","items":{"type":"string","minLength":1}}}}`)
+	for _, tc := range []struct {
+		name     string
+		sanitize bool
+		want     []string
+	}{
+		{"sanitize off", false, []string{"format", "minLength", "pattern"}},
+		{"sanitize on", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewOpenAI(t, OpenAIOptions{}, Step{Reply: Reply{Text: "hi"}})
+			c := codexClient(s, false)
+			c.SanitizeToolSchemas = tc.sanitize
+			req := codexRequest(codexUser("hi"))
+			req.Tools = []provider.ToolDef{{Name: "send", InputSchema: schema}}
+			codexTurn(t, c, req)
+			if got := s.WireRequests()[0].RejectedSchemaKeywords; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("rejected keywords = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpenAISSEDecodesZstdAndReportsRateLimitHeaders(t *testing.T) {
 	s := NewOpenAI(t, OpenAIOptions{Replies: map[string]CodexReply{"r": {RateLimits: &RateLimits{
 		Plan: "pro", Primary: &RateWindow{UsedPercent: 12.5, WindowMinutes: 10080, ResetAt: 99},
@@ -141,8 +165,8 @@ func TestOpenAIRefusedWebSocketFallsBackToSSE(t *testing.T) {
 	}
 }
 
-func TestOpenAIRejectsChainToUnknownResponse(t *testing.T) {
-	s := NewOpenAI(t, OpenAIOptions{})
+func chainMissFrame(t *testing.T, s *OpenAI) []byte {
+	t.Helper()
 	url := "ws" + strings.TrimPrefix(s.URL(), "http") + DefaultCodexPath
 	hdr := http.Header{"Authorization": {"Bearer k"}}
 	conn, _, err := websocket.Dial(context.Background(), url, &websocket.DialOptions{HTTPHeader: hdr})
@@ -157,6 +181,11 @@ func TestOpenAIRejectsChainToUnknownResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+func TestOpenAIRejectsChainToUnknownResponse(t *testing.T) {
+	data := chainMissFrame(t, NewOpenAI(t, OpenAIOptions{}))
 	var fr struct {
 		Type  string `json:"type"`
 		Error struct {
@@ -165,6 +194,13 @@ func TestOpenAIRejectsChainToUnknownResponse(t *testing.T) {
 	}
 	if err := json.Unmarshal(data, &fr); err != nil || fr.Type != "error" || fr.Error.Code != "previous_response_not_found" {
 		t.Errorf("frame = %s, want an error frame with code previous_response_not_found", data)
+	}
+}
+
+func TestOpenAIUncodedChainMissNamesTheFieldWithoutACode(t *testing.T) {
+	data := string(chainMissFrame(t, NewOpenAI(t, OpenAIOptions{UncodedChainMiss: true})))
+	if !strings.Contains(data, "Invalid `previous_response_id`.") || strings.Contains(data, `"code"`) {
+		t.Errorf("frame = %s, want the live message with no code", data)
 	}
 }
 

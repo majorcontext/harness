@@ -31,10 +31,12 @@ type openAIBody struct {
 		Summary string `json:"summary"`
 	} `json:"reasoning"`
 	Tools []struct {
-		Name string `json:"name"`
+		Name       string          `json:"name"`
+		Parameters json.RawMessage `json:"parameters"`
 	} `json:"tools"`
 
 	params         []string // optional params present on the wire
+	schemaKeywords []string // keywords the Codex tool-schema validator rejects
 	reasoningItems int      // reasoning items replayed in Input
 }
 
@@ -55,12 +57,68 @@ func decodeOpenAIBody(raw []byte) (openAIBody, error) {
 			b.reasoningItems++
 		}
 	}
+	b.schemaKeywords = rejectedSchemaKeywords(b)
 	for _, p := range optionalParams {
 		if _, ok := keys[p]; ok {
 			b.params = append(b.params, p)
 		}
 	}
 	return b, nil
+}
+
+// codexRejectedKeywords are the JSON Schema keywords the ChatGPT Codex backend
+// refuses in a tool schema.
+var codexRejectedKeywords = map[string]bool{
+	"pattern": true, "format": true, "minLength": true, "maxLength": true,
+	"default": true, "examples": true, "title": true,
+}
+
+// schemaSlots are the keywords whose values are subschemas or maps of them.
+var schemaSlots = []string{"properties", "$defs", "definitions", "items", "additionalProperties", "anyOf", "oneOf", "allOf"}
+
+func rejectedSchemaKeywords(b openAIBody) []string {
+	found := map[string]bool{}
+	for _, t := range b.Tools {
+		var schema any
+		if json.Unmarshal(t.Parameters, &schema) == nil {
+			collectRejected(schema, found)
+		}
+	}
+	var out []string
+	for k := range found {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func collectRejected(node any, found map[string]bool) {
+	switch v := node.(type) {
+	case []any:
+		for _, e := range v {
+			collectRejected(e, found)
+		}
+	case map[string]any:
+		for k := range v {
+			if codexRejectedKeywords[k] {
+				found[k] = true
+			}
+		}
+		for _, slot := range schemaSlots {
+			switch sub := v[slot].(type) {
+			case map[string]any:
+				if slot == "properties" || slot == "$defs" || slot == "definitions" {
+					for _, e := range sub {
+						collectRejected(e, found)
+					}
+				} else {
+					collectRejected(sub, found)
+				}
+			case []any:
+				collectRejected(sub, found)
+			}
+		}
+	}
 }
 
 // decodeBodyEncoding undoes the request Content-Encoding. The Codex HTTP path
@@ -164,7 +222,12 @@ func (o *OpenAI) prewarmFrames() (string, []frame) {
 	return id, []frame{newFrame("response.created", obj{"response": obj{"id": id}}), completedFrame(id, Usage{})}
 }
 
-func previousResponseNotFound(id string) frame {
+func previousResponseNotFound(id string, uncoded bool) frame {
+	if uncoded {
+		return newFrame("error", obj{"status": http.StatusBadRequest, "error": obj{
+			"type": "invalid_request_error", "message": "Invalid `previous_response_id`.",
+		}})
+	}
 	return newFrame("error", obj{"status": http.StatusBadRequest, "error": obj{
 		"type": "invalid_request_error", "code": "previous_response_not_found",
 		"message": fmt.Sprintf("Previous response with id '%s' not found.", id),

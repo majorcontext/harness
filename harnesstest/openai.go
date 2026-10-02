@@ -29,6 +29,9 @@ type OpenAIOptions struct {
 	// RefuseWebSocket answers every websocket upgrade with HTTP 426, so a
 	// client that prefers websocket must fall back to HTTP.
 	RefuseWebSocket bool
+	// UncodedChainMiss answers a chain miss with the error the live backend
+	// sends: a message that names previous_response_id and carries no code.
+	UncodedChainMiss bool
 	// Replies adds Codex-only behavior to the Step of the same Name.
 	Replies map[string]CodexReply
 }
@@ -43,6 +46,9 @@ type CodexReply struct {
 	// Reasoning is the summary parts of a reasoning item that the response
 	// carries before its text or tool calls, with encrypted content.
 	Reasoning []string
+	// Forget makes the connection lose the response after it completes, so a
+	// request that chains from it gets the chain-miss error.
+	Forget bool
 	// Drop ends the response without a terminal event after the first text
 	// delta. It closes the websocket, or aborts the SSE response. The Step
 	// needs Reply.Text.
@@ -88,6 +94,9 @@ type WireRequest struct {
 	// request.
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"`
 	ReasoningSummary string `json:"reasoning_summary,omitempty"`
+	// RejectedSchemaKeywords lists the tool-schema keywords the request
+	// carries that the live backend refuses.
+	RejectedSchemaKeywords []string `json:"rejected_schema_keywords,omitempty"`
 	// ReasoningItems counts the reasoning items that the request replays.
 	ReasoningItems int `json:"reasoning_items,omitempty"`
 }
@@ -97,6 +106,7 @@ func newWireRequest(transport, event string, conn int, b openAIBody) WireRequest
 		Transport: transport, Event: event, Conn: conn, PreviousResponseID: b.PreviousResponseID,
 		InputItems: len(b.Input), Params: b.params, Include: b.Include,
 		ReasoningEffort: b.Reasoning.Effort, ReasoningSummary: b.Reasoning.Summary, ReasoningItems: b.reasoningItems,
+		RejectedSchemaKeywords: b.schemaKeywords,
 	}
 }
 
@@ -349,7 +359,7 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 	}
 	o.logWire(newWireRequest("ws", event, n, b))
 	if b.PreviousResponseID != "" && !o.isKnown(n, b.PreviousResponseID) {
-		return writeFrames(ctx, conn, previousResponseNotFound(b.PreviousResponseID))
+		return writeFrames(ctx, conn, previousResponseNotFound(b.PreviousResponseID, o.opts.UncodedChainMiss))
 	}
 	if prewarm {
 		id, frames := o.prewarmFrames()
@@ -372,7 +382,9 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 			return false
 		}
 	}
-	o.markKnown(n, id)
+	if !extra.Forget {
+		o.markKnown(n, id)
+	}
 	return true
 }
 
