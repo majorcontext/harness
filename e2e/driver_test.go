@@ -21,11 +21,11 @@ type driver interface {
 	WaitIdle(t *testing.T, id string)
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)
-	Messages(t *testing.T, id string) []apiMessage
-	Events(t *testing.T) []apiEvent
+	Messages(t *testing.T, id string) []transcriptMessage
+	Events(t *testing.T) []journalEntry
 	Restart(t *testing.T, kill bool)
 	Queued(t *testing.T, id string) []string
-	AwaitTurnEnd(t *testing.T, outcome string)
+	AwaitMaxTurnsExceeded(t *testing.T)
 	Stderr() string
 }
 
@@ -117,14 +117,45 @@ func (d *httpDriver) SetGoal(t *testing.T, id, condition string, maxTurns int, d
 	d.expect(t, http.StatusAccepted, http.MethodPost, "/session/"+id+"/goal", body)
 }
 
-func (d *httpDriver) Messages(t *testing.T, id string) []apiMessage {
+func (d *httpDriver) Messages(t *testing.T, id string) []transcriptMessage {
 	t.Helper()
-	return d.p.messages(id)
+	return transcriptOf(d.p.messages(id))
+}
+
+func transcriptOf(msgs []apiMessage) []transcriptMessage {
+	out := make([]transcriptMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = transcriptMessage{ID: m.ID, Role: m.Role}
+		for _, p := range m.Parts {
+			tp := transcriptPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, IsError: p.IsError}
+			if len(p.Arguments) > 0 {
+				_ = json.Unmarshal(p.Arguments, &tp.Arguments)
+			}
+			var content []string
+			for _, c := range p.Content {
+				content = append(content, c.Text)
+			}
+			tp.Content = strings.Join(content, "\n")
+			out[i].Parts = append(out[i].Parts, tp)
+		}
+	}
+	return out
+}
+
+func journalOf(events []apiEvent) []journalEntry {
+	out := make([]journalEntry, len(events))
+	for i, ev := range events {
+		out[i] = journalEntry{Seq: ev.Seq}
+		if ev.Type == "message" && ev.Message != nil {
+			out[i].IsMessage, out[i].MessageID = true, ev.Message.ID
+		}
+	}
+	return out
 }
 
 // Events reads the journal from the start up to the tip observed first, so the
 // read ends on an event count, not a deadline.
-func (d *httpDriver) Events(t *testing.T) []apiEvent {
+func (d *httpDriver) Events(t *testing.T) []journalEntry {
 	t.Helper()
 	var tip struct {
 		Seq int64 `json:"seq"`
@@ -148,7 +179,7 @@ func (d *httpDriver) Events(t *testing.T) []apiEvent {
 	if err != nil {
 		t.Fatalf("event stream ended at %d events before tip %d: %v\nstderr:\n%s", len(events), tip.Seq, err, d.Stderr())
 	}
-	return events
+	return journalOf(events)
 }
 
 func (d *httpDriver) Queued(t *testing.T, id string) []string {
@@ -170,14 +201,14 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
 }
 
-func (d *httpDriver) AwaitTurnEnd(t *testing.T, outcome string) {
+func (d *httpDriver) AwaitMaxTurnsExceeded(t *testing.T) {
 	t.Helper()
 	err := d.scan(t, func(raw []byte) bool {
 		var ev struct{ Type, Outcome string }
-		return json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == outcome
+		return json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == "max_turns_exceeded"
 	})
 	if err != nil {
-		t.Fatalf("no turn ended with %q: %v\nstderr:\n%s", outcome, err, d.Stderr())
+		t.Fatalf("no turn ended with max_turns_exceeded: %v\nstderr:\n%s", err, d.Stderr())
 	}
 }
 

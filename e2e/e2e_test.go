@@ -608,7 +608,7 @@ func assertContiguousSeqs(t *testing.T, events []apiEvent) {
 	if len(events) == 0 {
 		t.Fatal("no durable events replayed")
 	}
-	if v := journalViolations(events); len(v) > 0 {
+	if v := journalViolations(journalOf(events)); len(v) > 0 {
 		t.Fatal(strings.Join(v, "; "))
 	}
 }
@@ -616,7 +616,7 @@ func assertContiguousSeqs(t *testing.T, events []apiEvent) {
 // assertUniqueMessageIDs asserts every message id is distinct and non-empty.
 func assertUniqueMessageIDs(t *testing.T, msgs []apiMessage) {
 	t.Helper()
-	if v := messageIDViolations(msgs); len(v) > 0 {
+	if v := messageIDViolations(transcriptOf(msgs)); len(v) > 0 {
 		t.Fatal(strings.Join(v, "; "))
 	}
 }

@@ -124,7 +124,7 @@ func runScenario(t *testing.T, sc scenario) observation {
 			r.drv.WaitIdle(t, r.ids[alias])
 		}
 	}
-	sessions := map[string][]apiMessage{}
+	sessions := map[string][]transcriptMessage{}
 	for _, alias := range r.aliases {
 		msgs := r.drv.Messages(t, r.ids[alias])
 		sessions[alias] = msgs

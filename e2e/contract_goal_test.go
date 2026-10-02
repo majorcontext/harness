@@ -28,7 +28,7 @@ type awaitMaxTurnsExceeded struct{}
 
 func (awaitMaxTurnsExceeded) run(t *testing.T, r *run) {
 	t.Helper()
-	r.drv.AwaitTurnEnd(t, "max_turns_exceeded")
+	r.drv.AwaitMaxTurnsExceeded(t)
 }
 
 func TestContractGoal(t *testing.T) {

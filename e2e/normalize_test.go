@@ -28,6 +28,32 @@ func maskUnstable(s string) string {
 
 const goalEvaluatorMarker = "MET: <one short sentence"
 
+// transcriptMessage and journalEntry are what a driver reports, in the
+// oracle's own vocabulary. A driver maps its wire shapes to them, so the
+// goldens do not depend on one API.
+type transcriptMessage struct {
+	ID    string
+	Role  string
+	Parts []transcriptPart
+}
+
+// transcriptPart is Type "text", "tool_call", or "tool_result". Content is the
+// joined text of a tool result.
+type transcriptPart struct {
+	Type, Text, CallID, Name string
+	Arguments                any
+	IsError                  bool
+	Content                  string
+}
+
+// journalEntry is one event of the session journal. MessageID is set only on
+// an entry that records a message.
+type journalEntry struct {
+	Seq       int64
+	IsMessage bool
+	MessageID string
+}
+
 type normRequest struct {
 	SystemHasGoalEvaluator bool             `json:"system_has_goal_evaluator"`
 	Tools                  []string         `json:"tools"`
@@ -84,7 +110,7 @@ func (n *normalizer) id(s string) string {
 	return a
 }
 
-func normalize(reqs []harnesstest.Request, sessions map[string][]apiMessage) observation {
+func normalize(reqs []harnesstest.Request, sessions map[string][]transcriptMessage) observation {
 	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}}
 	obs := observation{Sessions: map[string][]normMessage{}}
 	for _, r := range reqs {
@@ -112,15 +138,10 @@ func normalize(reqs []harnesstest.Request, sessions map[string][]apiMessage) obs
 		for _, m := range sessions[alias] {
 			nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
 			for _, p := range m.Parts {
-				np := normPart{Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name, IsError: p.IsError}
-				if len(p.Arguments) > 0 {
-					_ = json.Unmarshal(p.Arguments, &np.Arguments)
+				np := normPart{
+					Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name,
+					Arguments: p.Arguments, IsError: p.IsError, Content: maskUnstable(p.Content),
 				}
-				var content []string
-				for _, c := range p.Content {
-					content = append(content, c.Text)
-				}
-				np.Content = maskUnstable(strings.Join(content, "\n"))
 				nm.Parts = append(nm.Parts, np)
 			}
 			msgs = append(msgs, nm)
@@ -175,7 +196,7 @@ func uniqueIDViolations(kind string, ids []string) []string {
 	return out
 }
 
-func messageIDViolations(msgs []apiMessage) []string {
+func messageIDViolations(msgs []transcriptMessage) []string {
 	ids := make([]string, len(msgs))
 	for i, m := range msgs {
 		ids[i] = m.ID
@@ -183,7 +204,7 @@ func messageIDViolations(msgs []apiMessage) []string {
 	return uniqueIDViolations("message", ids)
 }
 
-func toolPairingViolations(msgs []apiMessage) []string {
+func toolPairingViolations(msgs []transcriptMessage) []string {
 	var out, callOrder, resultOrder []string
 	calls, results := map[string]int{}, map[string]int{}
 	for _, m := range msgs {
@@ -216,11 +237,11 @@ func toolPairingViolations(msgs []apiMessage) []string {
 	return out
 }
 
-func messageViolations(msgs []apiMessage) []string {
+func messageViolations(msgs []transcriptMessage) []string {
 	return append(messageIDViolations(msgs), toolPairingViolations(msgs)...)
 }
 
-func journalViolations(events []apiEvent) []string {
+func journalViolations(events []journalEntry) []string {
 	var out, msgIDs []string
 	var prev int64
 	for _, ev := range events {
@@ -228,8 +249,8 @@ func journalViolations(events []apiEvent) []string {
 			out = append(out, fmt.Sprintf("event seq %d follows %d", ev.Seq, prev))
 		}
 		prev = ev.Seq
-		if ev.Type == "message" && ev.Message != nil {
-			msgIDs = append(msgIDs, ev.Message.ID)
+		if ev.IsMessage {
+			msgIDs = append(msgIDs, ev.MessageID)
 		}
 	}
 	return append(out, uniqueIDViolations("journal message", msgIDs)...)
@@ -296,9 +317,9 @@ func TestNormalize(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sessions := map[string][]apiMessage{}
+			sessions := map[string][]transcriptMessage{}
 			if tc.msgs != "" {
-				sessions["a"] = mustDecode[[]apiMessage](t, tc.msgs)
+				sessions["a"] = transcriptOf(mustDecode[[]apiMessage](t, tc.msgs))
 			}
 			got, err := json.Marshal(normalize(tc.reqs, sessions))
 			if err != nil {
@@ -344,13 +365,13 @@ func TestInvariants(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var msgs []apiMessage
-			var events []apiEvent
+			var msgs []transcriptMessage
+			var events []journalEntry
 			if tc.msgs != "" {
-				msgs = mustDecode[[]apiMessage](t, tc.msgs)
+				msgs = transcriptOf(mustDecode[[]apiMessage](t, tc.msgs))
 			}
 			if tc.events != "" {
-				events = mustDecode[[]apiEvent](t, tc.events)
+				events = journalOf(mustDecode[[]apiEvent](t, tc.events))
 			}
 			got := append(messageViolations(msgs), journalViolations(events)...)
 			if tc.want == "" {
