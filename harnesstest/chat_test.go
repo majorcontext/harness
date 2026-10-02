@@ -25,7 +25,7 @@ func chatStream(t testing.TB, s *Server, req *provider.Request) ([]provider.Even
 	if err != nil {
 		return nil, err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	var evs []provider.Event
 	for {
 		ev, err := st.Next()
