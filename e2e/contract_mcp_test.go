@@ -29,6 +29,7 @@ type mcpServerDef struct {
 	stdio, sse  bool
 	failInit    int
 	down        bool
+	dir         bool // a stdio server starts in a directory named "stubdir"
 	toolLoading string
 }
 
@@ -40,6 +41,12 @@ func mcpSetup(global map[string]any, defs ...mcpServerDef) func(*testing.T, map[
 			if d.stdio {
 				entry["command"] = []string{mcpStubBin(t)}
 				entry["env"] = d.spec.StdioEnv()
+				if d.dir {
+					entry["dir"] = filepath.Join(t.TempDir(), "stubdir")
+					if err := os.MkdirAll(entry["dir"].(string), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
 			} else {
 				srv := harnesstest.NewMCPServer(t, d.spec)
 				srv.RequireAuthorization(mcpToken)
@@ -165,6 +172,39 @@ func (a expectMCPCalls) run(t *testing.T, r *run) {
 	}
 }
 
+type stopMCPServer struct{ server string }
+
+func (a stopMCPServer) run(t *testing.T, r *run) {
+	t.Helper()
+	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
+	if !ok {
+		t.Fatalf("no HTTP MCP server %q", a.server)
+	}
+	srv.Close()
+}
+
+// mcpEchoTools is a spec of n tools named t01, t02, ...
+func mcpEchoTools(n int) harnesstest.MCPSpec {
+	spec := harnesstest.MCPSpec{Name: "weather"}
+	for i := 1; i <= n; i++ {
+		spec.Tools = append(spec.Tools, harnesstest.MCPTool{
+			Def:  mcp.Tool{Name: fmt.Sprintf("t%02d", i), Description: "numbered tool"},
+			Echo: true,
+		})
+	}
+	return spec
+}
+
+// callThenDone scripts a request that calls c after turns assistant
+// messages and a request that replies "done" after the call.
+func callThenDone(turns int, c harnesstest.ToolCall) []harnesstest.Step {
+	c.ID = fmt.Sprintf("toolu_%d", turns+1)
+	return []harnesstest.Step{
+		{Name: fmt.Sprintf("call%d", turns+1), Match: assistantTurns(turns), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{c}}},
+		{Name: fmt.Sprintf("done%d", turns+1), Match: assistantTurns(turns + 1), Reply: harnesstest.Reply{Text: "done"}},
+	}
+}
+
 func mcpTool(server, tool string, kv ...any) harnesstest.ToolCall {
 	return ftTool("mcp__"+server+"__"+tool, ftArgs(kv...))
 }
@@ -283,6 +323,16 @@ func TestContractMCPInstructionsAndResources(t *testing.T) {
 				"Read doc://guide before searching.",
 			}}),
 		},
+		{
+			name: "mcp_resources_paged_list_is_merged",
+			setup: mcpSetup(nil, mcpServerDef{name: "docs", spec: func() harnesstest.MCPSpec {
+				spec := mcpDocs()
+				spec.PageSize = 1
+				return spec
+			}()}),
+			model:   toolChain(ftTool("list_mcp_resources", ftArgs("server", "docs"))),
+			actions: oneTurn,
+		},
 	})
 }
 
@@ -329,6 +379,18 @@ func TestContractMCPLazyLoading(t *testing.T) {
 			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"mcp__weather__alerts"}, lacks: []string{"mcp__docs__search \u2014"}}),
 		},
 		{
+			name:    "mcp_auto_default_threshold_stays_eager_at_20_tools",
+			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto"}, mcpServerDef{name: "weather", spec: mcpEchoTools(20)}),
+			model:   textReply("hi"),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, lacks: []string{"Deferred MCP tools"}}),
+		},
+		{
+			name:    "mcp_auto_default_threshold_defers_at_21_tools",
+			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto"}, mcpServerDef{name: "weather", spec: mcpEchoTools(21)}),
+			model:   textReply("hi"),
+			actions: append(append([]action{}, oneTurn...), expectSystem{req: 1, has: []string{"Deferred MCP tools"}}),
+		},
+		{
 			name:    "mcp_auto_defers_over_threshold",
 			setup:   mcpSetup(map[string]any{"mcp_tool_loading": "auto", "mcp_tool_loading_threshold": 2}, weather),
 			model:   textReply("hi"),
@@ -367,6 +429,42 @@ func TestContractMCPAvailability(t *testing.T) {
 				mcpAction("action", "connect", "server", "nope"),
 				mcpTool("weather", "forecast", "city", "Oslo"),
 			),
+			actions: oneTurn,
+		},
+	})
+}
+
+func TestContractMCPRuntime(t *testing.T) {
+	forecast := mcpTool("weather", "forecast", "city", "Oslo")
+	runScenarios(t, []scenario{
+		{
+			name: "mcp_stdio_server_starts_in_configured_dir",
+			setup: mcpSetup(nil, mcpServerDef{name: "where", stdio: true, dir: true, spec: harnesstest.MCPSpec{
+				Name:  "where",
+				Tools: []harnesstest.MCPTool{{Def: mcp.Tool{Name: "cwd", Description: "Report the working directory"}, Cwd: true}},
+			}}),
+			model:   toolChain(mcpTool("where", "cwd")),
+			actions: oneTurn,
+		},
+		{
+			name:  "mcp_server_lost_mid_session_hides_the_endpoint",
+			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("")}),
+			model: append(callThenDone(0, forecast), callThenDone(2, forecast)...),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+				stopMCPServer{server: "weather"},
+				submit{as: "a", text: "again"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name: "mcp_status_reports_connected_and_unavailable_servers",
+			setup: mcpSetup(nil,
+				mcpServerDef{name: "weather", spec: mcpWeather("")},
+				mcpServerDef{name: "docs", spec: mcpDocs(), down: true}),
+			model:   toolChain(mcpAction("action", "status")),
 			actions: oneTurn,
 		},
 	})

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,11 +35,12 @@ type MCPSpec struct {
 }
 
 // MCPTool is one scripted tool. A tools/call answers with the first of
-// RPCError, Echo, and Result that applies.
+// RPCError, Echo, Cwd, and Result that applies.
 type MCPTool struct {
 	Def      mcp.Tool
 	Result   mcp.CallToolResult
 	Echo     bool          // answer with the call arguments as one text item
+	Cwd      bool          // answer with the base name of the server's working directory
 	RPCError *mcp.RPCError // answer with a JSON-RPC error
 }
 
@@ -198,6 +201,9 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 		case t.Echo:
 			text, _ := json.Marshal(args)
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: string(text)}}}, nil
+		case t.Cwd:
+			wd, _ := os.Getwd()
+			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: filepath.Base(wd)}}}, nil
 		}
 		return t.Result, nil
 	}
@@ -283,6 +289,9 @@ func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 
 // URL is the MCP endpoint.
 func (s *MCPServer) URL() string { return s.srv.URL }
+
+// Close stops the listener, so a later request is refused at the socket.
+func (s *MCPServer) Close() { s.srv.Close() }
 
 // SetAvailable makes every request fail with HTTP 503 while up is false.
 func (s *MCPServer) SetAvailable(up bool) {
