@@ -145,6 +145,177 @@ func TestResumeSessionContinuesInterruptedTurn(t *testing.T) {
 	}
 }
 
+func awaitStarted(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(resumeWait):
+		t.Fatal("provider never started")
+	}
+}
+
+func countLostTurnEnds(t *testing.T, h *harness, from int64) int {
+	t.Helper()
+	sse := h.openSSE("", strconv.FormatInt(from, 10))
+	n := 0
+	deadline := time.NewTimer(resumeWait)
+	defer deadline.Stop()
+	for {
+		select {
+		case it, ok := <-sse.items:
+			if !ok {
+				t.Fatal("sse stream closed")
+			}
+			if it.heartbeat {
+				return n
+			}
+			if it.ev.Type == "turn.end" && it.ev.Outcome == "lost" {
+				n++
+			}
+		case <-deadline.C:
+			t.Fatal("timed out reading the events replay")
+		}
+	}
+}
+
+func (h *harness) head() int64 {
+	h.srv.mu.Lock()
+	defer h.srv.mu.Unlock()
+	return h.srv.seq
+}
+
+func appendRecord(t *testing.T, store engine.SessionStore, id, rec string) {
+	t.Helper()
+	at, err := store.Len(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append(id, at, []byte(rec)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func reloadForCheck(t *testing.T, store engine.SessionStore, id string) *engine.Session {
+	t.Helper()
+	s, err := engine.LoadSession(engine.Config{
+		Providers:      provider.Registry{"test": &scriptedProvider{name: "test"}},
+		Model:          message.ModelRef{Provider: "test", Model: "m1"},
+		SessionStore:   store,
+		MaxTurnResumes: 3,
+	}, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestResumeSessionFinalAnswerIsNotLost(t *testing.T) {
+	store := engine.NewMemStore()
+	id := interruptedSession(t, store, "q")
+	appendRecord(t, store, id, `{"type":"message","message":{"id":"msg_final","role":"assistant","parts":[{"type":"text","text":"done"}]}}`)
+
+	prov := &scriptedProvider{name: "test"}
+	h := newOwnerServer(t, store, prov)
+	from := h.head()
+	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+	h.srv.wg.Wait()
+	if n := countLostTurnEnds(t, h, from); n != 0 {
+		t.Errorf("%d turn.end lost events, want none", n)
+	}
+	if n := providerCalls(prov); n != 0 {
+		t.Errorf("provider received %d requests, want none", n)
+	}
+	if reloadForCheck(t, store, id).TurnUnfinished() {
+		t.Error("turn still unfinished after ResumeSession")
+	}
+}
+
+func TestResumeSessionZeroCapClosesLost(t *testing.T) {
+	store := engine.NewMemStore()
+	id := interruptedSession(t, store, "q")
+	prov := &scriptedProvider{name: "test"}
+	h := newOwnerServerCap(t, store, prov, 0)
+	from := h.head()
+	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+	h.srv.wg.Wait()
+	if n := countLostTurnEnds(t, h, from); n != 1 {
+		t.Errorf("%d turn.end lost events, want 1", n)
+	}
+	if n := providerCalls(prov); n != 0 {
+		t.Errorf("provider received %d requests, want none", n)
+	}
+	if reloadForCheck(t, store, id).TurnUnfinished() {
+		t.Error("turn still unfinished after ResumeSession")
+	}
+}
+
+func TestResumeSessionTrackedByManagerSettlesOnce(t *testing.T) {
+	store := engine.NewMemStore()
+	id := interruptedSession(t, store, "q")
+	h := newOwnerServer(t, store, &scriptedProvider{name: "test"})
+	stale, err := h.srv.opts.LoadSession(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.sessMgr.AdoptRoot(stale); err != nil {
+		t.Fatal(err)
+	}
+	if !stale.TurnUnfinished() {
+		t.Fatal("setup: the tracked session settled at adoption")
+	}
+	appendResumed(t, store, id, 1, 2, 3)
+
+	from := h.head()
+	for range 2 {
+		if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
+			t.Fatalf("ResumeSession: %v", err)
+		}
+	}
+	h.srv.wg.Wait()
+	if n := countLostTurnEnds(t, h, from); n != 1 {
+		t.Errorf("%d turn.end lost events, want 1", n)
+	}
+	if reloadForCheck(t, store, id).TurnUnfinished() {
+		t.Error("turn still unfinished after ResumeSession")
+	}
+}
+
+func TestResumedTurnStopsByTurnID(t *testing.T) {
+	store := engine.NewMemStore()
+	id := interruptedSession(t, store, "q")
+	prov := newStopProvider("par", "never")
+	h := newOwnerServer(t, store, prov)
+	sse := h.openSSEFromHead()
+	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
+		t.Fatalf("ResumeSession: %v", err)
+	}
+	busy := sse.waitUntil(t, func(ev Event) bool { return ev.Type == "session.status" && ev.Status == "busy" })
+	awaitStarted(t, prov.started)
+
+	h.abortBody(id, `{"turn_id":"`+busy.TurnID+`"}`)
+	aborted := sse.waitType(t, "session.aborted")
+	if aborted.TurnID != busy.TurnID {
+		t.Errorf("session.aborted turn_id = %q, want %q", aborted.TurnID, busy.TurnID)
+	}
+	h.srv.wg.Wait()
+
+	recs := journalTypes(t, store, id)
+	if last := recs[len(recs)-1]["type"]; last != "turn.stopped" {
+		t.Errorf("last record = %v, want turn.stopped", last)
+	}
+	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
+		t.Fatalf("second ResumeSession: %v", err)
+	}
+	h.srv.wg.Wait()
+	if n := prov.calls.Load(); n != 1 {
+		t.Errorf("provider saw %d requests, want 1: the stopped turn resumed again", n)
+	}
+}
+
 func TestResumeSessionNoUnfinishedTurnIsNoOp(t *testing.T) {
 	store := engine.NewMemStore()
 	seed := newOwnerServer(t, store, &scriptedProvider{name: "test", turns: [][]provider.Event{asstTurn("done")}})
@@ -240,11 +411,7 @@ func TestResumeSessionWhileRunningIsNoOp(t *testing.T) {
 	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
 		t.Fatalf("first ResumeSession: %v", err)
 	}
-	select {
-	case <-prov.started:
-	case <-time.After(resumeWait):
-		t.Fatal("resumed turn never reached the provider")
-	}
+	awaitStarted(t, prov.started)
 	if err := h.srv.ResumeSession(resumeCtx(t), id); err != nil {
 		t.Fatalf("second ResumeSession: %v", err)
 	}

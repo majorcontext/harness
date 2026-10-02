@@ -129,6 +129,11 @@ func (s *cancelWatchStream) Close() error { return nil }
 
 func newOwnerServer(t *testing.T, store engine.SessionStore, prov provider.Provider, mutate ...func(*Options)) *harness {
 	t.Helper()
+	return newOwnerServerCap(t, store, prov, 3, mutate...)
+}
+
+func newOwnerServerCap(t *testing.T, store engine.SessionStore, prov provider.Provider, maxResumes int, mutate ...func(*Options)) *harness {
+	t.Helper()
 	const token = "secret-run-token"
 	model := message.ModelRef{Provider: prov.Name(), Model: "m1"}
 	var srv *Server
@@ -140,7 +145,7 @@ func newOwnerServer(t *testing.T, store engine.SessionStore, prov provider.Provi
 			Providers:      provider.Registry{prov.Name(): prov},
 			Model:          m,
 			SessionStore:   store,
-			MaxTurnResumes: 3,
+			MaxTurnResumes: maxResumes,
 			OnEvent:        func(ev engine.Event) { srv.Publish(ev) },
 		}
 		if tp, ok := prov.(interface{ tools() []engine.Tool }); ok {

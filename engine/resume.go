@@ -40,6 +40,14 @@ func (s *Session) TurnStopped() bool {
 // journal holds messages of a turn that no outcome closed.
 func (s *Session) TurnUnfinished() bool { return s.hasUnfinalizedTurn() }
 
+// ResumeCapReached reports whether the turn has used all the resumes that
+// Config.MaxTurnResumes allows. It is true when MaxTurnResumes is zero.
+func (s *Session) ResumeCapReached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnResumes >= s.cfg.MaxTurnResumes
+}
+
 // RecordTurnStopped durably settles the current turn as stopped. The turn
 // never resumes. partialMessageID names the partial assistant message the
 // stop kept, or is empty when the stop came before any reply text.

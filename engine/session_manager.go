@@ -5061,6 +5061,30 @@ func (m *SessionManager) Suspend(id string) {
 	n.cancel()
 }
 
+// RecoverRoot runs restart recovery for the interrupted turn of root s. An
+// untracked s is adopted as AdoptRoot does. When m already tracks the id,
+// the node is re-pointed at s first, so recovery runs on the live object. A
+// tracked child is left alone.
+func (m *SessionManager) RecoverRoot(s *Session) {
+	m.mu.Lock()
+	defer m.unlockAndFlushPersist()
+	n, ok := m.nodes[s.ID]
+	if !ok {
+		m.adoptRootLocked(s)
+		return
+	}
+	if n.parentID != "" {
+		return
+	}
+	if old := n.session; old != nil && old != s {
+		for _, notif := range old.drainAllTaskNotifications() {
+			s.enqueueTaskNotificationMigrated(notif)
+		}
+	}
+	n.session = s
+	m.recoverInterruptedTurnLocked(n, s)
+}
+
 // SuspendAll suspends every root and its subtree. See Suspend.
 func (m *SessionManager) SuspendAll() {
 	m.mu.Lock()

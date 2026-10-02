@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -30,38 +31,60 @@ func (s *Server) ResumeSession(ctx context.Context, id string) error {
 	if running {
 		return nil
 	}
-	sess := st.sess
-	if sess.TurnStopped() || !sess.TurnUnfinished() {
+	if st.sess.TurnStopped() || !st.sess.TurnUnfinished() {
 		return nil
 	}
-	if !sess.ResumableTurn() {
-		return s.closeLostTurn(id, st)
+	claimed, runCtx, ok, err := s.claimResume(id)
+	if err != nil || !ok {
+		return err
 	}
+	sess := claimed.sess
+	switch {
+	case sess.TurnStopped() || !sess.TurnUnfinished():
+		s.releasePromptClaim(claimed)
+		return nil
+	case sess.ResumableTurn():
+		s.emitBusy(id, claimed)
+		go s.runTurn(runCtx, id, claimed, sess.ResumeTurn)
+		return nil
+	}
+	return s.settleUnresumable(id, claimed)
+}
+
+func (s *Server) claimResume(id string) (*sessionState, context.Context, bool, error) {
 	claimed, runCtx, _, code, holder := s.claimForPrompt(id)
 	switch {
 	case code == 0:
-	case code == 409 && holder == "":
+		return claimed, runCtx, true, nil
+	case code == http.StatusConflict && holder == "":
 		s.mu.Lock()
 		_, refused := s.refused[id]
 		s.mu.Unlock()
 		if refused {
-			return ErrSessionNotOwned
+			return nil, nil, false, ErrSessionNotOwned
 		}
-		return nil
-	case code == 503:
-		return errServerDraining
-	default:
-		return fmt.Errorf("server: resume session %s: workdir held by session %q", id, holder)
+		return nil, nil, false, nil
+	case code == http.StatusServiceUnavailable:
+		return nil, nil, false, errServerDraining
 	}
-	s.emitBusy(id, claimed)
-	go s.runTurn(runCtx, id, claimed, claimed.sess.ResumeTurn)
-	return nil
+	return nil, nil, false, fmt.Errorf("server: resume session %s: workdir held by session %q", id, holder)
 }
 
-func (s *Server) closeLostTurn(id string, st *sessionState) error {
-	_ = s.sessMgr.AdoptRoot(st.sess) // already managed means recovery already ran
+// settleUnresumable runs the manager's restart recovery on the claimed
+// session. Only a turn that reached the resume cap reports outcome lost; a
+// turn that already holds a final answer or a committed outcome settles as
+// recovery decides and emits no turn.end.
+func (s *Server) settleUnresumable(id string, st *sessionState) error {
+	defer s.releasePromptClaim(st)
+	capped := st.sess.ResumeCapReached()
+	s.sessMgr.RecoverRoot(st.sess)
 	s.syncMessages(id)
-	s.recordTurnEnd(id, "", st.sess, "lost", nil)
+	if st.sess.TurnUnfinished() {
+		return fmt.Errorf("server: resume session %s: recovery left the turn unfinished", id)
+	}
+	if capped {
+		s.recordTurnEnd(id, "", st.sess, "lost", nil)
+	}
 	return nil
 }
 
