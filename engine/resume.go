@@ -19,6 +19,16 @@ var ErrNotResumable = errors.New("engine: no resumable turn")
 // canceled with this cause keeps its partial reply and is never resumed.
 var ErrTurnStopped = errors.New("engine: turn stopped")
 
+// handoffCanceled reports whether ctx was canceled for a handoff rather than
+// a stop, on a root that may resume. The caller must then leave the tool
+// calls unresolved: a journaled canceled result would hide a call that may
+// have run, and the next holder would never re-run it.
+func (s *Session) handoffCanceled(ctx context.Context) bool {
+	return s.cfg.MaxTurnResumes > 0 && !s.hasTaskParent() &&
+		errors.Is(ctx.Err(), context.Canceled) &&
+		!errors.Is(context.Cause(ctx), ErrTurnStopped)
+}
+
 // PartialMessageID returns the id of the partial assistant message that a
 // stopped turn appended before it failed with err, or "" when err names none.
 func PartialMessageID(err error) string {
@@ -136,7 +146,11 @@ func (s *Session) ResumeTurn(ctx context.Context) (*message.Message, error) {
 		return nil, err
 	}
 	if trailing := s.dropLoadRepair(); trailing.Role == message.RoleAssistant && hasToolCall(trailing) {
-		s.append(s.resumeToolResults(ctx, &trailing))
+		res := s.resumeToolResults(ctx, &trailing)
+		if s.handoffCanceled(ctx) {
+			return nil, ctx.Err()
+		}
+		s.append(res)
 	}
 	return s.runAgenticLoop(ctx)
 }

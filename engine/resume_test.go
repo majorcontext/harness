@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -588,5 +589,124 @@ func TestResumeRecoveryTable(t *testing.T) {
 				t.Errorf("history holds %d lost-to-restart markers, want %d", closers, tc.wantClosers)
 			}
 		})
+	}
+}
+
+type blockingCallTool struct {
+	started chan struct{}
+	mu      sync.Mutex
+	ids     []string
+	block   bool
+}
+
+func (b *blockingCallTool) tool() Tool {
+	return Tool{
+		Def: provider.ToolDef{Name: "probe", Description: "probe", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		Run: func(ctx context.Context, _ *Session, _ json.RawMessage) (message.Parts, error) {
+			b.mu.Lock()
+			b.ids = append(b.ids, ToolCallID(ctx))
+			block := b.block
+			b.mu.Unlock()
+			if block {
+				b.started <- struct{}{}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			return message.Parts{&message.Text{Text: "real"}}, nil
+		},
+	}
+}
+
+func (b *blockingCallTool) callIDs() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.ids...)
+}
+
+func realToolResults(hist []message.Message) []message.Message {
+	var out []message.Message
+	for _, m := range hist {
+		if m.Role == message.RoleTool && !strings.HasPrefix(m.ID, message.SyntheticOrphanIDPrefix) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func TestHandoffCancelLeavesToolCallsUnresolved(t *testing.T) {
+	st := NewMemStore()
+	bt := &blockingCallTool{started: make(chan struct{}), block: true}
+	prov := scriptedTurns("p", [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("t1", "probe", `{}`)),
+	}).(*scriptedProvider)
+	cfg := resumeConfig(st, prov, 3, bt.tool())
+	cfg.ResumeRerunTools = true
+	s := NewSession(withStore(cfg, st))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(ctx, "q")
+		done <- err
+	}()
+	select {
+	case <-bt.started:
+	case err := <-done:
+		t.Fatalf("Prompt returned before the tool started: %v", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prompt error = %v, want context.Canceled", err)
+	}
+
+	reloaded := reloadSession(t, st, cfg, s.ID)
+	if got := realToolResults(reloaded.History()); len(got) != 0 {
+		t.Fatalf("journal holds tool-result messages %+v after a handoff cancel, want none", got)
+	}
+	bt.mu.Lock()
+	bt.block = false
+	bt.mu.Unlock()
+	prov2 := scriptedTurns("p", doneTurn("a")).(*scriptedProvider)
+	cfg2 := resumeConfig(st, prov2, 3, bt.tool())
+	cfg2.ResumeRerunTools = true
+	r := reloadSession(t, st, cfg2, s.ID)
+	if _, err := r.ResumeTurn(context.Background()); err != nil {
+		t.Fatalf("ResumeTurn: %v", err)
+	}
+	if got := bt.callIDs(); len(got) != 2 || got[0] != "t1" || got[1] != "t1" {
+		t.Errorf("tool call ids across handoff = %v, want [t1 t1]", got)
+	}
+}
+
+func TestStopCancelStillRecordsToolResults(t *testing.T) {
+	st := NewMemStore()
+	bt := &blockingCallTool{started: make(chan struct{}), block: true}
+	prov := scriptedTurns("p", [][]provider.Event{
+		asstTurn(provider.StopToolUse, toolCall("t1", "probe", `{}`)),
+	}).(*scriptedProvider)
+	cfg := resumeConfig(st, prov, 3, bt.tool())
+	s := NewSession(withStore(cfg, st))
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Prompt(ctx, "q")
+		done <- err
+	}()
+	select {
+	case <-bt.started:
+	case err := <-done:
+		t.Fatalf("Prompt returned before the tool started: %v", err)
+	}
+	cancel(ErrTurnStopped)
+	<-done
+
+	reloaded := reloadSession(t, st, cfg, s.ID)
+	got := realToolResults(reloaded.History())
+	if len(got) != 1 {
+		t.Fatalf("tool-result messages = %+v, want the stop to record one", got)
+	}
+	if res, ok := got[0].Parts[0].(*message.ToolResult); !ok || res.CallID != "t1" {
+		t.Errorf("recorded result = %+v, want a result for t1", got[0].Parts[0])
 	}
 }

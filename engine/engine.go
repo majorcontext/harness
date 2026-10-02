@@ -3365,6 +3365,9 @@ func (s *Session) runAgenticLoop(ctx context.Context) (*message.Message, error) 
 			return asst, nil
 		}
 		results := s.runToolCalls(ctx, asst)
+		if s.handoffCanceled(ctx) {
+			return nil, ctx.Err()
+		}
 		if len(results) == 0 {
 			// tool_use stop with no tool calls: treat as end of turn
 			// rather than looping forever. runToolCalls only ever omits a
