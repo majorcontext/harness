@@ -28,7 +28,7 @@ Goals:
 
 - One owner and one source of truth for each piece of state.
 - Every public interface is designed from what its consumer needs. Nothing is kept because it exists.
-- A public Go API small enough to read in one sitting: `harness`, `harness/protocol`, `harness/storetest`.
+- A public Go API small enough to read in one sitting: `harness`, `harness/protocol`, `harness/storetest`, `harness/harnesstest`.
 - One HTTP contract, built from the same Go types as the Go API.
 - Pluggable storage and ownership, so a session survives process loss.
 - Delivery as PRs on `main`. Each PR ships alone.
@@ -91,6 +91,7 @@ These are the compatibility surface.
 | `harness` | `Runtime`, `Options`, `Session`, `Store`, `Owner`, `Ownership`, `DiskStore`, `MemStore`, sentinel errors |
 | `harness/protocol` | Data types shared by the Go API and HTTP; source of the generated OpenAPI and TS |
 | `harness/storetest` | Conformance suite for a `Store` implementation |
+| `harness/harnesstest` | Scripted model server, so other modules test against the same wire fixtures |
 
 The Go API:
 
@@ -157,7 +158,6 @@ Free to change.
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
 | `internal/prompt` | System-prompt segments and the `Memo` loader |
 | `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is |
-| `harnesstest` | Scripted model server for tests |
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
 
