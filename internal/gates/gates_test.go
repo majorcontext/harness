@@ -1,6 +1,7 @@
 package gates
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -436,7 +437,38 @@ func TestLoadBaseNamesTheMissingRef(t *testing.T) {
 	}
 }
 
-func TestRepository(t *testing.T) {
+func TestRepository(t *testing.T) { checkRepository(t, LoadBase) }
+
+func TestResolveBaseSkipsOnlyWhenNotRequired(t *testing.T) {
+	failing := func(string, string) (Base, error) { return Base{}, errors.New("no merge base") }
+	for _, tc := range []struct {
+		required string
+		skip     bool
+		err      bool
+	}{{"", true, false}, {"1", false, true}} {
+		t.Run("GATES_REQUIRED="+tc.required, func(t *testing.T) {
+			t.Setenv("GATES_REQUIRED", tc.required)
+			_, skip, err := resolveBase(failing, "root", "origin/main")
+			if (skip != "") != tc.skip || (err != nil) != tc.err {
+				t.Fatalf("skip = %q, err = %v; want skip %v, err %v", skip, err, tc.skip, tc.err)
+			}
+		})
+	}
+}
+
+func resolveBase(load func(root, ref string) (Base, error), root, ref string) (Base, string, error) {
+	base, err := load(root, ref)
+	if err == nil {
+		return base, "", nil
+	}
+	if os.Getenv("GATES_REQUIRED") == "1" {
+		return Base{}, "", err
+	}
+	return Base{}, fmt.Sprintf("base %s unavailable; set GATES_BASE_REF or fetch full history (GATES_REQUIRED=1 fails instead)", ref), nil
+}
+
+func checkRepository(t *testing.T, load func(root, ref string) (Base, error)) {
+	t.Helper()
 	const root = "../.."
 	ref := os.Getenv("GATES_BASE_REF")
 	if ref == "" {
@@ -446,9 +478,12 @@ func TestRepository(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := LoadBase(root, ref)
+	base, skip, err := resolveBase(load, root, ref)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if skip != "" {
+		t.Skip(skip)
 	}
 	for _, w := range Warnings(head, base.Changed) {
 		t.Log("warning: " + w)

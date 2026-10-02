@@ -42,6 +42,8 @@ jobs:
       - run: go vet ./...
 
       - name: Gates
+        env:
+          GATES_REQUIRED: '1'
         run: go test -race -count=1 -v -run '^TestRepository$' ./internal/gates/
 
       - uses: golangci/golangci-lint-action@v9.3.0
