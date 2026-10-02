@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +20,10 @@ import (
 )
 
 const termGrace = 10 * time.Second
+
+// cleanupGrace bounds the SIGTERM wait at test cleanup. A process that is
+// still draining at the bound is killed, which loses only its coverage counters.
+const cleanupGrace = 3 * time.Second
 
 var liveGroups = struct {
 	sync.Mutex
@@ -32,8 +37,9 @@ type procGroup struct {
 	exited chan struct{}
 }
 
-// startGroup starts cmd in a new process group and registers its kill with
-// t.Cleanup before it returns.
+// startGroup starts cmd in a new process group and registers its shutdown
+// with t.Cleanup before it returns. Shutdown sends SIGTERM first, so an
+// instrumented binary flushes its coverage counters, then SIGKILL.
 func startGroup(t *testing.T, cmd *exec.Cmd) *procGroup {
 	t.Helper()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -45,7 +51,7 @@ func startGroup(t *testing.T, cmd *exec.Cmd) *procGroup {
 	liveGroups.Lock()
 	liveGroups.m[pid] = g
 	liveGroups.Unlock()
-	t.Cleanup(g.kill)
+	t.Cleanup(func() { _ = g.stopGracefully(cleanupGrace) })
 	go func() {
 		_ = cmd.Wait()
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
@@ -234,5 +240,16 @@ func TestServeProcessesDieWithTheirTest(t *testing.T) {
 	}
 	for _, pid := range pids {
 		requireGone(t, "serve", pid)
+	}
+}
+
+func TestCleanupSendsSIGTERMBeforeSIGKILL(t *testing.T) {
+	skipShort(t)
+	marker := filepath.Join(t.TempDir(), "got-term")
+	t.Run("body", func(t *testing.T) {
+		shellGroup(t, "trap 'touch "+marker+"; exit 0' TERM; sleep 600 & echo $!; wait")
+	})
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("process did not see SIGTERM at test cleanup: %v", err)
 	}
 }

@@ -1,17 +1,21 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
 
 type driver interface {
@@ -27,6 +31,34 @@ type driver interface {
 	Queued(t *testing.T, id string) []string
 	AwaitMaxTurnsExceeded(t *testing.T)
 	Stderr() string
+
+	Compact(t *testing.T, id string) callResult
+	SetModel(t *testing.T, id, model string) callResult
+	SetThinking(t *testing.T, id, level string) callResult
+	SetServiceTier(t *testing.T, id, tier string) callResult
+	EndSession(t *testing.T, id string) callResult
+	Send(t *testing.T, id, text string) callResult
+	CancelTree(t *testing.T, id string) callResult
+	DeleteQueued(t *testing.T, id string) callResult
+	UpdateGoal(t *testing.T, id, condition string) callResult
+	ClearGoal(t *testing.T, id string) callResult
+	ListSessions(t *testing.T) callResult
+	GetSession(t *testing.T, id string) callResult
+	SessionStatus(t *testing.T) callResult
+	MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult
+	Bootstrap(t *testing.T, id string, limit int) callResult
+	JournalPage(t *testing.T, id string, from, limit int) callResult
+	SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult
+	Child(t *testing.T, parentID string, nth int) string
+}
+
+// callResult is what a driver reports for a call: the status and the decoded
+// body. A body that carries a transcript reports it in Messages, in the
+// oracle's own vocabulary, and leaves the key out of Body.
+type callResult struct {
+	Status   int
+	Body     any
+	Messages []transcriptMessage
 }
 
 // waitBound is a failure bound for a wait on the serve process, not a delay.
@@ -45,10 +77,15 @@ type httpDriver struct {
 
 func newHTTPDriver(t *testing.T, modelURL string) *httpDriver {
 	t.Helper()
+	return newHTTPDriverWith(t, modelURL, nil)
+}
+
+func newHTTPDriverWith(t *testing.T, modelURL string, extra map[string]any) *httpDriver {
+	t.Helper()
 	d := &httpDriver{
 		sessDir: t.TempDir(),
 		workDir: t.TempDir(),
-		config:  writeGoalConfig(t, modelURL),
+		config:  writeGoalConfigWith(t, modelURL, extra),
 		enqSeq:  map[string]int64{},
 	}
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
@@ -199,6 +236,253 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 		d.p.terminate(t)
 	}
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
+}
+
+func (d *httpDriver) call(t *testing.T, method, path string, body any) callResult {
+	t.Helper()
+	resp, data := d.p.do(method, path, body)
+	res := callResult{Status: resp.StatusCode}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return res
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		t.Fatalf("%s %s: decode body: %v (%s)", method, path, err, data)
+	}
+	if obj, ok := v.(map[string]any); ok {
+		if list, ok := obj["messages"].([]any); ok {
+			raw, _ := json.Marshal(list)
+			var msgs []apiMessage
+			if err := json.Unmarshal(raw, &msgs); err != nil {
+				t.Fatalf("%s %s: decode messages: %v (%s)", method, path, err, raw)
+			}
+			res.Messages = transcriptOf(msgs)
+			delete(obj, "messages")
+		}
+	}
+	res.Body = v
+	return res
+}
+
+func withQuery(path string, kv ...any) string {
+	q := url.Values{}
+	for i := 0; i < len(kv); i += 2 {
+		if n := kv[i+1].(int); n != 0 {
+			q.Set(kv[i].(string), strconv.Itoa(n))
+		}
+	}
+	if len(q) == 0 {
+		return path
+	}
+	return path + "?" + q.Encode()
+}
+
+func (d *httpDriver) Compact(t *testing.T, id string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/compact", map[string]any{})
+}
+
+func (d *httpDriver) SetModel(t *testing.T, id, model string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/model", map[string]any{"model": model})
+}
+
+func (d *httpDriver) SetThinking(t *testing.T, id, level string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/thinking", map[string]any{"effort": level})
+}
+
+func (d *httpDriver) SetServiceTier(t *testing.T, id, tier string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/service-tier", map[string]any{"service_tier": tier})
+}
+
+func (d *httpDriver) EndSession(t *testing.T, id string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodDelete, "/session/"+id, nil)
+}
+
+func (d *httpDriver) Send(t *testing.T, id, text string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/send", map[string]any{"text": text})
+}
+
+func (d *httpDriver) CancelTree(t *testing.T, id string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodDelete, "/session/"+id+"/cancel_tree", nil)
+}
+
+func (d *httpDriver) DeleteQueued(t *testing.T, id string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodDelete, "/session/"+id+"/queue", nil)
+}
+
+func (d *httpDriver) UpdateGoal(t *testing.T, id, condition string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/goal", map[string]any{"condition": condition})
+}
+
+func (d *httpDriver) ClearGoal(t *testing.T, id string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodDelete, "/session/"+id+"/goal", nil)
+}
+
+func (d *httpDriver) ListSessions(t *testing.T) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, "/session", nil)
+}
+
+// withoutSeq drops the instance-wide event cursor from session objects. It
+// moves with events of other sessions, so it is not stable across runs.
+func withoutSeq(res callResult) callResult {
+	objs, _ := res.Body.([]any)
+	if obj, ok := res.Body.(map[string]any); ok {
+		objs = []any{obj}
+	}
+	for _, o := range objs {
+		if obj, ok := o.(map[string]any); ok {
+			delete(obj, "seq")
+		}
+	}
+	return res
+}
+
+func (d *httpDriver) GetSession(t *testing.T, id string) callResult {
+	t.Helper()
+	return withoutSeq(d.call(t, http.MethodGet, "/session/"+id, nil))
+}
+
+func (d *httpDriver) SessionStatus(t *testing.T) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, "/session/status", nil)
+}
+
+func (d *httpDriver) MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, withQuery("/session/"+id+"/message", "before_seq", beforeSeq, "limit", limit), nil)
+}
+
+func (d *httpDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
+	t.Helper()
+	path := "/session/" + id + "/message?stream_from=1"
+	if limit != 0 {
+		path += "&limit=" + strconv.Itoa(limit)
+	}
+	return d.call(t, http.MethodGet, path, nil)
+}
+
+func (d *httpDriver) JournalPage(t *testing.T, id string, from, limit int) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, withQuery("/session/"+id+"/journal", "from", from, "limit", limit), nil)
+}
+
+type sseFrame struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	SessionID string `json:"session_id,omitempty"`
+	Status    string `json:"status,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
+	seq       int64
+}
+
+// frames reads /event after seq `after` until a frame reaches stop. The read
+// ends on that frame, not on a deadline; none is opened when stop <= after.
+func (d *httpDriver) frames(t *testing.T, after int64, header bool, session string, stop int64) []sseFrame {
+	t.Helper()
+	var out []sseFrame
+	if stop <= after {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+	defer cancel()
+	err := d.p.scanEventsFrom(ctx, after, header, session, func(id string, raw []byte) bool {
+		var ev struct {
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
+			Status    string `json:"status"`
+			Seq       int64  `json:"seq"`
+			Message   *struct {
+				ID string `json:"id"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(raw, &ev) != nil || ev.Seq == 0 {
+			return false
+		}
+		f := sseFrame{ID: id, Type: ev.Type, SessionID: ev.SessionID, Status: ev.Status, seq: ev.Seq}
+		if ev.Message != nil {
+			f.MessageID = ev.Message.ID
+		}
+		out = append(out, f)
+		return ev.Seq >= stop
+	})
+	if err != nil {
+		t.Fatalf("event stream ended after %d frames before seq %d: %v\nstderr:\n%s", len(out), stop, err, d.Stderr())
+	}
+	return out
+}
+
+func (d *httpDriver) SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult {
+	t.Helper()
+	var tip struct {
+		Seq int64 `json:"seq"`
+	}
+	if err := json.Unmarshal(d.expect(t, http.StatusOK, http.MethodGet, "/event/tip", nil), &tip); err != nil {
+		t.Fatalf("decode tip: %v", err)
+	}
+	all := d.frames(t, afterSeq, header, "", tip.Seq)
+	got := all
+	if id != "" {
+		got = nil
+		for _, f := range all {
+			if f.SessionID == id {
+				got = append(got, f)
+			}
+		}
+	}
+	if scoped {
+		if len(got) == 0 {
+			got = nil
+		} else {
+			got = d.frames(t, afterSeq, header, id, got[len(got)-1].seq)
+		}
+	}
+	body := make([]any, len(got))
+	for i, f := range got {
+		raw, _ := json.Marshal(f)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		body[i] = m
+	}
+	return callResult{Status: http.StatusOK, Body: map[string]any{"frames": body}}
+}
+
+func (d *httpDriver) Child(t *testing.T, parentID string, nth int) string {
+	t.Helper()
+	var ids []string
+	ok := testpoll.UntilNoT(waitBound, func() bool {
+		ids = ids[:0]
+		var list []struct {
+			ID      string `json:"id"`
+			Lineage *struct {
+				ParentID string `json:"parent_id"`
+			} `json:"lineage"`
+		}
+		if json.Unmarshal(d.expect(t, http.StatusOK, http.MethodGet, "/session", nil), &list) != nil {
+			return false
+		}
+		for _, s := range list {
+			if s.Lineage != nil && s.Lineage.ParentID == parentID {
+				ids = append(ids, s.ID)
+			}
+		}
+		return len(ids) > nth
+	}, 15*time.Millisecond)
+	if !ok {
+		t.Fatalf("session %s has %d children, want more than %d\nstderr:\n%s", parentID, len(ids), nth, d.Stderr())
+	}
+	return ids[nth]
 }
 
 func (d *httpDriver) AwaitMaxTurnsExceeded(t *testing.T) {

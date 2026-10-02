@@ -23,12 +23,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -79,7 +82,15 @@ func buildHarness() (string, func(), error) {
 		return "", nil, err
 	}
 	bin := filepath.Join(dir, "harness")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/harness")
+	args := []string{"build", "-o", bin}
+	if os.Getenv("HARNESS_E2E_COVER") == "1" {
+		if os.Getenv("GOCOVERDIR") == "" {
+			os.RemoveAll(dir)
+			return "", nil, fmt.Errorf("HARNESS_E2E_COVER=1 needs GOCOVERDIR to collect counters")
+		}
+		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/majorcontext/harness/...")
+	}
+	cmd := exec.Command("go", append(args, "./cmd/harness")...)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
@@ -457,11 +468,29 @@ type apiEvent struct {
 // first, such as ctx expiring.
 func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool) error {
 	p.t.Helper()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?from=0", nil)
+	return p.scanEventsFrom(ctx, 0, false, "", func(_ string, raw []byte) bool { return visit(raw) })
+}
+
+// scanEventsFrom is scanEvents with a resume cursor. header sends it as
+// Last-Event-ID instead of the from query. session asks the server to filter.
+// visit also gets the id field of the frame.
+func (p *serveProc) scanEventsFrom(ctx context.Context, from int64, header bool, session string, visit func(id string, raw []byte) bool) error {
+	p.t.Helper()
+	q := url.Values{}
+	if !header {
+		q.Set("from", strconv.FormatInt(from, 10))
+	}
+	if session != "" {
+		q.Set("session", session)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?"+q.Encode(), nil)
 	if err != nil {
 		p.t.Fatalf("event request: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+testToken)
+	if header {
+		req.Header.Set("Last-Event-ID", strconv.FormatInt(from, 10))
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		p.t.Fatalf("GET /event: %v", err)
@@ -473,7 +502,7 @@ func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool)
 		if err != nil {
 			return err
 		}
-		if visit(raw) {
+		if visit(sc.id, raw) {
 			return nil
 		}
 	}
@@ -503,12 +532,14 @@ func (p *serveProc) eventReplay() []apiEvent {
 type sseScanner struct {
 	r   *bufReader
 	buf bytes.Buffer
+	id  string // the id field of the frame next returned
 }
 
 func newSSEScanner(r io.Reader) *sseScanner { return &sseScanner{r: newBufReader(r)} }
 
 func (s *sseScanner) next() ([]byte, error) {
 	s.buf.Reset()
+	s.id = ""
 	got := false
 	for {
 		line, err := s.r.readLine()
@@ -523,6 +554,8 @@ func (s *sseScanner) next() ([]byte, error) {
 			if got {
 				return s.buf.Bytes(), nil
 			}
+		case strings.HasPrefix(line, "id:"):
+			s.id = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 		case strings.HasPrefix(line, "data:"):
 			s.buf.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 			got = true
@@ -966,6 +999,13 @@ func (f *fakeGoalAnthropic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // naming a distinct evaluator model, so goal requests are enabled.
 func writeGoalConfig(t *testing.T, baseURL string) string {
 	t.Helper()
+	return writeGoalConfigWith(t, baseURL, nil)
+}
+
+// writeGoalConfigWith is writeGoalConfig with top-level keys that replace or
+// add to the base config.
+func writeGoalConfigWith(t *testing.T, baseURL string, extra map[string]any) string {
+	t.Helper()
 	cfg := map[string]any{
 		"model":                "anthropic/claude-fable-5",
 		"goal_evaluator_model": "anthropic/eval-model",
@@ -976,6 +1016,7 @@ func writeGoalConfig(t *testing.T, baseURL string) string {
 			},
 		},
 	}
+	maps.Copy(cfg, extra)
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)

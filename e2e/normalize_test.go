@@ -12,7 +12,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call)_`)
+var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_`)
 
 var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 
@@ -111,7 +111,73 @@ func (n *normalizer) id(s string) string {
 }
 
 func normalize(reqs []harnesstest.Request, sessions map[string][]transcriptMessage) observation {
+	return normalizeRun(reqs, sessions, nil, nil)
+}
+
+// normCall is a recorded call result. Ids are aliased and times masked.
+type normCall struct {
+	Status   int           `json:"status"`
+	Body     any           `json:"body,omitempty"`
+	Messages []normMessage `json:"messages,omitempty"`
+}
+
+var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_[0-9A-Za-z_]+$`)
+
+// value normalizes decoded JSON. Object keys are visited in sorted order so
+// the first-seen id numbering does not depend on map order. A session id that
+// has no alias gets a number, so a scenario that lists a child binds it first.
+func (n *normalizer) value(key string, v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			out[n.str(k)] = n.value(k, x[k])
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = n.value(key, e)
+		}
+		return out
+	case string:
+		if key == "workdir" {
+			return "<workdir>"
+		}
+		return n.str(x)
+	}
+	return v
+}
+
+func (n *normalizer) str(s string) string {
+	if fullIDPattern.MatchString(s) {
+		return n.id(s)
+	}
+	return maskUnstable(s)
+}
+
+func (n *normalizer) messages(msgs []transcriptMessage) []normMessage {
+	out := make([]normMessage, 0, len(msgs))
+	for _, m := range msgs {
+		nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
+		for _, p := range m.Parts {
+			nm.Parts = append(nm.Parts, normPart{
+				Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name,
+				Arguments: p.Arguments, IsError: p.IsError, Content: maskUnstable(p.Content),
+			})
+		}
+		out = append(out, nm)
+	}
+	return out
+}
+
+// normalizeRun is normalize plus the recorded calls. ids maps scenario aliases
+// to session ids, which normalize to "ses:<alias>".
+func normalizeRun(reqs []harnesstest.Request, sessions map[string][]transcriptMessage, calls []recordedCall, ids map[string]string) observation {
 	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}}
+	for alias, id := range ids {
+		n.aliases[id] = "ses:" + alias
+	}
 	obs := observation{Sessions: map[string][]normMessage{}}
 	for _, r := range reqs {
 		nr := normRequest{
@@ -134,19 +200,17 @@ func normalize(reqs []harnesstest.Request, sessions map[string][]transcriptMessa
 		obs.Requests = append(obs.Requests, nr)
 	}
 	for _, alias := range slices.Sorted(maps.Keys(sessions)) {
-		msgs := make([]normMessage, 0, len(sessions[alias]))
-		for _, m := range sessions[alias] {
-			nm := normMessage{ID: n.id(m.ID), Role: m.Role, Parts: []normPart{}}
-			for _, p := range m.Parts {
-				np := normPart{
-					Type: p.Type, Text: maskUnstable(p.Text), CallID: n.id(p.CallID), Name: p.Name,
-					Arguments: p.Arguments, IsError: p.IsError, Content: maskUnstable(p.Content),
-				}
-				nm.Parts = append(nm.Parts, np)
-			}
-			msgs = append(msgs, nm)
+		obs.Sessions[alias] = n.messages(sessions[alias])
+	}
+	for _, c := range calls {
+		if obs.Calls == nil {
+			obs.Calls = map[string]normCall{}
 		}
-		obs.Sessions[alias] = msgs
+		nc := normCall{Status: c.res.Status, Body: n.value("", c.res.Body)}
+		if len(c.res.Messages) > 0 {
+			nc.Messages = n.messages(c.res.Messages)
+		}
+		obs.Calls[c.key] = nc
 	}
 	return obs
 }
@@ -330,6 +394,49 @@ func TestNormalize(t *testing.T) {
 			}
 			if strings.Contains(string(got), "2026-10-02") || strings.Contains(string(got), "secret prompt") {
 				t.Errorf("normalized output leaks unstable or system data: %s", got)
+			}
+		})
+	}
+}
+
+func TestNormalizeCalls(t *testing.T) {
+	skipShort(t)
+	tests := []struct {
+		name string
+		body string
+		msgs string
+		want string
+	}{
+		{
+			name: "known_session_is_its_alias_unknown_is_numbered",
+			body: `{"id":"ses_abc","children":["ses_def"],"workdir":"/tmp/x","created_at":"2026-10-02T10:00:00Z"}`,
+			want: `{"status":200,"body":{"children":["ses#1"],"created_at":"\u003ctime\u003e","id":"ses:a","workdir":"\u003cworkdir\u003e"}}`,
+		},
+		{
+			name: "id_as_object_key",
+			body: `{"ses_abc":{"state":"idle"}}`,
+			want: `{"status":200,"body":{"ses:a":{"state":"idle"}}}`,
+		},
+		{
+			name: "transcript_ids_numbered_with_the_run",
+			body: `{"total":1}`,
+			msgs: `[{"id":"msg_9","role":"user","parts":[]}]`,
+			want: `{"status":200,"body":{"total":1},"messages":[{"id":"msg#1","role":"user","parts":[]}]}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callResult{Status: 200, Body: mustDecode[any](t, tc.body)}
+			if tc.msgs != "" {
+				res.Messages = transcriptOf(mustDecode[[]apiMessage](t, tc.msgs))
+			}
+			obs := normalizeRun(nil, nil, []recordedCall{{key: "k", res: res}}, map[string]string{"a": "ses_abc"})
+			got, err := json.Marshal(obs.Calls["k"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Errorf("call =\n%s\nwant\n%s", got, tc.want)
 			}
 		})
 	}
