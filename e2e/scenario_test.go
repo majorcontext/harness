@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +21,7 @@ type scenario struct {
 	concurrent bool // child sessions race, so requests are ordered by conversation
 	chat       bool // the model is a chat-completions gateway, and config names it as provider "bifrost"
 	config     map[string]any
+	setup      func(t *testing.T, fx map[string]any) map[string]any // fills fx for actions; the result is added to config
 	model      []harnesstest.Step
 	actions    []action
 	driver     func(t *testing.T, modelURL string) driver // nil runs the default HTTP driver
@@ -62,6 +64,7 @@ type run struct {
 	noIdle  map[string]bool
 	calls   []recordedCall
 	keys    map[string]int
+	fx      map[string]any
 }
 
 // recordedCall is the outcome of one action that reports a result. Its key is
@@ -260,6 +263,14 @@ func (a bindChild) run(t *testing.T, r *run) {
 func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
 	fake, config := scenarioFake(t, sc)
+	fx := map[string]any{}
+	if sc.setup != nil {
+		config = maps.Clone(config)
+		if config == nil {
+			config = map[string]any{}
+		}
+		maps.Copy(config, sc.setup(t, fx))
+	}
 	var drv driver
 	if sc.driver != nil {
 		drv = sc.driver(t, fake.URL())
@@ -272,6 +283,7 @@ func runScenario(t *testing.T, sc scenario) observation {
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
 		keys:   map[string]int{},
+		fx:     fx,
 	}
 	for _, a := range sc.actions {
 		a.run(t, r)
