@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+  exclusions:
+    paths:
+      - testdata
+
+issues:
+  new-from-rev: origin/main
