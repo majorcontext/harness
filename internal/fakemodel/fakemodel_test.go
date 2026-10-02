@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -164,77 +166,98 @@ func TestUnmatchedRequestFailsLoudly(t *testing.T) {
 	}
 }
 
-func blockedStream(t testing.TB, s *Server, ctx context.Context) (provider.Stream, chan provider.Event) {
-	t.Helper()
-	st, err := askCtx(t, ctx, s, "hi")
-	if err != nil {
-		t.Fatal(err)
-	}
-	evs := make(chan provider.Event, 64)
+// blockedRun streams reply through a bare Server inside a synctest bubble, so
+// every "has not happened yet" assertion is exact: Wait returns only once the
+// handler goroutine can make no further progress.
+type blockedRun struct {
+	s    *Server
+	w    *httptest.ResponseRecorder
+	done chan struct{}
+}
+
+func startBlocked(ctx context.Context, reply Reply) *blockedRun {
+	s := &Server{closing: make(chan struct{}), releases: map[string]chan struct{}{}, blocked: map[string]chan struct{}{}}
+	br := &blockedRun{s: s, w: httptest.NewRecorder(), done: make(chan struct{})}
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages", nil).WithContext(ctx)
 	go func() {
-		defer close(evs)
-		for {
-			ev, err := st.Next()
-			if err != nil {
-				return
-			}
-			evs <- ev
-		}
+		defer close(br.done)
+		s.stream(br.w, r, 1, "slow", reply)
 	}()
-	return st, evs
+	synctest.Wait()
+	return br
+}
+
+func (br *blockedRun) finished() bool {
+	select {
+	case <-br.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func TestBlockUntilRelease(t *testing.T) {
 	tests := []struct {
-		name  string
-		reply Reply
+		name      string
+		reply     Reply
+		wantDelta string
 	}{
-		{"text", Reply{Text: "slow text", Block: true}},
-		{"tool call only", Reply{Block: true, ToolCalls: []ToolCall{{ID: "toolu_1", Name: "bash"}}}},
+		{"text", Reply{Text: "slow text", Block: true}, `"text":"slow text"`},
+		{"tool call only", Reply{Block: true, ToolCalls: []ToolCall{{ID: "toolu_1", Name: "bash"}}}, `"partial_json"`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(t, Step{Name: "slow", Match: Any(), Reply: tc.reply})
-			_, evs := blockedStream(t, s, context.Background())
-		wait:
-			for {
+			synctest.Test(t, func(t *testing.T) {
+				br := startBlocked(context.Background(), tc.reply)
 				select {
-				case <-s.Blocked("slow"):
-					break wait
-				case ev, ok := <-evs:
-					if !ok || ev.Type == provider.EventDone {
-						t.Fatal("stream finished without waiting for Release")
-					}
+				case <-br.s.Blocked("slow"):
+				default:
+					t.Fatal("handler is not waiting on Release")
 				}
-			}
-			s.Release("slow")
-			var last provider.Event
-			for ev := range evs {
-				last = ev
-			}
-			if last.Type != provider.EventDone {
-				t.Errorf("last event = %v after Release, want done", last.Type)
-			}
+				if body := br.w.Body.String(); !strings.Contains(body, tc.wantDelta) {
+					t.Errorf("body before Release lacks the first delta %s:\n%s", tc.wantDelta, body)
+				}
+				if br.finished() || strings.Contains(br.w.Body.String(), "message_stop") {
+					t.Fatalf("stream completed before Release:\n%s", br.w.Body.String())
+				}
+				br.s.Release("slow")
+				synctest.Wait()
+				if !br.finished() || !strings.Contains(br.w.Body.String(), "message_stop") {
+					t.Errorf("stream did not complete after Release:\n%s", br.w.Body.String())
+				}
+			})
 		})
 	}
 }
 
 func TestBlockedStreamExits(t *testing.T) {
-	t.Run("client cancel", func(t *testing.T) {
-		s := New(t, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "x", Block: true}})
-		ctx, cancel := context.WithCancel(context.Background())
-		blockedStream(t, s, ctx)
-		<-s.Blocked("slow")
-		cancel()
-		s.srv.Close()
-	})
-	t.Run("server close", func(t *testing.T) {
-		rec := &recorder{TB: t}
-		s := New(rec, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "x", Block: true}})
-		blockedStream(t, s, context.Background())
-		<-s.Blocked("slow")
-		rec.runCleanups()
-	})
+	tests := []struct {
+		name string
+		end  func(cancel context.CancelFunc, s *Server)
+	}{
+		{"client cancel", func(cancel context.CancelFunc, _ *Server) { cancel() }},
+		{"server close", func(_ context.CancelFunc, s *Server) { close(s.closing) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				br := startBlocked(ctx, Reply{Text: "x", Block: true})
+				if br.finished() {
+					t.Fatal("handler returned before cancel")
+				}
+				tc.end(cancel, br.s)
+				synctest.Wait()
+				if !br.finished() {
+					t.Error("handler still blocked after the stream ended")
+				}
+				if strings.Contains(br.w.Body.String(), "message_stop") {
+					t.Errorf("an aborted stream completed:\n%s", br.w.Body.String())
+				}
+			})
+		})
+	}
 }
 
 func TestUndecodableRequestFailsLoudly(t *testing.T) {
