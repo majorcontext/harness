@@ -3,7 +3,7 @@ package e2e
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 func TestContractChildren(t *testing.T) {
@@ -11,13 +11,13 @@ func TestContractChildren(t *testing.T) {
 		{
 			name:       "task_child_result_reaches_parent",
 			concurrent: true,
-			model: []fakemodel.Step{
-				{Name: "delegate", Match: fakemodel.LastUserText("delegate"), Reply: fakemodel.Reply{ToolCalls: []fakemodel.ToolCall{{
+			model: []harnesstest.Step{
+				{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
 					ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
 				}}}},
-				{Name: "child", Match: fakemodel.LastUserText("child work"), Reply: fakemodel.Reply{Text: "child done", Block: true}},
-				{Name: "ack", Match: fakemodel.LastToolResult("task"), Reply: fakemodel.Reply{Text: "waiting"}},
-				{Name: "parent", Match: fakemodel.LastUserText("child done"), Reply: fakemodel.Reply{Text: "parent done"}},
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+				{Name: "parent", Match: harnesstest.LastUserText("child done"), Reply: harnesstest.Reply{Text: "parent done"}},
 			},
 			actions: []action{
 				create{as: "a"},

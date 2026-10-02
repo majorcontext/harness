@@ -3,26 +3,26 @@ package e2e
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 func TestContractQueue(t *testing.T) {
-	slow := func(text string) fakemodel.Step {
-		return fakemodel.Step{
+	slow := func(text string) harnesstest.Step {
+		return harnesstest.Step{
 			Name:  "slow",
-			Match: fakemodel.LastUserText("first"),
-			Reply: fakemodel.Reply{Text: text, Block: true},
+			Match: harnesstest.LastUserText("first"),
+			Reply: harnesstest.Reply{Text: text, Block: true},
 		}
 	}
-	second := fakemodel.Step{
+	second := harnesstest.Step{
 		Name:  "second",
-		Match: fakemodel.LastUserText("second"),
-		Reply: fakemodel.Reply{Text: "2"},
+		Match: harnesstest.LastUserText("second"),
+		Reply: harnesstest.Reply{Text: "2"},
 	}
 	runScenarios(t, []scenario{
 		{
 			name:  "enqueue_while_busy_runs_after",
-			model: []fakemodel.Step{slow("1"), second},
+			model: []harnesstest.Step{slow("1"), second},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},
@@ -35,7 +35,7 @@ func TestContractQueue(t *testing.T) {
 		{
 			// Known defect, pinned on purpose: interrupt drops the partial assistant text.
 			name:  "interrupt_drops_unfinished_text_then_queue_continues",
-			model: []fakemodel.Step{slow("unfinished"), second},
+			model: []harnesstest.Step{slow("unfinished"), second},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},

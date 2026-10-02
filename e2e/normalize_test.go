@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call)_`)
@@ -84,7 +84,7 @@ func (n *normalizer) id(s string) string {
 	return a
 }
 
-func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) observation {
+func normalize(reqs []harnesstest.Request, sessions map[string][]apiMessage) observation {
 	n := &normalizer{aliases: map[string]string{}, counts: map[string]int{}}
 	obs := observation{Sessions: map[string][]normMessage{}}
 	for _, r := range reqs {
@@ -132,9 +132,9 @@ func normalize(reqs []fakemodel.Request, sessions map[string][]apiMessage) obser
 
 // groupByConversation orders requests by the first user text, in order of
 // first arrival, and keeps arrival order inside each group.
-func groupByConversation(reqs []fakemodel.Request) []fakemodel.Request {
+func groupByConversation(reqs []harnesstest.Request) []harnesstest.Request {
 	var roots []string
-	groups := map[string][]fakemodel.Request{}
+	groups := map[string][]harnesstest.Request{}
 	for _, r := range reqs {
 		root := conversationRoot(r)
 		if _, ok := groups[root]; !ok {
@@ -142,14 +142,14 @@ func groupByConversation(reqs []fakemodel.Request) []fakemodel.Request {
 		}
 		groups[root] = append(groups[root], r)
 	}
-	var out []fakemodel.Request
+	var out []harnesstest.Request
 	for _, root := range roots {
 		out = append(out, groups[root]...)
 	}
 	return out
 }
 
-func conversationRoot(r fakemodel.Request) string {
+func conversationRoot(r harnesstest.Request) string {
 	if len(r.Messages) == 0 {
 		return ""
 	}
@@ -246,36 +246,36 @@ func mustDecode[T any](t *testing.T, raw string) T {
 
 func TestNormalize(t *testing.T) {
 	skipShort(t)
-	toolReq := func(ids ...string) fakemodel.Request {
-		var parts []fakemodel.Part
+	toolReq := func(ids ...string) harnesstest.Request {
+		var parts []harnesstest.Part
 		for _, id := range ids {
-			parts = append(parts, fakemodel.Part{Kind: "tool_use", ToolName: "bash", ToolUseID: id})
+			parts = append(parts, harnesstest.Part{Kind: "tool_use", ToolName: "bash", ToolUseID: id})
 		}
-		return fakemodel.Request{Messages: []fakemodel.Message{{Role: "assistant", Parts: parts}}}
+		return harnesstest.Request{Messages: []harnesstest.Message{{Role: "assistant", Parts: parts}}}
 	}
 	tests := []struct {
 		name string
-		reqs []fakemodel.Request
+		reqs []harnesstest.Request
 		msgs string
 		want string
 	}{
 		{
 			name: "ids_renumbered_by_first_seen",
-			reqs: []fakemodel.Request{toolReq("toolu_zzz", "toolu_aaa")},
+			reqs: []harnesstest.Request{toolReq("toolu_zzz", "toolu_aaa")},
 			msgs: `[{"id":"msg_9","role":"user","parts":[]},{"id":"msg_1","role":"assistant","parts":[]}]`,
 			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"assistant","parts":[{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#1"},{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#2"}]}]}],` +
 				`"sessions":{"a":[{"id":"msg#1","role":"user","parts":[]},{"id":"msg#2","role":"assistant","parts":[]}]}}`,
 		},
 		{
 			name: "same_id_same_alias",
-			reqs: []fakemodel.Request{toolReq("toolu_x")},
+			reqs: []harnesstest.Request{toolReq("toolu_x")},
 			msgs: `[{"id":"msg_1","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu_x","name":"bash","arguments":{"b":1,"a":2}}]}]`,
 			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"assistant","parts":[{"kind":"tool_use","tool_name":"bash","tool_use_id":"toolu#1"}]}]}],` +
 				`"sessions":{"a":[{"id":"msg#1","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu#1","name":"bash","arguments":{"a":2,"b":1}}]}]}}`,
 		},
 		{
 			name: "tools_sorted",
-			reqs: []fakemodel.Request{{Tools: []string{"write", "bash", "read"}}},
+			reqs: []harnesstest.Request{{Tools: []string{"write", "bash", "read"}}},
 			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":["bash","read","write"],"messages":null}],"sessions":{}}`,
 		},
 		{
@@ -285,12 +285,12 @@ func TestNormalize(t *testing.T) {
 		},
 		{
 			name: "system_reduced_to_flag",
-			reqs: []fakemodel.Request{{System: "You are a strict goal-completion evaluator.\nMET: <one short sentence saying why>"}, {System: "secret prompt body"}},
+			reqs: []harnesstest.Request{{System: "You are a strict goal-completion evaluator.\nMET: <one short sentence saying why>"}, {System: "secret prompt body"}},
 			want: `{"requests":[{"system_has_goal_evaluator":true,"tools":null,"messages":null},{"system_has_goal_evaluator":false,"tools":null,"messages":null}],"sessions":{}}`,
 		},
 		{
 			name: "timestamps_in_text_masked",
-			reqs: []fakemodel.Request{{Messages: []fakemodel.Message{{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: "engine started 2026-10-02T15:29:58Z"}}}}}},
+			reqs: []harnesstest.Request{{Messages: []harnesstest.Message{{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: "engine started 2026-10-02T15:29:58Z"}}}}}},
 			want: `{"requests":[{"system_has_goal_evaluator":false,"tools":null,"messages":[{"role":"user","parts":[{"kind":"text","text":"engine started \u003ctime\u003e"}]}]}],"sessions":{}}`,
 		},
 	}
@@ -368,14 +368,14 @@ func TestInvariants(t *testing.T) {
 
 func TestGroupByConversation(t *testing.T) {
 	skipShort(t)
-	req := func(root, last string) fakemodel.Request {
-		msgs := []fakemodel.Message{{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: root}}}}
+	req := func(root, last string) harnesstest.Request {
+		msgs := []harnesstest.Message{{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: root}}}}
 		if last != "" {
-			msgs = append(msgs, fakemodel.Message{Role: "user", Parts: []fakemodel.Part{{Kind: "text", Text: last}}})
+			msgs = append(msgs, harnesstest.Message{Role: "user", Parts: []harnesstest.Part{{Kind: "text", Text: last}}})
 		}
-		return fakemodel.Request{Messages: msgs}
+		return harnesstest.Request{Messages: msgs}
 	}
-	label := func(rs []fakemodel.Request) string {
+	label := func(rs []harnesstest.Request) string {
 		var out []string
 		for _, r := range rs {
 			out = append(out, r.LastUserText())
@@ -384,7 +384,7 @@ func TestGroupByConversation(t *testing.T) {
 	}
 	// The child request arrives between the parent's first and second request,
 	// or after its second; both arrival orders must normalize alike.
-	arrivals := [][]fakemodel.Request{
+	arrivals := [][]harnesstest.Request{
 		{req("p", ""), req("c", ""), req("p", "ack")},
 		{req("p", ""), req("p", "ack"), req("c", "")},
 	}

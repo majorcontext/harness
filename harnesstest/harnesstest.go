@@ -1,5 +1,5 @@
-// Package fakemodel is a scripted Anthropic Messages server for tests.
-package fakemodel
+// Package harnesstest is a scripted Anthropic Messages server for tests.
+package harnesstest
 
 import (
 	"fmt"
@@ -11,6 +11,7 @@ import (
 	"testing"
 )
 
+// Step is one scripted reply and the requests it answers.
 type Step struct {
 	Name   string
 	Match  Matcher
@@ -18,6 +19,7 @@ type Step struct {
 	Repeat bool // stays available after it matches
 }
 
+// Reply is what the server sends when a Step matches.
 type Reply struct {
 	Text       string
 	ToolCalls  []ToolCall // emitted as tool_use blocks after Text
@@ -27,24 +29,29 @@ type Reply struct {
 	Block      bool       // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
 }
 
+// ToolCall is a tool_use block in a Reply.
 type ToolCall struct {
 	ID, Name string
 	Input    map[string]any
 }
 
+// Usage is the token usage a Reply reports.
 type Usage struct{ Input, Output int }
 
+// Request is a decoded model request.
 type Request struct {
 	System   string
 	Messages []Message
 	Tools    []string // sorted names
 }
 
+// Message is one conversation turn in a Request.
 type Message struct {
 	Role  string
 	Parts []Part
 }
 
+// Part is one content block of a Message.
 type Part struct {
 	Kind      string // "text" | "tool_use" | "tool_result"
 	Text      string
@@ -73,6 +80,7 @@ func (r Request) LastUserText() string {
 	return ""
 }
 
+// Server is a scripted Anthropic Messages server.
 type Server struct {
 	srv     *httptest.Server
 	closing chan struct{}
@@ -88,6 +96,7 @@ type Server struct {
 	onRequest func(n int)
 }
 
+// New starts a Server that answers requests from steps and fails t on any request no step matches.
 func New(t testing.TB, steps ...Step) *Server {
 	t.Helper()
 	steps = append([]Step(nil), steps...)
@@ -110,27 +119,30 @@ func New(t testing.TB, steps ...Step) *Server {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for _, msg := range s.undecoded {
-			t.Errorf("fakemodel: undecodable request body: %s", msg)
+			t.Errorf("harnesstest: undecodable request body: %s", msg)
 		}
 		for _, r := range s.unmatched {
 			sys := r.System
 			if len(sys) > 80 {
 				sys = sys[:80]
 			}
-			t.Errorf("fakemodel: no step matched request: last user text %q, system prefix %q", r.LastUserText(), sys)
+			t.Errorf("harnesstest: no step matched request: last user text %q, system prefix %q", r.LastUserText(), sys)
 		}
 	})
 	return s
 }
 
+// URL is the base URL of the server.
 func (s *Server) URL() string { return s.srv.URL }
 
+// Requests returns a copy of every request received so far.
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
 }
 
+// Release lets the named Block step finish.
 func (s *Server) Release(stepName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,6 +164,7 @@ func closeOnce(ch chan struct{}) {
 	}
 }
 
+// OnRequest sets a callback that runs with the running request count for each request.
 func (s *Server) OnRequest(f func(n int)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,9 +235,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case matched < 0:
-		writeError(w, http.StatusInternalServerError, "fakemodel: no step matched")
+		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
 	case step.Reply.HTTPStatus != 0:
-		writeError(w, step.Reply.HTTPStatus, "fakemodel: scripted error")
+		writeError(w, step.Reply.HTTPStatus, "harnesstest: scripted error")
 	default:
 		s.stream(w, r, n, step.Name, step.Reply)
 	}

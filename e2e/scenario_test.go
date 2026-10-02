@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract goldens")
@@ -19,7 +19,7 @@ var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract go
 type scenario struct {
 	name       string
 	concurrent bool // child sessions race, so requests are ordered by conversation
-	model      []fakemodel.Step
+	model      []harnesstest.Step
 	actions    []action
 }
 
@@ -53,7 +53,7 @@ type observation struct {
 
 type run struct {
 	drv     driver
-	fake    *fakemodel.Server
+	fake    *harnesstest.Server
 	ids     map[string]string
 	aliases []string
 	noIdle  map[string]bool
@@ -108,7 +108,7 @@ func (r *run) waitForRequests(n int, bound time.Duration) bool {
 	return true
 }
 
-func requestSummary(reqs []fakemodel.Request) string {
+func requestSummary(reqs []harnesstest.Request) string {
 	var b strings.Builder
 	for i, req := range reqs {
 		fmt.Fprintf(&b, "\n  %d: last user text %q", i+1, req.LastUserText())
@@ -124,7 +124,7 @@ func (a restart) run(t *testing.T, r *run) { r.drv.Restart(t, a.kill) }
 
 func runScenario(t *testing.T, sc scenario) observation {
 	t.Helper()
-	fake := fakemodel.New(t, sc.model...)
+	fake := harnesstest.New(t, sc.model...)
 	r := &run{
 		drv:    newHTTPDriver(t, fake.URL()),
 		fake:   fake,
@@ -243,7 +243,7 @@ func TestScenarioRunsTwiceIdentically(t *testing.T) {
 	skipShort(t)
 	sc := scenario{
 		name:  "one_turn",
-		model: []fakemodel.Step{{Name: "reply", Reply: fakemodel.Reply{Text: "hello"}}},
+		model: []harnesstest.Step{{Name: "reply", Reply: harnesstest.Reply{Text: "hello"}}},
 		actions: []action{
 			create{as: "a"},
 			submit{as: "a", text: "hi"},

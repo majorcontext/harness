@@ -157,7 +157,7 @@ Free to change.
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
 | `internal/prompt` | System-prompt segments and the `Memo` loader |
 | `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is |
-| `internal/fakemodel` | Scripted model server for tests |
+| `harnesstest` | Scripted model server for tests |
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
 
@@ -580,7 +580,7 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 
 ### Contract suite
 
-- `internal/fakemodel` serves the Anthropic and OpenAI wire APIs from a script: text, tool call, error, stall, 429, block until released.
+- `harnesstest` serves the Anthropic and OpenAI wire APIs from a script: text, tool call, error, stall, 429, block until released.
 - A scenario is a model script, a list of HTTP calls, and a golden event log with normalized ids and times.
 - Scenarios run in-process inside `synctest`. A smoke subset runs the binary.
 - Every scenario checks the append-time invariants from the eventlog section.
@@ -614,7 +614,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 
 | Phase | Work | Consumers |
 | --- | --- | --- |
-| 1 | Contract suite: scenario scripts and `fakemodel`; CI gates in ratchet mode; new `AGENTS.md`; delete history comments | None |
+| 1 | Contract suite: scenario scripts and `harnesstest`; CI gates in ratchet mode; new `AGENTS.md`; delete history comments | None |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner`; `Runtime`, `Session.Submit`, `Events`; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; turn resume and stop causes; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it; it is the first consumer |
 | 3 | Leaf cleanups: `httpx`, `wirenorm`, `tool` registry, `prompt.Memo` and agent profiles; move leaves to `internal/` | None |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/testpoll"
 )
 
@@ -205,7 +205,7 @@ func TestServeProcessesDieWithTheirTest(t *testing.T) {
 	skipShort(t)
 	var pids []int
 	t.Run("body", func(t *testing.T) {
-		fake := fakemodel.New(t)
+		fake := harnesstest.New(t)
 		d := newHTTPDriver(t, fake.URL())
 		pids = append(pids, d.p.cmd.Process.Pid)
 		d.Restart(t, true)

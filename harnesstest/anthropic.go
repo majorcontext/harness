@@ -1,4 +1,4 @@
-package fakemodel
+package harnesstest
 
 import (
 	"encoding/json"

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 type driver interface {
@@ -191,7 +191,7 @@ func TestWaitsFailAtTheirBound(t *testing.T) {
 		}
 	})
 	t.Run("event stream", func(t *testing.T) {
-		fake := fakemodel.New(t)
+		fake := harnesstest.New(t)
 		d := newHTTPDriver(t, fake.URL())
 		err := d.scan(t, func([]byte) bool { return false })
 		if !errors.Is(err, context.DeadlineExceeded) {

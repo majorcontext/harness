@@ -4,22 +4,22 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
-func notEvaluator(r fakemodel.Request) bool {
+func notEvaluator(r harnesstest.Request) bool {
 	return !strings.Contains(r.System, goalEvaluatorMarker)
 }
 
-func agentStep(name, text string, repeat bool) fakemodel.Step {
-	return fakemodel.Step{Name: name, Match: notEvaluator, Reply: fakemodel.Reply{Text: text}, Repeat: repeat}
+func agentStep(name, text string, repeat bool) harnesstest.Step {
+	return harnesstest.Step{Name: name, Match: notEvaluator, Reply: harnesstest.Reply{Text: text}, Repeat: repeat}
 }
 
-func evaluatorStep(name, verdict string, repeat bool) fakemodel.Step {
-	return fakemodel.Step{
+func evaluatorStep(name, verdict string, repeat bool) harnesstest.Step {
+	return harnesstest.Step{
 		Name:   name,
-		Match:  fakemodel.SystemContains("You are a strict goal-completion evaluator"),
-		Reply:  fakemodel.Reply{Text: verdict},
+		Match:  harnesstest.SystemContains("You are a strict goal-completion evaluator"),
+		Reply:  harnesstest.Reply{Text: verdict},
 		Repeat: repeat,
 	}
 }
@@ -41,7 +41,7 @@ func TestContractGoal(t *testing.T) {
 	runScenarios(t, []scenario{
 		{
 			name: "goal_met_first_turn",
-			model: []fakemodel.Step{
+			model: []harnesstest.Step{
 				agentStep("work", "done", false),
 				evaluatorStep("judge", "MET: said done", false),
 			},
@@ -49,7 +49,7 @@ func TestContractGoal(t *testing.T) {
 		},
 		{
 			name: "goal_not_met_then_met",
-			model: []fakemodel.Step{
+			model: []harnesstest.Step{
 				agentStep("try", "try", false),
 				evaluatorStep("judge1", "NOT MET: say done", false),
 				agentStep("finish", "done", false),
@@ -59,7 +59,7 @@ func TestContractGoal(t *testing.T) {
 		},
 		{
 			name: "deferred_goal_judges_finished_turn",
-			model: []fakemodel.Step{
+			model: []harnesstest.Step{
 				agentStep("work", "done", false),
 				evaluatorStep("judge", "MET: said done", false),
 			},
@@ -67,7 +67,7 @@ func TestContractGoal(t *testing.T) {
 		},
 		{
 			name: "goal_exhausts_max_turns",
-			model: []fakemodel.Step{
+			model: []harnesstest.Step{
 				agentStep("try", "try", true),
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},

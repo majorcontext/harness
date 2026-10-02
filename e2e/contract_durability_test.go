@@ -3,18 +3,18 @@ package e2e
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/internal/fakemodel"
+	"github.com/majorcontext/harness/harnesstest"
 )
 
 func TestContractDurability(t *testing.T) {
-	text := func(name, user, reply string) fakemodel.Step {
-		return fakemodel.Step{Name: name, Match: fakemodel.LastUserText(user), Reply: fakemodel.Reply{Text: reply}}
+	text := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
 	}
-	slow := fakemodel.Step{Name: "slow", Match: fakemodel.LastUserText("first"), Reply: fakemodel.Reply{Text: "partial", Block: true}}
+	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
 	runScenarios(t, []scenario{
 		{
 			name:  "kill_mid_turn_then_continue",
-			model: []fakemodel.Step{slow, text("again", "again", "ok")},
+			model: []harnesstest.Step{slow, text("again", "again", "ok")},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},
@@ -26,7 +26,7 @@ func TestContractDurability(t *testing.T) {
 		},
 		{
 			name:  "history_survives_clean_restart",
-			model: []fakemodel.Step{text("one", "one", "1"), text("two", "two", "2")},
+			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2")},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "one"},
@@ -40,7 +40,7 @@ func TestContractDurability(t *testing.T) {
 			// Known defect, pinned on purpose: after a SIGKILL restart the refolded
 			// queue entry is not dispatched.
 			name:  "queued_input_survives_kill",
-			model: []fakemodel.Step{slow},
+			model: []harnesstest.Step{slow},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},
