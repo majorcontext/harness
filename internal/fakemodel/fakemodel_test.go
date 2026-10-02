@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"reflect"
+	"slices"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness/message"
@@ -16,8 +18,13 @@ import (
 
 func ask(t testing.TB, s *Server, text string) (provider.Stream, error) {
 	t.Helper()
+	return askCtx(t, context.Background(), s, text)
+}
+
+func askCtx(t testing.TB, ctx context.Context, s *Server, text string) (provider.Stream, error) {
+	t.Helper()
 	c := &anthropic.Client{APIKey: "k", BaseURL: s.URL()}
-	return c.Stream(context.Background(), &provider.Request{
+	return c.Stream(ctx, &provider.Request{
 		Model:     message.ModelRef{Provider: anthropic.Family, Model: "m"},
 		System:    []string{"sys one", "sys two"},
 		Messages:  []message.Message{{Role: message.RoleUser, Parts: message.Parts{&message.Text{Text: text}}}},
@@ -153,36 +160,155 @@ func TestUnmatchedRequestFailsLoudly(t *testing.T) {
 	}
 }
 
-func TestBlockUntilRelease(t *testing.T) {
-	s := New(t, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "slow text", Block: true}})
-	st, err := ask(t, s, "hi")
+func blockedStream(t testing.TB, s *Server, ctx context.Context) (provider.Stream, chan provider.Event) {
+	t.Helper()
+	st, err := askCtx(t, ctx, s, "hi")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for {
-		ev, err := st.Next()
-		if err != nil {
-			t.Fatalf("Next before first delta: %v", err)
-		}
-		if ev.Type == provider.EventTextDelta {
-			break
-		}
-	}
-	var released atomic.Bool
-	finished := make(chan bool)
+	evs := make(chan provider.Event, 64)
 	go func() {
+		defer close(evs)
 		for {
 			ev, err := st.Next()
-			if err != nil || ev.Type == provider.EventDone {
-				finished <- released.Load()
+			if err != nil {
 				return
 			}
+			evs <- ev
 		}
 	}()
-	released.Store(true)
-	s.Release("slow")
-	if !<-finished {
-		t.Error("stream completed before Release")
+	return st, evs
+}
+
+func TestBlockUntilRelease(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply Reply
+	}{
+		{"text", Reply{Text: "slow text", Block: true}},
+		{"tool call only", Reply{Block: true, ToolCalls: []ToolCall{{ID: "toolu_1", Name: "bash"}}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(t, Step{Name: "slow", Match: Any(), Reply: tc.reply})
+			_, evs := blockedStream(t, s, context.Background())
+		wait:
+			for {
+				select {
+				case <-s.Blocked("slow"):
+					break wait
+				case ev, ok := <-evs:
+					if !ok || ev.Type == provider.EventDone {
+						t.Fatal("stream finished without waiting for Release")
+					}
+				}
+			}
+			s.Release("slow")
+			var last provider.Event
+			for ev := range evs {
+				last = ev
+			}
+			if last.Type != provider.EventDone {
+				t.Errorf("last event = %v after Release, want done", last.Type)
+			}
+		})
+	}
+}
+
+func TestBlockedStreamExits(t *testing.T) {
+	t.Run("client cancel", func(t *testing.T) {
+		s := New(t, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "x", Block: true}})
+		ctx, cancel := context.WithCancel(context.Background())
+		blockedStream(t, s, ctx)
+		<-s.Blocked("slow")
+		cancel()
+		s.srv.Close()
+	})
+	t.Run("server close", func(t *testing.T) {
+		rec := &recorder{TB: t}
+		s := New(rec, Step{Name: "slow", Match: Any(), Reply: Reply{Text: "x", Block: true}})
+		blockedStream(t, s, context.Background())
+		<-s.Blocked("slow")
+		for i := len(rec.cleanups) - 1; i >= 0; i-- {
+			rec.cleanups[i]()
+		}
+	})
+}
+
+func TestStepConsumption(t *testing.T) {
+	tests := []struct {
+		name         string
+		repeat       bool
+		wantReplies  []int
+		wantUnmatchd int
+	}{
+		{"consumed once", false, []int{http.StatusOK, http.StatusInternalServerError}, 1},
+		{"repeat", true, []int{http.StatusOK, http.StatusOK, http.StatusOK}, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recorder{TB: t}
+			s := New(rec, Step{Match: Any(), Repeat: tc.repeat, Reply: Reply{Text: "x"}})
+			var got []int
+			for range tc.wantReplies {
+				resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(`{"messages":[{"role":"user","content":"q"}]}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				got = append(got, resp.StatusCode)
+			}
+			for i := len(rec.cleanups) - 1; i >= 0; i-- {
+				rec.cleanups[i]()
+			}
+			if !slices.Equal(got, tc.wantReplies) {
+				t.Errorf("statuses = %v, want %v", got, tc.wantReplies)
+			}
+			if len(rec.errors) != tc.wantUnmatchd {
+				t.Errorf("unmatched errors = %q, want %d", rec.errors, tc.wantUnmatchd)
+			}
+		})
+	}
+}
+
+func TestRequestDecodeAndMatchers(t *testing.T) {
+	const body = `{
+	  "system": [{"type":"text","text":"sys a"},{"type":"text","text":"sys b"}],
+	  "tools": [{"name":"zeta"},{"name":"alpha"}],
+	  "messages": [
+	    {"role":"user","content":"start"},
+	    {"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"bash","input":{"command":"ls"}}]},
+	    {"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","is_error":true,"content":[{"type":"text","text":"boom"}]}]}
+	  ]}`
+	var seen []int
+	s := New(t,
+		Step{Name: "no", Match: And(LastToolResult("bash"), SystemContains("absent")), Reply: Reply{Text: "no"}},
+		Step{Name: "yes", Match: And(LastToolResult("bash"), SystemContains("sys b")), Reply: Reply{Text: "yes"}},
+	)
+	s.OnRequest(func(n int) { seen = append(seen, n) })
+	resp, err := http.Post(s.URL()+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"text":"yes"`) || strings.Contains(string(raw), `"text":"no"`) {
+		t.Errorf("response %d %s, want only the second step's reply", resp.StatusCode, raw)
+	}
+	want := Request{
+		System: "sys a\nsys b",
+		Tools:  []string{"alpha", "zeta"},
+		Messages: []Message{
+			{Role: "user", Parts: []Part{{Kind: "text", Text: "start"}}},
+			{Role: "assistant", Parts: []Part{{Kind: "tool_use", ToolName: "bash", ToolInput: map[string]any{"command": "ls"}, ToolUseID: "tu_1"}}},
+			{Role: "user", Parts: []Part{{Kind: "tool_result", Text: "boom", ToolName: "bash", ToolUseID: "tu_1", IsError: true}}},
+		},
+	}
+	if got := s.Requests(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+		t.Errorf("requests = %+v, want [%+v]", got, want)
+	}
+	if !slices.Equal(seen, []int{1}) {
+		t.Errorf("OnRequest calls = %v, want [1]", seen)
 	}
 }
 

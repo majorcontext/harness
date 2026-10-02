@@ -115,7 +115,7 @@ func (s sseWriter) event(name string, data any) {
 
 type obj = map[string]any
 
-func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, rep Reply, release <-chan struct{}) {
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, name string, rep Reply) {
 	f, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "no flusher")
@@ -140,17 +140,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, rep Reply
 	}})
 
 	idx := 0
+	gate := rep.Block && rep.Text == ""
 	if rep.Text != "" || len(rep.ToolCalls) == 0 {
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "text", "text": ""}})
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "text_delta", "text": rep.Text}})
-		if rep.Block {
-			select {
-			case <-release:
-			case <-r.Context().Done():
-				return
-			case <-s.closing:
-				return
-			}
+		if rep.Block && !s.block(r, name) {
+			return
 		}
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
@@ -163,6 +158,12 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, n int, rep Reply
 		args, _ := json.Marshal(input)
 		e.event("content_block_start", obj{"type": "content_block_start", "index": idx, "content_block": obj{"type": "tool_use", "id": tc.ID, "name": tc.Name, "input": obj{}}})
 		e.event("content_block_delta", obj{"type": "content_block_delta", "index": idx, "delta": obj{"type": "input_json_delta", "partial_json": string(args)}})
+		if gate {
+			gate = false
+			if !s.block(r, name) {
+				return
+			}
+		}
 		e.event("content_block_stop", obj{"type": "content_block_stop", "index": idx})
 		idx++
 	}

@@ -23,7 +23,7 @@ type Reply struct {
 	StopReason string     // default "end_turn", or "tool_use" when ToolCalls is set
 	Usage      Usage      // default {Input: 5, Output: 3}
 	HTTPStatus int        // non-zero: reply with this status and an Anthropic error body
-	Block      bool       // stream Text's first delta, then wait for Release or client cancel
+	Block      bool       // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
 }
 
 type ToolCall struct {
@@ -82,16 +82,24 @@ type Server struct {
 	requests  []Request
 	unmatched []Request
 	releases  map[string]chan struct{}
+	blocked   map[string]chan struct{}
 	onRequest func(n int)
 }
 
 func New(t testing.TB, steps ...Step) *Server {
 	t.Helper()
+	steps = append([]Step(nil), steps...)
+	for i := range steps {
+		if steps[i].Match == nil {
+			steps[i].Match = Any()
+		}
+	}
 	s := &Server{
 		closing:  make(chan struct{}),
 		steps:    steps,
 		consumed: make([]bool, len(steps)),
 		releases: map[string]chan struct{}{},
+		blocked:  map[string]chan struct{}{},
 	}
 	s.srv = httptest.NewServer(http.HandlerFunc(s.handle))
 	t.Cleanup(func() {
@@ -121,7 +129,17 @@ func (s *Server) Requests() []Request {
 func (s *Server) Release(stepName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ch := s.releaseChan(stepName)
+	closeOnce(s.chanFor(s.releases, stepName))
+}
+
+// Blocked is closed once a request for the named Block step is waiting.
+func (s *Server) Blocked(stepName string) <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.chanFor(s.blocked, stepName)
+}
+
+func closeOnce(ch chan struct{}) {
 	select {
 	case <-ch:
 	default:
@@ -135,13 +153,27 @@ func (s *Server) OnRequest(f func(n int)) {
 	s.onRequest = f
 }
 
-func (s *Server) releaseChan(name string) chan struct{} {
-	ch, ok := s.releases[name]
+func (s *Server) chanFor(m map[string]chan struct{}, name string) chan struct{} {
+	ch, ok := m[name]
 	if !ok {
 		ch = make(chan struct{})
-		s.releases[name] = ch
+		m[name] = ch
 	}
 	return ch
+}
+
+func (s *Server) block(r *http.Request, name string) bool {
+	s.mu.Lock()
+	release := s.chanFor(s.releases, name)
+	closeOnce(s.chanFor(s.blocked, name))
+	s.mu.Unlock()
+	select {
+	case <-release:
+		return true
+	case <-r.Context().Done():
+	case <-s.closing:
+	}
+	return false
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +193,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	n := len(s.requests)
 	matched := -1
 	for i, st := range s.steps {
-		if s.consumed[i] || st.Match == nil || !st.Match(req) {
+		if s.consumed[i] || !st.Match(req) {
 			continue
 		}
 		matched = i
@@ -169,12 +201,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	var step Step
-	var release chan struct{}
 	if matched < 0 {
 		s.unmatched = append(s.unmatched, req)
 	} else {
 		step = s.steps[matched]
-		release = s.releaseChan(step.Name)
 	}
 	onRequest := s.onRequest
 	s.mu.Unlock()
@@ -188,6 +218,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case step.Reply.HTTPStatus != 0:
 		writeError(w, step.Reply.HTTPStatus, "fakemodel: scripted error")
 	default:
-		s.stream(w, r, n, step.Reply, release)
+		s.stream(w, r, n, step.Name, step.Reply)
 	}
 }
