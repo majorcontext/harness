@@ -580,9 +580,9 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 
 ### Contract suite
 
-- `harnesstest` serves the Anthropic and OpenAI wire APIs from a script: text, tool call, error, stall, 429, block until released.
+- `harnesstest` is a public package. It serves the Anthropic Messages API from a script: text, tool call, error status, block until released.
 - A scenario is a model script and a list of actions. Its golden holds the normalized model requests and the final transcript of each session, not event shapes, so the goldens survive the event-log change in phase 4.
-- Scenarios run in-process inside `synctest`. A smoke subset runs the binary.
+- Scenarios run the real `harness serve` binary over loopback, in its own process group, through a driver interface. Each wait has a bound.
 - Every scenario checks the invariants that hold in both formats: unique message ids, one result for each tool call, and contiguous event sequence numbers.
 - The suite exists before any internal change. It pins today's behavior, so each later phase is checked against it.
 

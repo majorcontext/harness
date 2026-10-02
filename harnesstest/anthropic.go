@@ -109,7 +109,7 @@ type sseWriter struct {
 
 func (s sseWriter) event(name string, data any) {
 	b, _ := json.Marshal(data)
-	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", name, b)
+	_, _ = fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", name, b)
 	s.f.Flush()
 }
 

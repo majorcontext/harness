@@ -101,8 +101,8 @@ type Server struct {
 // declaration order, that has not been consumed and whose Match accepts it.
 // A step without Repeat is consumed when it matches.
 //
-// A request that no step matches gets HTTP 500, and so does a request whose
-// body does not decode (HTTP 400). At cleanup New fails t for each such
+// A request that no step matches gets HTTP 500. A request whose body does
+// not decode gets HTTP 400. At cleanup New fails t for each such
 // request and for each non-Repeat step that never matched, unless t has
 // already failed.
 func New(t testing.TB, steps ...Step) *Server {

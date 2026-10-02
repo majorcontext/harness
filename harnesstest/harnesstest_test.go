@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -268,7 +269,7 @@ func TestUndecodableRequestFailsLoudly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
@@ -317,7 +318,7 @@ func TestStepConsumption(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				got = append(got, resp.StatusCode)
 			}
 			rec.runCleanups()
@@ -351,7 +352,7 @@ func TestRequestDecodeAndMatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"text":"yes"`) || strings.Contains(string(raw), `"text":"no"`) {
 		t.Errorf("response %d %s, want only the second step's reply", resp.StatusCode, raw)
 	}
@@ -381,16 +382,30 @@ func TestHTTPErrorReply(t *testing.T) {
 }
 
 func TestAwaitRequests(t *testing.T) {
-	const miss, hit = 20 * time.Millisecond, time.Minute
-	s := New(t, Step{Repeat: true, Reply: Reply{Text: "x"}})
-	if s.AwaitRequests(1, miss) {
-		t.Fatal("AwaitRequests(1) = true with no request, want false at the bound")
-	}
-	go ask(t, s, "one")
-	if !s.AwaitRequests(1, hit) {
-		t.Fatal("AwaitRequests(1) = false after a request arrived")
-	}
-	if s.AwaitRequests(2, miss) {
-		t.Fatal("AwaitRequests(2) = true with one request, want false at the bound")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		const bound = time.Minute
+		s := &Server{
+			closing:  make(chan struct{}),
+			steps:    []Step{{Repeat: true, Reply: Reply{Text: "x"}, Match: func(Request) bool { return true }}},
+			consumed: make([]bool, 1),
+			releases: map[string]chan struct{}{},
+			blocked:  map[string]chan struct{}{},
+			arrived:  make(chan struct{}),
+		}
+		if s.AwaitRequests(1, bound) {
+			t.Fatal("AwaitRequests(1) = true with no request, want false at the bound")
+		}
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			r := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"messages":[{"role":"user","content":"one"}]}`))
+			s.handle(httptest.NewRecorder(), r)
+		})
+		if !s.AwaitRequests(1, bound) {
+			t.Fatal("AwaitRequests(1) = false after a request arrived")
+		}
+		wg.Wait()
+		if s.AwaitRequests(2, bound) {
+			t.Fatal("AwaitRequests(2) = true with one request, want false at the bound")
+		}
+	})
 }
