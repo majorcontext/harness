@@ -120,12 +120,11 @@ func TestContractPluginHooks(t *testing.T) {
 	})
 }
 
-// A dead plugin is never respawned: its hooks are skipped and its tools fail
-// with the raw pipe error, which pins a defect.
 func TestContractPluginCrash(t *testing.T) {
 	cfg := pluginConfig(t)
 	runScenarios(t, []scenario{
 		{
+			// Defect: a dead plugin's tool returns the raw pipe error "write |1: broken pipe".
 			name:   "plugin_crash_mid_call_session_continues",
 			config: cfg,
 			model: []harnesstest.Step{
