@@ -253,13 +253,13 @@ func TestContractMCPEager(t *testing.T) {
 }
 
 func TestContractMCPInstructionsAndResources(t *testing.T) {
-	withDocs := func(a ...action) []action { return append(append([]action{}, oneTurn...), a...) }
+	withTurn := func(a ...action) []action { return append(append([]action{}, oneTurn...), a...) }
 	runScenarios(t, []scenario{
 		{
 			name:  "mcp_instructions_in_system_prompt",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts.")}),
 			model: textReply("hi"),
-			actions: withDocs(expectSystem{req: 1,
+			actions: withTurn(expectSystem{req: 1,
 				has: []string{
 					"<mcp_instructions>",
 					`<server name="weather" tools="mcp__weather__alerts, mcp__weather__echo, mcp__weather__flaky, mcp__weather__forecast, mcp__weather__strict">`,
@@ -278,7 +278,7 @@ func TestContractMCPInstructionsAndResources(t *testing.T) {
 				ftTool("read_mcp_resource", ftArgs("server", "docs", "uri", "doc://missing")),
 				ftTool("list_mcp_resources", ftArgs("server", "nope")),
 			),
-			actions: withDocs(expectSystem{req: 1, has: []string{
+			actions: withTurn(expectSystem{req: 1, has: []string{
 				"This session can also list and read MCP resources",
 				"Read doc://guide before searching.",
 			}}),

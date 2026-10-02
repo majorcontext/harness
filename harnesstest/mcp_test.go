@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -61,8 +62,13 @@ func TestMCPServerSpeaksToTheClient(t *testing.T) {
 			if err != nil || read.Contents[0].Text != "alpha" {
 				t.Fatalf("read = %+v, %v", read, err)
 			}
-			if got := len(srv.Calls()); got != 3 {
-				t.Fatalf("recorded %d calls, want 3", got)
+			want := []MCPCall{
+				{Method: "tools/call", Name: "echo", Args: map[string]any{"k": "v"}},
+				{Method: "tools/call", Name: "boom"},
+				{Method: "resources/read", Name: "doc://a"},
+			}
+			if got := srv.Calls(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("calls = %+v, want %+v", got, want)
 			}
 		})
 	}
