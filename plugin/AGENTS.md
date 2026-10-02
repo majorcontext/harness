@@ -16,5 +16,4 @@ Read the root AGENTS.md. Read `plugin/PROTOCOL.md` before a wire or hook change.
 - Tool definitions come from the cached manifest. Execution uses RPC.
 - Plugins never carry provider API keys.
 - Add no message-delta events without a throttling and backpressure design.
-- Add no permission hooks, auth hooks, JavaScript runtime, or opencode shim.
 - Use `net.Pipe` for protocol tests and `testing/synctest` for deadlines.

@@ -17,7 +17,7 @@ Read the root AGENTS.md. Read `engine/AGENTS.md` for session state machines.
 - Merge live and durable child IDs through one path. Mask and bound `fail_reason`.
 - Fail closed unless the CLI selects an allowed unauthenticated mode. Keep `/health` open.
 - Apply CORS only from configured origins.
-- Never import `net/http/pprof`. Keep pprof off by default and authenticated.
+- Never import `net/http/pprof`; `cmd/harness/pprof_defaultmux_test.go` guards the default mux. Keep pprof off by default and authenticated.
 - Log the mux route pattern, never the raw path. Bound `X-Request-Id`.
 - No ACP adapter exists. Do not describe one as implemented.
 - Keep lock-order tests for each new lock edge.

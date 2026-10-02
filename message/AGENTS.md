@@ -2,17 +2,15 @@
 
 Read the root AGENTS.md. Read `provider/AGENTS.md` for wire adapters.
 
-- Canonical messages are the durable form. Add no provider wire object to the union.
 - Opaque provider data carries a family tag. A different family drops it at transcode.
 - Keep tool-call IDs provider-neutral. Adapters own wire-ID mapping.
 - Keep `NoToolOutputText`, `ToolResult.SafeContent`, and `ToolResult.MarshalJSON` safe for empty output.
 - Add a regression test for each new serializer or transcoder path.
-- `ResolveOrphanToolCalls` is additive-only. It never deletes, moves, or reorders a real part.
 - `NormalizeForWire` reshapes a throwaway request. It never deletes a real `ToolResult`.
 - Keep wire-only shapes supported: duplicate call IDs, a call outside an assistant message, a result before its call, a same-role run between call and result.
 - Keep relocation within `computeRelocationBarrier`.
 - Derive `wire_oracle_test.go` from the provider contract, not an implementation.
-- `EngineContext` is distinct from `Text`. Only the engine creates it.
+- `EngineContext` is distinct from `Text`.
 - `NeutralizeEngineContextSentinel` defangs the sentinel in user text.
 - Never persist `EngineContext` as ambient status.
 - Keep `Message.Normalize` pointer-stable for in-place cleanup.

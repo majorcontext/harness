@@ -3,9 +3,7 @@
 Read the root AGENTS.md.
 
 - Contract scenarios drive the real binary over HTTP. They import no `engine` or `server` package.
-- Every test calls `skipShort(t)`. Run with `-race`.
-- A cross-process poll may use a deadline. Route it through `internal/testpoll`.
-- Never write an inline sleep loop. The timeout is a failure bound.
+- Every test calls `skipShort(t)`.
 - Do not poll state that has an in-process notification seam.
 - Wait on `GET /session/{id}/wait`, an SSE stream, or a channel.
 - Each scenario owns its binary process and temp dirs.
