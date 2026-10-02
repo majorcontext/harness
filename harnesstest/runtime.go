@@ -14,7 +14,6 @@ import (
 type SinkRecord struct {
 	Seq        int64  `json:"seq"`
 	Type       string `json:"type"`
-	SessionID  string `json:"session_id"`
 	RecordedAt string `json:"recorded_at"`
 }
 
@@ -56,8 +55,7 @@ type SinkReceiver struct {
 	arrived chan struct{} // closed and replaced when a batch is recorded
 }
 
-// NewSinkReceiver starts a receiver. reply gets the 1-based request number
-// and the batch; a nil reply acknowledges every batch through its ToSeq.
+// NewSinkReceiver starts a receiver; reply gets the 1-based request number, nil acks through ToSeq.
 func NewSinkReceiver(t testing.TB, reply func(n int, b SinkBatch) SinkReply) *SinkReceiver {
 	t.Helper()
 	r := &SinkReceiver{closing: make(chan struct{}), reply: reply, arrived: make(chan struct{})}
@@ -79,8 +77,7 @@ func (r *SinkReceiver) Batches() []SinkBatch {
 	return append([]SinkBatch(nil), r.batches...)
 }
 
-// Await reports whether cond holds for the received batches within bound.
-// It re-checks each time a batch arrives.
+// Await re-checks cond on each arrival until it holds or bound passes; cond must not keep or modify its argument.
 func (r *SinkReceiver) Await(cond func([]SinkBatch) bool, bound time.Duration) bool {
 	timer := time.NewTimer(bound)
 	defer timer.Stop()
