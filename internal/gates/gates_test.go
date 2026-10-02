@@ -1,24 +1,25 @@
 package gates
 
 import (
-	"encoding/json"
-	"flag"
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
 
-var updateBaseline = flag.Bool("update-baseline", false, "lower baseline.json to the current metrics")
-
-var prevBaseline = flag.String("prev-baseline", "", "baseline.json of the target branch; fail when baseline.json rises above it")
-
 func file(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
 
 func longFunc(n int) string {
 	return "package a\n\nfunc F() {\n" + strings.Repeat("\t_ = 1\n", n) + "}\n"
 }
+
+func comments(n int) string { return strings.Repeat("// x\n", n) }
+
+func code(n int) string { return strings.Repeat("var _ = 1\n", n) }
 
 func rules(vs []Violation) []string {
 	var out []string
@@ -30,118 +31,131 @@ func rules(vs []Violation) []string {
 }
 
 var checkCases = []struct {
-	name string
-	fs   fstest.MapFS
-	base Report
-	want []string
+	name       string
+	head, base fstest.MapFS
+	want       []string
 }{
 	{
-		name: "package_doc_in_doc_go_not_counted",
-		fs:   fstest.MapFS{"a/doc.go": file("// Package a x.\n// y\n// z\n// w\npackage a\n")},
+		name: "new_file_comment_share_at_limit_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(25) + code(74))},
 	},
 	{
-		name: "new_file_comment_bloat_fails",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\n// y\n// z\nvar A = 1\n")},
+		name: "new_file_comment_share_over_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(26) + code(73))},
 		want: []string{"a/a.go:comment_share"},
 	},
 	{
-		name: "baseline_file_may_not_grow",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\n// y\n// z\nvar A = 1\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 2, CodeLines: 2}}},
-		want: []string{"a/a.go:ratchet"},
+		name: "new_file_size_at_limit_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(799))},
 	},
 	{
-		name: "baseline_file_may_grow_code_while_share_falls",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\n// y\n// z\nvar A = 1\nvar B = 2\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 3, CodeLines: 2}}},
-	},
-	{
-		name: "baseline_file_may_shrink",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\nvar A = 1\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 5, CommentLines: 3, CodeLines: 2}}},
-	},
-	{
-		name: "history_marker_new_file_fails",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
-		want: []string{"a/a.go:history"},
-	},
-	{
-		name: "history_marker_at_baseline_passes",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
-	},
-	{
-		name: "history_marker_above_baseline_fails",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123 and #124\nvar A = 1\nvar B = 2\nvar C = 3\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
-		want: []string{"a/a.go:ratchet"},
-	},
-	{
-		name: "history_marker_below_baseline_passes",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\nvar A = 1\nvar B = 2\nvar C = 3\n")},
-		base: Report{Files: map[string]FileMetrics{"a/a.go": {Lines: 6, CommentLines: 1, CodeLines: 4, HistoryMarkers: 1}}},
-	},
-	{
-		name: "comment_share_at_limit_passes",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("// x\n", 25) + strings.Repeat("var _ = 1\n", 74))},
-	},
-	{
-		name: "comment_share_above_limit_fails",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("// x\n", 26) + strings.Repeat("var _ = 1\n", 73))},
-		want: []string{"a/a.go:comment_share"},
-	},
-	{
-		name: "func_with_line_directive_measured_by_raw_lines",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\nfunc F() {\n//line x.go:1\n" + strings.Repeat("\t_ = 1\n", 80) + "}\n")},
-		want: []string{"a/a.go:long_func"},
-	},
-	{
-		name: "long_func_new_file_fails",
-		fs:   fstest.MapFS{"a/a.go": file(longFunc(80))},
-		want: []string{"a/a.go:long_func"},
-	},
-	{
-		name: "func_at_limit_passes",
-		fs:   fstest.MapFS{"a/a.go": file(longFunc(79))},
-	},
-	{
-		name: "file_size_new_file_fails",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("var _ = 1\n", 800))},
+		name: "new_file_size_over_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(800))},
 		want: []string{"a/a.go:file_size"},
 	},
 	{
-		name: "file_at_size_limit_passes",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n" + strings.Repeat("var _ = 1\n", 799))},
+		name: "new_file_func_at_limit_passes",
+		head: fstest.MapFS{"a/a.go": file(longFunc(79))},
 	},
 	{
-		name: "sleep_in_non_test_file_passes",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\nimport \"time\"\n\nfunc F() { time.Sleep(1) }\n")},
+		name: "new_file_long_func_fails",
+		head: fstest.MapFS{"a/a.go": file(longFunc(80))},
+		want: []string{"a/a.go:long_func"},
 	},
 	{
-		name: "line_directive_does_not_remap_positions",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n//line other.go:500\nvar A = 1 // tail\nvar B = 2\n")},
+		name: "func_with_line_directive_measured_by_raw_lines",
+		head: fstest.MapFS{"a/a.go": file("package a\n\nfunc F() {\n//line x.go:1\n" + strings.Repeat("\t_ = 1\n", 80) + "}\n")},
+		want: []string{"a/a.go:long_func"},
 	},
 	{
-		name: "generated_file_skipped",
-		fs: fstest.MapFS{"a/a.go": file("// Code generated by x. DO NOT EDIT.\n\npackage a\n// used to be #12\n// x\n// y\n" +
-			strings.Repeat("var _ = 1\n", 900))},
+		name: "new_file_history_marker_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		want: []string{"a/a.go:history"},
 	},
 	{
-		name: "directives_not_comments",
-		fs:   fstest.MapFS{"a/a.go": file("package a\n\n//go:generate x\n//nolint:all\n//lint:ignore X y\nvar A = 1\n")},
-	},
-	{
-		name: "sleep_in_new_test_fails",
-		fs:   fstest.MapFS{"a/a_test.go": file("package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestX(t *testing.T) {\n\ttime.Sleep(1)\n\t<-time.After(1)\n}\n")},
+		name: "new_test_sleep_and_after_fail",
+		head: fstest.MapFS{"a/a_test.go": file("package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestX(t *testing.T) {\n\ttime.Sleep(1)\n\t<-time.After(1)\n}\n")},
 		want: []string{"a/a_test.go:sleep_after"},
 	},
 	{
-		name: "testdata_ignored",
-		fs:   fstest.MapFS{"a/testdata/x.go": file("package a\n// #123\n")},
+		name: "sleep_outside_test_file_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n\nimport \"time\"\n\nfunc F() { time.Sleep(1) }\n")},
 	},
 	{
-		name: "agents_cap_root_80_scoped_25",
-		fs: fstest.MapFS{
+		name: "changed_file_within_limit_stays_within",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(10) + code(40))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(30) + code(40))},
+	},
+	{
+		name: "changed_file_crossing_a_limit_it_met_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(30) + code(40))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(10) + code(40))},
+		want: []string{"a/a.go:comment_share"},
+	},
+	{
+		name: "changed_over_limit_file_may_not_get_worse",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(900))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(850))},
+		want: []string{"a/a.go:file_size"},
+	},
+	{
+		name: "changed_over_limit_file_may_improve",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(850))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(900))},
+	},
+	{
+		name: "changed_over_limit_comment_share_may_not_rise",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(40) + code(60))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + comments(30) + code(70))},
+		want: []string{"a/a.go:comment_share"},
+	},
+	{
+		name: "changed_file_may_keep_its_history_marker",
+		head: fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\nvar D = 4\n")},
+		base: fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+	},
+	{
+		name: "changed_file_may_not_add_a_history_marker",
+		head: fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123 and #124\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		base: fstest.MapFS{"a/a.go": file("package a\n\n// fixed in #123\nvar A = 1\nvar B = 2\nvar C = 3\n")},
+		want: []string{"a/a.go:history"},
+	},
+	{
+		name: "changed_file_may_not_add_a_long_func",
+		head: fstest.MapFS{"a/a.go": file(longFunc(80) + "\nfunc G() {\n" + strings.Repeat("\t_ = 1\n", 80) + "}\n")},
+		base: fstest.MapFS{"a/a.go": file(longFunc(80))},
+		want: []string{"a/a.go:long_func"},
+	},
+	{
+		name: "unchanged_over_limit_file_ignored",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(900))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(900))},
+	},
+	{
+		name: "doc_go_package_comment_not_counted",
+		head: fstest.MapFS{"a/doc.go": file("// Package a x.\n// y\n// z\n// w\npackage a\n")},
+	},
+	{
+		name: "generated_file_skipped",
+		head: fstest.MapFS{"a/a.go": file("// Code generated by x. DO NOT EDIT.\n\npackage a\n// #12\n" + code(900))},
+	},
+	{
+		name: "directives_are_not_comments",
+		head: fstest.MapFS{"a/a.go": file("package a\n\n//go:generate x\n//nolint:all\n//lint:ignore X y\nvar A = 1\n")},
+	},
+	{
+		name: "testdata_and_nested_module_skipped",
+		head: fstest.MapFS{
+			"a/testdata/x.go": file("package a\n// #123\n"),
+			"sub/go.mod":      file("module sub\n"),
+			"sub/x.go":        file("package sub\n" + code(900)),
+			"wt/.git":         file("gitdir: x\n"),
+			"wt/x.go":         file("package wt\n" + code(900)),
+		},
+	},
+	{
+		name: "agents_md_caps_root_80_scoped_25",
+		head: fstest.MapFS{
 			"AGENTS.md":   file(strings.Repeat("x\n", 81)),
 			"a/AGENTS.md": file(strings.Repeat("x\n", 25) + "x"),
 			"b/AGENTS.md": file(strings.Repeat("x\n", 25)),
@@ -149,77 +163,93 @@ var checkCases = []struct {
 		want: []string{"AGENTS.md:agents_cap", "a/AGENTS.md:agents_cap"},
 	},
 	{
-		name: "package_ratio_may_not_rise",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\n"),
-			"a/a_test.go": file("package a\nvar B = 1\nvar C = 1\nvar D = 1\n"),
+		name: "agents_md_over_cap_may_shrink_not_grow",
+		head: fstest.MapFS{
+			"a/AGENTS.md": file(strings.Repeat("x\n", 30)),
+			"b/AGENTS.md": file(strings.Repeat("x\n", 40)),
 		},
-		base: Report{Packages: map[string]PackageMetrics{"a": {TestLines: 2, CodeLines: 2}}},
+		base: fstest.MapFS{
+			"a/AGENTS.md": file(strings.Repeat("x\n", 35)),
+			"b/AGENTS.md": file(strings.Repeat("x\n", 35)),
+		},
+		want: []string{"b/AGENTS.md:agents_cap"},
+	},
+	{
+		name: "package_ratio_rise_over_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(2))},
 		want: []string{"a:test_ratio"},
 	},
 	{
-		name: "deleting_code_with_unchanged_tests_passes",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\n"),
-			"a/a_test.go": file("package a\nvar B = 1\nvar C = 1\nvar D = 1\n"),
-		},
-		base: Report{Packages: map[string]PackageMetrics{"a": {TestLines: 4, CodeLines: 4}}},
+		name: "package_ratio_rise_within_limit_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(2))},
 	},
 	{
-		name: "first_test_in_untested_package_passes",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\nvar B = 1\nvar C = 1\nvar D = 1\n"),
-			"a/a_test.go": file("package a\nvar T = 1\n"),
-		},
-		base: Report{Packages: map[string]PackageMetrics{"a": {TestLines: 0, CodeLines: 5}}},
+		name: "package_ratio_over_limit_may_fall",
+		head: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(8))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
 	},
 	{
-		name: "new_package_over_test_ratio_limit_fails",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\n"),
-			"a/a_test.go": file("package a\nvar B = 1\nvar C = 1\nvar D = 1\n"),
-		},
+		name: "deleting_code_that_raises_ratio_over_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"a/a.go": file("package a\n" + code(4)), "a/a_test.go": file("package a\n" + code(4))},
 		want: []string{"a:test_ratio"},
 	},
 	{
-		name: "new_package_at_test_ratio_limit_passes",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\n"),
-			"a/a_test.go": file("package a\nvar T = 1\nvar U = 1\n"),
-		},
+		name: "new_package_at_ratio_limit_passes",
+		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(2))},
 	},
 	{
-		name: "baseline_package_may_not_rise_below_new_package_limit",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\nvar B = 1\nvar C = 1\n"),
-			"a/a_test.go": file("package a\nvar T = 1\nvar U = 1\nvar V = 1\n"),
-		},
-		base: Report{Packages: map[string]PackageMetrics{"a": {TestLines: 2, CodeLines: 4}}},
+		name: "new_package_over_ratio_limit_fails",
+		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
 		want: []string{"a:test_ratio"},
-	},
-	{
-		name: "new_package_within_test_ratio_limit_passes",
-		fs: fstest.MapFS{
-			"a/a.go":      file("package a\nvar A = 1\nvar B = 1\nvar C = 1\n"),
-			"a/a_test.go": file("package a\nvar T = 1\nvar U = 1\nvar V = 1\n"),
-		},
 	},
 }
 
 func TestCheck(t *testing.T) {
 	for _, tc := range checkCases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := Collect(tc.fs)
+			head, err := Collect(tc.head)
 			if err != nil {
 				t.Fatal(err)
 			}
+			base, err := Collect(tc.base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := map[string]bool{}
+			for p, f := range tc.head {
+				if b, ok := tc.base[p]; !ok || string(b.Data) != string(f.Data) {
+					changed[p] = true
+				}
+			}
 			want := slices.Clone(tc.want)
 			slices.Sort(want)
-			got := rules(Check(r, tc.base))
-			if !slices.Equal(got, want) {
+			if got := rules(Check(head, base, changed)); !slices.Equal(got, want) {
 				t.Fatalf("violations = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestCheckSkipsPathsOutsideChangedSet(t *testing.T) {
+	head := Report{
+		Files:  map[string]FileMetrics{"a.go": {Lines: 900, CodeLines: 900}},
+		Agents: map[string]int{"AGENTS.md": 90},
+	}
+	if got := Check(head, Report{}, nil); len(got) != 0 {
+		t.Fatalf("violations = %v, want none", got)
+	}
+}
+
+func TestAgentsLineCountIncludesUnterminatedLastLine(t *testing.T) {
+	r, err := Collect(fstest.MapFS{"AGENTS.md": file("a\nb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Agents["AGENTS.md"]; got != 2 {
+		t.Fatalf("lines = %d, want 2", got)
 	}
 }
 
@@ -229,21 +259,22 @@ func TestHistoryPattern(t *testing.T) {
 		"on 2026-10-02":         true,
 		"previously did x":      true,
 		"no longer needed":      true,
-		"used to be x":          true,
-		"review finding 3":      true,
-		"fix rounds":            true,
+		"red-verified":          true,
+		"confirmed live":        true,
+		"an earlier version":    true,
+		"before this change":    true,
+		"review round two":      true,
 		"fix round":             true,
-		"review rounds":         true,
-		"review caught it":      true,
-		"copilot said":          true,
-		"Round 1: model calls":  false,
+		"fix rounds":            true,
+		"Round 1: model calls":  true,
+		"Copilot said":          true,
+		"use x instead of y":    false,
 		"argv used to spawn":    false,
 		"stop after finding it": false,
-		"use x instead of y":    false,
 		"around 12 items":       false,
 		"the round trip":        false,
+		"issue #5 is open":      false,
 		"a rounds table":        false,
-		"issue 5 is not marked": false,
 	} {
 		if got := historyRE.MatchString(text); got != want {
 			t.Errorf("historyRE.MatchString(%q) = %v, want %v", text, got, want)
@@ -251,209 +282,119 @@ func TestHistoryPattern(t *testing.T) {
 	}
 }
 
-func TestCommentShareDetailNamesCounts(t *testing.T) {
-	vs := absolutes(FileMetrics{CommentLines: 26, CodeLines: 74})
-	if len(vs) != 1 || vs[0].Detail != "26 of 100 lines are comments, limit 25%" {
-		t.Fatalf("violations = %+v", vs)
-	}
-}
-
 func TestCollectCounts(t *testing.T) {
-	r, err := Collect(fstest.MapFS{"a/a.go": file("package a\n\n// x\n/* y\nz */\nvar A = 1 // tail\n")})
+	r, err := Collect(fstest.MapFS{"a/a.go": file("package a\n\n// x\n/* y\nz */\nvar A = 1 // tail\n//line other.go:500\n")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := r.Files["a/a.go"]
-	want := FileMetrics{Lines: 6, CommentLines: 3, CodeLines: 2}
-	if got != want {
+	want := FileMetrics{Lines: 7, CommentLines: 3, CodeLines: 3}
+	if got := r.Files["a/a.go"]; got != want {
 		t.Fatalf("metrics = %+v, want %+v", got, want)
 	}
 }
 
-func TestLineDirectiveIsNotAComment(t *testing.T) {
-	r, err := Collect(fstest.MapFS{"a/a.go": file("package a\n\n//line other.go:500\n//lines of prose\nvar A = 1\n")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := r.Files["a/a.go"]
-	want := FileMetrics{Lines: 5, CommentLines: 1, CodeLines: 3}
-	if got != want {
-		t.Fatalf("metrics = %+v, want %+v", got, want)
-	}
-}
-
-func TestRatchetRefusesRise(t *testing.T) {
-	file := FileMetrics{Lines: 900, CommentLines: 300, CodeLines: 600, LongFuncs: 1, HistoryMarkers: 1, SleepAfter: 1}
-	pkg := PackageMetrics{TestLines: 10, CodeLines: 4}
-	rises := map[string]func(*FileMetrics){
-		"lines":           func(m *FileMetrics) { m.Lines++ },
-		"comment_lines":   func(m *FileMetrics) { m.CommentLines++ },
-		"long_funcs":      func(m *FileMetrics) { m.LongFuncs++ },
-		"history_markers": func(m *FileMetrics) { m.HistoryMarkers++ },
-		"sleep_after":     func(m *FileMetrics) { m.SleepAfter++ },
-	}
-	base := Report{Files: map[string]FileMetrics{"a.go": file}, Packages: map[string]PackageMetrics{"a": pkg}}
-	for name, rise := range rises {
-		t.Run(name, func(t *testing.T) {
-			m := file
-			rise(&m)
-			r := Report{Files: map[string]FileMetrics{"a.go": m}, Packages: base.Packages}
-			if _, err := Lower(r, base); err == nil {
-				t.Fatal("Lower accepted a rise")
-			}
-			if !slices.Contains(rules(Check(r, base)), "a.go:ratchet") {
-				t.Fatal("Check did not report the rise")
-			}
-		})
-	}
-	t.Run("test_ratio", func(t *testing.T) {
-		r := Report{Files: base.Files, Packages: map[string]PackageMetrics{"a": {TestLines: 11, CodeLines: 4}}}
-		if _, err := Lower(r, base); err == nil {
-			t.Fatal("Lower accepted a rise")
-		}
-	})
-}
-
-func TestLowerShrinksAndRemoves(t *testing.T) {
-	base := Report{Files: map[string]FileMetrics{
-		"a.go": {Lines: 900, CodeLines: 880, CommentLines: 2},
-		"b.go": {Lines: 900, CodeLines: 880, CommentLines: 2},
+func TestWarningsNameChangedFilesInTheWarnTier(t *testing.T) {
+	head := Report{Files: map[string]FileMetrics{
+		"warn.go":      {CommentLines: 20, CodeLines: 80},
+		"quiet.go":     {CommentLines: 10, CodeLines: 90},
+		"failing.go":   {CommentLines: 30, CodeLines: 70},
+		"unchanged.go": {CommentLines: 20, CodeLines: 80},
 	}}
-	cur := Report{Files: map[string]FileMetrics{
-		"a.go": {Lines: 850, CodeLines: 830, CommentLines: 2},
-		"b.go": {Lines: 100, CodeLines: 90, CommentLines: 2},
-	}}
-	got, err := Lower(cur, base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.Files["b.go"]; ok {
-		t.Fatal("b.go now meets the absolutes and must leave the baseline")
-	}
-	if got.Files["a.go"].Lines != 850 {
-		t.Fatalf("a.go = %+v, want lowered", got.Files["a.go"])
+	changed := map[string]bool{"warn.go": true, "quiet.go": true, "failing.go": true}
+	got := Warnings(head, changed)
+	if len(got) != 1 || !strings.HasPrefix(got[0], "warn.go:") {
+		t.Fatalf("warnings = %v, want only warn.go", got)
 	}
 }
 
-func baselineOf(lines, test, code int) Report {
-	return Report{
-		Files:    map[string]FileMetrics{"a.go": {Lines: lines, CodeLines: lines}},
-		Packages: map[string]PackageMetrics{"a": {TestLines: test, CodeLines: code}},
-	}
-}
-
-func TestStale(t *testing.T) {
-	for name, tc := range map[string]struct {
-		tree, base Report
-		want       []string
-	}{
-		"equal":                       {baselineOf(900, 4, 4), baselineOf(900, 4, 4), nil},
-		"file_shrunk":                 {baselineOf(850, 4, 4), baselineOf(900, 4, 4), []string{"a.go:baseline_stale"}},
-		"file_gone":                   {Report{Packages: baselineOf(0, 4, 4).Packages}, baselineOf(900, 4, 4), []string{"a.go:baseline_stale"}},
-		"ratio_fell":                  {baselineOf(900, 4, 4), baselineOf(900, 4, 2), []string{"a:baseline_stale"}},
-		"code_deleted_keeps_baseline": {baselineOf(900, 4, 2), baselineOf(900, 4, 4), nil},
-		"package_unrecorded":          {baselineOf(900, 4, 4), Report{Files: baselineOf(900, 0, 0).Files}, []string{"a:baseline_stale"}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := rules(Stale(tc.tree, tc.base)); !slices.Equal(got, tc.want) {
-				t.Errorf("Stale = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestRises(t *testing.T) {
-	for name, tc := range map[string]struct {
-		next, prev Report
-		want       []string
-	}{
-		"lowered":      {baselineOf(850, 4, 4), baselineOf(900, 4, 4), nil},
-		"file_raised":  {baselineOf(900, 4, 4), baselineOf(850, 4, 4), []string{"a.go:baseline_rise"}},
-		"file_added":   {baselineOf(900, 4, 4), Report{Packages: baselineOf(0, 4, 4).Packages}, []string{"a.go:baseline_rise"}},
-		"ratio_raised": {baselineOf(900, 4, 2), baselineOf(900, 4, 4), []string{"a:baseline_rise"}},
-		"package_new":  {baselineOf(900, 4, 4), Report{Files: baselineOf(900, 0, 0).Files}, nil},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if got := rules(Rises(tc.next, tc.prev)); !slices.Equal(got, tc.want) {
-				t.Errorf("Rises = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestLowerAddsNewPackage(t *testing.T) {
-	cur := Report{Packages: map[string]PackageMetrics{"new": {TestLines: 3, CodeLines: 10}}}
-	got, err := Lower(cur, Report{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Packages["new"] != cur.Packages["new"] {
-		t.Fatalf("packages = %+v, want the new package recorded", got.Packages)
-	}
-}
-
-func readReport(t *testing.T, path string) (Report, bool) {
+func gitIn(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	var r Report
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return r, true
+	cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+	return strings.TrimSpace(string(out))
+}
+
+func write(t *testing.T, dir, name, content string) {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadBaseReadsMergeBaseAndChangedPaths(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	write(t, dir, "a/old.go", "package a\n"+code(3))
+	write(t, dir, "a/same.go", "package a\n")
+	write(t, dir, "sub/go.mod", "module sub\n")
+	write(t, dir, "sub/x.go", "package sub\n"+code(900))
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+	write(t, dir, "a/old.go", "package a\n"+code(5))
+	gitIn(t, dir, "commit", "-q", "-am", "edit")
+	write(t, dir, "a/fresh.go", "package a\n")
+
+	got, err := LoadBase(dir, base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(data, &r); err != nil {
-		t.Fatal(err)
+	if m := got.Report.Files["a/old.go"]; m.CodeLines != 4 {
+		t.Fatalf("base a/old.go code lines = %d, want 4", m.CodeLines)
 	}
-	return r, false
+	if _, ok := got.Report.Files["sub/x.go"]; ok {
+		t.Fatal("nested module file was measured")
+	}
+	var paths []string
+	for p := range got.Changed {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	if want := []string{"a/fresh.go", "a/old.go"}; !slices.Equal(paths, want) {
+		t.Fatalf("changed = %v, want %v", paths, want)
+	}
+}
+
+func TestLoadBaseNamesTheMissingRef(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q")
+	write(t, dir, "a.go", "package a\n")
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+	if _, err := LoadBase(dir, "origin/nope"); err == nil || !strings.Contains(err.Error(), "origin/nope") {
+		t.Fatalf("err = %v, want one naming origin/nope", err)
+	}
 }
 
 func TestRepository(t *testing.T) {
-	const path = "baseline.json"
-	r, err := Collect(os.DirFS("../.."))
+	const root = "../.."
+	ref := os.Getenv("GATES_BASE_REF")
+	if ref == "" {
+		ref = "origin/main"
+	}
+	head, err := Collect(os.DirFS(root))
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, missing := readReport(t, path)
-	if *updateBaseline {
-		next := Seed(r)
-		if !missing {
-			if next, err = Lower(r, base); err != nil {
-				t.Fatal(err)
-			}
-		}
-		out, err := json.MarshalIndent(next, "", "\t")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return
+	base, err := LoadBase(root, ref)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for p, m := range r.Files {
-		if share := commentShare(m); share > warnShare && share <= maxShare {
-			t.Logf("warning: %s comment share %.0f%%", p, share*100)
+	for _, w := range Warnings(head, base.Changed) {
+		t.Log("warning: " + w)
+		if os.Getenv("GITHUB_ACTIONS") != "" {
+			fmt.Printf("::warning title=comment share::%s\n", w)
 		}
 	}
-	for _, v := range Check(r, base) {
-		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
-	}
-	for _, v := range Stale(r, base) {
-		t.Errorf("%s: %s: %s; run go test ./internal/gates -run TestRepository -update-baseline", v.Path, v.Rule, v.Detail)
-	}
-}
-
-func TestBaselineNeverRises(t *testing.T) {
-	if *prevBaseline == "" {
-		t.Skip("set -prev-baseline to the target branch's baseline.json")
-	}
-	prev, missing := readReport(t, *prevBaseline)
-	if missing {
-		t.Fatalf("%s does not exist", *prevBaseline)
-	}
-	next, _ := readReport(t, "baseline.json")
-	for _, v := range Rises(next, prev) {
+	for _, v := range Check(head, base.Report, base.Changed) {
 		t.Errorf("%s: %s: %s", v.Path, v.Rule, v.Detail)
 	}
 }

@@ -26,15 +26,14 @@ Add none of these without a new design decision:
 - A web UI. `majorcontext/bailey` owns that surface.
 
 ## Startup rules
-- Keep `harness --version` near its enforced millisecond budget.
+- Keep `harness version` inside the budget of the `Startup budget` step in `.github/workflows/ci.yml`.
 - Before first output, read only the user and project config files.
 - Make no network call and start no subprocess before a command needs it.
 - Add no `init()` side effects. Keep production Go free of cgo.
 - Validate credentials on first use. Keep model catalogs static.
 
 ## Code
-- Keep files under 800 lines and functions under 80. `internal/gates` enforces the ceilings.
-- After a change lowers a baselined file or package, run `go test ./internal/gates -run TestRepository -update-baseline`. Never edit `internal/gates/baseline.json` by hand.
+- Keep files under 800 lines and functions under 80. `internal/gates` compares each changed file with the merge base and enforces the ceilings.
 - Write no comment by default. A comment states a constraint, a hazard, or a non-obvious reason.
 - A comment never states history: no issue numbers, dates, "previously", or "no longer".
 - An exported identifier gets a one-line doc comment.

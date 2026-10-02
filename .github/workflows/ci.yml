@@ -10,6 +10,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    env:
+      GATES_BASE_REF: origin/${{ github.base_ref || 'main' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -40,15 +42,7 @@ jobs:
       - run: go vet ./...
 
       - name: Gates
-        run: |
-          go test -count=1 -v -run TestRepository ./internal/gates | grep -E 'warning:|FAIL' || true
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            base="origin/${{ github.base_ref }}:internal/gates/baseline.json"
-            if git cat-file -e "$base" 2>/dev/null; then
-              git show "$base" > "$RUNNER_TEMP/baseline.base.json"
-              go test -count=1 -run TestBaselineNeverRises ./internal/gates -prev-baseline "$RUNNER_TEMP/baseline.base.json"
-            fi
-          fi
+        run: go test -race -count=1 -v -run '^TestRepository$' ./internal/gates/
 
       - uses: golangci/golangci-lint-action@v9.3.0
         with:

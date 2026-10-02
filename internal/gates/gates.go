@@ -1,5 +1,5 @@
-// Package gates measures Go files and AGENTS.md files against a ratchet
-// baseline that can only go down.
+// Package gates measures Go files and AGENTS.md files and compares the
+// measurement with the merge base of the branch under test.
 package gates
 
 import (
@@ -16,43 +16,43 @@ import (
 )
 
 const (
-	warnShare          = 0.15
-	maxShare           = 0.25
-	maxNewPackageRatio = 1.5
-	maxFileLines       = 800
-	maxFuncLines       = 80
-	rootAgentsMax      = 80
-	agentsMax          = 25
+	warnShare     = 0.15
+	maxShare      = 0.25
+	maxTestRatio  = 1.5
+	maxFileLines  = 800
+	maxFuncLines  = 80
+	rootAgentsMax = 80
+	agentsMax     = 25
 )
 
 // FileMetrics holds the measured line counts and rule hits of one Go file.
 type FileMetrics struct {
-	Lines          int `json:"lines"`
-	CommentLines   int `json:"comment_lines"`
-	CodeLines      int `json:"code_lines"`
-	LongFuncs      int `json:"long_funcs"`
-	HistoryMarkers int `json:"history_markers"`
-	SleepAfter     int `json:"sleep_after"`
+	Lines          int
+	CommentLines   int
+	CodeLines      int
+	LongFuncs      int
+	HistoryMarkers int
+	SleepAfter     int
 }
 
 // PackageMetrics holds the summed test and code lines of one package.
 type PackageMetrics struct {
-	TestLines int `json:"test_lines"`
-	CodeLines int `json:"code_lines"`
+	TestLines int
+	CodeLines int
 }
 
 // Report is the full measurement of a tree: files, packages, and AGENTS.md sizes.
 type Report struct {
-	Files    map[string]FileMetrics    `json:"files"`
-	Packages map[string]PackageMetrics `json:"packages"`
-	Agents   map[string]int            `json:"agents,omitempty"`
+	Files    map[string]FileMetrics
+	Packages map[string]PackageMetrics
+	Agents   map[string]int
 }
 
 // Violation names one rule broken by one path.
 type Violation struct{ Path, Rule, Detail string }
 
 var (
-	historyRE   = regexp.MustCompile(`(?i)#[0-9]{2,}|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|used to be|before this change|red-verified|confirmed live|an earlier version|review findings?|(fix|review) rounds?|review caught|copilot)\b`)
+	historyRE   = regexp.MustCompile(`(?i)#[0-9]{2,}|\b(19|20)[0-9]{2}-[0-9]{2}-[0-9]{2}\b|\b(previously|no longer|red-verified|confirmed live|an earlier version|before this change|(fix|review) rounds?|round [0-9]+|copilot)\b`)
 	generatedRE = regexp.MustCompile(`^// Code generated .* DO NOT EDIT\.$`)
 	skipDirs    = map[string]bool{"testdata": true, ".worktrees": true, ".claude": true, ".git": true, "node_modules": true}
 	directives  = []string{"//go:", "//nolint", "//lint:", "//line "}
@@ -70,7 +70,7 @@ func Collect(fsys fs.FS) (Report, error) {
 			return err
 		}
 		if d.IsDir() {
-			if p != "." && skipDirs[d.Name()] {
+			if p != "." && (skipDirs[d.Name()] || nestedRoot(fsys, p)) {
 				return fs.SkipDir
 			}
 			return nil
@@ -110,6 +110,15 @@ func Collect(fsys fs.FS) (Report, error) {
 		return nil
 	})
 	return r, err
+}
+
+func nestedRoot(fsys fs.FS, dir string) bool {
+	for _, marker := range []string{"go.mod", ".git"} {
+		if _, err := fs.Stat(fsys, path.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func measure(name string, src []byte) (FileMetrics, error) {
@@ -186,118 +195,78 @@ func commentShare(m FileMetrics) float64 {
 	return 0
 }
 
-func absolutes(m FileMetrics) []Violation {
+// within reports whether head meets limit, or has not grown past a base that
+// already broke it.
+func within(head, base, limit int) bool { return head <= max(limit, base) }
+
+func fileViolations(h, b FileMetrics) []Violation {
 	var vs []Violation
 	add := func(rule, format string, a ...any) {
 		vs = append(vs, Violation{Rule: rule, Detail: fmt.Sprintf(format, a...)})
 	}
-	if s := commentShare(m); s > maxShare {
-		add("comment_share", "%d of %d lines are comments, limit %.0f%%", m.CommentLines, m.CommentLines+m.CodeLines, maxShare*100)
+	if limit := max(maxShare, commentShare(b)); commentShare(h) > limit {
+		add("comment_share", "%d of %d lines are comments, limit %.1f%%", h.CommentLines, h.CommentLines+h.CodeLines, limit*100)
 	}
-	if m.Lines > maxFileLines {
-		add("file_size", "%d lines, limit %d", m.Lines, maxFileLines)
+	if !within(h.Lines, b.Lines, maxFileLines) {
+		add("file_size", "%d lines, limit %d", h.Lines, max(maxFileLines, b.Lines))
 	}
-	if m.LongFuncs > 0 {
-		add("long_func", "%d functions over %d lines", m.LongFuncs, maxFuncLines)
+	if !within(h.LongFuncs, b.LongFuncs, 0) {
+		add("long_func", "%d functions over %d lines, limit %d", h.LongFuncs, maxFuncLines, b.LongFuncs)
 	}
-	if m.HistoryMarkers > 0 {
-		add("history", "%d history markers in comments", m.HistoryMarkers)
+	if !within(h.HistoryMarkers, b.HistoryMarkers, 0) {
+		add("history", "%d history markers in comments, limit %d", h.HistoryMarkers, b.HistoryMarkers)
 	}
-	if m.SleepAfter > 0 {
-		add("sleep_after", "%d time.Sleep or time.After calls in a test", m.SleepAfter)
+	if !within(h.SleepAfter, b.SleepAfter, 0) {
+		add("sleep_after", "%d time.Sleep or time.After calls in a test, limit %d", h.SleepAfter, b.SleepAfter)
 	}
 	return vs
 }
 
-type limit struct {
-	share                            float64
-	lines, longFuncs, history, sleep int
-}
-
-// limitOf returns what a baselined file may reach: each dimension may rise to
-// its absolute ceiling, or stay at the baseline when the baseline is worse.
-func limitOf(b FileMetrics) limit {
-	return limit{max(maxShare, commentShare(b)), max(maxFileLines, b.Lines), b.LongFuncs, b.HistoryMarkers, b.SleepAfter}
-}
-
-func over(m FileMetrics, l limit) []string {
-	var out []string
-	if s := commentShare(m); s > l.share {
-		out = append(out, fmt.Sprintf("comment share %.1f%% above limit %.1f%%", s*100, l.share*100))
-	}
-	if m.Lines > l.lines {
-		out = append(out, fmt.Sprintf("%d lines above limit %d", m.Lines, l.lines))
-	}
-	if m.LongFuncs > l.longFuncs {
-		out = append(out, fmt.Sprintf("%d long functions above limit %d", m.LongFuncs, l.longFuncs))
-	}
-	if m.HistoryMarkers > l.history {
-		out = append(out, fmt.Sprintf("%d history markers above limit %d", m.HistoryMarkers, l.history))
-	}
-	if m.SleepAfter > l.sleep {
-		out = append(out, fmt.Sprintf("%d time.Sleep or time.After calls above limit %d", m.SleepAfter, l.sleep))
-	}
-	return out
-}
-
-func ratioRises(m, b PackageMetrics) bool {
-	return m.TestLines*b.CodeLines > b.TestLines*m.CodeLines
-}
-
 // ratioFailure explains a test:code ratio violation, or returns "". A package
-// without code has no gate. A package absent from base, or with no baseline
-// test lines, may not pass maxNewPackageRatio. Any other package may not add
-// test lines while its ratio rises above its baseline.
-func ratioFailure(m, b PackageMetrics, inBase bool) string {
-	if m.CodeLines == 0 {
+// without code has no gate. A ratio up to maxTestRatio always passes. A
+// package absent from base may not pass it. Any other package may not raise
+// its ratio above the merge base.
+func ratioFailure(h, b PackageMetrics, inBase bool) string {
+	if h.CodeLines == 0 || h == b || h.TestLines*2 <= h.CodeLines*3 {
 		return ""
 	}
-	if !inBase || b.TestLines == 0 {
-		if float64(m.TestLines) > maxNewPackageRatio*float64(m.CodeLines) {
-			return fmt.Sprintf("test:code %d:%d exceeds limit %.1f", m.TestLines, m.CodeLines, maxNewPackageRatio)
-		}
-		return ""
+	if !inBase || b == (PackageMetrics{}) {
+		return fmt.Sprintf("test:code %d:%d exceeds limit %.1f", h.TestLines, h.CodeLines, maxTestRatio)
 	}
-	if m.TestLines > b.TestLines && ratioRises(m, b) {
-		return fmt.Sprintf("test:code %d:%d exceeds baseline %d:%d", m.TestLines, m.CodeLines, b.TestLines, b.CodeLines)
+	if h.TestLines*b.CodeLines > b.TestLines*h.CodeLines {
+		return fmt.Sprintf("test:code %d:%d exceeds merge base %d:%d", h.TestLines, h.CodeLines, b.TestLines, b.CodeLines)
 	}
 	return ""
 }
 
-// Check returns the violations of absolute rules and of the ratchet against base.
-func Check(r Report, base Report) []Violation {
+// Check returns the violations of head against base. Only files in changed
+// are checked. A file absent from base is new and meets the absolute limits.
+func Check(head, base Report, changed map[string]bool) []Violation {
 	var vs []Violation
-	for p, m := range r.Files {
-		if b, ok := base.Files[p]; ok {
-			if o := over(m, limitOf(b)); len(o) > 0 {
-				vs = append(vs, Violation{p, "ratchet", strings.Join(o, "; ")})
-			}
+	for p, m := range head.Files {
+		if !changed[p] {
 			continue
 		}
-		for _, v := range absolutes(m) {
+		for _, v := range fileViolations(m, base.Files[p]) {
 			v.Path = p
 			vs = append(vs, v)
 		}
 	}
-	for p, m := range r.Packages {
+	for p, n := range head.Agents {
+		limit := agentsMax
+		if p == "AGENTS.md" {
+			limit = rootAgentsMax
+		}
+		if changed[p] && !within(n, base.Agents[p], limit) {
+			vs = append(vs, Violation{p, "agents_cap", fmt.Sprintf("%d lines, limit %d", n, max(limit, base.Agents[p]))})
+		}
+	}
+	for p, m := range head.Packages {
 		b, ok := base.Packages[p]
 		if d := ratioFailure(m, b, ok); d != "" {
 			vs = append(vs, Violation{p, "test_ratio", d})
 		}
 	}
-	for p, n := range r.Agents {
-		limit := agentsMax
-		if p == "AGENTS.md" {
-			limit = rootAgentsMax
-		}
-		if n > limit {
-			vs = append(vs, Violation{p, "agents_cap", fmt.Sprintf("%d lines, limit %d", n, limit)})
-		}
-	}
-	return sorted(vs)
-}
-
-func sorted(vs []Violation) []Violation {
 	sort.Slice(vs, func(i, j int) bool {
 		if vs[i].Path != vs[j].Path {
 			return vs[i].Path < vs[j].Path
@@ -307,108 +276,15 @@ func sorted(vs []Violation) []Violation {
 	return vs
 }
 
-// Stale returns baseline entries that are looser than the current metrics: a
-// file that is gone, meets the rules, or has tighter limits than recorded; a
-// package that is gone, unrecorded, or has a lower test:code ratio.
-func Stale(r, base Report) []Violation {
-	var vs []Violation
-	for p, b := range base.Files {
-		if m, ok := r.Files[p]; !ok {
-			vs = append(vs, Violation{p, "baseline_stale", "file is gone"})
-		} else if limitOf(m) != limitOf(b) {
-			vs = append(vs, Violation{p, "baseline_stale", "file is within a tighter limit than recorded"})
+// Warnings lists changed files whose comment share is above warnShare and
+// within maxShare.
+func Warnings(head Report, changed map[string]bool) []string {
+	var out []string
+	for p, m := range head.Files {
+		if s := commentShare(m); changed[p] && s > warnShare && s <= maxShare {
+			out = append(out, fmt.Sprintf("%s: comment share %.1f%% is above %.0f%%", p, s*100, warnShare*100))
 		}
 	}
-	for p, b := range base.Packages {
-		m, ok := r.Packages[p]
-		switch {
-		case !ok:
-			vs = append(vs, Violation{p, "baseline_stale", "package is gone"})
-		case m.CodeLines > 0 && b.TestLines > 0 && m.TestLines*b.CodeLines < b.TestLines*m.CodeLines,
-			b.TestLines == 0 && m.TestLines > 0:
-			vs = append(vs, Violation{p, "baseline_stale", fmt.Sprintf("test:code %d:%d is below recorded %d:%d", m.TestLines, m.CodeLines, b.TestLines, b.CodeLines)})
-		}
-	}
-	for p := range r.Packages {
-		if _, ok := base.Packages[p]; !ok {
-			vs = append(vs, Violation{p, "baseline_stale", "package is not recorded"})
-		}
-	}
-	return sorted(vs)
-}
-
-func packageRises(n, pb PackageMetrics) bool {
-	if n.CodeLines == 0 {
-		return false
-	}
-	if pb.TestLines == 0 {
-		return ratioFailure(n, pb, true) != ""
-	}
-	return ratioRises(n, pb)
-}
-
-// Rises returns the entries of next that are looser than prev: a file that
-// enters the baseline, a file over a limit that prev set, or a package whose
-// ratio rises. A package absent from prev is new and passes.
-func Rises(next, prev Report) []Violation {
-	var vs []Violation
-	for p, n := range next.Files {
-		if pb, ok := prev.Files[p]; !ok {
-			vs = append(vs, Violation{p, "baseline_rise", "file is new to the baseline"})
-		} else if o := over(n, limitOf(pb)); len(o) > 0 {
-			vs = append(vs, Violation{p, "baseline_rise", strings.Join(o, "; ")})
-		}
-	}
-	for p, n := range next.Packages {
-		pb, ok := prev.Packages[p]
-		if ok && packageRises(n, pb) {
-			vs = append(vs, Violation{p, "baseline_rise", fmt.Sprintf("test:code %d:%d rises above %d:%d", n.TestLines, n.CodeLines, pb.TestLines, pb.CodeLines)})
-		}
-	}
-	return sorted(vs)
-}
-
-// Seed builds a first baseline: every package ratio and every file that
-// breaks an absolute rule.
-func Seed(r Report) Report {
-	next := Report{Files: map[string]FileMetrics{}, Packages: map[string]PackageMetrics{}}
-	for p, m := range r.Files {
-		if len(absolutes(m)) > 0 {
-			next.Files[p] = m
-		}
-	}
-	for p, m := range r.Packages {
-		next.Packages[p] = m
-	}
-	return next
-}
-
-// Lower returns base set to the current metrics. A file leaves the baseline
-// when it is gone or now meets the absolute rules. A file absent from base
-// never enters it. Every current package is recorded. A rise is an error.
-func Lower(r Report, base Report) (Report, error) {
-	next := Report{Files: map[string]FileMetrics{}, Packages: map[string]PackageMetrics{}}
-	for p, b := range base.Files {
-		m, ok := r.Files[p]
-		if !ok {
-			continue
-		}
-		if o := over(m, limitOf(b)); len(o) > 0 {
-			return Report{}, fmt.Errorf("%s: %s", p, strings.Join(o, "; "))
-		}
-		if len(absolutes(m)) > 0 {
-			next.Files[p] = m
-		}
-	}
-	for p, m := range r.Packages {
-		b, ok := base.Packages[p]
-		if d := ratioFailure(m, b, ok); d != "" {
-			return Report{}, fmt.Errorf("%s: %s", p, d)
-		}
-		if ok && b.TestLines > 0 && m.CodeLines > 0 && ratioRises(m, b) {
-			m = b
-		}
-		next.Packages[p] = m
-	}
-	return next, nil
+	sort.Strings(out)
+	return out
 }
