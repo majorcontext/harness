@@ -24,7 +24,7 @@ import (
 )
 
 // fakeClaudeBin is the path to the compiled fakeclaude stand-in (see
-// engine/testdata/fakeclaude/main.go), built once for the whole package
+// harnesstest/fakeclaude), built once for the whole package
 // run by buildFakeClaude below.
 var (
 	fakeClaudeBin     string
@@ -32,7 +32,7 @@ var (
 	fakeClaudeBinErr  error
 )
 
-// buildFakeClaude compiles engine/testdata/fakeclaude into a temp binary a
+// buildFakeClaude compiles harnesstest/fakeclaude into a temp binary a
 // single time (sync.Once) for however many tests in this package need it —
 // mirrors e2e/e2e_test.go's buildHarness precedent for the same reason:
 // paying one `go build` up front is far cheaper and more deterministic
@@ -46,7 +46,7 @@ func buildFakeClaude(t *testing.T) string {
 			return
 		}
 		bin := filepath.Join(dir, "fakeclaude")
-		cmd := exec.Command("go", "build", "-o", bin, "./testdata/fakeclaude")
+		cmd := exec.Command("go", "build", "-o", bin, "../harnesstest/fakeclaude")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fakeClaudeBinErr = fmt.Errorf("go build fakeclaude: %v\n%s", err, out)
 			return
@@ -2659,7 +2659,7 @@ func killLeakedFakeClaude(t *testing.T, pidFile string) {
 // that child's own terminal "result" event — not after the process exits
 // and a fresh one is dispatched.
 //
-// fakeclaude's "queue_injection" mode (testdata/fakeclaude/main.go) emits
+// fakeclaude's "queue_injection" mode (harnesstest/fakeclaude) emits
 // a "WAITING_FOR_QUEUE" marker message and then blocks reading a SECOND
 // stdin line. This test waits for that marker via OnEvent — a
 // deterministic, non-sleep synchronization point: by the time the driver

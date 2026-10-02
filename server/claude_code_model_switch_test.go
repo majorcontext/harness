@@ -15,7 +15,7 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// fakeClaudeBinForServer is the compiled engine/testdata/fakeclaude stand-in
+// fakeClaudeBinForServer is the compiled harnesstest/fakeclaude stand-in
 // (see engine/claude_code_backend_test.go's buildFakeClaude for the
 // original), rebuilt here because it is a package-private helper of the
 // engine test binary and this package needs its own copy to drive a real
@@ -36,7 +36,7 @@ func buildFakeClaudeForServer(t *testing.T) string {
 			return
 		}
 		bin := filepath.Join(dir, "fakeclaude")
-		cmd := exec.Command("go", "build", "-o", bin, "../engine/testdata/fakeclaude")
+		cmd := exec.Command("go", "build", "-o", bin, "../harnesstest/fakeclaude")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fakeClaudeBinForServerErr = fmt.Errorf("go build fakeclaude: %v\n%s", err, out)
 			return

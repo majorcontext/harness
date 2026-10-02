@@ -1,0 +1,87 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Task",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Working inside the subagent."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "subagent done"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "All done."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "message_parents.a": {
+      "status": 200,
+      "body": [
+        {
+          "parent_tool_use_id": "",
+          "role": "user"
+        },
+        {
+          "parent_tool_use_id": "",
+          "role": "assistant"
+        },
+        {
+          "parent_tool_use_id": "toolu#1",
+          "role": "assistant"
+        },
+        {
+          "parent_tool_use_id": "toolu#1",
+          "role": "tool"
+        },
+        {
+          "parent_tool_use_id": "",
+          "role": "assistant"
+        }
+      ]
+    }
+  }
+}
