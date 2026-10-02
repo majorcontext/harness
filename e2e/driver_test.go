@@ -324,7 +324,7 @@ func (d *httpDriver) DeleteQueued(t *testing.T, id string) callResult {
 
 func (d *httpDriver) UpdateGoal(t *testing.T, id, condition string) callResult {
 	t.Helper()
-	return d.call(t, http.MethodPost, "/session/"+id+"/goal", map[string]any{"condition": condition})
+	return withoutSeq(d.call(t, http.MethodPost, "/session/"+id+"/goal", map[string]any{"condition": condition}))
 }
 
 func (d *httpDriver) ClearGoal(t *testing.T, id string) callResult {
@@ -334,7 +334,7 @@ func (d *httpDriver) ClearGoal(t *testing.T, id string) callResult {
 
 func (d *httpDriver) ListSessions(t *testing.T) callResult {
 	t.Helper()
-	return d.call(t, http.MethodGet, "/session", nil)
+	return withoutSeq(d.call(t, http.MethodGet, "/session", nil))
 }
 
 // withoutSeq drops the instance-wide event cursor from session objects. It

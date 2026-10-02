@@ -146,6 +146,7 @@ type updateGoal struct{ as, condition string }
 type clearGoal struct{ as string }
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
+// listSessions needs at most one resident session: the server lists them in map order.
 type listSessions struct{}
 type getSession struct{ as string }
 type sessionStatus struct{}

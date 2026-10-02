@@ -79,7 +79,6 @@
     "update_goal.a": {
       "status": 202,
       "body": {
-        "seq": 8,
         "status": "armed"
       }
     }

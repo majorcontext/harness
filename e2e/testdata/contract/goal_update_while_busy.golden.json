@@ -237,7 +237,6 @@
     "update_goal.a": {
       "status": 200,
       "body": {
-        "seq": 5,
         "status": "updated"
       }
     }

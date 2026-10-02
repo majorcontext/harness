@@ -169,7 +169,6 @@
           "model": "anthropic/claude-fable-5",
           "plugins": [],
           "queued": 0,
-          "seq": 9,
           "service_tier": "priority",
           "state": "idle",
           "status": "idle",

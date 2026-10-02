@@ -223,7 +223,6 @@
           "model": "anthropic/claude-fable-5",
           "plugins": [],
           "queued": 0,
-          "seq": 7,
           "state": "idle",
           "status": "idle",
           "subscription_usage": null,
