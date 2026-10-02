@@ -1,4 +1,5 @@
-// Package harnesstest provides scripted Anthropic Messages and OpenAI Responses servers for tests.
+// Package harnesstest provides scripted Anthropic Messages, OpenAI
+// chat-completions, and OpenAI Responses servers for tests.
 package harnesstest
 
 import (
@@ -33,6 +34,9 @@ type Reply struct {
 	// RetryAfter is the Retry-After header value of an HTTPStatus reply.
 	RetryAfter string
 	Block      bool // after the first content delta, wait for Release or client cancel; a Repeat step blocks only until its first Release
+	// Reasoning is streamed before Text as reasoning_content deltas. Only the
+	// chat-completions server (NewChat) sends it.
+	Reasoning string
 }
 
 // ContextOverflowMessage is the error message Anthropic sends for a prompt
@@ -57,6 +61,11 @@ type Request struct {
 	ServiceTier    string
 	Messages       []Message
 	Tools          []string // sorted names
+	// Chat-completions requests only.
+	ReasoningEffort string // top-level reasoning_effort
+	User            string // top-level user
+	PromptCacheKey  string // top-level prompt_cache_key
+	Header          http.Header
 }
 
 // Message is one conversation turn in a Request.
@@ -94,8 +103,29 @@ func (r Request) LastUserText() string {
 	return ""
 }
 
-// Server is a scripted Anthropic Messages server.
+// codec is the wire format of a Server.
+type codec struct {
+	decode     func(body []byte, h http.Header) (Request, error)
+	stream     func(s *Server, w http.ResponseWriter, r *http.Request, n int, name string, rep Reply)
+	writeError func(w http.ResponseWriter, status int, msg string)
+	replyError func(w http.ResponseWriter, rep Reply)
+}
+
+var anthropicCodec = codec{
+	decode: func(body []byte, _ http.Header) (Request, error) { return decodeRequest(body) },
+	stream: (*Server).stream, writeError: writeError, replyError: writeReplyError,
+}
+
+func (s *Server) wire() codec {
+	if s.codec == nil {
+		return anthropicCodec
+	}
+	return *s.codec
+}
+
+// Server is a scripted model server.
 type Server struct {
+	codec   *codec // nil speaks the Anthropic wire
 	srv     *httptest.Server
 	closing chan struct{}
 
@@ -140,7 +170,13 @@ func newServer(steps []Step) *Server {
 // already failed.
 func New(t testing.TB, steps ...Step) *Server {
 	t.Helper()
+	return start(t, anthropicCodec, steps)
+}
+
+func start(t testing.TB, c codec, steps []Step) *Server {
+	t.Helper()
 	s := newServer(steps)
+	s.codec = &c
 	s.srv = httptest.NewServer(http.HandlerFunc(s.handle))
 	t.Cleanup(func() {
 		close(s.closing)
@@ -305,15 +341,15 @@ func (s *Server) selectStep(req Request) int {
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.wire().writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	req, err := decodeRequest(body)
+	req, err := s.wire().decode(body, r.Header)
 	if err != nil {
 		s.mu.Lock()
 		s.undecoded = append(s.undecoded, fmt.Sprintf("%v (body prefix %q)", err, body[:min(len(body), 80)]))
 		s.mu.Unlock()
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.wire().writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -337,10 +373,10 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case matched < 0:
-		writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
+		s.wire().writeError(w, http.StatusInternalServerError, "harnesstest: no step matched")
 	case step.Reply.HTTPStatus != 0:
-		writeReplyError(w, step.Reply)
+		s.wire().replyError(w, step.Reply)
 	default:
-		s.stream(w, r, n, step.Name, step.Reply)
+		s.wire().stream(s, w, r, n, step.Name, step.Reply)
 	}
 }
