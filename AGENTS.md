@@ -33,7 +33,7 @@ Add none of these without a new design decision:
 - Validate credentials on first use. Keep model catalogs static.
 
 ## Code
-- Keep files under 800 lines and functions under 80. `internal/gates` compares each changed file with the merge base and enforces the ceilings.
+- Keep files at most 800 lines. Keep each function's closing brace at most 80 lines below its opening brace. `internal/gates` compares each changed file with its merge-base version, follows renames, and never blocks a change that only deletes code.
 - Write no comment by default. A comment states a constraint, a hazard, or a non-obvious reason.
 - A comment never states history: no issue numbers, dates, "previously", or "no longer".
 - An exported identifier gets a one-line doc comment.

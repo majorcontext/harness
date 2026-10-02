@@ -28,4 +28,4 @@ linters:
       - testdata
 
 issues:
-  new-from-rev: origin/main
+  new-from-merge-base: origin/main
