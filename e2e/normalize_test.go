@@ -16,7 +16,11 @@ var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call)_`)
 
 var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 
-func maskTime(s string) string { return timePattern.ReplaceAllString(s, "<time>") }
+var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
+
+func maskTime(s string) string {
+	return sessionIDPattern.ReplaceAllString(timePattern.ReplaceAllString(s, "<time>"), "<session>")
+}
 
 const goalEvaluatorMarker = "MET: <one short sentence"
 

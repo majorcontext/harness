@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,6 +35,10 @@ type setGoal struct {
 type release struct{ step string }
 type awaitRequests struct{ n int }
 type restart struct{ kill bool }
+type expectQueued struct {
+	as    string
+	texts []string
+}
 
 type observation struct {
 	Requests []normRequest            `json:"requests"`
@@ -82,6 +87,11 @@ func (a awaitRequests) run(t *testing.T, r *run) {
 		case <-t.Context().Done():
 			t.Fatalf("test ended while waiting for %d model requests; saw %d", a.n, r.seen)
 		}
+	}
+}
+func (a expectQueued) run(t *testing.T, r *run) {
+	if got := r.drv.Queued(t, r.id(t, a.as)); !slices.Equal(got, a.texts) {
+		t.Fatalf("session %s queue = %q, want %q", a.as, got, a.texts)
 	}
 }
 func (a restart) run(t *testing.T, r *run) { r.drv.Restart(t, a.kill) }

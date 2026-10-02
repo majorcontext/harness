@@ -18,6 +18,7 @@ type driver interface {
 	Messages(t *testing.T, id string) []apiMessage
 	Events(t *testing.T) []apiEvent
 	Restart(t *testing.T, kill bool)
+	Queued(t *testing.T, id string) []string
 }
 
 type httpDriver struct {
@@ -139,6 +140,15 @@ func (d *httpDriver) Events(t *testing.T) []apiEvent {
 			return events
 		}
 	}
+}
+
+func (d *httpDriver) Queued(t *testing.T, id string) []string {
+	t.Helper()
+	var texts []string
+	for _, item := range d.p.queueGet(id).Queued {
+		texts = append(texts, item.Text)
+	}
+	return texts
 }
 
 func (d *httpDriver) Restart(t *testing.T, kill bool) {
