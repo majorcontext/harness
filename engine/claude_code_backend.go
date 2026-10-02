@@ -155,7 +155,7 @@ func (s *Session) recordClaudeCodeQuestion(callID string) {
 // turn, so a parked question there would stall the tree or the goal.
 func (s *Session) claudeCodeAsksQuestions() bool {
 	_, goal := s.ActiveGoal()
-	return s.cfg.ClaudeCode.AskUserQuestion && s.TaskParentID() == "" && !goal
+	return s.cfg.ClaudeCode.AskUserQuestion && !s.cfg.ClaudeCode.DisableBuiltinTools && s.TaskParentID() == "" && !goal
 }
 
 // AnswerQuestion resumes the delegated turn parked on callID. answers maps
@@ -1483,6 +1483,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 		pendingReasoningCreatedAt = time.Time{}
 	}
 
+	initChecked := !s.cfg.ClaudeCode.DisableBuiltinTools
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -1494,6 +1495,12 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 			// turn over one malformed/unexpected line from the child —
 			// unknown stream data must not crash a turn.
 			continue
+		}
+		if !initChecked {
+			switch env.Type {
+			case "assistant", "user", "result":
+				return nil, false, fmt.Errorf("%w: %s event before init", ErrClaudeCodeBuiltinTools, env.Type), false, false
+			}
 		}
 		if (env.Type == "user" || env.Type == "result") && len(pendingReasoning) > 0 {
 			// Only a "user" (tool_result) or "result" (turn-terminal)
@@ -1528,6 +1535,7 @@ func (s *Session) consumeClaudeCodeStream(r io.Reader, model message.ModelRef, r
 					if err := claudeCodeCheckNoBuiltinTools(env.Tools); err != nil {
 						return nil, false, err, false, false
 					}
+					initChecked = true
 				}
 				s.recordClaudeCodeSessionID(env.SessionID)
 				mainModel = env.Model

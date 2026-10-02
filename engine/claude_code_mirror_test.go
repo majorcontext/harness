@@ -455,3 +455,73 @@ func TestMirrorResumeAfterKillRestoresAppendedFrames(t *testing.T) {
 		t.Errorf("--resume = %q, ok=%v, want %s", v, ok, e.f.sid)
 	}
 }
+
+func writeReorderedFixture(t *testing.T, e *mirrorEnv, keepInit bool, initAfterFirstFrame bool) {
+	t.Helper()
+	var init any
+	var rest []any
+	for _, v := range e.f.run1Lines {
+		m := v.(map[string]any)
+		if m["type"] == "system" && m["subtype"] == "init" {
+			init = v
+			continue
+		}
+		rest = append(rest, v)
+	}
+	var lines []any
+	switch {
+	case !keepInit:
+		lines = rest
+	case initAfterFirstFrame:
+		lines = append(lines, rest[0], init)
+		lines = append(lines, rest[1:]...)
+	default:
+		lines = append([]any{init}, rest...)
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, l := range lines {
+		if err := enc.Encode(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "fixture.jsonl")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FAKE_CLAUDE_MIRROR_FIXTURE", path)
+}
+
+func TestNoToolsRefusesEventsBeforeInit(t *testing.T) {
+	e := newMirrorEnv(t)
+	writeReorderedFixture(t, e, false, false)
+	store := NewMemStore()
+	cfg := e.config(store)
+	cfg.ClaudeCode.DisableBuiltinTools = true
+	s := NewSession(cfg)
+	_, err := s.Prompt(context.Background(), "hi")
+	if !errors.Is(err, ErrClaudeCodeBuiltinTools) {
+		t.Fatalf("Prompt error = %v, want ErrClaudeCodeBuiltinTools", err)
+	}
+	for _, m := range s.History() {
+		if m.Role == message.RoleAssistant {
+			t.Errorf("assistant message journaled with no init event: %+v", m)
+		}
+	}
+}
+
+func TestNoToolsMirrorFrameBeforeInitStillMirrored(t *testing.T) {
+	e := newMirrorEnv(t)
+	writeReorderedFixture(t, e, true, true)
+	store := NewMemStore()
+	cfg := e.config(store)
+	cfg.ClaudeCode.DisableBuiltinTools = true
+	s := NewSession(cfg)
+	if _, err := s.Prompt(context.Background(), "hi"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	_, entries := mirrorEntries(t, store, s.ID)
+	if want := e.f.run1Entries(); !reflect.DeepEqual(entries, want) {
+		t.Errorf("mirrored entries = %v\nwant %v", entries, want)
+	}
+}
