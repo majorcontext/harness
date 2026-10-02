@@ -132,7 +132,7 @@ var checkCases = []struct {
 		name: "agents_cap_root_80_scoped_25",
 		fs: fstest.MapFS{
 			"AGENTS.md":   file(strings.Repeat("x\n", 81)),
-			"a/AGENTS.md": file(strings.Repeat("x\n", 26)),
+			"a/AGENTS.md": file(strings.Repeat("x\n", 25) + "x"),
 			"b/AGENTS.md": file(strings.Repeat("x\n", 25)),
 		},
 		want: []string{"AGENTS.md:agents_cap", "a/AGENTS.md:agents_cap"},

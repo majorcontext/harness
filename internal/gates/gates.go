@@ -82,6 +82,9 @@ func Collect(fsys fs.FS) (Report, error) {
 				return err
 			}
 			r.Agents[p] = bytes.Count(data, []byte("\n"))
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				r.Agents[p]++
+			}
 		case strings.HasSuffix(p, ".go"):
 			data, err := fs.ReadFile(fsys, p)
 			if err != nil {
