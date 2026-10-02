@@ -304,14 +304,6 @@
 			"history_markers": 2,
 			"sleep_after": 0
 		},
-		"engine/doc.go": {
-			"lines": 16,
-			"comment_lines": 15,
-			"code_lines": 1,
-			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
 		"engine/engine.go": {
 			"lines": 4391,
 			"comment_lines": 2777,
@@ -1202,7 +1194,7 @@
 		},
 		"mcp/doc.go": {
 			"lines": 10,
-			"comment_lines": 9,
+			"comment_lines": 0,
 			"code_lines": 1,
 			"long_funcs": 0,
 			"history_markers": 1,
@@ -1252,22 +1244,6 @@
 			"lines": 179,
 			"comment_lines": 47,
 			"code_lines": 110,
-			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
-		"mcpserver/doc.go": {
-			"lines": 7,
-			"comment_lines": 6,
-			"code_lines": 1,
-			"long_funcs": 0,
-			"history_markers": 0,
-			"sleep_after": 0
-		},
-		"message/doc.go": {
-			"lines": 9,
-			"comment_lines": 8,
-			"code_lines": 1,
 			"long_funcs": 0,
 			"history_markers": 0,
 			"sleep_after": 0
@@ -2459,8 +2435,8 @@
 			"code_lines": 265
 		},
 		"internal/gates": {
-			"test_lines": 369,
-			"code_lines": 303
+			"test_lines": 373,
+			"code_lines": 307
 		},
 		"internal/testpoll": {
 			"test_lines": 0,

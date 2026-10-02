@@ -34,6 +34,10 @@ var checkCases = []struct {
 	want []string
 }{
 	{
+		name: "package_doc_in_doc_go_not_counted",
+		fs:   fstest.MapFS{"a/doc.go": file("// Package a x.\n// y\n// z\n// w\npackage a\n")},
+	},
+	{
 		name: "new_file_comment_bloat_fails",
 		fs:   fstest.MapFS{"a/a.go": file("package a\n// x\n// y\n// z\nvar A = 1\n")},
 		want: []string{"a/a.go:comment_share"},

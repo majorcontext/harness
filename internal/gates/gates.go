@@ -139,8 +139,12 @@ func measure(name string, src []byte) (FileMetrics, error) {
 			}
 		}
 	}
+	exempt := func(line int) bool {
+		return f.Doc != nil && path.Base(name) == "doc.go" &&
+			line >= fset.PositionFor(f.Doc.Pos(), false).Line && line <= fset.PositionFor(f.Doc.End(), false).Line
+	}
 	for i, l := range lines {
-		if len(bytes.TrimSpace(l)) == 0 {
+		if len(bytes.TrimSpace(l)) == 0 || exempt(i+1) {
 			continue
 		}
 		if commentLine[i+1] {
