@@ -122,9 +122,9 @@
       "body": {
         "events": [
           {
+            "beta_header": true,
             "conn": 1,
             "event": "dial",
-            "respon\u003csession\u003e": true,
             "transport": "ws"
           },
           {

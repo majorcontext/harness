@@ -71,7 +71,7 @@ type WireRequest struct {
 	Conn int `json:"conn,omitempty"`
 	// ResponsesWebsockets reports that a dial carried the openai-beta
 	// responses_websockets protocol header.
-	ResponsesWebsockets bool   `json:"responses_websockets,omitempty"`
+	ResponsesWebsockets bool   `json:"beta_header,omitempty"`
 	PreviousResponseID  string `json:"previous_response_id,omitempty"`
 	InputItems          int    `json:"input_items,omitempty"`
 	// ContentEncoding is the Content-Encoding header of an SSE request.
