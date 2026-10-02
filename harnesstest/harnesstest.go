@@ -86,6 +86,7 @@ type Server struct {
 	srv     *httptest.Server
 	closing chan struct{}
 
+	selMu     sync.Mutex // serializes step selection; held while Match runs, never with mu
 	mu        sync.Mutex
 	steps     []Step
 	consumed  []bool
@@ -226,6 +227,32 @@ func (s *Server) block(r *http.Request, name string) bool {
 	return false
 }
 
+func (s *Server) selectStep(req Request) int {
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
+	s.mu.Lock()
+	var candidates []int
+	for i := range s.steps {
+		if !s.consumed[i] {
+			candidates = append(candidates, i)
+		}
+	}
+	s.mu.Unlock()
+	for _, i := range candidates {
+		if !s.steps[i].Match(req) {
+			continue
+		}
+		s.mu.Lock()
+		ok := !s.consumed[i]
+		s.consumed[i] = !s.steps[i].Repeat
+		s.mu.Unlock()
+		if ok {
+			return i
+		}
+	}
+	return -1
+}
+
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -246,15 +273,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	n := len(s.requests)
 	close(s.arrived)
 	s.arrived = make(chan struct{})
-	matched := -1
-	for i, st := range s.steps {
-		if s.consumed[i] || !st.Match(req) {
-			continue
-		}
-		matched = i
-		s.consumed[i] = !st.Repeat
-		break
-	}
+	s.mu.Unlock()
+
+	matched := s.selectStep(req)
+
+	s.mu.Lock()
 	var step Step
 	if matched < 0 {
 		s.unmatched = append(s.unmatched, req)

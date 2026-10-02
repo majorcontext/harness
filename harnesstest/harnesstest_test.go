@@ -409,3 +409,24 @@ func TestAwaitRequests(t *testing.T) {
 		}
 	})
 }
+
+func TestMatchMayCallServer(t *testing.T) {
+	var s *Server
+	s = New(t, Step{Name: "a", Match: func(Request) bool { _ = s.Requests(); return true }, Reply: Reply{Text: "ok"}})
+	errc := make(chan error, 1)
+	go func() {
+		st, err := ask(t, s, "hi")
+		if err == nil {
+			_ = drain(t, st)
+		}
+		errc <- err
+	}()
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("Stream: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("request did not complete: Match calling Requests deadlocked")
+	}
+}
