@@ -62,6 +62,11 @@ func (m *models) check(model string, names []string, tools []turn.Tool) error {
 		return fmt.Errorf("%w: modelmeta does not know %s", ErrModelUnavailable, model)
 	}
 	if caps := be.Capabilities(model); caps.OwnsLoop {
+		for _, t := range tools {
+			if slices.Contains(caps.Tools, t.Spec().Name) {
+				return fmt.Errorf("%w: tool %q has the name of a built-in tool of %s", ErrInvalidRequest, t.Spec().Name, model)
+			}
+		}
 		for _, n := range names {
 			if !slices.Contains(caps.Tools, n) && !slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == n }) {
 				return fmt.Errorf("%w: %s has no tool %q", ErrInvalidRequest, model, n)

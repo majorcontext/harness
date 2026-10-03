@@ -211,6 +211,17 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
+	for _, allowed := range [][]string{nil, {"Read"}} {
+		r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, newProbe("Read", false))
+		defer closeRuntime(t, r)
+		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
+		if !errors.Is(err, harness.ErrInvalidRequest) {
+			t.Errorf("Create with AllowedTools %v = %v, want ErrInvalidRequest", allowed, err)
+		}
+	}
+}
+
 type lookup struct{}
 
 func (lookup) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: "lookup"} }
