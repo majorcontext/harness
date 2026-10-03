@@ -487,10 +487,11 @@ type Backend interface {
 }
 
 type Capabilities struct {
-	OwnsLoop      bool // backend runs tools and multi-step turns
-	OwnsContext   bool // backend compacts its own context
-	Steering      bool // accepts input mid-turn
-	ContextWindow int  // 0 means the backend reports it
+	OwnsLoop      bool     // backend runs tools and multi-step turns
+	OwnsContext   bool     // backend compacts its own context
+	Steering      bool     // accepts input mid-turn
+	ContextWindow int      // 0 means the backend reports it
+	Tools         []string // built-in tools of a delegated backend
 }
 
 type Sink interface {
@@ -503,6 +504,7 @@ type Sink interface {
 
 - A model API backend runs one model call per `Run`. The loop runs the tools.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
+- `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools`, and any other name fails `Create`.
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.
 - Private backend state is one `backend.state` event plus a blob. The Claude Code transcript mirror is that blob. The eight `claudeCode*` fields and their record kinds are deleted.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
