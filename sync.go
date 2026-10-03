@@ -29,10 +29,14 @@ const epochBlob = "sync-epoch"
 // older epoch with ErrStaleEpoch. It appends a batch at head+1. A batch at or
 // below head is a retry: the same bytes return the head, and other bytes fail
 // with ErrConflict. Any other batch returns the head, so the sender resends
-// from head+1.
+// from head+1. The caller serializes calls for one session: the epoch check
+// and the append are separate Store operations.
 func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error) {
 	if b.FromSeq == 0 {
 		return protocol.SyncAck{}, fmt.Errorf("%w: from_seq is 0", ErrInvalidRequest)
+	}
+	if _, ok := b.Blobs[epochBlob]; ok {
+		return protocol.SyncAck{}, fmt.Errorf("%w: blob key %q is reserved", ErrInvalidRequest, epochBlob)
 	}
 	if err := fenceEpoch(ctx, st, b.Session, b.Epoch); err != nil {
 		return protocol.SyncAck{}, err

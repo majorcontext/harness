@@ -26,6 +26,15 @@ const (
 // returns nil after the last record of a stopped actor is acknowledged, and
 // ErrNotOwned when the ownership ends first. ErrStaleEpoch stops the actor.
 func (a *Actor) replicate() error {
+	ctx, cancel := context.WithCancel(a.cfg.Base)
+	defer cancel()
+	go func() {
+		select {
+		case <-a.cfg.Ownership.Lost():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	var b *protocol.SyncBatch
 	next, wait := uint64(1), minBackoff
 	for !a.revoked() {
@@ -43,7 +52,7 @@ func (a *Actor) replicate() error {
 		}
 		var ack protocol.SyncAck
 		if err == nil {
-			ack, err = a.cfg.Sync.Deliver(a.cfg.Base, *b)
+			ack, err = a.cfg.Sync.Deliver(ctx, *b)
 		}
 		if errors.Is(err, ErrStaleEpoch) {
 			close(a.stale)

@@ -56,6 +56,9 @@ func TestApplySync(t *testing.T) {
 			2, nil, []string{"r1", "r2"}},
 		{"an overlap is a seq mismatch", protocol.SyncBatch{Epoch: 2, FromSeq: 2, Records: recs("r2", "r3")},
 			2, nil, []string{"r1", "r2"}},
+		{"a batch that carries the reserved epoch key is rejected",
+			protocol.SyncBatch{Epoch: 3, FromSeq: 3, Records: recs("r3"), Blobs: map[string][]byte{"sync-epoch": []byte("1")}},
+			0, harness.ErrInvalidRequest, []string{"r1", "r2"}},
 		{"an older epoch is stale", protocol.SyncBatch{Epoch: 1, FromSeq: 3, Records: recs("r3")},
 			0, harness.ErrStaleEpoch, []string{"r1", "r2"}},
 	} {
@@ -77,6 +80,9 @@ func TestApplySync(t *testing.T) {
 				t.Fatalf("receiver log = %q, want %q", got, tc.log)
 			}
 			for k, v := range tc.b.Blobs {
+				if err != nil {
+					break
+				}
 				rc, err := st.GetBlob(bg, "s1", k)
 				if err != nil {
 					t.Fatal(err)
@@ -241,4 +247,20 @@ func TestHandoffWaitsForTheFinalAck(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestOwnershipLossEndsABlockedDelivery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		k := killable{lost: make(chan struct{})}
+		rep := &replica{st: harness.NewMemStore(), hold: make(chan struct{}), faults: []string{"hold"}}
+		r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: k, Sync: rep}, newFake())
+		if err != nil {
+			t.Fatal(err)
+		}
+		create(t, r)
+		synctest.Wait()
+		close(k.lost)
+		synctest.Wait()
+		closeRuntime(t, r)
+	})
 }
