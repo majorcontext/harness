@@ -357,13 +357,13 @@ any ─► cleared
 
 Goals follow Claude Code `/goal`. There is no deferred goal.
 
-- `SetGoal` on an idle session with no queued input starts a turn. The condition is that turn's input, with `source: goal`.
+- `SetGoal` on an idle session with no queued input admits the condition as an input with `source: goal`. That input starts a turn through the normal input events.
 - `SetGoal` on a busy session, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
 - A new `SetGoal` replaces the goal and resets its turn count.
 - After each turn, the evaluator returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `impossible` yields `failed`.
 - A turn that fails on a retryable error or a usage limit yields `paused`. Harness retries with backoff, and any input resumes the goal. An error the user must fix yields `failed`.
 - `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`.
-- The goal lives in the log. `Open` restores it with its turn count, and an `active` goal on an idle session continues without a new `SetGoal`.
+- The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session continues, and a `paused` goal keeps its retry time.
 
 Request:
 
