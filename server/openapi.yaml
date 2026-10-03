@@ -3988,11 +3988,12 @@ paths:
           (a different condition updates it in place before resuming) — and
           the case where a goal POSTed while a plain prompt was busy wins the
           run slot the instant that prompt finishes.
-        - `updated` (200): a goal loop is ALREADY running on this session;
-          the condition is rewritten in place (a same-condition POST is a
-          silent no-op, still reported as `updated`) and NO new loop starts —
-          the existing loop picks up the new condition at its next turn
-          boundary. No run-slot claim happens for this outcome.
+        - `updated` (200): the goal is rewritten in place and NO new loop
+          starts. Either a goal loop is ALREADY running on this session (a
+          same-condition POST is a silent no-op, still reported as
+          `updated`, and the loop picks up the new condition at its next
+          turn boundary), or an armed goal sits behind a busy plain prompt
+          (see `armed`). No run-slot claim happens for this outcome.
         - `armed` (202): the run slot is currently held by a plain prompt (not
           a goal); the goal is registered now, but the loop itself starts
           automatically once that prompt finishes (auto-arm) — no further
@@ -4016,9 +4017,10 @@ paths:
       responses:
         "200":
           description: >
-            Updated in place: a goal loop was already running on this
-            session; its condition was rewritten (or, if unchanged, left
-            as-is) and no second loop was started.
+            Updated in place: either a goal loop was already running on
+            this session, or an armed goal sat behind a busy plain prompt.
+            Its condition was rewritten (or, if unchanged, left as-is) and
+            no second loop was started.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GoalPostResponse" }
