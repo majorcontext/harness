@@ -407,6 +407,17 @@ the condition. A running loop ignores `defer`: the request returns `updated`
 as usual. An active-but-idle goal (after an abort, restart, or park) keeps its
 state, takes any new condition, and gets the same deferral.
 
+A `POST` on an already-armed goal keeps it armed, with or without `defer`.
+The goal takes the new condition. No loop starts and nothing is evaluated.
+`Session.GoalDeferred` reports the armed state. The request replaces
+`max_turns` only when it gives a value greater than 0. The response is
+`armed` (202). The first finished turn is judged against the new condition.
+Behind a busy prompt, the goal takes the new condition in place, stays armed,
+and keeps its `max_turns`. The response is `updated` (200).
+
+An active goal that is not armed (after an abort or a park) takes `max_turns`
+as given on a `defer: true` request, and `0` or omitted means unlimited.
+
 The loop starts through the existing auto-arm path (`maybeAutoArmGoal`) when
 the next prompt turn ends. Its first iteration skips the worker turn and
 evaluates the history as it stands, and that evaluation does not count

@@ -2944,9 +2944,10 @@ func (s *Server) maybeAutoArmGoal(id string, st *sessionState) {
 //     plain prompt; maybeAutoArmGoal starts the loop once that prompt ends.
 //     A defer=true request answers "armed" whenever no loop is running: it
 //     registers the goal without starting a loop, and the loop starts after
-//     the next prompt turn. While a loop runs, defer is ignored.
-//   - "updated": an already-running loop's condition was rewritten in place;
-//     no new loop, no run-slot claim.
+//     the next prompt turn. A POST on an armed goal also answers "armed".
+//     While a loop runs, defer is ignored.
+//   - "updated": a running loop, or an armed goal behind a busy prompt, took
+//     the new condition in place; no new loop, no run-slot claim.
 type goalPostResponse struct {
 	Seq    int64  `json:"seq"`
 	Status string `json:"status"`
@@ -2958,17 +2959,16 @@ type goalPostResponse struct {
 // (config goal_evaluator_model), and goals are rejected with 400 when it is
 // unset.
 //
-// When claimForPrompt succeeds (the session was idle), three outcomes:
+// When claimForPrompt succeeds (the session was idle), four outcomes:
+//   - an armed goal (see GoalDeferred): UpdateGoal rewrites it, no loop
+//     starts, "armed". The first finished turn is judged against it.
 //   - no goal active: RegisterGoal, spawn runGoal, "started".
 //   - a goal is active (a paused/restart goal, or one left active-but-idle
 //     by an abort — see PursueGoal's context.Canceled branch) with the SAME
 //     condition: just resume it, "started".
 //   - active with a DIFFERENT condition: UpdateGoal rewrites it in place,
-//     then resume with the new condition, "started". This is the one
-//     behavior change from the pre-Task-5 contract, which 409'd here
-//     instead (see TestGoalReArmDifferentConditionUpdatesAndResumes) —
-//     claimForPrompt's success proves no loop is currently running to race
-//     UpdateGoal with, so updating in place is always safe here.
+//     then resume with the new condition, "started". claimForPrompt's
+//     success proves no loop runs to race UpdateGoal with.
 //
 // When claimForPrompt 409s because THIS session's own run slot is already
 // held (empty holder — the non-empty-holder, workdir-held-by-ANOTHER-
@@ -3015,7 +3015,7 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if body.Defer {
+	if body.Defer || st.sess.GoalDeferred() {
 		s.armDeferredGoal(w, id, st, fromSeq, body.Condition, body.MaxTurns)
 		return
 	}
@@ -3033,11 +3033,8 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 	condition := body.Condition
 	if existing, active := st.sess.ActiveGoal(); active {
 		if existing != body.Condition {
-			// See this function's doc comment: a different condition here
-			// now updates and resumes instead of rejecting. UpdateGoal can
-			// only fail on "no active goal", which ActiveGoal() just ruled
-			// out — structurally unreachable, but fail closed rather than
-			// silently resuming the wrong condition if that ever changes.
+			// UpdateGoal fails only on "no active goal", which ActiveGoal()
+			// ruled out. Fail closed rather than resume the wrong condition.
 			if err := st.sess.UpdateGoal(body.Condition); err != nil {
 				s.mu.Lock()
 				st.running = false
@@ -3094,9 +3091,10 @@ func (s *Server) handleGoal(w http.ResponseWriter, r *http.Request) {
 
 // armDeferredGoal registers a goal with defer=true on a session whose run
 // slot handleGoal just claimed, releases the slot, and starts no loop. An
-// already-active goal keeps its state and takes the new condition.
+// armed goal keeps its cap unless maxTurns is above 0.
 func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionState, fromSeq int64, condition string, maxTurns int) {
 	var err error
+	armed := st.sess.GoalDeferred()
 	if existing, active := st.sess.ActiveGoal(); !active {
 		err = st.sess.RegisterGoalWithMaxTurns(condition, true, maxTurns)
 	} else {
@@ -3105,7 +3103,9 @@ func (s *Server) armDeferredGoal(w http.ResponseWriter, id string, st *sessionSt
 		}
 		if err == nil {
 			st.sess.DeferActiveGoal()
-			st.sess.SetGoalMaxTurns(maxTurns)
+			if maxTurns > 0 || !armed {
+				st.sess.SetGoalMaxTurns(maxTurns)
+			}
 		}
 	}
 	if s.deferArmRace != nil {

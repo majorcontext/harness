@@ -121,7 +121,7 @@ var boxesFeatures = []struct {
 		"goal_met_first_turn",
 		"goal_update_while_busy",
 		"deferred_goal_judges_finished_turn",
-		"goal_update_deferred_goal_judges_empty_transcript",
+		"goal_update_deferred_goal_waits_for_first_turn",
 	}},
 	{"POST /session/{id}/goal defer and max_turns", []string{
 		"deferred_goal_with_max_turns",
