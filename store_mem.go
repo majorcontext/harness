@@ -27,6 +27,7 @@ func NewMemStore() *MemStore {
 	return &MemStore{sessions: map[string]*memSession{}}
 }
 
+// Append implements Store.
 func (m *MemStore) Append(ctx context.Context, session string, expectedSeq uint64, records ...[]byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -39,10 +40,14 @@ func (m *MemStore) Append(ctx context.Context, session string, expectedSeq uint6
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := m.session(session)
-	if n := uint64(len(s.records)); n != expectedSeq {
-		return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, n, expectedSeq)
+	var have uint64
+	if s := m.sessions[session]; s != nil {
+		have = uint64(len(s.records))
 	}
+	if have != expectedSeq {
+		return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, have, expectedSeq)
+	}
+	s := m.session(session)
 	for _, r := range records {
 		s.records = append(s.records, slices.Clone(r))
 	}
@@ -58,8 +63,12 @@ func (m *MemStore) session(id string) *memSession {
 	return s
 }
 
+// Read implements Store.
 func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := checkName("session", session); err != nil {
 		return nil, err
 	}
 	m.mu.Lock()
@@ -73,8 +82,12 @@ func (m *MemStore) Read(ctx context.Context, session string, afterSeq uint64, li
 	return out, nil
 }
 
+// Head implements Store.
 func (m *MemStore) Head(ctx context.Context, session string) (uint64, error) {
 	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := checkName("session", session); err != nil {
 		return 0, err
 	}
 	m.mu.Lock()
@@ -85,6 +98,7 @@ func (m *MemStore) Head(ctx context.Context, session string) (uint64, error) {
 	return 0, nil
 }
 
+// Sessions implements Store.
 func (m *MemStore) Sessions(ctx context.Context, after string, limit int) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -101,6 +115,7 @@ func (m *MemStore) Sessions(ctx context.Context, after string, limit int) ([]str
 	return ids[:max(0, min(limit, len(ids)))], nil
 }
 
+// PutBlob implements Store.
 func (m *MemStore) PutBlob(ctx context.Context, session, key string, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -121,6 +136,7 @@ func (m *MemStore) PutBlob(ctx context.Context, session, key string, r io.Reader
 	return nil
 }
 
+// GetBlob implements Store.
 func (m *MemStore) GetBlob(ctx context.Context, session, key string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

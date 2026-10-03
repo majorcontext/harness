@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -62,7 +63,7 @@ func readBlob(t *testing.T, st harness.Store, id, key string) string {
 	if err != nil {
 		t.Fatalf("GetBlob(%q, %q): %v", id, key, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	b, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +87,7 @@ func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 		{"InvalidRecordRejected", testInvalidRecordRejected},
 		{"ReadPaging", testReadPaging},
 		{"UnknownSessionIsEmpty", testUnknownSessionIsEmpty},
+		{"InvalidSessionRejected", testInvalidSessionRejected},
 		{"SessionsSortedAndPaged", testSessionsSortedAndPaged},
 		{"BlobRoundTrip", testBlobRoundTrip},
 		{"StoredRecordsAreCopies", testStoredRecordsAreCopies},
@@ -123,19 +125,24 @@ func testFirstAppendAtZero(t *testing.T, st store) {
 
 func testConcurrentAppendOneWins(t *testing.T, st store) {
 	mustAppend(t, st, "a", 0, "1", "2")
-	cands := []string{"a", "b"}
-	errs := make([]error, len(cands))
+	const contenders = 8
+	errs := make([]error, contenders)
+	start := make(chan struct{})
 	var wg sync.WaitGroup
-	for i, c := range cands {
-		wg.Go(func() { errs[i] = st.Append(ctx, "a", 2, rec(c)) })
+	for i := range contenders {
+		wg.Go(func() {
+			<-start
+			errs[i] = st.Append(ctx, "a", 2, rec(strconv.Itoa(i)))
+		})
 	}
+	close(start)
 	wg.Wait()
 	winner := -1
 	for i, err := range errs {
 		switch {
 		case err == nil:
 			if winner >= 0 {
-				t.Fatalf("both appends succeeded")
+				t.Fatalf("appends %d and %d both succeeded", winner, i)
 			}
 			winner = i
 		case !errors.Is(err, harness.ErrConflict):
@@ -143,9 +150,9 @@ func testConcurrentAppendOneWins(t *testing.T, st store) {
 		}
 	}
 	if winner < 0 {
-		t.Fatalf("both appends conflicted: %v", errs)
+		t.Fatalf("every append conflicted: %v", errs)
 	}
-	wantRecords(t, st, "a", "1", "2", cands[winner])
+	wantRecords(t, st, "a", "1", "2", strconv.Itoa(winner))
 }
 
 func testInvalidRecordRejected(t *testing.T, st store) {
@@ -185,6 +192,17 @@ func testUnknownSessionIsEmpty(t *testing.T, st store) {
 	}
 	if got := readAll(t, st, "x", 0, 10); len(got) != 0 {
 		t.Errorf("Read = %q, want none", got)
+	}
+}
+
+func testInvalidSessionRejected(t *testing.T, st store) {
+	for _, id := range []string{"", "..", "a/b"} {
+		if _, err := st.Head(ctx, id); err == nil {
+			t.Errorf("Head(%q) succeeded", id)
+		}
+		if _, err := st.Read(ctx, id, 0, 10); err == nil {
+			t.Errorf("Read(%q) succeeded", id)
+		}
 	}
 }
 

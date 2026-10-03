@@ -101,6 +101,7 @@ func scanLog(path string) (lines uint64, size, total int64, err error) {
 	}
 }
 
+// Append implements Store.
 func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint64, records ...[]byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -174,6 +175,7 @@ func appendSynced(f *os.File, s *diskSession, b []byte) error {
 	return nil
 }
 
+// Read implements Store.
 func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -201,6 +203,7 @@ func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, l
 	return out, nil
 }
 
+// Head implements Store.
 func (d *DiskStore) Head(ctx context.Context, session string) (uint64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -213,6 +216,7 @@ func (d *DiskStore) Head(ctx context.Context, session string) (uint64, error) {
 	return d.headLocked(session, s)
 }
 
+// Sessions implements Store.
 func (d *DiskStore) Sessions(ctx context.Context, after string, limit int) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -260,6 +264,7 @@ func (d *DiskStore) blobPath(session, key string) (string, error) {
 	return filepath.Join(d.root, session, "blobs", key), nil
 }
 
+// PutBlob implements Store.
 func (d *DiskStore) PutBlob(ctx context.Context, session, key string, r io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -276,7 +281,7 @@ func (d *DiskStore) PutBlob(ctx context.Context, session, key string, r io.Reade
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	_, err = io.Copy(tmp, r)
 	if err == nil {
 		err = tmp.Sync()
@@ -293,6 +298,7 @@ func (d *DiskStore) PutBlob(ctx context.Context, session, key string, r io.Reade
 	return err
 }
 
+// GetBlob implements Store.
 func (d *DiskStore) GetBlob(ctx context.Context, session, key string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
