@@ -952,9 +952,10 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		reason = evalReason
 		reasonGen = snap.gen
 	}
-	if ctx.Err() == nil {
-		s.clearGoal(goalExhaustedReason(opts.MaxTurns))
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	s.clearGoal(goalExhaustedReason(opts.MaxTurns))
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
 

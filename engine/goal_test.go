@@ -465,10 +465,11 @@ func TestPursueGoalMaxTurns(t *testing.T) {
 		name       string
 		act        func(*Session, context.CancelFunc) // runs in the final turn's evaluator call
 		wantClears []string
+		wantCancel bool
 	}{
-		{"exhausted goal is cleared", func(*Session, context.CancelFunc) {}, exhausted},
-		{"update in the final turn is cleared", func(s *Session, _ context.CancelFunc) { _ = s.UpdateGoal("new") }, exhausted},
-		{"cancel in the final turn keeps the goal", func(_ *Session, cancel context.CancelFunc) { cancel() }, nil},
+		{"exhausted goal is cleared", func(*Session, context.CancelFunc) {}, exhausted, false},
+		{"update in the final turn is cleared", func(s *Session, _ context.CancelFunc) { _ = s.UpdateGoal("new") }, exhausted, false},
+		{"cancel in the final turn keeps the goal", func(_ *Session, cancel context.CancelFunc) { cancel() }, nil, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -494,11 +495,17 @@ func TestPursueGoalMaxTurns(t *testing.T) {
 				}
 			}
 			res, err := s.PursueGoal(ctx, "impossible", GoalOptions{MaxTurns: 2, Evaluator: evalModel})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if res.Achieved || res.Turns != 2 || res.Reason != "max turns" {
-				t.Errorf("result = %+v, want not achieved, turns=2 reason=%q", res, "max turns")
+			if tc.wantCancel {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("PursueGoal error = %v (result %+v), want context.Canceled", err, res)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.Achieved || res.Turns != 2 || res.Reason != "max turns" {
+					t.Errorf("result = %+v, want not achieved, turns=2 reason=%q", res, "max turns")
+				}
 			}
 			if !slices.Equal(cleared, tc.wantClears) {
 				t.Errorf("goal.cleared reasons = %q, want %q", cleared, tc.wantClears)
