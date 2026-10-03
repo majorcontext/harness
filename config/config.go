@@ -725,13 +725,8 @@ type Provider struct {
 	// validateProviders rejects it elsewhere rather than ignoring it.
 	CacheTTL string `json:"cache_ttl,omitempty"`
 
-	// BinaryPath is the executable this entry's Claude Code CLI child
-	// process is spawned from — resolved via PATH like any exec, exactly
-	// as PluginSpec.Command's Command[0]. Empty (the default) spawns
-	// "claude", the CLI's own published binary name. Valid ONLY on a
-	// TypeClaudeCodeCLI entry — no other adapter spawns a process at all —
-	// so validateProviders rejects it elsewhere, the same rule every other
-	// type-scoped field in this struct follows.
+	// BinaryPath is the Claude Code CLI executable, resolved through PATH.
+	// Empty spawns "claude". Valid ONLY on a TypeClaudeCodeCLI entry.
 	BinaryPath string `json:"binary_path,omitempty"`
 	// ExtraArgs are appended after the flags the engine constructs. Use this
 	// escape hatch only for flags without a dedicated Provider field, such as
@@ -742,13 +737,15 @@ type Provider struct {
 	// supported legacy escape hatch. Valid only on TypeClaudeCodeCLI entries.
 	// A non-empty project list replaces the base list wholesale.
 	ExtraArgs []string `json:"extra_args,omitempty"`
-	// PermissionMode selects the `claude` child's --permission-mode flag
-	// (one of ClaudeCodePermissionModeValues — "default", "acceptEdits",
-	// "bypassPermissions", "plan"; see the Claude Code CLI's own
-	// documentation for what each does). Empty (the default) omits the
-	// flag entirely, leaving the CLI's own default in place. Valid ONLY on
-	// a TypeClaudeCodeCLI entry.
+	// PermissionMode is the --permission-mode of the CLI, one of
+	// ClaudeCodePermissionModeValues. Empty omits the flag. Valid ONLY on a
+	// TypeClaudeCodeCLI entry.
 	PermissionMode string `json:"permission_mode,omitempty"`
+	// SessionMirror runs the CLI with --session-mirror under a scratch
+	// CLAUDE_CONFIG_DIR, so the session state holds the transcript and
+	// another host can resume it. The CLI then reads its credentials from
+	// the environment. Valid ONLY on a TypeClaudeCodeCLI entry.
+	SessionMirror bool `json:"session_mirror,omitempty"`
 }
 
 // ClaudeCodePermissionModeValues returns every value validatePermissionMode
@@ -905,15 +902,8 @@ func validateProviders(providers map[string]Provider) error {
 	return nil
 }
 
-// validateClaudeCodeFields fails loudly on BinaryPath/ExtraArgs/
-// PermissionMode set on any entry that is not TypeClaudeCodeCLI — no other
-// adapter reads them, the same silent-misconfiguration class
-// validateResponsesPath and validateCacheTTL refuse to allow — and on an
-// unrecognized PermissionMode value on an entry that IS that type (a typo
-// would otherwise reach the `claude` child's --permission-mode flag
-// verbatim and fail there instead, far from the config that caused it).
-// Empty PermissionMode is always valid: it omits the flag, leaving the
-// CLI's own default in place.
+// validateClaudeCodeFields rejects a Claude Code field on an entry of
+// another type, and an unknown PermissionMode.
 func validateClaudeCodeFields(name string, p Provider) error {
 	if p.Type == TypeClaudeCodeCLI {
 		if p.PermissionMode != "" && !slices.Contains(ClaudeCodePermissionModeValues(), p.PermissionMode) {
@@ -929,6 +919,9 @@ func validateClaudeCodeFields(name string, p Provider) error {
 	}
 	if p.PermissionMode != "" {
 		return fmt.Errorf("providers.%s: permission_mode is only valid on a %q entry", name, TypeClaudeCodeCLI)
+	}
+	if p.SessionMirror {
+		return fmt.Errorf("providers.%s: session_mirror is only valid on a %q entry", name, TypeClaudeCodeCLI)
 	}
 	return nil
 }
@@ -1594,6 +1587,9 @@ func merge(base, over *Config) *Config {
 				}
 				if v.PermissionMode != "" {
 					ex.PermissionMode = v.PermissionMode
+				}
+				if v.SessionMirror {
+					ex.SessionMirror = true
 				}
 				if n := len(ex.ExtraHeaders) + len(v.ExtraHeaders); n > 0 {
 					hm := make(map[string]string, n)

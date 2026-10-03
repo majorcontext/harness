@@ -28,9 +28,11 @@ const (
 // the items of the turn on items and closes items to end the turn. When the
 // turn's ctx ends, it reports late, then waits for stuck when it is set.
 // With ownsLoop, the test reports the tool results; without it, the turn
-// loop runs the tools.
+// loop runs the tools. With save, each Run reads its saved state into
+// fakeRun.state, then saves save.
 type fake struct {
 	ownsLoop bool
+	save     string
 	steering bool
 	deaf     bool
 	late     []eventlog.Message
@@ -41,6 +43,7 @@ type fake struct {
 type fakeRun struct {
 	req   turn.Request
 	items chan<- eventlog.Message
+	state string
 }
 
 func newFake() *fake { return &fake{ownsLoop: true, runs: make(chan fakeRun)} }
@@ -50,9 +53,13 @@ func (f *fake) Capabilities(string) turn.Capabilities {
 }
 
 func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	items := make(chan eventlog.Message)
+	items, run := make(chan eventlog.Message), fakeRun{req: req}
+	run.items = items
+	if f.save != "" {
+		run.state = f.loadAndSave(out)
+	}
 	select {
-	case f.runs <- fakeRun{req, items}:
+	case f.runs <- run:
 	case <-ctx.Done():
 		return turn.Result{}, context.Cause(ctx)
 	}
@@ -70,6 +77,17 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 			return f.stop(ctx, out)
 		}
 	}
+}
+
+func (f *fake) loadAndSave(out turn.Sink) string {
+	prior, err := out.State("fake")
+	if err == nil {
+		err = out.SaveState("fake", []byte(f.save))
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return string(prior)
 }
 
 // report reports m, then an answer to each steer input that it takes.

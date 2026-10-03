@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"errors"
+	"io"
 	"time"
 
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -82,8 +84,38 @@ func (a *Actor) batch(from, head uint64) (*protocol.SyncBatch, error) {
 	b := &protocol.SyncBatch{Epoch: a.cfg.Ownership.Epoch(), Session: a.cfg.ID, FromSeq: from}
 	for _, r := range recs {
 		b.Records = append(b.Records, r.Data)
+		if err := a.attachBlob(b, r); err != nil {
+			return nil, err
+		}
 	}
 	return b, nil
+}
+
+// attachBlob adds the blob that r points to. A later save under the same
+// key overwrites the blob, so the batch carries its newest content.
+func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
+	env, err := eventlog.Decode(r.Data)
+	if err != nil {
+		return err
+	}
+	s, ok := env.Event.(eventlog.BackendState)
+	if !ok {
+		return nil
+	}
+	rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, s.BlobKey)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return err
+	}
+	if b.Blobs == nil {
+		b.Blobs = map[string][]byte{}
+	}
+	b.Blobs[s.BlobKey] = data
+	return nil
 }
 
 // await waits for ch or for the ownership to end.

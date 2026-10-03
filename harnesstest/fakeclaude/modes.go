@@ -109,6 +109,7 @@ var basicModes = map[string]mode{
 	"rate_limit_event_no_overage": rateLimitTurn(false),
 	"hang":                        hang,
 	"hang_after_text":             hangAfterText,
+	"hang_in_tool":                hangInTool,
 	"crash":                       crashAfter(),
 	"fast_no_drain":               frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                       frames(result("error_during_execution", true, "fake failure", 11, 3)),
@@ -122,5 +123,13 @@ var basicModes = map[string]mode{
 
 func hangAfterText(f *fake) {
 	f.emit(say("Working on it."))
+	hang(f)
+}
+
+// hangInTool sends a text and a tool call of one API response, as the CLI
+// does, then hangs while the tool runs.
+func hangInTool(f *fake) {
+	f.emit(say("Checking.").inMessage("id", "msg_A"),
+		assistant(toolUse("toolu_h", "Bash", obj{"command": "sleep 60"})).inMessage("id", "msg_A"))
 	hang(f)
 }

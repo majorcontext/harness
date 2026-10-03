@@ -188,6 +188,27 @@ func TestSyncReplicatesTheLog(t *testing.T) {
 	}
 }
 
+func TestAReplicaResumesTheBackendState(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f1, rep := harness.NewMemStore(), newFake(), &replica{st: harness.NewMemStore()}
+		f1.save = "v1"
+		r1 := syncRuntime(t, st, rep, f1)
+		submit(t, create(t, r1), text("a", "hi"))
+		(<-f1.runs).end()
+		closeRuntime(t, r1)
+		f2 := newFake()
+		f2.save = "v2"
+		r2 := runtime(t, rep.st, f2)
+		submit(t, open(t, r2), text("b", "again"))
+		run := <-f2.runs
+		run.end()
+		closeRuntime(t, r2)
+		if run.state != "v1" {
+			t.Fatalf("state on the replica = %q, want %q", run.state, "v1")
+		}
+	})
+}
+
 func TestStaleEpochStopsTheSessionWithoutAnAppend(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rep := &replica{st: harness.NewMemStore()}

@@ -13,6 +13,14 @@ var preInitModes = map[string]func(f *fake) bool{
 	"queued_empty_result":       queuedEmptyResult,
 	"queued_empty_result_error": queuedEmptyResult,
 	"question":                  question,
+	"mirror":                    replayMirror,
+	"no_init":                   noInit,
+}
+
+// noInit prints a hook frame and a reply, but no init frame.
+func noInit(f *fake) bool {
+	f.emit(system("hook_started", obj{"session_id": f.sessionID}), say("hi"), success("hi", 1, 1))
+	return true
 }
 
 func crashBeforeInit(*fake) bool {
@@ -105,8 +113,9 @@ func question(f *fake) bool {
 	f.emit(
 		system("init", obj{"session_id": f.sessionID}),
 		assistant(toolUse("toolu_q", "AskUserQuestion", askQuestionInput)),
-		obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""},
 	)
+	questionMirrorFrame(f, "parked")
+	f.emit(obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
 	return true
 }
 
@@ -133,6 +142,7 @@ func resumeParkedQuestion(f *fake, state string) {
 			user(textBlock("[Request interrupted by user]")),
 			obj{"type": "result", "subtype": "error_during_execution", "is_error": true, "num_turns": 2, "stop_reason": nil},
 		)
+		questionMirrorFrame(f, "dismissal-tail")
 		os.Exit(1)
 	}
 	f.emit(
