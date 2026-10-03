@@ -291,14 +291,14 @@ func (r *Runtime) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		r.group.Wait()
+		if r.models != nil {
+			r.models.Close()
+		}
 		close(done)
 	}()
 	defer r.cancel()
 	select {
 	case <-done:
-		if r.models != nil {
-			r.models.Close()
-		}
 		return errors.Join(errs...)
 	case <-ctx.Done():
 		return errors.Join(append(errs, ctx.Err())...)

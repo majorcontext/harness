@@ -29,6 +29,9 @@ type Part struct {
 	Name      string          `json:"name,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// ProviderData holds the opaque, provider-tagged payload of a reasoning
+	// part, which the provider replays on the next request.
+	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
 }
 
 // Message roles.

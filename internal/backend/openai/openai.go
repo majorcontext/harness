@@ -84,7 +84,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			out.Telemetry(turn.Telemetry{Usage: eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
 				CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}})
 			m := fromMessage(ev.Message)
-			if len(m.Parts) == 0 {
+			if !hasOutput(m) {
 				return turn.Result{}, fmt.Errorf("%w: openai: the response has no output", turn.ErrRetryable)
 			}
 			if err := out.Item(m); err != nil {

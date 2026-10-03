@@ -1,6 +1,8 @@
 package openai
 
 import (
+	"slices"
+
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/message"
 )
@@ -12,7 +14,7 @@ func toMessage(m eventlog.Message) message.Message {
 		case eventlog.PartText:
 			out.Parts = append(out.Parts, &message.Text{Text: p.Text})
 		case eventlog.PartReasoning:
-			out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text})
+			out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text, ProviderData: p.ProviderData})
 		case eventlog.PartToolCall:
 			out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
 		case eventlog.PartToolResult:
@@ -33,12 +35,18 @@ func fromMessage(m *message.Message) eventlog.Message {
 		case *message.Text:
 			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
 		case *message.Reasoning:
-			if p.Text != "" {
-				out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartReasoning, Text: p.Text})
+			if p.Text != "" || len(p.ProviderData) > 0 {
+				out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartReasoning, Text: p.Text, ProviderData: p.ProviderData})
 			}
 		case *message.ToolCall:
 			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
 		}
 	}
 	return out
+}
+
+func hasOutput(m eventlog.Message) bool {
+	return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool {
+		return p.Type == eventlog.PartToolCall || p.Type == eventlog.PartText && p.Text != ""
+	})
 }

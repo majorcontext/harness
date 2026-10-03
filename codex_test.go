@@ -146,6 +146,26 @@ var codexTurns = []struct {
 		inputs: []string{"hi"},
 		want:   []string{"input.admitted a", "turn.started a", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
 		calls:  []string{codexPost}},
+	{name: "the reasoning item of a tool call turn is replayed",
+		opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan"}}}},
+		steps: []harnesstest.Step{
+			{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash"}}}},
+			{Name: "after", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}}},
+		inputs: []string{"run", "again"},
+		want: []string{"input.admitted a", "turn.started a", "item.completed assistant plan call_1", "item.completed tool call_1 " + cutOff, "turn.ended completed",
+			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
+		calls: []string{codexPost, codexPost},
+		check: func(t *testing.T, s *harnesstest.OpenAI) {
+			if got := s.WireEvents()[1].ReasoningItems; got != 1 {
+				t.Errorf("reasoning items in the second request = %d, want 1", got)
+			}
+		}},
+	{name: "a reasoning-only response fails the turn as retryable",
+		opts:   harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"empty": {Reasoning: []string{"plan"}}}},
+		steps:  []harnesstest.Step{{Name: "empty", Match: harnesstest.LastUserText("hi")}},
+		inputs: []string{"hi"},
+		want:   []string{"input.admitted a", "turn.started a", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
+		calls:  []string{codexPost}},
 	{name: "the ModelTransport alone can supply the credentials", injected: true,
 		opts:   harnesstest.OpenAIOptions{APIKey: "k"},
 		steps:  []harnesstest.Step{{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}},
