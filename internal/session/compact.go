@@ -38,12 +38,15 @@ func (a *Actor) Compact(ctx context.Context) error {
 	return err
 }
 
-// autoCompact starts a compaction when the newest context reading passes
-// Config.Threshold of its window, and reports whether one started.
-func (a *Actor) autoCompact() bool {
+// autoCompact starts a compaction when overThreshold, and reports whether one started.
+func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(nil) }
+
+// overThreshold reports whether the newest context reading passes
+// Config.Threshold of its window, for a backend that does not own its context.
+func (a *Actor) overThreshold() bool {
 	c := a.state.Context()
 	over := c.Window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(c.Window)
-	return over && !a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext && a.compact(nil)
+	return over && !a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
 }
 
 // compact runs a summary of the folded turns as the run of the actor, and
@@ -96,5 +99,5 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, err error) {
 		a.stop(nil)
 		return
 	}
-	a.next(false)
+	_ = a.next(false)
 }

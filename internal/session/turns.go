@@ -62,25 +62,31 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string) (uint64, e
 	}
 	events := append(a.dismissRequests(), in)
 	seq := a.state.Head() + uint64(len(events))
-	if r := a.run; r != nil || a.autoCompact() {
-		err := a.append(events...)
-		if r != nil && err == nil && in.Delivery == eventlog.DeliverySteer && r.steering {
-			select {
-			case r.steered <- struct{}{}:
-			default:
-			}
+	r := a.run
+	if r == nil && !a.overThreshold() {
+		next := in.InputID
+		if q := a.state.Queue(); len(q) > 0 {
+			next = q[0].InputID
 		}
-		return seq, err
+		id := newID("turn")
+		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: []string{next}})...); err != nil {
+			return 0, err
+		}
+		a.start(id, []string{next}, 0)
+		return seq, nil
 	}
-	next := in.InputID
-	if q := a.state.Queue(); len(q) > 0 {
-		next = q[0].InputID
-	}
-	id := newID("turn")
-	if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: []string{next}})...); err != nil {
+	if err := a.append(events...); err != nil {
 		return 0, err
 	}
-	a.start(id, []string{next}, 0)
+	if r == nil {
+		return seq, a.next(true)
+	}
+	if in.Delivery == eventlog.DeliverySteer && r.steering {
+		select {
+		case r.steered <- struct{}{}:
+		default:
+		}
+	}
 	return seq, nil
 }
 
@@ -223,21 +229,23 @@ func (a *Actor) ended(turnID string, runErr error) {
 		return
 	}
 	if next && err == nil {
-		a.next(true)
+		_ = a.next(true)
 	}
 }
 
 // next starts the next queued input. With check, a compaction runs first
 // when the context reading passes the threshold.
-func (a *Actor) next(check bool) {
+func (a *Actor) next(check bool) error {
 	q := a.state.Queue()
 	if len(q) == 0 || check && a.autoCompact() {
-		return
+		return nil
 	}
 	id := newID("turn")
-	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err == nil {
-		a.start(id, []string{q[0].InputID}, 0)
+	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err != nil {
+		return err
 	}
+	a.start(id, []string{q[0].InputID}, 0)
+	return nil
 }
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage) error {

@@ -93,11 +93,15 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 }
 
 // telemetry reports u, and the prompt of the call as the context reading.
+// A call with no prompt tokens reports no reading, so the earlier reading stays.
 func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {
 	usage := eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
-	return turn.Telemetry{Usage: usage, Context: eventlog.ContextMeasured{Source: b.client.Family,
-		Tokens: usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens, Window: int64(b.Capabilities(model).ContextWindow)}}
+	t := turn.Telemetry{Usage: usage}
+	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
+		t.Context = eventlog.ContextMeasured{Source: b.client.Family, Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
+	}
+	return t
 }
 
 // Close closes the pooled websocket connections. Call it when no Run is

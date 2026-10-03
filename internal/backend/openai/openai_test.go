@@ -3,6 +3,7 @@ package openai_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"sync/atomic"
@@ -80,13 +81,19 @@ func converse(t *testing.T, s *harness.Session, texts ...string) {
 		if _, err := s.Submit(bg, protocol.Input{ID: txt, Parts: []protocol.Part{{Type: protocol.PartText, Text: txt}}}); err != nil {
 			t.Fatal(err)
 		}
-		for e, err := range s.Events(bg, after) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			if e.Kind == "turn.ended" {
-				break
-			}
+		await(t, s, after)
+	}
+}
+
+// await waits for a turn.ended record after seq after.
+func await(t *testing.T, s *harness.Session, after uint64) {
+	t.Helper()
+	for e, err := range s.Events(bg, after) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" {
+			return
 		}
 	}
 }
@@ -138,15 +145,17 @@ func TestCompactFoldsTheOlderTurns(t *testing.T) {
 func TestAutoCompaction(t *testing.T) {
 	full := []string{"user alpha", "assistant re alpha", "user bravo", "assistant re bravo", "user charlie"}
 	for _, tc := range []struct {
-		name    string
-		tokens  int
-		summary *harnesstest.Reply
-		want    []string
+		name      string
+		threshold float64
+		tokens    int
+		summary   *harnesstest.Reply
+		want      []string
 	}{
-		{"a reading under the threshold does not compact", 199_999, nil, full},
-		{"a reading at the threshold compacts before the next turn", 200_000, &harnesstest.Reply{Text: "sum"},
+		{"a reading under the threshold does not compact", 0.5, 199_999, nil, full},
+		{"a reading at the threshold compacts before the next turn", 0.5, 200_000, &harnesstest.Reply{Text: "sum"},
 			[]string{"user " + banner + "sum", "user bravo", "assistant re bravo", "user charlie"}},
-		{"a failed summary keeps the history and the turn runs", 200_000, &harnesstest.Reply{}, full},
+		{"a failed summary keeps the history and the turn runs", 0.5, 200_000, &harnesstest.Reply{}, full},
+		{"a negative threshold is the default threshold", -1, 200_000, nil, full},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			steps := []harnesstest.Step{answer("alpha", 5), answer("bravo", tc.tokens), answer("charlie", 5)}
@@ -154,7 +163,7 @@ func TestAutoCompaction(t *testing.T) {
 				steps = append(steps, summarize("summary", *tc.summary))
 			}
 			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
-			_, sess := open(t, s, harness.NewMemStore(), 0.5, 1, nil)
+			_, sess := open(t, s, harness.NewMemStore(), tc.threshold, 1, nil)
 			converse(t, sess, "alpha", "bravo", "charlie")
 			reqs := s.Requests()
 			if got := transcript(reqs[len(reqs)-1]); !slices.Equal(got, tc.want) {
@@ -165,29 +174,60 @@ func TestAutoCompaction(t *testing.T) {
 }
 
 func TestHandoffDuringCompaction(t *testing.T) {
-	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, answer("alpha", 5), answer("bravo", 5), answer("charlie", 5),
-		summarize("summary", harnesstest.Reply{Text: "sum"}))
-	st, hold := harness.NewMemStore(), holdNth{n: 4, seen: new(atomic.Int32), held: make(chan struct{})}
-	r1, sess := open(t, s, st, 0, 0, hold)
-	converse(t, sess, "alpha", "bravo", "charlie")
-	head := sess.View().HeadSeq
-	errc := make(chan error, 1)
-	go func() { errc <- sess.Compact(bg) }()
-	<-hold.held
-	if err := r1.Close(bg); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-errc; err == nil {
-		t.Fatal("Compact during a handoff = nil, want an error")
-	}
-	if got := kinds(t, st, head); len(got) != 0 {
-		t.Fatalf("records after the handoff = %q, want none", got)
-	}
-	_, next := open(t, s, st, 0, 0, nil)
-	if err := next.Compact(bg); err != nil {
-		t.Fatalf("Compact on the next owner: %v", err)
-	}
-	if got, want := kinds(t, st, head), []string{"owner.acquired", "compaction.applied"}; !slices.Equal(got, want) {
-		t.Errorf("records after the handoff = %q, want %q", got, want)
+	charlie := protocol.Input{ID: "charlie", Parts: []protocol.Part{{Type: protocol.PartText, Text: "charlie"}}}
+	for _, tc := range []struct {
+		name      string
+		threshold float64
+		bravo     int
+		before    []string
+		start     func(*harness.Session) error
+		held      []string
+		next      func(*testing.T, *harness.Session, uint64) error
+		want      []string
+	}{
+		{"a manual compaction stops and the next owner compacts", 0, 5, []string{"alpha", "bravo", "charlie"},
+			func(s *harness.Session) error {
+				if err := s.Compact(bg); err == nil {
+					return errors.New("Compact during a handoff = nil, want an error")
+				}
+				return nil
+			},
+			nil,
+			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg) },
+			[]string{"owner.acquired", "compaction.applied"}},
+		{"an auto-compaction stops and the next owner runs the queued input", 0.5, 200_000, []string{"alpha", "bravo"},
+			func(s *harness.Session) error { _, err := s.Submit(bg, charlie); return err },
+			[]string{"input.admitted"},
+			func(t *testing.T, s *harness.Session, head uint64) error { await(t, s, head); return nil },
+			[]string{"input.admitted", "owner.acquired", "compaction.applied", "turn.started", "context.measured", "item.completed", "turn.ended"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, answer("alpha", 5), answer("bravo", tc.bravo), answer("charlie", 5),
+				summarize("summary", harnesstest.Reply{Text: "sum"}))
+			st := harness.NewMemStore()
+			hold := holdNth{n: int32(len(tc.before)) + 1, seen: new(atomic.Int32), held: make(chan struct{})}
+			r1, sess := open(t, s, st, tc.threshold, 1, hold)
+			converse(t, sess, tc.before...)
+			head := sess.View().HeadSeq
+			errc := make(chan error, 1)
+			go func() { errc <- tc.start(sess) }()
+			<-hold.held
+			if err := r1.Close(bg); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-errc; err != nil {
+				t.Fatal(err)
+			}
+			if got := kinds(t, st, head); !slices.Equal(got, tc.held) {
+				t.Fatalf("records after the handoff = %q, want %q", got, tc.held)
+			}
+			_, next := open(t, s, st, tc.threshold, 1, nil)
+			if err := tc.next(t, next, head); err != nil {
+				t.Fatalf("next owner: %v", err)
+			}
+			if got := kinds(t, st, head); !slices.Equal(got, tc.want) {
+				t.Errorf("records after the handoff = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -96,7 +95,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
 		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
-		threshold: cmp.Or(opts.Config.CompactionThreshold, 0.8), keep: max(cmp.Or(opts.Config.CompactionKeepTurns, 2), 1)}
+		threshold: positive(opts.Config.CompactionThreshold, 0.8), keep: positive(opts.Config.CompactionKeepTurns, 2)}
 	names := map[string]bool{}
 	for _, t := range opts.Tools {
 		name := t.Spec().Name
@@ -119,6 +118,14 @@ func New(opts Options) (*Runtime, error) {
 	})
 	r.base, r.cancel = context.WithCancel(context.Background())
 	return r, nil
+}
+
+// positive returns v, or def when v is not positive.
+func positive[T int | float64](v, def T) T {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Create creates a session and runs it.
