@@ -17,6 +17,8 @@ func (s *State) applyStarted(e TurnStarted) error {
 		return illegal("turn.started has an empty turn_id")
 	case s.turnIDs[e.TurnID]:
 		return illegal("turn %s was used", e.TurnID)
+	case len(s.calls) > 0:
+		return illegal("turn %s starts with open tool call %s", e.TurnID, s.calls[0].CallID)
 	}
 	for _, id := range e.InputIDs {
 		if err := s.inputIs(id, inputAdmitted); err != nil {
@@ -155,6 +157,13 @@ func (s *State) applyRequestResolved(e RequestResolved) error {
 	if e.Resolution != ResolutionAnswered && e.Resolution != ResolutionDismissed {
 		return illegal("request %s has resolution %q", e.RequestID, e.Resolution)
 	}
+	item := s.requests[i].ItemID
+	open := func(c OpenToolCall) bool { return c.ItemID == item }
+	calls := slices.DeleteFunc(slices.Clone(s.calls), open)
+	if n := len(s.calls) - len(calls); n > 1 {
+		return illegal("request %s has %d open tool calls", e.RequestID, n)
+	}
+	s.calls = calls
 	s.requests = slices.Delete(s.requests, i, i+1)
 	return nil
 }

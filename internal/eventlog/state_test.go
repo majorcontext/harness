@@ -48,7 +48,11 @@ func ask(req, item string) Event {
 }
 
 func resolve(req string) Event {
-	return RequestResolved{RequestID: req, Resolution: ResolutionAnswered}
+	return RequestResolved{RequestID: req, Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)}
+}
+
+func dismiss(req string) Event {
+	return RequestResolved{RequestID: req, Resolution: ResolutionDismissed}
 }
 func suspend(turn string, c Cause) Event { return TurnSuspended{TurnID: turn, Cause: c} }
 func resume(turn string, n int) Event    { return TurnResumed{TurnID: turn, Count: n} }
@@ -151,7 +155,12 @@ var applyRows = []struct {
 	{"a request holds a tool call open past the turn", with(asking, end("t1", StopAwaitingInput, "")), "", view{Status: StatusWaiting, Requests: []string{"r1"}, Calls: []string{"c1"}}},
 	{"a request holds open only the one call of its item", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), end("t1", StopAwaitingInput, "")), "tool call c1 has no result", view{}},
 	{"awaiting_input needs an open request", with(running, end("t1", StopAwaitingInput, "")), "no open request", view{}},
-	{"awaiting_input needs a request from its own turn", with(asking, result("t1", "i2", "c1"), end("t1", StopCompleted, ""), admit("b"), start("t2", "b"), end("t2", StopAwaitingInput, "")), "turn t2 awaits input with no open request from this turn", view{}},
+	{"awaiting_input needs a request from its own turn", with(asking, result("t1", "i2", "c1"), end("t1", StopCompleted, ""), start("t2"), end("t2", StopAwaitingInput, "")), "turn t2 awaits input with no open request from this turn", view{}},
+	{"a turn does not start while a tool call is open", with(asking, end("t1", StopAwaitingInput, ""), start("t2")), "turn t2 starts with open tool call c1", view{}},
+	{"an input is not admitted while a request is open", with(asking, admit("b")), "request r1 is open", view{}},
+	{"a dismissed request lets an input start a turn", with(asking, end("t1", StopAwaitingInput, ""), dismiss("r1"), admit("b"), start("t2", "b")), "", view{Status: StatusRunning, Turn: "t2"}},
+	{"an answer is the result of the request's tool call", with(asking, end("t1", StopAwaitingInput, ""), resolve("r1")), "", view{Status: StatusIdle}},
+	{"a request answers only an item with one open tool call", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), resolve("r1")), "request r1 has 2 open tool calls", view{}},
 	{"a request resolves once", with(asking, resolve("r1"), resolve("r1")), "request r1 is not open", view{}},
 	{"a request opens only in a running turn", with(base, ask("r1", "i1")), "no running turn", view{}},
 	{"a handoff suspends the turn", suspended, "", view{Status: StatusIdle, Turn: "t1 suspended"}},
@@ -243,6 +252,8 @@ func TestAccessorsDoNotAliasState(t *testing.T) {
 	q[0].Parts[0].Text = "x"
 	q[0].Parts = append(q[0].Parts, Part{})
 	s.Requests()[0].Payload[0] = 'x'
+	in, _, _ := s.Input("b")
+	in.Parts[0].Text = "x"
 	if !reflect.DeepEqual(s, replay(t, events)) {
 		t.Fatal("a caller changed the state through an accessor")
 	}
