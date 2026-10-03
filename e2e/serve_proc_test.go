@@ -97,7 +97,7 @@ func (p *serveProc) waitOwned() bool {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}, 15*time.Millisecond) {
 		p.t.Fatalf("serve did not answer on %s\nstderr:\n%s", p.addr, p.stderr.String())
