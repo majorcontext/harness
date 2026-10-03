@@ -233,7 +233,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `turn.ended` | `turn_id`, `stop_reason`, `error?`, `usage` |
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
-| `goal.set` | `condition`, `max_turns`, `deferred` |
+| `goal.set` | `condition`, `max_turns` |
 | `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
 | `goal.changed` | `state`, `reason?` |
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
@@ -350,15 +350,20 @@ A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn 
 Goal:
 
 ```
-armed ─► active ─► backoff ─► active
-            └───► parked  ─► active
-            └───► achieved | exhausted
+active ─► paused ─► active
+   └───► achieved | failed | exhausted
 any ─► cleared
 ```
 
-- `armed` is a deferred goal. Its first evaluation judges the finished turn and consumes no turn.
-- A goal is a completion condition. It never becomes a second instruction. `NOT MET` guidance is an input with `source: goal`.
-- `max_turns` bounds `active`. Reaching it yields `exhausted`.
+Goals follow Claude Code `/goal`. There is no deferred goal.
+
+- `SetGoal` on an idle session with no queued input admits the condition as an input with `source: goal`. That input starts a turn through the normal input events.
+- `SetGoal` on a busy session, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
+- A new `SetGoal` replaces the goal and resets its turn count.
+- After each turn, the evaluator returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `impossible` yields `failed`.
+- A turn that fails on a retryable error or a usage limit yields `paused`. Harness retries with backoff, and any input resumes the goal. An error the user must fix yields `failed`.
+- `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`.
+- The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session continues, and a `paused` goal keeps its retry time.
 
 Request:
 
@@ -393,7 +398,7 @@ GET    /sessions/{id}/inputs                  queued inputs
 DELETE /sessions/{id}/inputs/{input}          withdraw
 POST   /sessions/{id}/interrupt               {turn_id?, tree?}
 POST   /sessions/{id}/compact
-PUT    /sessions/{id}/goal                    {condition, max_turns, defer}
+PUT    /sessions/{id}/goal                    {condition, max_turns}
 DELETE /sessions/{id}/goal
 POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}
 GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream
@@ -553,7 +558,7 @@ One `Config` struct. One defaults table. One `Validate`. Environment variables o
 
 | Feature | Verdict |
 | --- | --- |
-| Goals, deferred goals, parking | Keep; one state machine |
+| Goals | Keep; one state machine. Delete deferred goals and parking |
 | Queue, `prompt_async`, `enqueue`, `send` | Merge into inputs |
 | Task notifications | Merge into inputs with `source: child` |
 | Structured questions (#317) | Generalize to requests |
