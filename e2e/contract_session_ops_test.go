@@ -71,14 +71,15 @@ func TestContractSessionOps(t *testing.T) {
 func TestContractSessionOpsGoals(t *testing.T) {
 	runScenarios(t, []scenario{
 		{
-			name:  "goal_update_deferred_goal_judges_empty_transcript",
-			model: []harnesstest.Step{evaluatorStep("judge", "MET: said done", false)},
-			// Defect: updating a deferred goal on a session with no turn judges an empty transcript and marks the goal achieved.
+			name:  "goal_update_deferred_goal_waits_for_first_turn",
+			model: []harnesstest.Step{agentStep("work", "done", true), evaluatorStep("judge", "MET: said done", true)},
 			actions: []action{
 				create{as: "a"},
 				setGoal{as: "a", condition: "say hello", deferred: true},
 				getSession{as: "a"},
 				updateGoal{as: "a", condition: "say done"},
+				getSession{as: "a"},
+				submit{as: "a", text: "go"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
 				clearGoal{as: "a"},

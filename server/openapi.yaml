@@ -2780,18 +2780,20 @@ components:
         max_turns:
           type: integer
           description: >
-            Maximum worker turns; 0 or omitted means unlimited. Only applies
-            when this call actually starts a loop (response status
-            `started`); ignored entirely for `updated` (an already-running
-            loop keeps whatever budget it started with) and for the loop
-            eventually spawned by auto-arm after an `armed` response (that
-            loop always runs unlimited — see startGoal's description).
+            Maximum worker turns; 0 or omitted means unlimited. Applies when
+            this call starts a loop (response status `started`) and to the
+            loop that auto-arm starts after an `armed` response. Ignored for
+            `updated` (an already-running loop keeps the budget it started
+            with). On an idle session, a POST that updates an already-armed
+            goal replaces the cap only when `max_turns` is greater than 0,
+            with or without `defer`. Behind a busy prompt, a POST on an armed
+            goal answers `updated` and ignores `max_turns`.
         defer:
           type: boolean
           description: >
             When true and no loop is running, registers the goal (or, for an
             active-but-idle goal, updates it and keeps it active) and starts
-            no loop; the response is `armed` (202) and `max_turns` is ignored.
+            no loop; the response is `armed` (202).
             No standalone turn posts the condition. The loop starts when the
             next prompt turn ends and evaluates that turn first; on NOT MET
             the guidance turn carries the condition. Ignored while a loop is
@@ -3986,17 +3988,25 @@ paths:
           (a different condition updates it in place before resuming) — and
           the case where a goal POSTed while a plain prompt was busy wins the
           run slot the instant that prompt finishes.
-        - `updated` (200): a goal loop is ALREADY running on this session;
-          the condition is rewritten in place (a same-condition POST is a
-          silent no-op, still reported as `updated`) and NO new loop starts —
-          the existing loop picks up the new condition at its next turn
-          boundary. No run-slot claim happens for this outcome.
+        - `updated` (200): the goal is rewritten in place and NO new loop
+          starts. Either a goal loop is ALREADY running on this session (a
+          same-condition POST is a silent no-op, still reported as
+          `updated`, and the loop picks up the new condition at its next
+          turn boundary), or an armed goal sits behind a busy plain prompt
+          (see `armed`). No run-slot claim happens for this outcome.
         - `armed` (202): the run slot is currently held by a plain prompt (not
           a goal); the goal is registered now, but the loop itself starts
           automatically once that prompt finishes (auto-arm) — no further
           client action is needed. The same self-arming path is how the
           `goal` session tool's `set` action (called by the model itself,
           mid-turn) begins running: it takes effect after the current turn.
+          On an idle session, a POST on a goal that is already armed
+          (registered with `defer`, no turn finished yet) also answers
+          `armed`, with or without `defer`: the goal stays armed with the new
+          condition, nothing is evaluated, and the first finished turn is
+          judged against the new condition. Behind a busy prompt, a POST on
+          an armed goal answers `updated` (200): the goal takes the new
+          condition, stays armed, and keeps its `max_turns`.
       parameters:
         - $ref: "#/components/parameters/sessionID"
       requestBody:
@@ -4007,9 +4017,10 @@ paths:
       responses:
         "200":
           description: >
-            Updated in place: a goal loop was already running on this
-            session; its condition was rewritten (or, if unchanged, left
-            as-is) and no second loop was started.
+            Updated in place: either a goal loop was already running on
+            this session, or an armed goal sat behind a busy plain prompt.
+            Its condition was rewritten (or, if unchanged, left as-is) and
+            no second loop was started.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GoalPostResponse" }

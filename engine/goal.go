@@ -1750,6 +1750,13 @@ func (s *Session) DeferActiveGoal() bool {
 	return s.goalActive
 }
 
+// GoalDeferred reports whether the active goal is armed to evaluate first.
+func (s *Session) GoalDeferred() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goalActive && s.goalDeferred
+}
+
 // takeGoalDeferred reports and clears the deferral set by RegisterGoalDeferred.
 func (s *Session) takeGoalDeferred() bool {
 	s.mu.Lock()
@@ -1794,18 +1801,9 @@ func (s *Session) UpdateGoal(condition string) error {
 	}
 	s.goalCondition = trimmed
 	s.goalGen++
-	// Clear the runtime parked-presentation fields (see the goalParked field's
-	// doc comment on *Session) in the same critical section as the condition
-	// change, not just on the next PursueGoal entry. Without this, a plain
-	// Prompt landing in the window between this UpdateGoal call and the next
-	// PursueGoal turn would render goalParkedSegment's ambient block quoting
-	// the OLD park episode's reason/attempts against the NEW condition text —
-	// a stale, confusing pairing. Gated on the condition-changed branch only
-	// (mirrors the goalGen bump above, which is also skipped on a same-
-	// condition no-op): a no-op UpdateGoal changes nothing about the goal's
-	// state, so there is nothing stale to invalidate — the parked signal
-	// still accurately describes the one goal, under its one unchanged
-	// condition, that is still waiting to resume.
+	// Clear the parked presentation with the condition so a Prompt before the
+	// next PursueGoal turn never quotes the old park episode against the new
+	// condition. A same-condition no-op returns above and keeps it.
 	s.goalParked = false
 	s.goalParkedReason = ""
 	s.goalParkedAttempts = 0

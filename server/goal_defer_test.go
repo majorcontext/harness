@@ -144,13 +144,17 @@ func TestGoalDeferOnActiveIdleGoalSkipsConditionTurn(t *testing.T) {
 	h := newGoalHarness(t, prov)
 	id := h.createSession("test/m1")
 	sse := h.openSSE("?from=0", "")
-	if err := h.srv.residentSession(id).RegisterGoal(cond); err != nil {
+	sess := h.srv.residentSession(id)
+	if err := sess.RegisterGoalWithMaxTurns(cond, false, 2); err != nil {
 		t.Fatal(err)
 	}
 
 	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": cond, "defer": true})
 	if resp.StatusCode != http.StatusAccepted || !strings.Contains(string(data), `"status":"armed"`) {
 		t.Fatalf("POST goal = %d %s, want 202 armed", resp.StatusCode, data)
+	}
+	if got := sess.GoalMaxTurns(); got != 0 {
+		t.Fatalf("GoalMaxTurns = %d, want 0: only an armed goal keeps its cap", got)
 	}
 	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "hello"}},
@@ -165,8 +169,8 @@ func TestGoalDeferOnActiveIdleGoalSkipsConditionTurn(t *testing.T) {
 	}
 }
 
-// A deferred goal with max_turns=2 that is never MET must stop after two
-// worker turns: the auto-armed loop starts with the stored cap.
+// A never-MET deferred goal stops at its cap. An update on the armed goal
+// keeps the cap unless it gives max_turns above 0.
 func TestGoalDeferHonorsMaxTurns(t *testing.T) {
 	notMet := slices.Repeat([][]provider.Event{asstTurn("NOT MET: keep going")}, 20)
 	worker := slices.Repeat([][]provider.Event{asstTurn("worked")}, 20)
@@ -175,11 +179,18 @@ func TestGoalDeferHonorsMaxTurns(t *testing.T) {
 	id := h.createSession("test/m1")
 	sse := h.openSSE("?from=0", "")
 
-	resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "never met", "defer": true, "max_turns": 2})
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	bodies := []map[string]any{
+		{"condition": "never met", "defer": true, "max_turns": 5},
+		{"condition": "still never met"},
+		{"condition": "still never met", "max_turns": 2},
 	}
-	resp, data = h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
+	for i, wantCap := range []int{5, 5, 2} {
+		h.do("POST", "/session/"+id+"/goal", bodies[i])
+		if got := h.srv.residentSession(id).GoalMaxTurns(); got != wantCap {
+			t.Fatalf("GoalMaxTurns after %v = %d, want %d", bodies[i], got, wantCap)
+		}
+	}
+	resp, data := h.do("POST", "/session/"+id+"/prompt_async", map[string]any{
 		"parts": []map[string]string{{"type": "text", "text": "hello"}},
 	})
 	if resp.StatusCode != http.StatusAccepted {
