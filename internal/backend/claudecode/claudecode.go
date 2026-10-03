@@ -35,9 +35,6 @@ const Continuation = "The session moved to a new host, which interrupted the pre
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
 
-// ErrUnknownTool reports a tool restriction that the CLI cannot apply.
-var ErrUnknownTool = errors.New("claudecode: unknown tool in restriction")
-
 // ErrToolsNotRestricted reports a CLI whose init frame shows a tool outside the restriction.
 var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the tool restriction")
 
@@ -58,18 +55,15 @@ type Backend struct {
 // New returns the Backend of provider entry p.
 func New(p config.Provider) *Backend { return &Backend{p: p} }
 
-// Capabilities reports that the CLI runs the loop, owns its context, and
-// takes steer input. It reports the context window itself.
+// Capabilities reports that the CLI runs the loop with its built-in tools,
+// owns its context, and takes steer input. It reports the context window
+// itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true, Tools: slices.Clone(builtins)}
 }
 
 // Run runs one turn of the CLI on the external session in the state blob.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	allowed, err := restriction(req.AllowedTools)
-	if err != nil {
-		return turn.Result{}, err
-	}
 	blob, err := out.State(stateKey)
 	if err != nil {
 		return turn.Result{}, err
@@ -78,7 +72,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	if err != nil {
 		return turn.Result{}, err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: allowed, names: map[string]string{},
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: restriction(req.AllowedTools), names: map[string]string{},
 		continues: b.resumes(mirror) && mirror.Turn == req.TurnID}
 	cmd, err := b.command(req, r)
 	defer r.cleanup()
@@ -93,18 +87,17 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	return turn.Result{}, r.finish(ctx, err)
 }
 
-func restriction(names []string) (map[string]bool, error) {
+// restriction is the set of allowed tools, or nil to allow every tool. The
+// init frame check keeps a CLI that does not apply it from running.
+func restriction(names []string) map[string]bool {
 	if names == nil {
-		return nil, nil
+		return nil
 	}
 	allowed := map[string]bool{}
 	for _, n := range names {
-		if !slices.Contains(builtins, n) {
-			return nil, fmt.Errorf("%w: %q", ErrUnknownTool, n)
-		}
 		allowed[n] = true
 	}
-	return allowed, nil
+	return allowed
 }
 
 func (b *Backend) command(req turn.Request, r *run) (*exec.Cmd, error) {

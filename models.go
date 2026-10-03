@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
@@ -46,17 +47,26 @@ func newModels(cfg config.Config, transport func(provider string) http.RoundTrip
 	return m
 }
 
-// check reports why model cannot start a session.
-func (m *models) check(model string) error {
+// check reports why model cannot start a session that allows tools. A
+// backend that owns the loop runs only its built-in tools.
+func (m *models) check(model string, tools []string) error {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	if _, err := m.backend(model); err != nil {
+	be, err := m.backend(model)
+	if err != nil {
 		return err
 	}
 	if _, ok := modelmeta.ContextWindow(ref); !ok && m.strict {
 		return fmt.Errorf("%w: modelmeta does not know %s", ErrModelUnavailable, model)
+	}
+	if caps := be.Capabilities(model); caps.OwnsLoop {
+		for _, t := range tools {
+			if !slices.Contains(caps.Tools, t) {
+				return fmt.Errorf("%w: %s has no built-in tool %q", ErrInvalidRequest, model, t)
+			}
+		}
 	}
 	return nil
 }

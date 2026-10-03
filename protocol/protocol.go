@@ -30,8 +30,10 @@ type CreateSession struct {
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`
 	Origin      string `json:"origin,omitempty"`
-	// AllowedTools names the embedder tools that the model sees and may
-	// call. nil allows every tool; an empty list allows none.
+	// AllowedTools names the tools that the model sees and may call: the
+	// embedder tools, or the built-in tools of a backend that runs its own
+	// loop. nil allows every tool; an empty list allows none. For a backend
+	// that runs its own loop, any other name fails Create.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 }
 

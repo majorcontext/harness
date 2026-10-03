@@ -3,6 +3,7 @@ package claudecode_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -63,13 +64,13 @@ func claudeRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror b
 	return retryingRuntime(t, st, owner, mirror, 0)
 }
 
-func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int) *harness.Runtime {
+func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int, tools ...harness.Tool) *harness.Runtime {
 	t.Helper()
 	bin, err := fakeClaudeBin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: st, Owner: owner, Config: config.Config{PromptRetries: &retries,
+	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: tools, Config: config.Config{PromptRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +148,6 @@ func TestClaudeCodeTurn(t *testing.T) {
 		allowed []string
 		want    []string
 		args    []string
-		runs    int
 	}{
 		{name: "a text turn records the assistant items", mode: "thinking",
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"}},
@@ -171,8 +171,6 @@ func TestClaudeCodeTurn(t *testing.T) {
 		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"},
 			args: []string{"--tools", "", "--strict-mcp-config"}},
-		{name: "an unknown restriction refuses to start the CLI", mode: "thinking", allowed: []string{"bash"},
-			want: []string{`turn.ended failed claudecode: unknown tool in restriction: "bash"`}, runs: -1},
 		{name: "a restricted CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"Bash"},
 			want: []string{"turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
 		{name: "a CLI that ignores the restriction fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash","Write"]`}, allowed: []string{"Bash"},
@@ -187,8 +185,8 @@ func TestClaudeCodeTurn(t *testing.T) {
 			turnOf(t, s, text("a", "hi"))
 			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
 			argv := jsonLines[[]string](t, argvLog)
-			if want := tc.runs + 1; len(argv) != want {
-				t.Fatalf("CLI runs = %d, want %d", len(argv), want)
+			if len(argv) != 1 {
+				t.Fatalf("CLI runs = %d, want 1", len(argv))
 			}
 			if tc.args != nil && !hasArgs(argv[0], tc.args...) {
 				t.Errorf("argv = %q, want %q in it", argv[0], tc.args)
@@ -198,6 +196,28 @@ func TestClaudeCodeTurn(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClaudeCodeCreateRefusesAToolThatIsNotBuiltIn(t *testing.T) {
+	for _, name := range []string{"bash", "lookup"} {
+		t.Run(name, func(t *testing.T) {
+			r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, lookup{})
+			defer closeRuntime(t, r)
+			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
+			if !errors.Is(err, harness.ErrInvalidRequest) {
+				t.Errorf("Create = %v, want ErrInvalidRequest", err)
+			}
+		})
+	}
+}
+
+// lookup is an embedder tool, which the CLI cannot run.
+type lookup struct{}
+
+func (lookup) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: "lookup"} }
+
+func (lookup) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, error) {
+	return protocol.ToolResult{}, nil
 }
 
 func TestClaudeCodeSteerReachesStdin(t *testing.T) {

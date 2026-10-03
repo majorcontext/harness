@@ -30,6 +30,9 @@ type Capabilities struct {
 	OwnsContext   bool
 	Steering      bool
 	ContextWindow int
+	// Tools names the built-in tools of a backend that owns the loop. A
+	// session of that backend may allow only these.
+	Tools []string
 }
 
 // Tool is a tool that the loop runs for a backend that does not own the loop.

@@ -120,7 +120,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
 	}
 	if r.models != nil {
-		if err := r.models.check(req.Model); err != nil {
+		if err := r.models.check(req.Model, req.AllowedTools); err != nil {
 			return nil, err
 		}
 	}
