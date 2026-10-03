@@ -527,14 +527,14 @@ func (d *httpDriver) AwaitGoalExhausted(t *testing.T) {
 		}
 		switch ev.Type {
 		case "goal.cleared":
-			exhausted = exhausted || strings.Contains(ev.GoalReason, "exhausted")
+			exhausted = exhausted || ev.GoalReason == "goal exhausted max_turns (2)"
 		case "turn.end":
 			return exhausted && ev.Outcome == "max_turns_exceeded"
 		}
 		return false
 	})
 	if err != nil {
-		t.Fatalf("no goal.cleared with an exhausted reason before turn.end max_turns_exceeded: %v\nstderr:\n%s", err, d.Stderr())
+		t.Fatalf("no goal.cleared with reason %q before turn.end max_turns_exceeded: %v\nstderr:\n%s", "goal exhausted max_turns (2)", err, d.Stderr())
 	}
 }
 
