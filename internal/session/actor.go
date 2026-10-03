@@ -55,6 +55,8 @@ type Config struct {
 	// Owner names this process in owner.acquired.
 	Owner   string
 	Backend turn.Backend
+	// Sync receives every durable record. nil: no replication.
+	Sync Sync
 	// Base bounds the actor. When it ends, the actor stops without an append.
 	Base context.Context
 	// Go runs a goroutine that the runtime waits for at shutdown.
@@ -74,8 +76,14 @@ type View struct {
 type Actor struct {
 	cfg  Config
 	mail chan func()
+	quit chan struct{}
 	done chan struct{}
 	view atomic.Pointer[View]
+
+	stale   chan struct{}
+	flushed chan struct{}
+	synced  atomic.Uint64
+	syncErr error
 
 	state     *eventlog.State
 	run       *running
@@ -84,7 +92,8 @@ type Actor struct {
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
-	a := &Actor{cfg: cfg, mail: make(chan func()), done: make(chan struct{}), state: s}
+	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
+		stale: make(chan struct{}), flushed: make(chan struct{}), state: s}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a
@@ -101,7 +110,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated) (*Actor,
 		}
 		return nil, err
 	}
-	cfg.Go(a.loop)
+	a.launch()
 	return a, nil
 }
 
@@ -113,8 +122,20 @@ func Open(ctx context.Context, cfg Config) (*Actor, error) {
 		cfg.Ownership.Release()
 		return nil, err
 	}
-	cfg.Go(a.loop)
+	a.launch()
 	return a, nil
+}
+
+func (a *Actor) launch() {
+	a.cfg.Go(a.loop)
+	if a.cfg.Sync == nil {
+		close(a.flushed)
+		return
+	}
+	a.cfg.Go(func() {
+		a.syncErr = a.replicate()
+		close(a.flushed)
+	})
 }
 
 func open(ctx context.Context, cfg Config) (*Actor, error) {
@@ -208,20 +229,31 @@ func (a *Actor) loop() {
 			a.stopped = true
 		case <-a.cfg.Base.Done():
 			a.stopped = true
+		case <-a.stale:
+			a.stopped = true
 		}
 	}
 }
 
-// lost reports whether Lost closed or Base ended. A select picks among ready
+// lost reports whether the ownership ended. A select picks among ready
 // cases at random, so the actor checks this before each command and append.
 func (a *Actor) lost() bool {
-	select {
-	case <-a.cfg.Ownership.Lost():
-	case <-a.cfg.Base.Done():
-	default:
+	if !a.revoked() {
 		return false
 	}
 	a.stopped = true
+	return true
+}
+
+// revoked reports whether Lost closed, Base ended, or Sync reported a stale epoch.
+func (a *Actor) revoked() bool {
+	select {
+	case <-a.cfg.Ownership.Lost():
+	case <-a.cfg.Base.Done():
+	case <-a.stale:
+	default:
+		return false
+	}
 	return true
 }
 
@@ -230,12 +262,15 @@ func (a *Actor) finish() {
 		a.run.cancel(ErrNotOwned)
 	}
 	a.publish(true)
+	close(a.quit)
+	<-a.flushed
 	a.cfg.Ownership.Release()
 	close(a.done)
 	a.cfg.Done()
 }
 
-// Done closes after the actor stops and releases its Ownership.
+// Done closes after the actor stops, Sync acknowledges its last record or
+// the ownership ends, and the actor releases its Ownership.
 func (a *Actor) Done() <-chan struct{} { return a.done }
 
 // View returns the newest published view.
@@ -259,7 +294,7 @@ func call[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, erro
 	var zero T
 	select {
 	case a.mail <- cmd:
-	case <-a.done:
+	case <-a.quit:
 		return zero, ErrNotOwned
 	case <-ctx.Done():
 		return zero, ctx.Err()
@@ -267,7 +302,7 @@ func call[T any](ctx context.Context, a *Actor, f func(func(T, error))) (T, erro
 	select {
 	case r := <-ch:
 		return r.v, r.err
-	case <-a.done:
+	case <-a.quit:
 		select {
 		case r := <-ch:
 			return r.v, r.err

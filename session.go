@@ -17,7 +17,12 @@ type Session struct {
 }
 
 // View returns the session as of its last durable record.
-func (s *Session) View() protocol.Session { return detach(s.a.View().Session) }
+func (s *Session) View() protocol.Session {
+	synced := s.a.Synced()
+	v := detach(s.a.View().Session)
+	v.SyncedSeq = synced
+	return v
+}
 
 func detach(s protocol.Session) protocol.Session {
 	s.Queued = slices.Clone(s.Queued)
@@ -77,8 +82,8 @@ func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.E
 	return s.a.Events(ctx, after)
 }
 
-// Release hands the session off: the running turn suspends at an item
-// boundary for the next owner, and the ownership is released.
+// Release suspends the running turn for the next owner, waits for Sync to
+// acknowledge every record, and releases the ownership.
 func (s *Session) Release(ctx context.Context) error { return s.a.Release(ctx) }
 
 // View is a read-only session that no runtime needs to own.
