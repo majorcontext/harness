@@ -448,7 +448,8 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 ### Events
 
 - One per-session `seq` serves paging and SSE resume.
-- SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
+- Only SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
+- A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A slow subscriber gets a `gap` frame and a close. It never loses a record silently.
 - Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
