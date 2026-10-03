@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -16,6 +18,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -232,6 +235,8 @@ func TestErrorsOverHTTP(t *testing.T) {
 		{"POST", base, `{"id":"s1","model":"codex/gpt-6-sol"}`, 409, protocol.CodeSessionExists},
 		{"POST", base, `{"model":"nope/x"}`, 409, protocol.CodeModelUnavailable},
 		{"GET", base + "/s2", "", 404, protocol.CodeSessionNotFound},
+		{"GET", strings.TrimSuffix(base, "/sessions") + "/nope", "", 404, protocol.CodeInvalidRequest},
+		{"DELETE", s1, "", 405, protocol.CodeInvalidRequest},
 		{"PATCH", s1, `{"model":"codex/no-such-model"}`, 409, protocol.CodeModelUnavailable},
 		{"POST", s1 + "/inputs", `{"id":"a","parts":[{"type":"text","text":"other"}]}`, 409, protocol.CodeInputConflict},
 		{"POST", s1 + "/interrupt", `{"turn_id":"turn_x"}`, 409, protocol.CodeTurnMismatch},
@@ -249,5 +254,79 @@ func TestErrorsOverHTTP(t *testing.T) {
 		if status != tc.status || got.Error.Code != tc.code || got.Error.Message == "" || got.Error.Details == nil {
 			t.Errorf("%s %s %.40s = %d %+v, want %d %s", tc.method, tc.url, tc.body, status, got, tc.status, tc.code)
 		}
+	}
+}
+
+// stub is a Runtime and a Session with scripted results.
+type stub struct {
+	openErr error
+	head    uint64
+	receipt protocol.Admitted
+	repeat  bool
+}
+
+func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }
+func (s stub) Open(context.Context, string) (stub, error)                   { return s, s.openErr }
+func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, error) {
+	return protocol.SessionPage{}, nil
+}
+func (stub) Models() []protocol.Model                            { return nil }
+func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
+func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
+func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session, error) {
+	return s.View(), nil
+}
+func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { return nil }
+func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, bool, error) {
+	return s.receipt, s.repeat, nil
+}
+
+func TestInternalErrorHidesItsCause(t *testing.T) {
+	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, nil))
+	t.Cleanup(srv.Close)
+	var got protocol.ErrorBody
+	want(t, "status", call(t, "GET", srv.URL+"/sessions/s1", "", &got), http.StatusInternalServerError)
+	if got.Error.Code != protocol.CodeInternal || strings.Contains(got.Error.Message, "hunter2") {
+		t.Errorf("error = %+v, want code internal and no cause", got.Error)
+	}
+}
+
+func TestSubmitStatusFollowsTheSessionVerdict(t *testing.T) {
+	for _, repeat := range []bool{false, true} {
+		status := http.StatusCreated
+		if repeat {
+			status = http.StatusOK
+		}
+		srv := httptest.NewServer(server.New(stub{head: 9, receipt: protocol.Admitted{InputID: "a", Seq: 5}, repeat: repeat}, nil))
+		t.Cleanup(srv.Close)
+		want(t, fmt.Sprintf("status with repeat=%v", repeat),
+			call(t, "POST", srv.URL+"/sessions/s1/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil), status)
+	}
+}
+
+func TestEventsAcceptNegotiation(t *testing.T) {
+	_, s1 := serve(t, nil)
+	for accept, ct := range map[string]string{
+		"text/event-stream":                        "text/event-stream",
+		"TEXT/Event-Stream":                        "text/event-stream",
+		"application/json, text/event-stream":      "text/event-stream",
+		"text/event-streaming":                     "application/json",
+		"text/event-stream;q=0":                    "application/json",
+		"text/event-stream; q=0, application/json": "application/json",
+		"*/*": "application/json",
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		req, err := http.NewRequestWithContext(ctx, "GET", s1+"/events", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", accept)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want(t, "content type for Accept "+accept, resp.Header.Get("Content-Type"), ct)
+		cancel()
+		_ = resp.Body.Close()
 	}
 }

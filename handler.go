@@ -7,8 +7,8 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// Handler returns the HTTP API of r. It opens a session on its first
-// request. It has no authentication; the embedder wraps it.
+// Handler returns the HTTP API of r. A route that names a session opens it
+// through r.Open. It has no authentication; the embedder wraps it.
 func (r *Runtime) Handler() http.Handler {
 	return server.New[*Session](r, []server.Code{
 		{Err: ErrInvalidRequest, Code: protocol.CodeInvalidRequest},

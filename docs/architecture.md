@@ -125,6 +125,7 @@ func (r *Runtime) Close(ctx context.Context) error
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
+func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) // Submit, and whether the input repeats
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -409,7 +410,7 @@ One `errgroup` per runtime tracks every actor, turn runner, and writer. `Runtime
 
 ```
 POST   /sessions                              create; client id optional
-GET    /sessions?parent=&after=&limit=        list
+GET    /sessions?after=&limit=                list
 GET    /sessions/{id}                         view
 PATCH  /sessions/{id}                         model, effort, service_tier
 DELETE /sessions/{id}
@@ -470,7 +471,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `draining` | 503 |
 | `internal` | 500 |
 
-Each code except `internal` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. Any other error is `internal`.
+Each code except `internal` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 ### Contract source
 

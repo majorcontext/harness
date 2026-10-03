@@ -33,18 +33,28 @@ type running struct {
 }
 
 // Submit admits in and returns the seq of its input.admitted record. A
-// repeated input ID returns the original seq.
-func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedTurn string) (uint64, error) {
-	return call(ctx, a, func(reply func(uint64, error)) { reply(a.admit(in, expectedTurn)) })
+// repeated input ID returns the original seq and repeat set.
+func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
+	type receipt struct {
+		seq    uint64
+		repeat bool
+	}
+	r, err := call(ctx, a, func(reply func(receipt, error)) {
+		if old, seq, ok := a.state.Input(in.InputID); ok {
+			if !sameJSON(old, in) {
+				reply(receipt{}, ErrInputConflict)
+				return
+			}
+			reply(receipt{seq, true}, nil)
+			return
+		}
+		seq, err := a.admit(in, expectedTurn)
+		reply(receipt{seq, false}, err)
+	})
+	return r.seq, r.repeat, err
 }
 
 func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string) (uint64, error) {
-	if old, seq, ok := a.state.Input(in.InputID); ok {
-		if !sameJSON(old, in) {
-			return 0, ErrInputConflict
-		}
-		return seq, nil
-	}
 	if in.Delivery == eventlog.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
 		return 0, ErrTurnMismatch
 	}

@@ -35,15 +35,22 @@ func detach(s protocol.Session) protocol.Session {
 // when the backend accepts steering. A repeated input ID returns the
 // original receipt.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+	a, _, err := s.Admit(ctx, in)
+	return a, err
+}
+
+// Admit is Submit that also reports whether in repeats an input that the
+// session already admitted. The verdict is atomic with the admission.
+func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) {
 	ev, err := admission(in)
 	if err != nil {
-		return protocol.Admitted{}, err
+		return protocol.Admitted{}, false, err
 	}
-	seq, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
+	seq, repeat, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
 	if err != nil {
-		return protocol.Admitted{}, err
+		return protocol.Admitted{}, false, err
 	}
-	return protocol.Admitted{InputID: in.ID, Seq: seq}, nil
+	return protocol.Admitted{InputID: in.ID, Seq: seq}, repeat, nil
 }
 
 func admission(in protocol.Input) (eventlog.InputAdmitted, error) {

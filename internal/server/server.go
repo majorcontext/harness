@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ import (
 // Session is a session that the Runtime runs.
 type Session interface {
 	View() protocol.Session
-	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
+	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
@@ -84,8 +85,33 @@ func New[S Session](rt Runtime[S], codes []Code) http.Handler {
 		reply(w, http.StatusOK, map[string]string{"status": "ok"})
 		return nil
 	}))
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern != "" {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		miss := &miss{header: http.Header{}}
+		mux.ServeHTTP(miss, r)
+		if miss.status != http.StatusNotFound && miss.status != http.StatusMethodNotAllowed {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if allow := miss.header.Get("Allow"); allow != "" {
+			w.Header().Set("Allow", allow)
+		}
+		reply(w, miss.status, errorBody(protocol.CodeInvalidRequest, errors.New(http.StatusText(miss.status))))
+	})
 }
+
+// miss records the status and headers of a ServeMux routing error.
+type miss struct {
+	header http.Header
+	status int
+}
+
+func (m *miss) Header() http.Header         { return m.header }
+func (m *miss) Write(b []byte) (int, error) { return len(b), nil }
+func (m *miss) WriteHeader(status int)      { m.status = status }
 
 func (h *handler[S]) serve(f func(http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -124,8 +150,13 @@ func (h *handler[S]) code(err error) string {
 	return protocol.CodeInternal
 }
 
+// errorBody hides the cause of an internal error: it can hold store details.
 func errorBody(code string, err error) protocol.ErrorBody {
-	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: err.Error(), Details: map[string]any{}}}
+	msg := err.Error()
+	if code == protocol.CodeInternal {
+		msg = "internal error"
+	}
+	return protocol.ErrorBody{Error: protocol.Error{Code: code, Message: msg, Details: map[string]any{}}}
 }
 
 // reply writes v. A write error means that the client is gone.
@@ -213,19 +244,17 @@ func (h *handler[S]) update(s S, w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// submit answers 201 for a new input and 200 for a repeat. A repeat's
-// record precedes the head that the request saw.
+// submit answers 201 for a new input and 200 for a repeat.
 func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	var in protocol.Input
 	if err := decode(w, r, &in); err != nil {
 		return err
 	}
-	head := s.View().HeadSeq
-	a, err := s.Submit(r.Context(), in)
+	a, repeat, err := s.Admit(r.Context(), in)
 	if err != nil {
 		return err
 	}
-	if a.Seq <= head {
+	if repeat {
 		reply(w, http.StatusOK, a)
 		return nil
 	}
@@ -245,12 +274,27 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 	return nil
 }
 
+// acceptsStream reports whether an Accept header lists text/event-stream
+// with a quality above 0.
+func acceptsStream(accept string) bool {
+	for _, rng := range strings.Split(accept, ",") {
+		media, params, err := mime.ParseMediaType(strings.TrimSpace(rng))
+		if err != nil || media != "text/event-stream" {
+			continue
+		}
+		if q, err := strconv.ParseFloat(params["q"], 64); params["q"] == "" || err != nil || q > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *handler[S]) events(s S, w http.ResponseWriter, r *http.Request) error {
 	after, err := number(r, "after")
 	if err != nil {
 		return err
 	}
-	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+	if acceptsStream(r.Header.Get("Accept")) {
 		if id := r.Header.Get("Last-Event-ID"); id != "" {
 			if after, err = strconv.ParseUint(id, 10, 64); err != nil {
 				return fmt.Errorf("%w: Last-Event-ID: %w", errInvalid, err)
