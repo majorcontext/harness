@@ -37,9 +37,6 @@ func TestContractGoal(t *testing.T) {
 	armed := func(g setGoal) []action {
 		return []action{create{as: "a"}, g, waitIdle{as: "a"}}
 	}
-	deferredThenGo := func(g setGoal) []action {
-		return []action{create{as: "a"}, g, submit{as: "a", text: "go"}, waitIdle{as: "a"}}
-	}
 	runScenarios(t, []scenario{
 		{
 			name: "goal_met_first_turn",
@@ -60,14 +57,6 @@ func TestContractGoal(t *testing.T) {
 			actions: armed(setGoal{as: "a", condition: "say done", maxTurns: 3}),
 		},
 		{
-			name: "deferred_goal_judges_finished_turn",
-			model: []harnesstest.Step{
-				agentStep("work", "done", false),
-				evaluatorStep("judge", "MET: said done", false),
-			},
-			actions: deferredThenGo(setGoal{as: "a", condition: "say done", deferred: true}),
-		},
-		{
 			name: "goal_exhausts_max_turns",
 			model: []harnesstest.Step{
 				agentStep("try", "try", true),
@@ -79,6 +68,94 @@ func TestContractGoal(t *testing.T) {
 				awaitGoalExhausted{},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
+			},
+		},
+	})
+}
+
+func TestContractGoalDeferred(t *testing.T) {
+	deferredThenGo := func(g setGoal) []action {
+		return []action{create{as: "a"}, g, submit{as: "a", text: "go"}, waitIdle{as: "a"}}
+	}
+	runScenarios(t, []scenario{
+		{
+			name: "deferred_goal_judges_finished_turn",
+			model: []harnesstest.Step{
+				agentStep("work", "done", false),
+				evaluatorStep("judge", "MET: said done", false),
+			},
+			actions: deferredThenGo(setGoal{as: "a", condition: "say done", deferred: true}),
+		},
+		{
+			name: "deferred_goal_with_max_turns",
+			model: []harnesstest.Step{
+				agentStep("work", "worked", true),
+				evaluatorStep("judge", "NOT MET: keep going", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 2, deferred: true},
+				submit{as: "a", text: "go"},
+				awaitGoalExhausted{},
+				waitIdle{as: "a"},
+			},
+		},
+	})
+}
+
+func TestContractGoalDeferredQueue(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "queued_prompt_runs_before_deferred_auto_arm",
+			model: []harnesstest.Step{
+				{Name: "slow", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working", Block: true}},
+				agentStep("rest", "done", true),
+				evaluatorStep("judge", "MET: said done", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				enqueue{as: "a", text: "second"},
+				setGoal{as: "a", condition: "say done", deferred: true},
+				release{step: "slow"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name: "busy_deferred_goal_with_max_turns",
+			model: []harnesstest.Step{
+				{Name: "slow", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working", Block: true}},
+				agentStep("work", "worked", true),
+				evaluatorStep("judge", "NOT MET: keep going", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				setGoal{as: "a", condition: "say done", maxTurns: 2, deferred: true},
+				release{step: "slow"},
+				awaitGoalExhausted{},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name: "persisted_queue_dispatches_after_deferred_arm",
+			model: []harnesstest.Step{
+				{Name: "slow", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working", Block: true}},
+				agentStep("rest", "done", true),
+				evaluatorStep("judge", "MET: said done", true),
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				enqueue{as: "a", text: "second"},
+				restart{},
+				expectQueued{as: "a", texts: []string{"second"}},
+				setGoal{as: "a", condition: "say done", deferred: true},
+				waitIdle{as: "a"},
+				expectQueued{as: "a"},
 			},
 		},
 	})
