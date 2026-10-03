@@ -341,28 +341,31 @@ func TestGoalEvalFailedAdvisoryDuringRunNoSessionErrorOrTurnEnd(t *testing.T) {
 // TestGoalPausedRestartYieldsIdleAndUsable already establishes for
 // paused/active/condition.
 //
-// Both scripted evaluator boundaries fail (MaxTurns=2, so the loop stops by
-// exhausting its turn budget, never by achieving or being cleared) — the
-// last durable goal.* record is goal.eval_failed(count=2), with nothing
-// after it to reset the streak, so eval_failures must read 2 both before and
-// after the restart. Two boundaries pay two backoff waits
-// (goalRetryDelay(1)+goalRetryDelay(2) == 1s+4s == 5s of real wall-clock
-// time); per AGENTS.md's synctest rule this runs on fake time inside a bubble,
-// driving handleGoal directly with an httptest.ResponseRecorder and reading
-// state through handleGet (no real listener; real network I/O does not work in
-// a bubble) so those backoffs cost nothing. The restart is a SECOND newServer
+// Both scripted evaluator boundaries fail while the third worker turn is
+// parked in flight, and a drain with an expired context cancels the loop
+// instead of clearing the goal — the last durable goal.* record is
+// goal.eval_failed(count=2), with nothing after it to reset the streak, so
+// eval_failures must read 2 both before and after the restart. Two
+// boundaries pay two backoff waits (goalRetryDelay(1)+goalRetryDelay(2) ==
+// 1s+4s == 5s of real wall-clock time); per AGENTS.md's synctest rule this
+// runs on fake time inside a bubble, driving handleGoal directly with an
+// httptest.ResponseRecorder and reading state through handleGet (no real
+// listener; real network I/O does not work in a bubble) so those backoffs
+// cost nothing. The restart is a SECOND newServer
 // over the SAME dir — ADOPT — whose New reconciles the on-disk journal
 // synchronously (file I/O, which the terminal test above already exercises in
-// a bubble); srv1.wg.Wait guarantees every durable goal.eval_failed record is
+// a bubble); srv1.Drain guarantees every durable goal.eval_failed record is
 // flushed before the second server replays it.
 func TestGoalEvalFailuresSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
 	synctest.Test(t, func(t *testing.T) {
 		prov := &goalProv{
-			name:     "test",
-			worker:   [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
-			evalErrN: 2,
-			evalErr:  errors.New("evaluator down"),
+			name:             "test",
+			worker:           [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
+			evalErrN:         2,
+			evalErr:          errors.New("evaluator down"),
+			blockWorkerAfter: 2,
+			started:          make(chan struct{}),
 		}
 		mutate := func(o *Options) {
 			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
@@ -371,23 +374,26 @@ func TestGoalEvalFailuresSurviveRestart(t *testing.T) {
 		id := createSessionDirect(t, srv1, "test/m1")
 
 		grec := httptest.NewRecorder()
-		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond","max_turns":2}`))
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"cond","max_turns":3}`))
 		greq.SetPathValue("id", id)
 		srv1.handleGoal(grec, greq)
 		if grec.Code != http.StatusAccepted {
 			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
 		}
 
-		srv1.wg.Wait() // both failed boundaries + their fake-time backoffs, then max-turns exhaustion
+		<-prov.started // both failed boundaries + their fake-time backoffs, then the parked third worker turn
 
 		before := getEvalFailuresViewDirect(t, srv1, id)
 		if before.Goal == nil || !before.Goal.Active {
-			t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
+			t.Fatalf("before restart, goal = %+v, want active", before.Goal)
 		}
 		if before.Goal.EvalFailures != 2 {
 			t.Fatalf("before restart, eval_failures = %d, want 2", before.Goal.EvalFailures)
 		}
 
+		expired, cancel := context.WithCancel(context.Background())
+		cancel()
+		srv1.Drain(expired)
 		if err := srv1.Close(); err != nil {
 			t.Fatalf("closing first server: %v", err)
 		}

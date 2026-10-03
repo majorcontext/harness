@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -46,9 +47,8 @@ func getRestartGoalView(t *testing.T, srv *Server, id string) restartGoalView {
 // active (never achieved/cleared) goal used to read back as no goal at all
 // (Session.Goal == nil, composite state falling back to idle) after a
 // restart — even though goal.set (and no later achieved/cleared) was
-// durably on disk the whole time. Here the goal exhausts its turn budget
-// without being met, which leaves goalActive true in the journal
-// (engine/goal.go's terminal "max turns" case never clears the goal).
+// durably on disk the whole time. Here the goal loop is aborted after one
+// NOT MET evaluation, which leaves goalActive true in the journal.
 //
 // The composite state assertion below intentionally differs from this
 // test's original version: it used to assert "goal-running" after restart,
@@ -66,13 +66,17 @@ func TestGoalActiveSurvivesRestart(t *testing.T) {
 	// listener — a bubble forbids real network I/O) exactly like
 	// TestGoalEvaluatorExhaustedTerminalOutcome. The restart is a SECOND
 	// newServer over the SAME dir (ADOPT); the first server's goal loop is
-	// settled via srv1.wg.Wait() before the second is constructed.
+	// aborted by a Drain with an expired context before the second is
+	// constructed.
 	dir := t.TempDir()
 	synctest.Test(t, func(t *testing.T) {
 		prov := &goalProv{
 			name:   "test",
 			worker: [][]provider.Event{asstTurn("try 1")},
 			eval:   [][]provider.Event{asstTurn("NOT MET: nope")},
+
+			blockWorkerAfter: 1,
+			started:          make(chan struct{}),
 		}
 		mutate := func(o *Options) {
 			o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
@@ -81,19 +85,23 @@ func TestGoalActiveSurvivesRestart(t *testing.T) {
 		id := createSessionDirect(t, srv1, "test/m1")
 
 		grec := httptest.NewRecorder()
-		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"impossible","max_turns":1}`))
+		greq := httptest.NewRequest("POST", "/session/"+id+"/goal", strings.NewReader(`{"condition":"impossible","max_turns":2}`))
 		greq.SetPathValue("id", id)
 		srv1.handleGoal(grec, greq)
 		if grec.Code != http.StatusAccepted {
 			t.Fatalf("POST goal status %d: %s", grec.Code, grec.Body)
 		}
 
-		srv1.wg.Wait() // the goal loop (max turns exhausted, never cleared) finishes
+		<-prov.started // one NOT MET evaluation journaled, second worker turn parked
 
 		before := getRestartGoalView(t, srv1, id)
 		if before.Goal == nil || !before.Goal.Active {
-			t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
+			t.Fatalf("before restart, goal = %+v, want active", before.Goal)
 		}
+
+		expired, cancel := context.WithCancel(context.Background())
+		cancel()
+		srv1.Drain(expired)
 
 		if err := srv1.Close(); err != nil {
 			t.Fatalf("closing first server: %v", err)

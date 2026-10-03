@@ -44,6 +44,14 @@ goal with a dedicated reason, and the server maps that terminal to a
 `session.error` plus a distinct `turn.end outcome=evaluator_exhausted` — loud
 and machine-distinguishable, since every failure below the horizon is
 deliberately silent apart from the journaled record.
+
+When the loop spends `MaxTurns` without a MET verdict, it ends the goal.
+`PursueGoal` clears the goal with `goal.cleared` and the reason
+`goal exhausted max_turns (N)`. The server then records `turn.end` with
+outcome `max_turns_exceeded` and the session reads `idle`. An `UpdateGoal`
+during the last turn does not stop the clear. A canceled context leaves the
+goal active. A new `POST /session/{id}/goal` starts a fresh goal.
+
 Durable `goal.set` / `goal.eval` / `goal.eval_failed` / `goal.parked` /
 `goal.achieved` / `goal.cleared` records land in the session log, so
 `LoadSession` restores an active goal (condition only; counters reset) via

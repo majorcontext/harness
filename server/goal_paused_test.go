@@ -63,17 +63,11 @@ func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
-	if resp.StatusCode != 202 {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
+	h1.leaveGoalActive(id, "impossible", prov, 0)
 
 	before := h1.getPausedGoalView(id)
 	if before.Goal == nil || !before.Goal.Active {
-		t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
+		t.Fatalf("before restart, goal = %+v, want active (aborted, never cleared)", before.Goal)
 	}
 	if before.Goal.Paused {
 		t.Fatalf("before restart, goal.Paused = true, want false (loop just ran in this same process)")
@@ -123,7 +117,7 @@ func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 
 	// GET /session/{id}/wait?until=idle must resolve immediately, not time
 	// out — an idle composite state is exactly the condition it waits for.
-	resp, data = h2.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=1", nil)
+	resp, data := h2.do("GET", "/session/"+id+"/wait?until=idle&timeout_s=1", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("wait until=idle status %d: %s", resp.StatusCode, data)
 	}
@@ -295,13 +289,7 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
-	if resp.StatusCode != 202 {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
+	h1.leaveGoalActive(id, "impossible", prov, 0)
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
@@ -320,7 +308,7 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 	// Replay only events from here on: from=0 would replay the FIRST
 	// (pre-restart) turn's history, including its own session.status idle,
 	// and collectUntilIdle would stop right there.
-	resp, data = h2.do("GET", "/session/"+id, nil)
+	resp, data := h2.do("GET", "/session/"+id, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get seq status %d: %s", resp.StatusCode, data)
 	}
@@ -376,13 +364,7 @@ func TestGoalReArmDifferentConditionUpdatesAndResumes(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
-	if resp.StatusCode != 202 {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
+	h1.leaveGoalActive(id, "impossible", prov, 0)
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
@@ -403,7 +385,7 @@ func TestGoalReArmDifferentConditionUpdatesAndResumes(t *testing.T) {
 	// Replay only events from here on (see TestGoalReArmClearsRestartPause's
 	// comment for why: from=0 would replay the first, pre-restart turn's
 	// history and collectUntilIdle would stop at its idle).
-	resp, data = h2.do("GET", "/session/"+id, nil)
+	resp, data := h2.do("GET", "/session/"+id, nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("get seq status %d: %s", resp.StatusCode, data)
 	}

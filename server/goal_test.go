@@ -130,6 +130,31 @@ func (s *goalBlockingStream) Next() (provider.Event, error) {
 
 func (s *goalBlockingStream) Close() error { return nil }
 
+// leaveGoalActive runs a goal for one NOT MET evaluation, then aborts its
+// parked second worker turn, so the goal stays active and the journal holds
+// its goal.eval record. prov scripts one worker turn and one NOT MET
+// evaluation. afterAbort is the number of worker calls prov then admits
+// before it blocks again; 0 turns blocking off.
+func (h *harness) leaveGoalActive(id, condition string, prov *goalProv, afterAbort int) {
+	h.t.Helper()
+	prov.blockWorkerAfter, prov.started = 1, make(chan struct{})
+	sse := h.openSSE("?from=0", "")
+	if resp, data := h.do("POST", "/session/"+id+"/goal", map[string]any{"condition": condition, "max_turns": 2}); resp.StatusCode != http.StatusAccepted {
+		h.t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
+	}
+	<-prov.started
+	h.do("POST", "/session/"+id+"/abort", nil)
+	sse.collectUntilIdle(h.t)
+	sse.stop()
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	prov.blockWorkerAfter = 0
+	if afterAbort > 0 {
+		prov.blockWorkerAfter = prov.workerCalls + afterAbort
+	}
+	prov.started, prov.startedOnce = make(chan struct{}), sync.Once{}
+}
+
 func newGoalHarness(t *testing.T, prov provider.Provider) *harness {
 	t.Helper()
 	const token = "secret-run-token"

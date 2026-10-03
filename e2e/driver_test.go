@@ -30,7 +30,7 @@ type driver interface {
 	Events(t *testing.T) []journalEntry
 	Restart(t *testing.T, kill bool)
 	Queued(t *testing.T, id string) []string
-	AwaitMaxTurnsExceeded(t *testing.T)
+	AwaitGoalExhausted(t *testing.T)
 	Stderr() string
 	Workdir() string
 
@@ -514,14 +514,27 @@ func (d *httpDriver) Child(t *testing.T, parentID string, nth int) string {
 	return ids[nth]
 }
 
-func (d *httpDriver) AwaitMaxTurnsExceeded(t *testing.T) {
+func (d *httpDriver) AwaitGoalExhausted(t *testing.T) {
 	t.Helper()
+	exhausted := false
 	err := d.scan(t, func(raw []byte) bool {
-		var ev struct{ Type, Outcome string }
-		return json.Unmarshal(raw, &ev) == nil && ev.Type == "turn.end" && ev.Outcome == "max_turns_exceeded"
+		var ev struct {
+			Type, Outcome string
+			GoalReason    string `json:"goal_reason"`
+		}
+		if json.Unmarshal(raw, &ev) != nil {
+			return false
+		}
+		switch ev.Type {
+		case "goal.cleared":
+			exhausted = exhausted || ev.GoalReason == "goal exhausted max_turns (2)"
+		case "turn.end":
+			return exhausted && ev.Outcome == "max_turns_exceeded"
+		}
+		return false
 	})
 	if err != nil {
-		t.Fatalf("no turn ended with max_turns_exceeded: %v\nstderr:\n%s", err, d.Stderr())
+		t.Fatalf("no goal.cleared with reason %q before turn.end max_turns_exceeded: %v\nstderr:\n%s", "goal exhausted max_turns (2)", err, d.Stderr())
 	}
 }
 

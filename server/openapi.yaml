@@ -715,6 +715,8 @@ components:
             goal-loop only — GoalOptions.MaxTurns was exhausted without the
             evaluator ever returning MET; the goal gave up, it did not
             complete, so it is deliberately never reported as "completed".
+            A goal.cleared with goal_reason "goal exhausted max_turns (N)"
+            precedes this turn.end, and the session then reads idle.
             A goal cleared via DELETE /session/{id}/goal (or a ClearGoal that
             wins a race against an in-flight worker retry or evaluator call)
             emits no turn.end at all — see the turn.end Event description.
@@ -1999,6 +2001,9 @@ components:
             failing at 5 CONSECUTIVE goal.eval_failed boundaries (goal_reason
             "goal evaluator failed at 5 consecutive turn boundaries" — see
             turn.end's "evaluator_exhausted" outcome, which this clear
+            always precedes), or the loop spending max_turns without a MET
+            verdict (goal_reason "goal exhausted max_turns (N)" — see
+            turn.end's "max_turns_exceeded" outcome, which this clear
             always precedes). A worker turn that fails past either retry
             budget (deterministic OR retryable-class) is deliberately NOT a
             goal.cleared any more (superseded by the Round 7 exit-park work) — see goal.parked

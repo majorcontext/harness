@@ -36,19 +36,13 @@ func TestDeleteGoalNonResidentClearsAndJournals(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
-	if resp.StatusCode != 202 {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
-	sse.collectUntilIdle(t)
-	sse.stop()
+	h1.leaveGoalActive(id, "impossible", prov, 0)
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
 	ts1.Close()
 
-	// Restart: the goal is active (max turns exhausted, never cleared) with
+	// Restart: the goal is active (aborted, never cleared) with
 	// no loop attached in the new process -- pauseArmedGoalsAtBoot marks it
 	// paused/restart. Nothing has touched the session in srv2 yet, so it is
 	// not resident.
@@ -68,7 +62,7 @@ func TestDeleteGoalNonResidentClearsAndJournals(t *testing.T) {
 		t.Fatal("test setup invariant broken: session must be non-resident before DELETE")
 	}
 
-	resp, data = h2.do("DELETE", "/session/"+id+"/goal", nil)
+	resp, data := h2.do("DELETE", "/session/"+id+"/goal", nil)
 	if resp.StatusCode != 204 {
 		t.Fatalf("DELETE goal status %d: %s", resp.StatusCode, data)
 	}

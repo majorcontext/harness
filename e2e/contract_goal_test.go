@@ -26,11 +26,11 @@ func evaluatorStep(name, verdict string, repeat bool) harnesstest.Step {
 	}
 }
 
-type awaitMaxTurnsExceeded struct{}
+type awaitGoalExhausted struct{}
 
-func (awaitMaxTurnsExceeded) run(t *testing.T, r *run) {
+func (awaitGoalExhausted) run(t *testing.T, r *run) {
 	t.Helper()
-	r.drv.AwaitMaxTurnsExceeded(t)
+	r.drv.AwaitGoalExhausted(t)
 }
 
 func TestContractGoal(t *testing.T) {
@@ -73,11 +73,12 @@ func TestContractGoal(t *testing.T) {
 				agentStep("try", "try", true),
 				evaluatorStep("judge", "NOT MET: keep going", true),
 			},
-			// Known defect, pinned: a goal that exhausts max_turns stays active, so wait never reads idle.
 			actions: []action{
-				create{as: "a", staysActive: true},
+				create{as: "a"},
 				setGoal{as: "a", condition: "say done", maxTurns: 2},
-				awaitMaxTurnsExceeded{},
+				awaitGoalExhausted{},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
 			},
 		},
 	})
