@@ -69,7 +69,7 @@ func fenceEpoch(ctx context.Context, st Store, id string, epoch uint64) error {
 		return err
 	default:
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			return err
 		}
