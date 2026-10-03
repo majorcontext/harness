@@ -201,7 +201,9 @@ func (a *Actor) loop() {
 	for !a.stopped {
 		select {
 		case f := <-a.mail:
-			f()
+			if !a.lost() {
+				f()
+			}
 		case <-a.cfg.Ownership.Lost():
 			a.stopped = true
 		case <-a.cfg.Base.Done():
@@ -210,15 +212,31 @@ func (a *Actor) loop() {
 	}
 }
 
+// lost reports whether Lost closed or Base ended. A select picks among ready
+// cases at random, so the actor checks this before each command and append.
+func (a *Actor) lost() bool {
+	select {
+	case <-a.cfg.Ownership.Lost():
+	case <-a.cfg.Base.Done():
+	default:
+		return false
+	}
+	a.stopped = true
+	return true
+}
+
 func (a *Actor) finish() {
 	if a.run != nil {
 		a.run.cancel(ErrNotOwned)
 	}
-	a.cfg.Ownership.Release()
 	a.publish(true)
+	a.cfg.Ownership.Release()
 	close(a.done)
 	a.cfg.Done()
 }
+
+// Done closes after the actor stops and releases its Ownership.
+func (a *Actor) Done() <-chan struct{} { return a.done }
 
 // View returns the newest published view.
 func (a *Actor) View() *View { return a.view.Load() }
@@ -266,7 +284,8 @@ func (a *Actor) append(events ...eventlog.Event) error {
 }
 
 // appendCtx checks, appends, and applies events. Any store error stops the
-// actor: the next Open fences and replays from the store.
+// actor: the next Open fences and replays from the store. Only a conflict
+// means that another owner holds the session.
 func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 	if err := eventlog.Check(a.state, events); err != nil {
 		return err
@@ -280,14 +299,20 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 		}
 		recs[i] = data
 	}
+	if a.lost() {
+		return ErrNotOwned
+	}
 	if err := a.cfg.Log.Append(ctx, head, recs...); err != nil {
 		a.stopped = true
-		return fmt.Errorf("%w: %w", ErrNotOwned, err)
+		if errors.Is(err, ErrConflict) {
+			return fmt.Errorf("%w: %w", ErrNotOwned, err)
+		}
+		return err
 	}
 	for i, data := range recs {
 		if err := a.state.Apply(eventlog.Record{Seq: head + uint64(i) + 1, Data: data}); err != nil {
 			a.stopped = true
-			return fmt.Errorf("%w: %w", ErrNotOwned, err)
+			return err
 		}
 	}
 	a.publish(false)

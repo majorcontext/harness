@@ -36,7 +36,9 @@ var (
 type Options struct {
 	// Store holds every session log. It is required.
 	Store Store
-	// Owner grants sessions. nil: this process owns every session.
+	// Owner grants sessions. nil: this Runtime owns every session. The
+	// default does not exclude another Runtime on the same Store; the fence
+	// that Open appends stops the earlier one.
 	Owner Owner
 
 	backend turn.Backend
@@ -124,8 +126,10 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(s
 		if e == nil {
 			e = &entry{ready: make(chan struct{})}
 			r.sessions[id] = e
+			r.group.Add(1)
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, start)
+			r.group.Done()
 			if e.err != nil {
 				r.forget(id, e)
 			}
@@ -146,6 +150,11 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(s
 		}
 		if !e.s.a.View().Stopped {
 			return e.s, nil
+		}
+		select {
+		case <-e.s.a.Done():
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 		r.forget(id, e)
 	}
@@ -226,7 +235,7 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 
 // Close hands off every session and waits for every goroutine of the
 // runtime. When ctx ends first, it stops the remaining sessions without an
-// append; their next Open finds a crashed turn.
+// append and returns; their next Open finds a crashed turn.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -252,12 +261,18 @@ func (r *Runtime) Close(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	if ctx.Err() != nil {
-		r.cancel()
+	done := make(chan struct{})
+	go func() {
+		r.group.Wait()
+		close(done)
+	}()
+	defer r.cancel()
+	select {
+	case <-done:
+		return errors.Join(errs...)
+	case <-ctx.Done():
+		return errors.Join(append(errs, ctx.Err())...)
 	}
-	r.group.Wait()
-	r.cancel()
-	return errors.Join(errs...)
 }
 
 type storeLog struct {

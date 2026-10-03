@@ -30,15 +30,15 @@ type Request struct {
 	Input []eventlog.Message
 	// Resumed counts the resumes of a turn suspended by a handoff; 0 for a new turn.
 	Resumed int
-	// Steer carries the steer inputs folded into the turn. It is nil unless
-	// the backend has Steering.
-	Steer <-chan eventlog.Message
 }
 
 // Sink receives the items of a running turn.
 type Sink interface {
 	// Item records one completed message. An error stops the turn.
 	Item(m eventlog.Message) error
+	// Steer takes the queued steer inputs into the turn. A backend with
+	// Steering calls it at each item boundary and must use each message.
+	Steer() ([]eventlog.Message, error)
 }
 
 // Result is the outcome of a turn that returned.
@@ -46,22 +46,24 @@ type Result struct {
 	Usage eventlog.Usage
 }
 
-// Reporter receives what one turn produces. The session actor implements it.
+// Reporter takes no ctx: a backend reports items after the turn's ctx ends.
 type Reporter interface {
-	Item(ctx context.Context, turnID string, m eventlog.Message) error
+	Item(turnID string, m eventlog.Message) error
+	Steer(turnID string) ([]eventlog.Message, error)
 	Ended(turnID string, r Result, err error)
 }
 
-// Run runs req on b and reports each item and the end of the turn to to.
+// Run runs req on b and reports its items and its end to to.
 func Run(ctx context.Context, b Backend, req Request, to Reporter) {
-	r, err := b.Run(ctx, req, sink{ctx, req.TurnID, to})
+	r, err := b.Run(ctx, req, sink{req.TurnID, to})
 	to.Ended(req.TurnID, r, err)
 }
 
 type sink struct {
-	ctx    context.Context
 	turnID string
 	to     Reporter
 }
 
-func (s sink) Item(m eventlog.Message) error { return s.to.Item(s.ctx, s.turnID, m) }
+func (s sink) Item(m eventlog.Message) error { return s.to.Item(s.turnID, m) }
+
+func (s sink) Steer() ([]eventlog.Message, error) { return s.to.Steer(s.turnID) }

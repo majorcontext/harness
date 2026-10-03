@@ -5,10 +5,13 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -20,6 +23,24 @@ func (k killable) Epoch() uint64                                              { 
 func (k killable) Lost() <-chan struct{}                                      { return k.lost }
 func (k killable) Release()                                                   {}
 
+// held is a Store whose Append fails with err, or waits for hold while armed.
+type held struct {
+	harness.Store
+	err   error
+	armed atomic.Bool
+	hold  chan struct{}
+}
+
+func (h *held) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
+	if h.armed.Load() {
+		<-h.hold
+	}
+	if h.err != nil {
+		return h.err
+	}
+	return h.Store.Append(ctx, id, expectedSeq, records...)
+}
+
 func open(t *testing.T, r *harness.Runtime) *harness.Session {
 	t.Helper()
 	s, err := r.Open(bg, "s1")
@@ -30,26 +51,46 @@ func open(t *testing.T, r *harness.Runtime) *harness.Session {
 	return s
 }
 
-func TestHandoffResumesTheTurn(t *testing.T) {
-	eachStore(t, func(t *testing.T, openStore func() harness.Store) {
-		f1, f2 := newFake(), newFake()
-		r1 := runtime(t, openStore(), f1)
-		submit(t, create(t, r1), text("a", "hi"))
-		run := <-f1.runs
-		run.emit(say("partial"))
-		closeRuntime(t, r1)
-		r2 := runtime(t, openStore(), f2)
-		open(t, r2)
-		next := <-f2.runs
-		if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || next.req.Input[0].Parts[0].Text != "hi" {
-			t.Fatalf("resumed Request = %+v, want turn %s resumed once", next.req, run.req.TurnID)
-		}
-		next.emit(say("rest"))
-		next.end()
-		wantLog(t, openStore(), 2, "input.admitted a", "turn.started a", "item.completed assistant partial",
-			"turn.suspended handoff", "owner.acquired 1", "turn.resumed 1", "item.completed assistant rest", "turn.ended completed")
-		closeRuntime(t, r2)
-	})
+func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		last eventlog.Message
+		late []eventlog.Message
+		want []string
+	}{
+		{"the turn suspends after its last item", say("partial"), nil,
+			[]string{"item.completed assistant partial"}},
+		{"a running tool finishes within the budget", callTool("c1"), []eventlog.Message{toolResult("c1")},
+			[]string{"item.completed assistant c1", "item.completed tool c1 ok"}},
+		{"a tool call after the handoff is refused", say("partial"), []eventlog.Message{callTool("c2")},
+			[]string{"item.completed assistant partial"}},
+		{"an open tool call is cut off", callTool("c1"), nil,
+			[]string{"item.completed assistant c1", "item.completed tool c1 " + cutOff}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eachStore(t, func(t *testing.T, openStore func() harness.Store) {
+				f1, f2 := newFake(), newFake()
+				f1.late = tc.late
+				r1 := runtime(t, openStore(), f1)
+				submit(t, create(t, r1), text("a", "hi"))
+				run := <-f1.runs
+				run.emit(tc.last)
+				closeRuntime(t, r1)
+				r2 := runtime(t, openStore(), f2)
+				open(t, r2)
+				next := <-f2.runs
+				if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || next.req.Input[0].Parts[0].Text != "hi" {
+					t.Fatalf("resumed Request = %+v, want turn %s resumed once", next.req, run.req.TurnID)
+				}
+				next.emit(say("rest"))
+				next.end()
+				want := append(append([]string{"input.admitted a", "turn.started a"}, tc.want...), "turn.suspended handoff",
+					"owner.acquired 1", "turn.resumed 1", "item.completed assistant rest", "turn.ended completed")
+				wantLog(t, openStore(), 2, want...)
+				closeRuntime(t, r2)
+			})
+		})
+	}
 }
 
 func TestOpenEndsACrashedTurn(t *testing.T) {
@@ -74,6 +115,53 @@ func TestOpenEndsACrashedTurn(t *testing.T) {
 		}
 		closeRuntime(t, r1)
 		closeRuntime(t, r2)
+	})
+}
+
+func TestLostStopsTheActorBeforeItsNextAppend(t *testing.T) {
+	eachStore(t, func(t *testing.T, openStore func() harness.Store) {
+		st, f, k := &held{Store: openStore(), hold: make(chan struct{})}, newFake(), killable{make(chan struct{})}
+		r, err := harness.NewWithBackend(harness.Options{Store: st, Owner: k}, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := create(t, r)
+		submit(t, s, text("a", "one"))
+		run := <-f.runs
+		submit(t, s, text("b", "two"))
+		st.armed.Store(true)
+		run.end()
+		close(k.lost)
+		close(st.hold)
+		noRun(t, f)
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "input.admitted b", "turn.ended completed")
+		closeRuntime(t, r)
+	})
+}
+
+func TestCreateReturnsTheStoreError(t *testing.T) {
+	boom := errors.New("disk full")
+	r := runtime(t, &held{Store: harness.NewMemStore(), err: boom}, newFake())
+	_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "test/model"})
+	if !errors.Is(err, boom) || errors.Is(err, harness.ErrSessionNotOwned) {
+		t.Fatalf("Create = %v, want the store error only", err)
+	}
+}
+
+func TestCloseReturnsWhenItsContextEnds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := newFake()
+		f.stuck = make(chan struct{})
+		r := runtime(t, harness.NewMemStore(), f)
+		submit(t, create(t, r), text("a", "hi"))
+		<-f.runs
+		ctx, cancel := context.WithTimeout(bg, time.Minute)
+		defer cancel()
+		if err := r.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close = %v, want DeadlineExceeded", err)
+		}
+		close(f.stuck)
+		synctest.Wait()
 	})
 }
 
@@ -176,19 +264,21 @@ func TestOpenViewReadsWithoutAppending(t *testing.T) {
 
 func TestSteerInput(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		steering bool
-		want     []string
+		name           string
+		steering, deaf bool
+		want           []string
 	}{
-		{"a steering backend folds the input in at the next item", true,
+		{"a steering backend folds the input in at the next item", true, false,
 			[]string{"input.promoted s", "item.completed assistant steered: now", "turn.ended completed"}},
-		{"another backend runs the input as the next turn", false,
+		{"another backend runs the input as the next turn", false, false,
+			[]string{"turn.ended completed", "turn.started s", "turn.ended completed"}},
+		{"a steering backend that ends without taking the input runs it as the next turn", true, true,
 			[]string{"turn.ended completed", "turn.started s", "turn.ended completed"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eachStore(t, func(t *testing.T, openStore func() harness.Store) {
 				st, f := openStore(), newFake()
-				f.steering = tc.steering
+				f.steering, f.deaf = tc.steering, tc.deaf
 				r := runtime(t, st, f)
 				s := create(t, r)
 				submit(t, s, text("a", "hi"))
@@ -202,7 +292,7 @@ func TestSteerInput(t *testing.T) {
 				submit(t, s, steer)
 				run.emit(say("next"))
 				run.end()
-				if !tc.steering {
+				if !tc.steering || tc.deaf {
 					(<-f.runs).end()
 				}
 				wantLog(t, st, 4, append([]string{"input.admitted s", "item.completed assistant next"}, tc.want...)...)

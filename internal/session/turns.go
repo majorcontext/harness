@@ -13,7 +13,6 @@ import (
 const (
 	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
-	steerBuffer = 16
 )
 
 var (
@@ -22,11 +21,11 @@ var (
 )
 
 type running struct {
-	id      string
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
-	steer   chan eventlog.Message
-	waiters []func(struct{}, error)
+	id       string
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+	steering bool
+	waiters  []func(struct{}, error)
 }
 
 // Submit admits in and returns the seq of its input.admitted record. A
@@ -70,12 +69,8 @@ func sameJSON(x, y any) bool {
 
 func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	r := &running{id: id, ctx: ctx, cancel: cancel}
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Resumed: resumed}
-	if a.cfg.Backend.Capabilities(req.Model).Steering {
-		r.steer = make(chan eventlog.Message, steerBuffer)
-		req.Steer = r.steer
-	}
+	r := &running{id: id, ctx: ctx, cancel: cancel, steering: a.cfg.Backend.Capabilities(req.Model).Steering}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
@@ -84,10 +79,10 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	a.cfg.Go(func() { turn.Run(ctx, a.cfg.Backend, req, a) })
 }
 
-// Item records one completed message of turnID and folds queued steer inputs
-// into the turn. After a stop or a handoff starts, it admits no new tool call.
-func (a *Actor) Item(ctx context.Context, turnID string, m eventlog.Message) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, m)) })
+// Item records one completed message of turnID. After a stop or a handoff
+// starts, it admits no new tool call.
+func (a *Actor) Item(turnID string, m eventlog.Message) error {
+	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, m)) })
 	return err
 }
 
@@ -99,24 +94,38 @@ func (a *Actor) item(turnID string, m eventlog.Message) error {
 	if err := context.Cause(r.ctx); err != nil && slices.ContainsFunc(m.Parts, isCall) {
 		return err
 	}
-	events := []eventlog.Event{eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m}}
+	return a.append(eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m})
+}
+
+// Steer promotes the queued steer inputs into turnID and returns them. A
+// backend without Steering, or a turn that is stopping, gets none.
+func (a *Actor) Steer(turnID string) ([]eventlog.Message, error) {
+	return call(context.Background(), a, func(reply func([]eventlog.Message, error)) { reply(a.steer(turnID)) })
+}
+
+func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
+	r := a.run
+	if r == nil || r.id != turnID {
+		return nil, ErrTurnMismatch
+	}
+	if !r.steering || r.ctx.Err() != nil {
+		return nil, nil
+	}
+	var events []eventlog.Event
 	var steered []eventlog.Message
 	for _, in := range a.state.Queue() {
-		if r.steer == nil || r.ctx.Err() != nil || len(r.steer)+len(steered) == cap(r.steer) {
-			break
-		}
 		if in.Delivery == eventlog.DeliverySteer {
 			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: turnID})
 			steered = append(steered, eventlog.Message{Role: eventlog.RoleUser, Parts: in.Parts})
 		}
 	}
+	if len(events) == 0 {
+		return nil, nil
+	}
 	if err := a.append(events...); err != nil {
-		return err
+		return nil, err
 	}
-	for _, in := range steered {
-		r.steer <- in
-	}
-	return nil
+	return steered, nil
 }
 
 func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }

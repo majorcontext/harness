@@ -23,9 +23,13 @@ const (
 )
 
 // fake is a scripted Backend. Each Run sends itself on runs; the test sends
-// the items of the turn on items and closes items to end the turn.
+// the items of the turn on items and closes items to end the turn. When the
+// turn's ctx ends, it reports late, then waits for stuck when it is set.
 type fake struct {
 	steering bool
+	deaf     bool
+	late     []eventlog.Message
+	stuck    chan struct{}
 	runs     chan fakeRun
 }
 
@@ -51,17 +55,39 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 			if !ok {
 				return turn.Result{Usage: eventlog.Usage{InputTokens: 3, OutputTokens: 1}}, nil
 			}
-			if err := out.Item(m); err != nil {
-				return turn.Result{}, err
-			}
-		case in := <-req.Steer:
-			if err := out.Item(say("steered: " + in.Parts[0].Text)); err != nil {
+			if err := f.report(out, m); err != nil {
 				return turn.Result{}, err
 			}
 		case <-ctx.Done():
-			return turn.Result{}, context.Cause(ctx)
+			return f.stop(ctx, out)
 		}
 	}
+}
+
+// report reports m, then an answer to each steer input that it takes.
+func (f *fake) report(out turn.Sink, m eventlog.Message) error {
+	if err := out.Item(m); err != nil || !f.steering || f.deaf {
+		return err
+	}
+	in, err := out.Steer()
+	for _, s := range in {
+		if err == nil {
+			err = f.report(out, say("steered: "+s.Parts[0].Text))
+		}
+	}
+	return err
+}
+
+func (f *fake) stop(ctx context.Context, out turn.Sink) (turn.Result, error) {
+	for _, m := range f.late {
+		if out.Item(m) != nil {
+			break
+		}
+	}
+	if f.stuck != nil {
+		<-f.stuck
+	}
+	return turn.Result{}, context.Cause(ctx)
 }
 
 func (r fakeRun) emit(m eventlog.Message) {
