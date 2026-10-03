@@ -200,16 +200,35 @@ func (s *State) Status() Status {
 }
 
 // Turn returns the current turn, if any.
-func (s *State) Turn() (Turn, bool) { return s.turn, s.turn.ID != "" }
+func (s *State) Turn() (Turn, bool) {
+	t := s.turn
+	t.InputIDs = slices.Clone(t.InputIDs)
+	return t, t.ID != ""
+}
 
 // Queue returns the admitted inputs that no turn has taken, oldest first.
-func (s *State) Queue() []InputAdmitted { return slices.Clone(s.queue) }
+func (s *State) Queue() []InputAdmitted {
+	out := make([]InputAdmitted, len(s.queue))
+	for i, in := range s.queue {
+		out[i] = cloneInput(in)
+	}
+	return out
+}
+
+func cloneInput(in InputAdmitted) InputAdmitted {
+	in.Parts = slices.Clone(in.Parts)
+	for i := range in.Parts {
+		in.Parts[i].Arguments = slices.Clone(in.Parts[i].Arguments)
+	}
+	return in
+}
 
 // Requests returns the open requests, oldest first.
 func (s *State) Requests() []RequestOpened {
 	out := make([]RequestOpened, len(s.requests))
 	for i, r := range s.requests {
 		out[i] = r.RequestOpened
+		out[i].Payload = slices.Clone(r.Payload)
 	}
 	return out
 }

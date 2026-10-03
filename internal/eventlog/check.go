@@ -5,7 +5,15 @@ package eventlog
 func Check(s *State, events []Event) error {
 	c := s.clone()
 	for _, e := range events {
-		if err := c.apply(Envelope{Seq: c.head + 1, Event: e}); err != nil {
+		data, err := Envelope{Seq: c.head + 1, Event: e}.Encode()
+		if err != nil {
+			return err
+		}
+		env, err := Decode(data)
+		if err != nil {
+			return err
+		}
+		if err := c.apply(env); err != nil {
 			return err
 		}
 	}

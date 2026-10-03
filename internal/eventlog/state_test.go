@@ -170,6 +170,8 @@ var applyRows = []struct {
 	{"an achieved goal stays achieved", with(base, setGoal, goal(GoalAchieved), goal(GoalActive)), "goal achieved cannot become active", view{}},
 	{"any goal clears", with(base, setGoal, goal(GoalExhausted), goal(GoalCleared)), "", view{Status: StatusIdle, Goal: "cleared 0"}},
 	{"a cleared goal does not clear again", with(base, setGoal, goal(GoalCleared), goal(GoalCleared)), "goal cleared cannot become cleared", view{}},
+	{"a new goal does not evaluate an ended turn", with(base, admit("a"), start("t1", "a"), end("t1", StopCompleted, ""), setGoal, verdict("t1")), "turn t1 was evaluated", view{}},
+	{"a goal evaluates no more turns than max_turns", with(base, GoalSet{Condition: "x", MaxTurns: 1}, admit("a"), start("t1", "a"), end("t1", StopCompleted, ""), verdict("t1"), admit("b"), start("t2", "b"), end("t2", StopCompleted, ""), verdict("t2")), "max_turns 1 is reached", view{}},
 	{"an evaluation names the last ended turn", with(running, setGoal, verdict("t1")), "turn t1 is not the last ended turn", view{}},
 	{"an evaluation needs an active goal", with(running, end("t1", StopCompleted, ""), verdict("t1")), "no active goal", view{}},
 	{"a compaction covers only earlier records", with(base, CompactionApplied{FromSeq: 1, ToSeq: 2}), "to_seq 2", view{}},
@@ -209,5 +211,39 @@ func TestApply(t *testing.T) {
 func TestCheckRejectsNilEvent(t *testing.T) {
 	if err := Check(&State{}, []Event{nil}); !errors.Is(err, ErrUnknownKind) {
 		t.Fatalf("Check = %v, want ErrUnknownKind", err)
+	}
+}
+
+func TestCheckMatchesAppend(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event Event
+		err   error
+	}{
+		{"a pointer event passes as its value", &InputAdmitted{InputID: "b", Delivery: DeliveryQueue}, nil},
+		{"a malformed payload fails as it would at append", RequestOpened{RequestID: "r", ItemID: "i1", Payload: json.RawMessage(`{bad`)}, errAny},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Check(replay(t, calling), []Event{tc.event})
+			if (err != nil) != (tc.err != nil) {
+				t.Fatalf("Check = %v, want error %v", err, tc.err)
+			}
+		})
+	}
+}
+
+var errAny = errors.New("any error")
+
+func TestAccessorsDoNotAliasState(t *testing.T) {
+	events := with(base, admit("a"), start("t1", "a"), admit("b"), call("t1", "i1", "c1"), ask("r1", "i1"))
+	s := replay(t, events)
+	turn, _ := s.Turn()
+	turn.InputIDs[0] = "x"
+	q := s.Queue()
+	q[0].Parts[0].Text = "x"
+	q[0].Parts = append(q[0].Parts, Part{})
+	s.Requests()[0].Payload[0] = 'x'
+	if !reflect.DeepEqual(s, replay(t, events)) {
+		t.Fatal("a caller changed the state through an accessor")
 	}
 }

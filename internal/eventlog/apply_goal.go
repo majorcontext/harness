@@ -16,6 +16,7 @@ func (s *State) applyGoalSet(e GoalSet) error {
 		return illegal("goal.set needs a condition and max_turns >= 0")
 	}
 	s.goal = Goal{Condition: e.Condition, MaxTurns: e.MaxTurns, State: GoalActive}
+	s.evaluated = s.lastEnded.TurnID
 	return nil
 }
 
@@ -27,6 +28,8 @@ func (s *State) applyGoalEvaluated(e GoalEvaluated) error {
 		return illegal("turn %s is not the last ended turn", e.TurnID)
 	case s.evaluated == e.TurnID:
 		return illegal("turn %s was evaluated", e.TurnID)
+	case s.goal.MaxTurns > 0 && s.goal.Turns >= s.goal.MaxTurns:
+		return illegal("goal max_turns %d is reached", s.goal.MaxTurns)
 	case e.Verdict != VerdictMet && e.Verdict != VerdictNotMet && e.Verdict != VerdictImpossible:
 		return illegal("goal verdict %q", e.Verdict)
 	}
