@@ -35,6 +35,10 @@ func (s *State) applyPromoted(e InputPromoted) error {
 	if err := s.runningTurn(e.TurnID); err != nil {
 		return err
 	}
+	i := slices.IndexFunc(s.queue, func(in InputAdmitted) bool { return in.InputID == e.InputID })
+	if s.queue[i].Delivery != DeliverySteer {
+		return illegal("input %s waits for the next turn", e.InputID)
+	}
 	s.takeInput(e.InputID, inputPromoted)
 	return nil
 }

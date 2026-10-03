@@ -60,11 +60,11 @@ func with(base []Event, more ...Event) []Event {
 
 var (
 	base      = []Event{created()}
-	running   = with(base, admit("a"), start("t1", "a"), promote("a", "t1"))
+	running   = with(base, admit("a"), start("t1", "a"))
 	calling   = with(running, call("t1", "i1", "c1"))
 	asking    = with(calling, ask("r1", "i1"))
 	suspended = with(calling, result("t1", "i2", "c1"), suspend("t1", CauseHandoff))
-	evaluated = with(base, setGoal, admit("a"), start("t1", "a"), promote("a", "t1"), end("t1", StopCompleted, ""), verdict("t1"))
+	evaluated = with(base, setGoal, admit("a"), start("t1", "a"), end("t1", StopCompleted, ""), verdict("t1"))
 )
 
 type view struct {
@@ -133,6 +133,8 @@ func TestApply(t *testing.T) {
 		{"a steer input joins the running turn", with(running, steer("s"), promote("s", "t1")), "", view{Status: StatusRunning, Turn: "t1"}},
 		{"a withdrawn input leaves the queue", with(base, admit("a"), withdraw("a")), "", view{Status: StatusIdle}},
 		{"a promoted input is not withdrawn", with(running, withdraw("a")), "input a is promoted", view{}},
+		{"an input drives one turn", with(running, end("t1", StopCompleted, ""), start("t2", "a")), "input a is promoted", view{}},
+		{"a queue input waits for the next turn", with(running, admit("b"), promote("b", "t1")), "input b waits for the next turn", view{}},
 		{"a withdrawn input is not promoted", with(base, admit("a"), withdraw("a"), admit("b"), start("t1", "b"), promote("a", "t1")), "input a is withdrawn", view{}},
 		{"an input id is admitted once", with(base, admit("a"), admit("a")), "input a is admitted", view{}},
 		{"a promotion needs its turn running", with(base, admit("a"), admit("b"), start("t1", "a"), promote("b", "t2")), "turn t2 is not running", view{}},

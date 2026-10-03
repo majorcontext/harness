@@ -62,7 +62,7 @@ func everyKind() []Event {
 		OwnerAcquired{Epoch: 7, Owner: "box-1"},
 		SettingsChanged{ServiceTier: new("flex")},
 		GoalSet{Condition: "tests pass", MaxTurns: 3},
-		admit("a"), start("t1", "a"), promote("a", "t1"),
+		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
 		ChildSpawned{ChildID: "k", Agent: "explore"},
 		call("t1", "i1", "c1"), ask("r1", "i1"),
 		RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)},
@@ -116,7 +116,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: StatusIdle, Goal: GoalAchieved,
-		HeadSeq: 23, CreatedAt: t0, UpdatedAt: t0.Add(22 * time.Second)}
+		HeadSeq: 24, CreatedAt: t0, UpdatedAt: t0.Add(23 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

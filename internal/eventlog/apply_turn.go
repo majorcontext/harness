@@ -23,6 +23,9 @@ func (s *State) applyStarted(e TurnStarted) error {
 			return err
 		}
 	}
+	for _, id := range e.InputIDs {
+		s.takeInput(id, inputPromoted)
+	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
 	s.turnIDs[e.TurnID] = true
 	return nil

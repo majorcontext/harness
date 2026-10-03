@@ -81,7 +81,7 @@ type InputAdmitted struct {
 	Parts    []Part   `json:"parts"`
 }
 
-// InputPromoted moves a queued input into a turn.
+// InputPromoted moves a queued steer input into the running turn.
 type InputPromoted struct {
 	InputID string `json:"input_id"`
 	TurnID  string `json:"turn_id"`
@@ -92,7 +92,7 @@ type InputWithdrawn struct {
 	InputID string `json:"input_id"`
 }
 
-// TurnStarted starts a turn for the listed queued inputs.
+// TurnStarted starts a turn and promotes the listed queued inputs.
 type TurnStarted struct {
 	TurnID   string   `json:"turn_id"`
 	InputIDs []string `json:"input_ids"`
