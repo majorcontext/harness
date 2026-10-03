@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -167,12 +168,8 @@ func TestGoalDeferOnActiveIdleGoalSkipsConditionTurn(t *testing.T) {
 // A deferred goal with max_turns=2 that is never MET must stop after two
 // worker turns: the auto-armed loop starts with the stored cap.
 func TestGoalDeferHonorsMaxTurns(t *testing.T) {
-	notMet := make([][]provider.Event, 20)
-	worker := make([][]provider.Event, 20)
-	for i := range notMet {
-		notMet[i] = asstTurn("NOT MET: keep going")
-		worker[i] = asstTurn("worked")
-	}
+	notMet := slices.Repeat([][]provider.Event{asstTurn("NOT MET: keep going")}, 20)
+	worker := slices.Repeat([][]provider.Event{asstTurn("worked")}, 20)
 	prov := &workerLog{goalProv: &goalProv{name: "test", worker: worker, eval: notMet}}
 	h := newGoalHarness(t, prov)
 	id := h.createSession("test/m1")
@@ -188,8 +185,8 @@ func TestGoalDeferHonorsMaxTurns(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("prompt_async status %d: %s", resp.StatusCode, data)
 	}
+	sse.collectUntilIdle(t)
 	sse.collectUntilDrained(t, h, id)
-
 	if sent := prov.sent(); len(sent) != 3 {
 		t.Fatalf("worker turns = %d, want the prompt plus 2 goal turns", len(sent))
 	}
