@@ -63,7 +63,10 @@ type Config struct {
 	// Owner names this process in owner.acquired.
 	Owner   string
 	Backend turn.Backend
-	Tools   []turn.Tool
+	// Check reports why a session that allows tools cannot use model. nil
+	// accepts every model.
+	Check func(model string, tools []string) error
+	Tools []turn.Tool
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Retries bounds the new attempts of a turn after a retryable error.

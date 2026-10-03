@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -111,4 +112,20 @@ func (v *View) Session() protocol.Session { return detach(v.state) }
 // Events yields the events after seq and ends at the head that OpenView read.
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
+}
+
+// Update changes the settings of the session and returns its view. The next
+// turn uses them; a running turn keeps its own. A model that no configured
+// provider serves fails with ErrModelUnavailable.
+func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
+	if p.Effort != nil {
+		if _, err := message.ParseEffort(*p.Effort); err != nil {
+			return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		}
+	}
+	err := s.a.Update(ctx, eventlog.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier})
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return s.View(), nil
 }

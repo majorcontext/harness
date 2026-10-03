@@ -177,9 +177,16 @@ type SyncAck struct {
 
 // Model is a model that a configured provider serves.
 type Model struct {
-	// ID is the provider/model ref that a session names.
 	ID       string `json:"id"`
 	Provider string `json:"provider"`
 	// ContextWindow is 0 when the backend reports the window during a turn.
 	ContextWindow int `json:"context_window"`
+}
+
+// SettingsPatch changes each non-nil setting of a session. The next turn
+// uses the new settings; a running turn keeps its own.
+type SettingsPatch struct {
+	Model       *string `json:"model,omitempty"`
+	Effort      *string `json:"effort,omitempty"`
+	ServiceTier *string `json:"service_tier,omitempty"`
 }

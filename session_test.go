@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,16 +10,15 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
-// watch reads the events of s after seq, submits in at the first event, and
-// returns every event up to the turn.ended after seq end. With stall, it
-// reads nothing more until the bubble is idle.
+// watch reads the events of s after seq after, submits in at the first
+// event, and returns every event up to the turn.ended after seq end. With
+// stall, it reads nothing more until the bubble is idle.
 func watch(t *testing.T, s *harness.Session, after, end uint64, in protocol.Input, stall bool) []protocol.Event {
 	t.Helper()
 	var out []protocol.Event
@@ -27,8 +27,10 @@ func watch(t *testing.T, s *harness.Session, after, end uint64, in protocol.Inpu
 			t.Fatal(err)
 		}
 		if out = append(out, e); len(out) == 1 {
-			submit := func() { _, _ = s.Submit(bg, in) }
-			if submit(); stall {
+			if _, err := s.Submit(bg, in); err != nil {
+				t.Fatal(err)
+			}
+			if stall {
 				synctest.Wait()
 			}
 		}
@@ -94,12 +96,7 @@ func deltas(n int, text string) func(turn.Sink) error {
 func TestEventsLiveFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		flaky := func(turn.Sink) error { return fmt.Errorf("%w: flaky", turn.ErrRetryable) }
-		st, retries := harness.NewMemStore(), 1
-		r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{PromptRetries: &retries}},
-			&scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
-		if err != nil {
-			t.Fatal(err)
-		}
+		r := runtime(t, harness.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
 		s := create(t, r)
 		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
 			"~4 status retrying 1", "~4 status running", "~4 item.started i1", "~4 item.delta i1 text x", "~4 item.delta i1 text x", "5 item.completed i1", "6 turn.ended")
@@ -113,4 +110,53 @@ func TestEventsLiveFrames(t *testing.T) {
 		}
 		closeRuntime(t, r)
 	})
+}
+
+func TestUpdateAppliesToTheNextTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f := harness.NewMemStore(), newFake()
+		r := runtime(t, st, f)
+		s := create(t, r)
+		submit(t, s, text("a", "one"))
+		run := <-f.runs
+		v, err := s.Update(bg, protocol.SettingsPatch{Model: new("test/other"), Effort: new("high")})
+		if err != nil || v.Model != "test/other" || v.Effort != "high" || v.Status != protocol.StatusRunning {
+			t.Fatalf("Update = %+v, %v", v, err)
+		}
+		submit(t, s, text("b", "two"))
+		run.end()
+		next := <-f.runs
+		next.end()
+		if run.req.Model != "test/model" || next.req.Model != "test/other" || next.req.Settings.Effort != "high" {
+			t.Fatalf("models = %s then %s %+v, want test/model then test/other high", run.req.Model, next.req.Model, next.req.Settings)
+		}
+		wantLog(t, st, 4, "settings.changed", "input.admitted b", "turn.ended completed", "turn.started b", "turn.ended completed")
+		closeRuntime(t, r)
+	})
+}
+
+func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
+	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"hi": {Reasoning: []string{"plan"}}}},
+		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}},
+		harnesstest.Step{Name: "again", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}})
+	r, _, rec := codexRuntime(t, o, false, false)
+	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converse(t, s, "hi")
+	for p, want := range map[protocol.SettingsPatch]error{{Model: new("codex/no-such-model")}: harness.ErrModelUnavailable,
+		{Model: new("nope/gpt-5")}: harness.ErrModelUnavailable, {Effort: new("hard")}: harness.ErrInvalidRequest,
+		{Model: new("openai/gpt-5"), Effort: new("high")}: nil} {
+		if _, err := s.Update(bg, p); !errors.Is(err, want) {
+			t.Errorf("Update(%v) = %v, want %v", p, err, want)
+		}
+	}
+	watch(t, s, s.View().HeadSeq-1, s.View().HeadSeq, text("b", "again"), false)
+	if got, want := transcript(o.Requests()[1]), []string{"user text :hi", "assistant text :hello", "user text :again"}; !slices.Equal(got, want) {
+		t.Errorf("request after the switch = %q, want %q", got, want)
+	}
+	if calls, e := rec.Calls(), o.WireEvents()[1].ReasoningEffort; e != "high" || !slices.Equal(calls, []string{codexPost, "openai POST /backend-api/codex/responses"}) {
+		t.Errorf("transport calls = %q, effort = %q, want codex then openai, high", calls, e)
+	}
 }

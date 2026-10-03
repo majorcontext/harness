@@ -210,7 +210,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	a, err := start(ctx, session.Config{
+	cfg := session.Config{
 		ID:        id,
 		Log:       storeLog{r.store, id},
 		Blobs:     storeLog{r.store, id},
@@ -223,7 +223,11 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Base:      r.base,
 		Go:        r.group.Go,
 		Done:      func() { r.forget(id, e) },
-	})
+	}
+	if r.models != nil {
+		cfg.Check = r.models.check
+	}
+	a, err := start(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
