@@ -80,7 +80,7 @@ func rpc(url, method string, params obj, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var msg struct {
 		Result json.RawMessage
 		Error  *struct{ Message string }

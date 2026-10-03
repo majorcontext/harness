@@ -182,11 +182,16 @@ func scratch(m external.Mirror) (string, error) {
 
 // serveTools serves the harness tools of req for this run and returns the
 // path of an --mcp-config file that names the endpoint. A file keeps the
-// endpoint URL out of the argv of the CLI.
+// endpoint URL out of the argv of the CLI. Items record a served tool by
+// its harness name, as on the other backends.
 func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
 	var err error
 	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, req.Call); err != nil {
 		return "", err
+	}
+	r.bridged = map[string]bool{}
+	for _, t := range req.Tools {
+		r.bridged[t.Name] = true
 	}
 	cfg := map[string]any{"mcpServers": map[string]any{external.ToolServer: map[string]string{"type": "http", "url": r.tools.URL}}}
 	data, err := json.Marshal(cfg)

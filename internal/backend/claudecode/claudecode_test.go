@@ -254,12 +254,17 @@ type mcpRun struct {
 }
 
 // endedCall returns the call that p ran to its end, and checks that the
-// MCP endpoint of run is closed.
-func endedCall(t *testing.T, p probe, run mcpRun) protocol.ToolCall {
+// MCP endpoint of run and the --mcp-config file of argv are gone.
+func endedCall(t *testing.T, p probe, run mcpRun, argv []string) protocol.ToolCall {
 	t.Helper()
 	if resp, err := http.Post(run.URL, "application/json", strings.NewReader("{}")); err == nil {
 		_ = resp.Body.Close()
 		t.Errorf("POST %s after the turn = %s, want a closed endpoint", run.URL, resp.Status)
+	}
+	if i := slices.Index(argv, "--mcp-config"); i < 0 {
+		t.Errorf("argv = %q, want --mcp-config", argv)
+	} else if _, err := os.Stat(argv[i+1]); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stat %s after the turn: %v, want it removed", argv[i+1], err)
 	}
 	select {
 	case c := <-p.ended:
@@ -277,9 +282,10 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		env     []string
 		offered []string
 		args    []string
+		absent  string
 	}{
-		{name: "a tool call through MCP runs the embedder tool", offered: []string{"echo", "hidden"},
-			args: []string{"--allowedTools", "mcp__harness"}},
+		{name: "a tool call through MCP runs the embedder tool beside the operator MCP servers", offered: []string{"echo", "hidden"},
+			args: []string{"--allowedTools", "mcp__harness"}, absent: "--strict-mcp-config"},
 		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
 			offered: []string{"echo"}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
 	} {
@@ -296,11 +302,15 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			if len(runs) != 1 || !slices.Equal(runs[0].Tools, tc.offered) {
 				t.Fatalf("MCP runs = %+v, want one that offers %q", runs, tc.offered)
 			}
-			if c := endedCall(t, echo, runs[0]); c.ID != "toolu_m" || c.Name != "echo" {
+			argv := jsonLines[[]string](t, argvLog)[0]
+			if c := endedCall(t, echo, runs[0], argv); c.ID != "toolu_m" || c.Name != "echo" {
 				t.Errorf("call = %+v, want ID toolu_m and name echo", c)
 			}
-			if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[0], tc.args...) {
-				t.Errorf("argv = %q, want %q in it", argv[0], tc.args)
+			if !hasArgs(argv, tc.args...) || slices.Contains(argv, tc.absent) {
+				t.Errorf("argv = %q, want %q in it and no %q", argv, tc.args, tc.absent)
+			}
+			if names := toolPartNames(t, st); !slices.Equal(names, []string{"echo", "echo"}) {
+				t.Errorf("recorded tool part names = %q, want the embedder name echo for the call and the result", names)
 			}
 		})
 	}
@@ -308,7 +318,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 
 func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	mcpLog := filepath.Join(t.TempDir(), "mcp")
-	fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
+	argvLog := fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
 	st, block := harness.NewMemStore(), newProbe("block", true)
 	r := retryingRuntime(t, st, nil, false, 0, block)
 	defer closeRuntime(t, r)
@@ -336,7 +346,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	<-ended
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
 		"item.completed tool toolu_m "+interrupted, "turn.ended interrupted stopped")
-	if c := endedCall(t, block, jsonLines[mcpRun](t, mcpLog)[0]); c.ID != "toolu_m" {
+	if c := endedCall(t, block, jsonLines[mcpRun](t, mcpLog)[0], jsonLines[[]string](t, argvLog)[0]); c.ID != "toolu_m" {
 		t.Errorf("call = %+v, want ID toolu_m", c)
 	}
 }
@@ -530,6 +540,28 @@ func TestClaudeCodeResumesTheMirroredSessionAfterAHandoff(t *testing.T) {
 	if keys := blobKeys(t, st); len(keys) != 2 {
 		t.Errorf("state blob keys = %q, want one for each owner", keys)
 	}
+}
+
+// toolPartNames returns the names of the tool call and tool result parts of s1.
+func toolPartNames(t *testing.T, st harness.Store) []string {
+	t.Helper()
+	recs, err := st.Read(bg, "s1", 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range recs {
+		var env struct {
+			D struct{ Message eventlog.Message }
+		}
+		_ = json.Unmarshal(r.Data, &env)
+		for _, p := range env.D.Message.Parts {
+			if p.CallID != "" {
+				names = append(names, p.Name)
+			}
+		}
+	}
+	return names
 }
 
 // blobKeys returns the distinct blob keys of the backend.state records of s1.

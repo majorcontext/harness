@@ -31,11 +31,12 @@ type Capabilities struct {
 	Steering      bool
 	ContextWindow int
 	// Tools names the built-in tools of a backend that owns the loop. A
-	// session of that backend may allow only these.
+	// session of that backend may allow only these and the embedder tools.
 	Tools []string
 }
 
-// Tool is a tool that the loop runs for a backend that does not own the loop.
+// Tool is an embedder tool. The loop runs it, or Request.Call for a backend
+// that owns the loop.
 type Tool interface {
 	Spec() protocol.ToolSpec
 	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -24,6 +25,7 @@ type run struct {
 	mirror    external.Mirror
 	saved     []byte
 	allowed   map[string]bool
+	bridged   map[string]bool
 	names     map[string]string
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
@@ -290,12 +292,15 @@ func (r *run) assistant(env envelope) error {
 		}
 		r.pending, r.pendingID = &eventlog.Message{Role: eventlog.RoleAssistant}, m.ID
 	}
-	for _, p := range parts {
+	for i, p := range parts {
 		switch p.Type {
 		case eventlog.PartText, eventlog.PartReasoning:
 			r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: p.Text})
 		case eventlog.PartToolCall:
-			r.names[p.CallID] = p.Name
+			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
+				parts[i].Name = name
+			}
+			r.names[p.CallID] = parts[i].Name
 			r.open++
 		}
 	}
