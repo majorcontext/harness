@@ -13,7 +13,8 @@ import (
 const liveBuffer = 256
 
 // live fans ephemeral frames out to the subscribers of Events. A send to a
-// full subscriber drops the frame; durable events come from the log.
+// full subscriber drops the frame; durable events come from the log. mu
+// orders a frame's head read and send against publish.
 type live struct {
 	mu   sync.Mutex
 	subs map[chan protocol.Event]struct{}
@@ -36,9 +37,8 @@ func (l *live) unsubscribe(ch chan protocol.Event) {
 	delete(l.subs, ch)
 }
 
+// send needs l.mu.
 func (l *live) send(e protocol.Event) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	for ch := range l.subs {
 		select {
 		case ch <- e:
@@ -55,6 +55,8 @@ func (a *Actor) frame(kind string, data any) {
 	if err != nil {
 		return
 	}
+	a.live.mu.Lock()
+	defer a.live.mu.Unlock()
 	a.live.send(protocol.Event{Seq: a.View().Session.HeadSeq, Time: time.Now(), Kind: kind, Data: d, Ephemeral: true})
 }
 

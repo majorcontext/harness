@@ -297,6 +297,8 @@ func (a *Actor) View() *View { return a.view.Load() }
 
 func (a *Actor) publish(stopped bool) {
 	next := &View{Session: Describe(a.cfg.ID, a.state), Stopped: stopped, changed: make(chan struct{})}
+	a.live.mu.Lock()
+	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)
 }
 

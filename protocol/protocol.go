@@ -131,7 +131,8 @@ const (
 )
 
 // ItemFrame is the data of an item.started or item.delta frame. ItemID is
-// the item_id of the item.completed record that ends the item.
+// the item_id of the item.completed record that ends the item, unless a
+// failed attempt started the item: that item never completes.
 type ItemFrame struct {
 	ItemID string `json:"item_id"`
 	TurnID string `json:"turn_id"`
