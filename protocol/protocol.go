@@ -192,3 +192,36 @@ type SettingsPatch struct {
 	Effort      *string `json:"effort,omitempty"`
 	ServiceTier *string `json:"service_tier,omitempty"`
 }
+
+// EventPage is one page of durable events. Next is the after of the next
+// page, or 0 when the page reaches the head.
+type EventPage struct {
+	Events []Event `json:"events"`
+	Next   uint64  `json:"next,omitempty"`
+}
+
+// Error codes of the HTTP API.
+const (
+	CodeInvalidRequest   = "invalid_request"
+	CodeSessionNotFound  = "session_not_found"
+	CodeSessionExists    = "session_exists"
+	CodeSessionNotOwned  = "session_not_owned"
+	CodeInputConflict    = "input_conflict"
+	CodeTurnMismatch     = "turn_mismatch"
+	CodeModelUnavailable = "model_unavailable"
+	CodePayloadTooLarge  = "payload_too_large"
+	CodeDraining         = "draining"
+	CodeInternal         = "internal"
+)
+
+// ErrorBody is the body of every HTTP error response.
+type ErrorBody struct {
+	Error Error `json:"error"`
+}
+
+// Error is a failed HTTP request: a code from the Code constants and a message.
+type Error struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details"`
+}

@@ -409,7 +409,7 @@ One `errgroup` per runtime tracks every actor, turn runner, and writer. `Runtime
 
 ```
 POST   /sessions                              create; client id optional
-GET    /sessions?parent=&cursor=              list
+GET    /sessions?parent=&after=&limit=        list
 GET    /sessions/{id}                         view
 PATCH  /sessions/{id}                         model, effort, service_tier
 DELETE /sessions/{id}
@@ -460,6 +460,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | --- | --- |
 | `invalid_request` | 400 |
 | `session_not_found` | 404 |
+| `session_exists` | 409 |
 | `request_not_pending` | 409 |
 | `session_not_owned` | 409 |
 | `input_conflict` | 409 |
@@ -467,8 +468,9 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `model_unavailable` | 409 |
 | `payload_too_large` | 413 |
 | `draining` | 503 |
+| `internal` | 500 |
 
-Each code is a sentinel error in `harness`. `server` maps it with `errors.Is`.
+Each code except `internal` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. Any other error is `internal`.
 
 ### Contract source
 
