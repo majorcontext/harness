@@ -84,20 +84,23 @@ var errExited = errors.New("claudecode: the CLI exited before its result")
 
 // finish ends the process, maps the frames that it writes until it exits,
 // saves the external session, and returns the turn error. A stopped turn
-// keeps every item that the CLI wrote.
+// keeps every item that the CLI wrote, and completes on a success result.
 func (r *run) finish(ctx context.Context, err error) error {
 	r.stopped = ctx.Err() != nil
 	if err == nil {
 		r.proc.CloseInput()
-		if r.stopped && r.result.IsError {
-			err = context.Cause(ctx)
-		}
 	} else if !r.stopped {
 		r.proc.Interrupt()
 	}
 	exit := r.proc.Finish(grace, r.tail)
+	if r.stopped && (err == nil || errors.Is(err, context.Cause(ctx))) {
+		err = nil
+		if r.result == nil || r.result.IsError {
+			err = context.Cause(ctx)
+		}
+	}
 	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
-	if r.taken && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
+	if r.taken && err != nil && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
 		r.mirror.Turn = r.turnID
 	}
 	if r.mirror.SessionID != "" {
@@ -155,6 +158,9 @@ func (r *run) tail(line []byte) {
 	var err error
 	switch {
 	case env.Type == "result":
+		if r.placeholder(env) {
+			return
+		}
 		r.result = &env
 		err = r.settle(env)
 	case r.stopped || env.Type == "transcript_mirror":

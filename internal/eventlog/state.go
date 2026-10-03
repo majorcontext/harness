@@ -258,8 +258,8 @@ func (s *State) Model() string { return s.model }
 // Settings returns the session settings other than the model.
 func (s *State) Settings() Settings { return s.settings }
 
-// AllowedTools returns the names of the embedder tools of the session, or
-// nil for every tool.
+// AllowedTools returns the tool names of the session: the embedder tools,
+// or the built-in tools of a delegated backend. nil allows every tool.
 func (s *State) AllowedTools() []string { return slices.Clone(s.allowed) }
 
 // Usage returns the token usage summed over every ended turn.
