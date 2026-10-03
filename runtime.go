@@ -40,6 +40,8 @@ type Options struct {
 	// default does not exclude another Runtime on the same Store; the fence
 	// that Open appends stops the earlier one.
 	Owner Owner
+	// Sync replicates every record that this Runtime appends. nil: no replication.
+	Sync Sync
 
 	backend turn.Backend
 }
@@ -48,6 +50,7 @@ type Options struct {
 type Runtime struct {
 	store   Store
 	owner   Owner
+	sync    Sync
 	backend turn.Backend
 	name    func() string
 	base    context.Context
@@ -70,7 +73,7 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Store == nil {
 		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
 	}
-	r := &Runtime{store: opts.Store, owner: opts.Owner, backend: opts.backend, sessions: map[string]*entry{}}
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend, sessions: map[string]*entry{}}
 	if r.owner == nil {
 		r.owner = newLocalOwner()
 	}
@@ -182,6 +185,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Ownership: own,
 		Owner:     r.name(),
 		Backend:   r.backend,
+		Sync:      r.sync,
 		Base:      r.base,
 		Go:        r.group.Go,
 		Done:      func() { r.forget(id, e) },

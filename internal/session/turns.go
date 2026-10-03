@@ -235,7 +235,8 @@ func (a *Actor) Interrupt(ctx context.Context, turnID string) error {
 }
 
 // Release hands the session off: it suspends the running turn at an item
-// boundary, stops the actor, and releases the ownership.
+// boundary, stops the actor, waits for Sync to acknowledge the last record,
+// and releases the ownership.
 func (a *Actor) Release(ctx context.Context) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		a.releasing = append(a.releasing, reply)
@@ -250,7 +251,7 @@ func (a *Actor) Release(ctx context.Context) error {
 	}
 	select {
 	case <-a.done:
-		return nil
+		return a.syncErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
