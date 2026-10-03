@@ -14,6 +14,10 @@ import (
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
 
+// ErrHandoff is the cause of a turn context that a handoff ended. The next
+// owner resumes the turn.
+var ErrHandoff = errors.New("harness: turn handed off")
+
 // Backend runs turns against one kind of model or agent harness.
 type Backend interface {
 	Capabilities(model string) Capabilities

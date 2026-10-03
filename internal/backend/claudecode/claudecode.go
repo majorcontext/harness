@@ -26,6 +26,12 @@ import (
 // stateKey names the state blob of the external session.
 const stateKey = "claude-code"
 
+// Continuation is the prompt of a run that continues a turn whose input the
+// CLI already took: a resume after a handoff, or a retry.
+const Continuation = "The session moved to a new host, which interrupted the previous turn. " +
+	"Continue the unfinished work from the saved conversation. " +
+	"Check the current state before repeating actions that may already have completed."
+
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
 
@@ -72,7 +78,8 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	if err != nil {
 		return turn.Result{}, err
 	}
-	r := &run{out: out, mirror: mirror, saved: blob, allowed: allowed, names: map[string]string{}}
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: allowed, names: map[string]string{},
+		continues: b.resumes(mirror) && mirror.Turn == req.TurnID}
 	cmd, err := b.command(req, r)
 	defer r.cleanup()
 	if err != nil {
@@ -117,7 +124,7 @@ func (b *Backend) command(req turn.Request, r *run) (*exec.Cmd, error) {
 	if ref.Model != "" {
 		args = append(args, "--model", ref.Model)
 	}
-	if r.mirror.SessionID != "" && (r.mirror.Path != "" || !b.p.SessionMirror) {
+	if b.resumes(r.mirror) {
 		args = append(args, "--resume", r.mirror.SessionID)
 	}
 	if b.p.PermissionMode != "" {
@@ -139,6 +146,12 @@ func (b *Backend) command(req turn.Request, r *run) (*exec.Cmd, error) {
 	cmd := exec.Command(cmp.Or(b.p.BinaryPath, "claude"), append(args, b.p.ExtraArgs...)...) //nolint:gosec // operator config
 	cmd.Env = env
 	return cmd, nil
+}
+
+// resumes reports whether a run resumes the external session of m. A
+// mirrored session resumes only a saved transcript.
+func (b *Backend) resumes(m external.Mirror) bool {
+	return m.SessionID != "" && (m.Path != "" || !b.p.SessionMirror)
 }
 
 // scratch returns a new config directory that holds the restored transcript.
@@ -165,12 +178,15 @@ func effortArg(e message.Effort) (string, bool) {
 	return "", false
 }
 
-// prompt is the stdin line that starts the turn. A resumed turn sends its
-// input again, because the handoff stopped the earlier run of the CLI.
-func prompt(req turn.Request) input {
-	var m eventlog.Message
-	for _, in := range req.Input {
-		m.Parts = append(m.Parts, in.Parts...)
+// prompt is the stdin line that starts the run. A run that continues the
+// turn sends Continuation: the resumed session already holds the input.
+func (r *run) prompt(req turn.Request) input {
+	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: Continuation}}}
+	if !r.continues {
+		m.Parts = nil
+		for _, in := range req.Input {
+			m.Parts = append(m.Parts, in.Parts...)
+		}
 	}
 	return userLine(m)
 }

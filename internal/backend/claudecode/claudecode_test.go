@@ -14,6 +14,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -59,11 +60,15 @@ func fakeClaude(t *testing.T, mode string, env ...string) string {
 
 func claudeRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool) *harness.Runtime {
 	t.Helper()
+	return retryingRuntime(t, st, owner, mirror, 0)
+}
+
+func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int) *harness.Runtime {
+	t.Helper()
 	bin, err := fakeClaudeBin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	retries := 0
 	r, err := harness.New(harness.Options{Store: st, Owner: owner, Config: config.Config{PromptRetries: &retries,
 		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
 	if err != nil {
@@ -154,7 +159,7 @@ func TestClaudeCodeTurn(t *testing.T) {
 		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
 			want: []string{"backend.state", "compaction.applied", "turn.ended completed"}},
 		{name: "a failed result fails the turn", mode: "error",
-			want: []string{"backend.state", "turn.ended failed turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure"}},
+			want: []string{"backend.state", "backend.state", "turn.ended failed turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure"}},
 		{name: "a compaction by Claude Code is logged", mode: "compact_boundary",
 			want: []string{"backend.state", "compaction.applied", "item.completed assistant Continuing after compaction.", "turn.ended completed"}},
 		{name: "the context reading is logged", mode: "per_call_usage",
@@ -264,23 +269,61 @@ func TestClaudeCodeHandoffInterruptsTheCLI(t *testing.T) {
 	signals := filepath.Join(t.TempDir(), "signals")
 	fakeClaude(t, "tool_on_interrupt", "FAKE_CLAUDE_SIGNAL_LOG", signals)
 	st := harness.NewMemStore()
-	handOff(t, claudeRuntime(t, st, nil, false))
+	handOff(t, claudeRuntime(t, st, nil, false), "backend.state")
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_i",
-		"item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
+		"backend.state", "item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
 	if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
 		t.Errorf("signals = %q, want one SIGINT", got)
 	}
 }
 
-// handOff starts a turn on r, waits for the CLI to start, and closes r.
-func handOff(t *testing.T, r *harness.Runtime) {
+// handOff starts a turn on r, waits for the first event of kind, and closes r.
+func handOff(t *testing.T, r *harness.Runtime, kind string) {
 	t.Helper()
 	s := createClaude(t, r, nil)
 	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
 		t.Fatal(err)
 	}
-	await(t, s, 0, "backend.state")
+	await(t, s, 0, kind)
 	closeRuntime(t, r)
+}
+
+func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, next string
+		hangAfter, seen  string
+		retries          int
+		want             string
+	}{
+		{name: "a handoff after init", mode: "hang", next: "thinking", seen: "backend.state", want: claudecode.Continuation},
+		{name: "a mirrored handoff after a transcript", mode: "mirror", next: "mirror", hangAfter: "3", seen: "item.completed",
+			want: claudecode.Continuation},
+		{name: "a mirrored handoff before a transcript", mode: "mirror", next: "mirror", hangAfter: "0", seen: "backend.state", want: "hi"},
+		{name: "a retry after init", mode: "crash", retries: 1, want: claudecode.Continuation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClaude(t, tc.mode, "FAKE_CLAUDE_MIRROR_FIXTURE", fixtures+"run1.stdout.jsonl", "FAKE_CLAUDE_MIRROR_HANG_AFTER", tc.hangAfter)
+			st, mirror := harness.NewMemStore(), tc.mode == "mirror"
+			if tc.next != "" {
+				handOff(t, claudeRuntime(t, st, nil, mirror), tc.seen)
+				t.Setenv("FAKE_CLAUDE_MODE", tc.next)
+				t.Setenv("FAKE_CLAUDE_MIRROR_HANG_AFTER", "")
+			}
+			r := retryingRuntime(t, st, nil, mirror, tc.retries)
+			defer closeRuntime(t, r)
+			if tc.next == "" {
+				turnOf(t, createClaude(t, r, nil), text("a", "hi"))
+			} else if s, err := r.Open(bg, "s1"); err != nil {
+				t.Fatal(err)
+			} else {
+				await(t, s, 0, "turn.ended")
+			}
+			stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
+			if len(stdin) != 2 || stdin[0].Message.Content != "hi" || stdin[1].Message.Content != tc.want {
+				t.Errorf("stdin lines = %+v, want the prompt, then %q", stdin, tc.want)
+			}
+		})
+	}
 }
 
 // endedUsage returns the usage of the last turn.ended record of session s1.
@@ -405,6 +448,9 @@ func TestClaudeCodeCrashWaitsForInput(t *testing.T) {
 		"input.admitted b", "turn.started b", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed")
 	if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[1], "--resume", "fake-session-1") {
 		t.Errorf("argv after the crash = %q, want --resume fake-session-1", argv[1])
+	}
+	if stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG")); stdin[1].Message.Content != "again" {
+		t.Errorf("stdin after the crash = %+v, want the next input", stdin[1])
 	}
 }
 

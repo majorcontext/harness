@@ -15,10 +15,7 @@ const (
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
 )
 
-var (
-	errStopTurn = errors.New("harness: turn stopped")
-	errHandoff  = errors.New("harness: turn handed off")
-)
+var errStopTurn = errors.New("harness: turn stopped")
 
 // running is a turn. An interrupt or a lost ownership ends ctx, which stops
 // the running tools. A handoff ends only step: running tools finish.
@@ -191,7 +188,7 @@ func (a *Actor) ended(turnID string, runErr error) {
 	case runErr == nil:
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, r.usage)
 		next = true
-	case errors.Is(cause, errHandoff):
+	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
@@ -282,7 +279,7 @@ func (a *Actor) Release(ctx context.Context) error {
 			a.stop(nil)
 			return
 		}
-		a.run.handoff(errHandoff)
+		a.run.handoff(turn.ErrHandoff)
 	})
 	if err != nil {
 		return err

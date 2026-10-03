@@ -13,6 +13,8 @@ import (
 // that the external harness mirrors as it writes it. One state blob holds it.
 type Mirror struct {
 	SessionID string
+	// Turn is the harness turn whose input the external session holds.
+	Turn string
 	// Path is the transcript file, relative to the config directory.
 	Path    string
 	Entries []json.RawMessage
@@ -20,6 +22,7 @@ type Mirror struct {
 
 type mirrorHead struct {
 	SessionID string `json:"session_id,omitempty"`
+	Turn      string `json:"turn,omitempty"`
 	Path      string `json:"path,omitempty"`
 }
 
@@ -40,7 +43,7 @@ func LoadMirror(blob []byte) (Mirror, error) {
 			if h.Path != "" && !filepath.IsLocal(h.Path) {
 				return Mirror{}, fmt.Errorf("external: mirror path %q is not local", h.Path)
 			}
-			m.SessionID, m.Path = h.SessionID, h.Path
+			m.SessionID, m.Turn, m.Path = h.SessionID, h.Turn, h.Path
 			continue
 		}
 		m.Entries = append(m.Entries, append(json.RawMessage(nil), sc.Bytes()...))
@@ -51,7 +54,7 @@ func LoadMirror(blob []byte) (Mirror, error) {
 // Encode returns the state blob: a head line, then one line per entry.
 func (m Mirror) Encode() ([]byte, error) {
 	var buf bytes.Buffer
-	head, err := json.Marshal(mirrorHead{SessionID: m.SessionID, Path: m.Path})
+	head, err := json.Marshal(mirrorHead{SessionID: m.SessionID, Turn: m.Turn, Path: m.Path})
 	if err != nil {
 		return nil, err
 	}

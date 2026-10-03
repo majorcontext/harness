@@ -16,13 +16,18 @@ import (
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
 type run struct {
 	out     turn.Sink
+	turnID  string
 	proc    *external.Process
 	dir     string
 	mirror  external.Mirror
 	saved   []byte
 	allowed map[string]bool
 	names   map[string]string
-	stopped bool
+	// continues reports a run of a turn whose input the CLI already took;
+	// taken reports that this run gave the CLI the input.
+	continues bool
+	taken     bool
+	stopped   bool
 
 	started bool
 	sendErr error
@@ -52,7 +57,7 @@ func (r *run) cleanup() {
 // drive sends the prompt and handles frames until the result, the end of
 // stdout, or the end of ctx.
 func (r *run) drive(ctx context.Context, req turn.Request) error {
-	r.sendErr = r.proc.Send(prompt(req))
+	r.sendErr = r.proc.Send(r.prompt(req))
 	for {
 		select {
 		case line, ok := <-r.proc.Lines():
@@ -92,6 +97,9 @@ func (r *run) finish(ctx context.Context, err error) error {
 	}
 	exit := r.proc.Finish(grace, r.tail)
 	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
+	if r.taken && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
+		r.mirror.Turn = r.turnID
+	}
 	if r.mirror.SessionID != "" {
 		if serr := r.save(); err == nil {
 			err = serr
@@ -197,6 +205,7 @@ func (r *run) addMirror(env envelope) error {
 	if r.dir == "" {
 		return nil
 	}
+	r.taken = true
 	return r.mirror.Add(r.dir, env.FilePath, env.Entries)
 }
 
@@ -208,6 +217,7 @@ func (r *run) system(env envelope) error {
 		if err := r.checkTools(env.Tools); err != nil {
 			return err
 		}
+		r.taken = r.taken || r.dir == ""
 		if env.SessionID != "" && env.SessionID != r.mirror.SessionID {
 			r.mirror.SessionID = env.SessionID
 			return r.save()
