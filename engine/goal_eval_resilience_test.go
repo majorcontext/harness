@@ -234,14 +234,11 @@ func TestPursueGoalEvaluatorRetryableBudgetExhaustedFailsBoundary(t *testing.T) 
 		if res.Achieved || res.Reason != "max turns" {
 			t.Errorf("result = %+v, want not achieved, reason \"max turns\"", res)
 		}
-		if cond, ok := s.ActiveGoal(); !ok || cond != "cond" {
-			t.Errorf("ActiveGoal = %q, %v; want still active", cond, ok)
-		}
 
 		var failedCount int
 		for _, ev := range evs {
-			if ev.Type == EventGoalCleared {
-				t.Error("goal.cleared emitted, want none (retryable exhaustion is still just a failed boundary)")
+			if ev.Type == EventGoalCleared && ev.GoalReason != goalExhaustedReason(1) {
+				t.Errorf("goal.cleared reason = %q, want only the max-turns clear (retryable exhaustion is still just a failed boundary)", ev.GoalReason)
 			}
 			if ev.Type == EventGoalEvalFailed {
 				failedCount++
@@ -363,7 +360,9 @@ func TestPursueGoalEvaluatorConsecutiveFailureCounting(t *testing.T) {
 			case EventGoalEval:
 				sawEval = true
 			case EventGoalCleared:
-				t.Error("goal.cleared emitted, want none — well below the terminal horizon")
+				if ev.GoalReason != goalExhaustedReason(4) {
+					t.Errorf("goal.cleared reason = %q, want only the max-turns clear — well below the terminal horizon", ev.GoalReason)
+				}
 			}
 		}
 		want := []int{1, 2, 1}

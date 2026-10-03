@@ -50,11 +50,7 @@ func (h *harness) getPausedGoalView(id string) pausedGoalView {
 // session must still accept an ordinary prompt (the "usable prompt path").
 func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProv{
-		name:   "test",
-		worker: [][]provider.Event{asstTurn("try 1")},
-		eval:   [][]provider.Event{asstTurn("NOT MET: nope")},
-	}
+	prov := &goalProv{name: "test"}
 	mutate := func(o *Options) {
 		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
 	}
@@ -63,17 +59,14 @@ func TestGoalPausedRestartYieldsIdleAndUsable(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "defer": true})
 	if resp.StatusCode != 202 {
 		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
 	}
-	sse.collectUntilIdle(t)
-	sse.stop()
 
 	before := h1.getPausedGoalView(id)
 	if before.Goal == nil || !before.Goal.Active {
-		t.Fatalf("before restart, goal = %+v, want active (max turns exhausted, never cleared)", before.Goal)
+		t.Fatalf("before restart, goal = %+v, want active (armed, never run or cleared)", before.Goal)
 	}
 	if before.Goal.Paused {
 		t.Fatalf("before restart, goal.Paused = true, want false (loop just ran in this same process)")
@@ -284,8 +277,8 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 	dir := t.TempDir()
 	prov := &goalProv{
 		name:   "test",
-		worker: [][]provider.Event{asstTurn("try 1"), asstTurn("try 2")},
-		eval:   [][]provider.Event{asstTurn("NOT MET: nope"), asstTurn("MET: now it is")},
+		worker: [][]provider.Event{asstTurn("try 2")},
+		eval:   [][]provider.Event{asstTurn("MET: now it is")},
 	}
 	mutate := func(o *Options) {
 		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
@@ -295,13 +288,10 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "defer": true})
 	if resp.StatusCode != 202 {
 		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
 	}
-	sse.collectUntilIdle(t)
-	sse.stop()
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
@@ -363,11 +353,7 @@ func TestGoalReArmClearsRestartPause(t *testing.T) {
 // record lands, and that the response reports status "started".
 func TestGoalReArmDifferentConditionUpdatesAndResumes(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProv{
-		name:   "test",
-		worker: [][]provider.Event{asstTurn("try 1")},
-		eval:   [][]provider.Event{asstTurn("NOT MET: nope")},
-	}
+	prov := &goalProv{name: "test"}
 	mutate := func(o *Options) {
 		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
 	}
@@ -376,13 +362,10 @@ func TestGoalReArmDifferentConditionUpdatesAndResumes(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "max_turns": 1})
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "defer": true})
 	if resp.StatusCode != 202 {
 		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
 	}
-	sse.collectUntilIdle(t)
-	sse.stop()
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}

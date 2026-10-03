@@ -89,10 +89,10 @@ func TestPursueGoalDeferredEvaluatesBeforeAnyTurn(t *testing.T) {
 	}
 }
 
-// The deferral covers only the first loop entry: a later loop over the same
-// goal posts the condition like any non-deferred goal. The preliminary
-// evaluation does not count against MaxTurns.
-func TestPursueGoalDeferralConsumedByFirstLoop(t *testing.T) {
+// The deferral dies with the goal it armed: after an exhausted loop, a goal
+// registered afresh posts the condition like any non-deferred goal. The
+// preliminary evaluation does not count against MaxTurns.
+func TestPursueGoalDeferralEndsWithExhaustedGoal(t *testing.T) {
 	const cond = "write a summary"
 	prov := &goalProvider{
 		worker: [][]provider.Event{
@@ -115,6 +115,9 @@ func TestPursueGoalDeferralConsumedByFirstLoop(t *testing.T) {
 	}
 	if users := userTexts(s); len(users) != 2 || !strings.Contains(users[1], "x") {
 		t.Fatalf("user turns = %q, want one guidance turn after the prompt", users)
+	}
+	if err := s.RegisterGoal(cond); err != nil {
+		t.Fatal(err)
 	}
 	opts.MaxTurns = 0
 	if _, err := s.PursueGoal(context.Background(), cond, opts); err != nil {

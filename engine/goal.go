@@ -645,12 +645,14 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	if deferFirst {
 		firstTurn = 0
 	}
+	var lastGen uint64
 	for turn := firstTurn; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
 		// is the single source of truth for the rest of this iteration,
 		// deliberately NOT the condition parameter or a value carried over
 		// from a previous iteration.
 		snap := s.snapshotGoal()
+		lastGen = snap.gen
 		if !snap.active {
 			// Cleared between registration and this turn (or mid-loop by a
 			// concurrent DELETE): clean stop, no turn runs.
@@ -950,6 +952,9 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		}
 		reason = evalReason
 		reasonGen = snap.gen
+	}
+	if !s.clearGoal(goalExhaustedReason(opts.MaxTurns), lastGen) && !s.goalActiveNow() {
+		return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "goal cleared"}, nil
 	}
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
@@ -1632,37 +1637,32 @@ func (s *Session) ClearGoal() bool {
 }
 
 // clearGoal is ClearGoal's implementation, parameterized on the reason
-// recorded with goal.cleared. An empty reason (ClearGoal's case) matches the
-// pre-existing on-disk shape exactly (goalRecord.Reason omitempty); a
-// non-empty reason (PursueGoal's permanent-failure case) is what lets a
-// resumed session's log — and a live event subscriber — tell "a caller
-// cancelled this" apart from "the worker kept failing and the loop gave up".
-func (s *Session) clearGoal(reason string) bool {
+// recorded with goal.cleared. An empty reason means a caller cancelled the
+// goal; a non-empty reason means the loop ended it. A given onlyGen makes
+// the clear a no-op when the goal is at another generation.
+func (s *Session) clearGoal(reason string, onlyGen ...uint64) bool {
 	s.mu.Lock()
-	if !s.goalActive {
-		s.mu.Unlock()
+	defer s.mu.Unlock()
+	if !s.goalActive || (len(onlyGen) > 0 && s.goalGen != onlyGen[0]) {
 		return false
 	}
 	s.goalActive = false
 	s.goalCondition = ""
 	s.goalDeferred = false
 	s.goalMaxTurns = 0
-	// A clear (operator DELETE, or PursueGoal's context-overflow branch)
-	// always supersedes any parked signal still standing from an earlier
-	// exit-park episode — see the goalParked field's doc comment: there is
-	// no longer an active goal for the ambient segment to describe.
+	// A clear always supersedes a parked signal from an earlier exit-park
+	// episode: no active goal remains for the ambient segment to describe.
 	s.goalParked = false
 	s.goalParkedReason = ""
 	s.goalParkedAttempts = 0
 	s.persistGoalLocked(recGoalCleared, goalRecord{Reason: reason})
-	// Emit while still holding s.mu: this keeps the event stream (-> server
-	// journal/SSE seqs) ordered the same as the log write above under a
-	// concurrent recordGoalEval/achieveGoal race (see those functions).
-	// OnEvent must not call back into this Session — doing so would
-	// deadlock on s.mu, which is still held here.
+	// Emit under s.mu so event order matches log order; OnEvent must not call back.
 	s.emit(Event{Type: EventGoalCleared, GoalReason: reason})
-	s.mu.Unlock()
 	return true
+}
+
+func goalExhaustedReason(maxTurns int) string {
+	return fmt.Sprintf("goal exhausted max_turns (%d)", maxTurns)
 }
 
 // RegisterGoal records goal.set and marks the goal active. It is called

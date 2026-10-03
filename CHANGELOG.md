@@ -23,3 +23,7 @@ First tagged release.
 - **Event-sink test receiver** (`harnesstest`) — `NewSinkReceiver` starts a scripted event-sink receiver that records every batch as a `SinkBatch`, answers each one through a `SinkReply`, and lets a test wait on the received batches with `Await`.
 - **Documentation** — package docs on pkg.go.dev, `engine` examples, and runnable programs in [`examples/`](examples).
 - **Claude Code structured questions** — `harness serve -ask-user-question` lets a Claude Code session ask the user an `AskUserQuestion` question. The turn ends with outcome `awaiting_input` and a `question_call_id`, and `POST /session/{id}/question/{call_id}/answer` resumes it. Off by default.
+
+### Fixed
+
+- **Goal exhaustion** — a goal loop that spends `max_turns` without a MET verdict now ends the goal. The goal journals `goal.cleared` with `goal_reason` `goal exhausted max_turns (N)` before `turn.end` with outcome `max_turns_exceeded`, and the session reads `idle`. The goal used to stay active, so the session read `goal-running` forever.

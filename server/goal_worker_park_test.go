@@ -838,16 +838,13 @@ func TestAutoArmAfterRestartResetsPausePresentation(t *testing.T) {
 	dir := t.TempDir()
 	prov := &goalProv{
 		name: "test",
-		// worker[0] is consumed by the pre-restart turn (max_turns exhausts
-		// after one NOT MET). worker[1] is the plain resume prompt's own
-		// turn. blockWorkerAfter=2 lets exactly those two calls through
-		// normally, then blocks the THIRD worker call — the auto-armed
-		// goal loop's own first turn — indefinitely, giving a deterministic
-		// mid-run checkpoint instead of racing a fast scripted turn to
-		// achievement.
-		worker:           [][]provider.Event{asstTurn("try 1"), asstTurn("plain prompt reply")},
-		eval:             [][]provider.Event{asstTurn("NOT MET: nope")},
-		blockWorkerAfter: 2,
+		// worker[0] is the plain resume prompt's own turn. blockWorkerAfter=1
+		// lets that call through normally, then blocks the SECOND worker
+		// call — the auto-armed goal loop's own first turn — indefinitely,
+		// giving a deterministic mid-run checkpoint instead of racing a
+		// fast scripted turn to achievement.
+		worker:           [][]provider.Event{asstTurn("plain prompt reply")},
+		blockWorkerAfter: 1,
 		started:          make(chan struct{}),
 	}
 	mutate := func(o *Options) {
@@ -858,13 +855,10 @@ func TestAutoArmAfterRestartResetsPausePresentation(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	sse := h1.openSSE("?from=0", "")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond", "max_turns": 1})
+	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "cond", "defer": true})
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
 	}
-	sse.collectUntilIdle(t) // max-turns exhausted, still active, never cleared
-	sse.stop()
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
@@ -934,7 +928,7 @@ func TestAutoArmAfterRestartResetsPausePresentation(t *testing.T) {
 	}
 
 	// The resumed loop's own worker call is now in flight and blocked
-	// (blockWorkerAfter=2, this is call #3) — <-started proves it has
+	// (blockWorkerAfter=1, this is call #2) — <-started proves it has
 	// actually begun, giving a stable, non-racy window to inspect the
 	// pause presentation while the loop is provably still running.
 	<-prov.started

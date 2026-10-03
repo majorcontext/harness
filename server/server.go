@@ -734,8 +734,7 @@ type goalTracker struct {
 	// pauseView). Cleared the moment POST /session/{id}/goal re-arms it
 	// (handleGoal). Never set any other way: it is NOT re-derived live from
 	// running/active (see compositeState's doc comment for why that would
-	// be wrong — an ordinary max-turns-exhausted goal in a live process is
-	// not "paused", only one observed unattended at boot is).
+	// be wrong — only a goal observed unattended at boot is "paused").
 	pausedRestart bool
 	// pausedWorker is set by publishGoal/foldGoalRecordLocked when a
 	// goal.parked record lands (Task 2): a worker turn exhausted
