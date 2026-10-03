@@ -95,11 +95,15 @@ func deltas(n int, text string) func(turn.Sink) error {
 
 func TestEventsLiveFrames(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		flaky := func(turn.Sink) error { return fmt.Errorf("%w: flaky", turn.ErrRetryable) }
+		flaky := func(out turn.Sink) error {
+			out.Delta("backend-id", turn.Delta{Type: eventlog.PartText, Text: "z"})
+			return fmt.Errorf("%w: flaky", turn.ErrRetryable)
+		}
 		r := runtime(t, harness.NewMemStore(), &scripted{steps: []func(turn.Sink) error{flaky, deltas(2, "x"), deltas(1000, "y")}})
 		s := create(t, r)
 		wantEvents(t, watch(t, s, 1, 0, text("a", "one"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
-			"~4 status retrying 1", "~4 status running", "~4 item.started i1", "~4 item.delta i1 text x", "~4 item.delta i1 text x", "5 item.completed i1", "6 turn.ended")
+			"~4 item.started i1", "~4 item.delta i1 text z", "~4 status retrying 1", "~4 status running",
+			"~4 item.started i2", "~4 item.delta i2 text x", "~4 item.delta i2 text x", "5 item.completed i2", "6 turn.ended")
 
 		got := watch(t, s, 4, 6, text("b", "two"), true)
 		durable := slices.DeleteFunc(slices.Clone(got), func(e protocol.Event) bool { return e.Ephemeral })
@@ -119,9 +123,13 @@ func TestUpdateAppliesToTheNextTurn(t *testing.T) {
 		s := create(t, r)
 		submit(t, s, text("a", "one"))
 		run := <-f.runs
-		v, err := s.Update(bg, protocol.SettingsPatch{Model: new("test/other"), Effort: new("high")})
+		p := protocol.SettingsPatch{Model: new("test/other"), Effort: new("high")}
+		v, err := s.Update(bg, p)
 		if err != nil || v.Model != "test/other" || v.Effort != "high" || v.Status != protocol.StatusRunning {
 			t.Fatalf("Update = %+v, %v", v, err)
+		}
+		if again, err := s.Update(bg, p); err != nil || again.HeadSeq != v.HeadSeq {
+			t.Fatalf("unchanged Update = head %d, %v, want head %d", again.HeadSeq, err, v.HeadSeq)
 		}
 		submit(t, s, text("b", "two"))
 		run.end()
@@ -147,9 +155,19 @@ func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
 	converse(t, s, "hi")
 	for p, want := range map[protocol.SettingsPatch]error{{Model: new("codex/no-such-model")}: harness.ErrModelUnavailable,
 		{Model: new("nope/gpt-5")}: harness.ErrModelUnavailable, {Effort: new("hard")}: harness.ErrInvalidRequest,
+		{Model: new("claude-code/sonnet")}:                harness.ErrInvalidRequest,
 		{Model: new("openai/gpt-5"), Effort: new("high")}: nil} {
 		if _, err := s.Update(bg, p); !errors.Is(err, want) {
 			t.Errorf("Update(%v) = %v, want %v", p, err, want)
+		}
+	}
+	cc, err := r.Create(bg, protocol.CreateSession{ID: "s2", Model: "claude-code/opus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for m, want := range map[string]error{"codex/gpt-5": harness.ErrInvalidRequest, "claude-code/sonnet": nil} {
+		if _, err := cc.Update(bg, protocol.SettingsPatch{Model: new(m)}); !errors.Is(err, want) {
+			t.Errorf("claude-code Update(%s) = %v, want %v", m, err, want)
 		}
 	}
 	watch(t, s, s.View().HeadSeq-1, s.View().HeadSeq, text("b", "again"), false)

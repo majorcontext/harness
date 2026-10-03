@@ -16,7 +16,7 @@ func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 		ch.ServiceTier = changed(ch.ServiceTier, set.ServiceTier)
 		var err error
 		if ch.Model != nil && a.cfg.Check != nil {
-			err = a.cfg.Check(*ch.Model, a.state.AllowedTools())
+			err = a.cfg.Check(a.state.Model(), *ch.Model, a.state.AllowedTools())
 		}
 		if err == nil && ch != (eventlog.SettingsChanged{}) {
 			err = a.append(ch)

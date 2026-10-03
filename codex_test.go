@@ -47,7 +47,7 @@ func (t *transport) Calls() []string {
 }
 
 // codexRuntime runs turns on s, as provider codex and as provider openai,
-// with no retries. The key is in the
+// with no retries, and also configures provider claude-code. The key is in the
 // environment, or, with injected set, only in the ModelTransport.
 func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool, tools ...harness.Tool) (*harness.Runtime, harness.Store, *transport) {
 	t.Helper()
@@ -64,7 +64,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 	}
 	r, err := harness.New(harness.Options{
 		Store:          st,
-		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p}},
+		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
 		ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} },
 		Tools:          tools,
 	})

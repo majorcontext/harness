@@ -293,7 +293,7 @@ func TestBedrockTableKeysAreNormalized(t *testing.T) {
 }
 
 func TestModelsAreKnownToContextWindow(t *testing.T) {
-	for _, provider := range []string{"anthropic", "openai", "codex", "claude-code"} {
+	for _, provider := range []string{"codex", "claude-code"} {
 		models := Models(provider)
 		if len(models) == 0 {
 			t.Errorf("Models(%q) is empty", provider)
@@ -304,7 +304,9 @@ func TestModelsAreKnownToContextWindow(t *testing.T) {
 			}
 		}
 	}
-	if got := Models("bedrock"); got != nil {
-		t.Errorf("Models(bedrock) = %q, want nil", got)
+	for _, provider := range []string{"openai", "bedrock"} {
+		if got := Models(provider); got != nil {
+			t.Errorf("Models(%q) = %q, want nil", provider, got)
+		}
 	}
 }

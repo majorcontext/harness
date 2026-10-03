@@ -141,7 +141,8 @@ type ItemFrame struct {
 }
 
 // StatusFrame is the data of a status frame. A retrying turn waits until
-// NextAt before its attempt number Attempt.
+// NextAt before its attempt number Attempt. An item that the failed attempt
+// started never completes.
 type StatusFrame struct {
 	Status  string    `json:"status"`
 	TurnID  string    `json:"turn_id"`

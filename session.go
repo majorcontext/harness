@@ -79,9 +79,10 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 
 // Events yields the durable events after seq, then each new one as it is
 // appended, with the ephemeral frames of the running turn between them:
-// item.started, item.delta, and status. A slow reader can miss frames,
-// never durable events. It ends with ErrSessionNotOwned when the session
-// stops here.
+// item.started, item.delta, and status. A slow reader can miss any frame,
+// never a durable event, so the deltas of an item can have holes; its
+// item.completed holds the whole item. It ends with ErrSessionNotOwned
+// when the session stops here.
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return s.a.Events(ctx, after)
 }
@@ -115,8 +116,10 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 }
 
 // Update changes the settings of the session and returns its view. The next
-// turn uses them; a running turn keeps its own. A model that no configured
-// provider serves fails with ErrModelUnavailable.
+// turn uses them; a running turn keeps its own until a handoff resumes it.
+// A model that no configured provider serves fails with ErrModelUnavailable.
+// A move to another provider fails with ErrInvalidRequest when either
+// backend owns its context.
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
 	if p.Effort != nil {
 		if _, err := message.ParseEffort(*p.Effort); err != nil {
