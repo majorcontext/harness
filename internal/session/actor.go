@@ -90,6 +90,7 @@ type Actor struct {
 	quit chan struct{}
 	done chan struct{}
 	view atomic.Pointer[View]
+	live live
 
 	stale   chan struct{}
 	flushed chan struct{}

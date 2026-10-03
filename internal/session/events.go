@@ -29,64 +29,77 @@ func Describe(id string, s *eventlog.State) protocol.Session {
 }
 
 // Events yields the durable records after seq, then each record that the
-// actor appends. The view holds the head and the signal of the next append
-// together, so no record falls between the read and the wait. It ends with
+// actor appends, with the ephemeral frames of its turns between them. It
+// subscribes before it yields. It loads the view before it drains the
+// frames: a frame sent before an append is then never yielded after the
+// record. A full subscriber drops frames, never records. It ends with
 // ErrNotOwned when the actor stops.
 func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
-	return events(ctx, a.cfg.Log, after, 0, a.View)
-}
-
-// Stored yields the records in log after seq and ends at seq through.
-func Stored(ctx context.Context, log Log, after, through uint64) iter.Seq2[protocol.Event, error] {
-	return events(ctx, log, after, through, nil)
-}
-
-func events(ctx context.Context, log Log, after, through uint64, view func() *View) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
+		frames := a.live.subscribe()
+		defer a.live.unsubscribe(frames)
+		place := func(f protocol.Event) bool {
+			return through(ctx, a.cfg.Log, &after, f.Seq, yield) && yield(f, nil)
+		}
 		for {
-			limit := page
-			if view == nil {
-				if after >= through {
-					return
-				}
-				limit = int(min(through-after, page))
-			} else {
-				v := view()
-				if v.Session.HeadSeq <= after {
-					if v.Stopped {
-						yield(protocol.Event{}, ErrNotOwned)
+			v := a.View()
+			for drained := false; !drained; {
+				select {
+				case f := <-frames:
+					if !place(f) {
 						return
 					}
-					select {
-					case <-v.changed:
-						continue
-					case <-ctx.Done():
-						yield(protocol.Event{}, ctx.Err())
-						return
-					}
+				default:
+					drained = true
 				}
-				limit = int(min(v.Session.HeadSeq-after, page))
 			}
-			recs, err := log.Read(ctx, after, limit)
-			if err == nil && len(recs) == 0 && view != nil {
-				err = fmt.Errorf("harness: log ends at %d before the published head", after)
-			}
-			if err != nil {
-				yield(protocol.Event{}, err)
+			if !through(ctx, a.cfg.Log, &after, v.Session.HeadSeq, yield) {
 				return
 			}
-			for _, r := range recs {
-				e, err := event(r)
-				if !yield(e, err) || err != nil {
+			if v.Stopped {
+				yield(protocol.Event{}, ErrNotOwned)
+				return
+			}
+			select {
+			case <-v.changed:
+			case f := <-frames:
+				if !place(f) {
 					return
 				}
-				after = r.Seq
-			}
-			if view == nil && len(recs) < limit {
+			case <-ctx.Done():
+				yield(protocol.Event{}, ctx.Err())
 				return
 			}
 		}
 	}
+}
+
+// Stored yields the records in log after seq and ends at seq head.
+func Stored(ctx context.Context, log Log, after, head uint64) iter.Seq2[protocol.Event, error] {
+	return func(yield func(protocol.Event, error) bool) { through(ctx, log, &after, head, yield) }
+}
+
+// through yields the records after *after through head and advances
+// *after. It reports false when it yielded an error or yield returned false.
+func through(ctx context.Context, log Log, after *uint64, head uint64, yield func(protocol.Event, error) bool) bool {
+	for *after < head {
+		recs, err := log.Read(ctx, *after, int(min(head-*after, page)))
+		if err == nil && len(recs) == 0 {
+			err = fmt.Errorf("harness: log ends at %d before seq %d", *after, head)
+		}
+		if err != nil {
+			yield(protocol.Event{}, err)
+			return false
+		}
+		for _, r := range recs {
+			e, err := event(r)
+			if !yield(e, err) || err != nil {
+				return false
+			}
+			*after = r.Seq
+		}
+	}
+	return true
 }
 
 func event(r eventlog.Record) (protocol.Event, error) {

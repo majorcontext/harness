@@ -77,7 +77,10 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 }
 
 // Events yields the durable events after seq, then each new one as it is
-// appended. It ends with ErrSessionNotOwned when the session stops here.
+// appended, with the ephemeral frames of the running turn between them:
+// item.started, item.delta, and status. A slow reader can miss frames,
+// never durable events. It ends with ErrSessionNotOwned when the session
+// stops here.
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return s.a.Events(ctx, after)
 }

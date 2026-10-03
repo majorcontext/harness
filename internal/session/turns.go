@@ -99,15 +99,16 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a, a.cfg.Retries) })
 }
 
-// Item records one completed message of turnID. After a stop or a handoff
-// starts, it admits no new tool call, except from a backend that owns the
-// loop: that backend has already run the call.
-func (a *Actor) Item(turnID string, m eventlog.Message) error {
-	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, m)) })
+// Item records one completed message of turnID under itemID, or under a new
+// ID when itemID is empty. After a stop or a handoff starts, it admits no
+// new tool call, except from a backend that owns the loop: that backend has
+// already run the call.
+func (a *Actor) Item(turnID, itemID string, m eventlog.Message) error {
+	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, itemID, m)) })
 	return err
 }
 
-func (a *Actor) item(turnID string, m eventlog.Message) error {
+func (a *Actor) item(turnID, itemID string, m eventlog.Message) error {
 	r := a.run
 	if r == nil || r.id != turnID {
 		return ErrTurnMismatch
@@ -115,7 +116,10 @@ func (a *Actor) item(turnID string, m eventlog.Message) error {
 	if err := context.Cause(r.step); err != nil && !r.ownsLoop && slices.ContainsFunc(m.Parts, isCall) {
 		return err
 	}
-	return a.append(eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m})
+	if itemID == "" {
+		itemID = newID("item")
+	}
+	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: turnID, Message: m})
 }
 
 // Telemetry adds the usage in t to turnID and records its context reading.

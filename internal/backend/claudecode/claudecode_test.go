@@ -730,3 +730,40 @@ func wantLog(t *testing.T, st harness.Store, after uint64, want ...string) {
 		t.Fatalf("log after %d =\n%s\nwant\n%s", after, strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+func TestClaudeCodeStreamsDeltas(t *testing.T) {
+	fakeClaude(t, "thinking_reserved_id")
+	r := claudeRuntime(t, harness.NewMemStore(), nil, false)
+	defer closeRuntime(t, r)
+	s := createClaude(t, r, nil)
+	var got []string
+	ids := map[string]string{}
+	for e, err := range s.Events(bg, s.View().HeadSeq-1) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == nil {
+			if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var d struct {
+			ItemID     string `json:"item_id"`
+			Type, Text string
+		}
+		_ = json.Unmarshal(e.Data, &d)
+		if d.ItemID != "" && ids[d.ItemID] == "" {
+			ids[d.ItemID] = fmt.Sprintf("i%d", len(ids)+1)
+		}
+		got = append(got, strings.TrimSpace(fmt.Sprintf("%d %s %s %s %s", e.Seq, e.Kind, ids[d.ItemID], d.Type, d.Text)))
+		if e.Kind == "turn.ended" {
+			break
+		}
+	}
+	want := []string{"2 owner.acquired", "3 input.admitted", "4 turn.started", "5 backend.state",
+		"5 item.started i1", "5 item.delta i1 reasoning Reasoning under a reserved id.",
+		"5 item.delta i1 text Answer under the same reserved id.", "6 item.completed i1", "7 turn.ended"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
