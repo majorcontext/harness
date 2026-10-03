@@ -47,7 +47,7 @@ func (t *transport) Calls() []string {
 
 // codexRuntime runs turns on s with no retries. The key is in the
 // environment, or, with injected set, only in the ModelTransport.
-func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool) (*harness.Runtime, harness.Store, *transport) {
+func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool, tools ...harness.Tool) (*harness.Runtime, harness.Store, *transport) {
 	t.Helper()
 	envKey, key := "k", ""
 	if injected {
@@ -63,6 +63,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool)
 			OmitResponseParams: []string{"max_output_tokens"}, UseWebSocketTransport: websocket,
 		}}},
 		ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} },
+		Tools:          tools,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,22 +116,25 @@ var codexTurns = []struct {
 		inputs: []string{"hi"},
 		want:   []string{"input.admitted a", "turn.started a", "item.completed assistant hello", "turn.ended completed"},
 		calls:  []string{codexPost}},
-	{name: "a tool call item is recorded and the next turn sees it",
+	{name: "a call to an unknown tool gets an error result and the next turn sees it",
 		steps: []harnesstest.Step{
 			{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash"}}}},
+			{Name: "refused", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "noted"}},
 			{Name: "after", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}}},
 		inputs: []string{"run", "again"},
-		want: []string{"input.admitted a", "turn.started a", "item.completed assistant call_1", "item.completed tool call_1 " + cutOff, "turn.ended completed",
+		want: []string{"input.admitted a", "turn.started a", "item.completed assistant call_1", "item.completed tool call_1 " + noTool + "bash",
+			"item.completed assistant noted", "turn.ended completed",
 			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
-		calls: []string{codexPost, codexPost},
+		calls: []string{codexPost, codexPost, codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
 			var got []string
-			for _, m := range s.Requests()[1].Messages {
+			for _, m := range s.Requests()[2].Messages {
 				for _, p := range m.Parts {
 					got = append(got, m.Role+" "+p.Kind+" "+p.ToolName+":"+p.Text)
 				}
 			}
-			want := []string{"user text :run", "assistant tool_use bash:", "user tool_result bash:[tool error] " + cutOff, "user text :again"}
+			want := []string{"user text :run", "assistant tool_use bash:", "user tool_result bash:[tool error] " + noTool + "bash",
+				"assistant text :noted", "user text :again"}
 			if !slices.Equal(got, want) {
 				t.Errorf("second request = %q, want %q", got, want)
 			}
@@ -150,11 +154,13 @@ var codexTurns = []struct {
 		opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan"}}}},
 		steps: []harnesstest.Step{
 			{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash"}}}},
+			{Name: "refused", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "noted"}},
 			{Name: "after", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}}},
 		inputs: []string{"run", "again"},
-		want: []string{"input.admitted a", "turn.started a", "item.completed assistant plan call_1", "item.completed tool call_1 " + cutOff, "turn.ended completed",
+		want: []string{"input.admitted a", "turn.started a", "item.completed assistant plan call_1", "item.completed tool call_1 " + noTool + "bash",
+			"item.completed assistant noted", "turn.ended completed",
 			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
-		calls: []string{codexPost, codexPost},
+		calls: []string{codexPost, codexPost, codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
 			if got := s.WireEvents()[1].ReasoningItems; got != 1 {
 				t.Errorf("reasoning items in the second request = %d, want 1", got)

@@ -160,6 +160,7 @@ type State struct {
 	origin     string
 	model      string
 	settings   Settings
+	allowed    []string
 	head       uint64
 	createdAt  time.Time
 	updatedAt  time.Time
@@ -256,6 +257,10 @@ func (s *State) Model() string { return s.model }
 
 // Settings returns the session settings other than the model.
 func (s *State) Settings() Settings { return s.settings }
+
+// AllowedTools returns the names of the embedder tools of the session, or
+// nil for every tool.
+func (s *State) AllowedTools() []string { return slices.Clone(s.allowed) }
 
 // Usage returns the token usage summed over every ended turn.
 func (s *State) Usage() Usage { return s.usage }

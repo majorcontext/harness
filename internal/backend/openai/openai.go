@@ -111,7 +111,12 @@ func request(req turn.Request) (*provider.Request, error) {
 	for i, m := range req.History {
 		msgs[i] = toMessage(m)
 	}
-	return &provider.Request{Model: ref, Messages: msgs, Effort: effort, ServiceTier: req.Settings.ServiceTier, SessionKey: req.SessionID}, nil
+	tools := make([]provider.ToolDef, len(req.Tools))
+	for i, t := range req.Tools {
+		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+	}
+	return &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
+		SessionKey: req.SessionID}, nil
 }
 
 func classify(err error) error {

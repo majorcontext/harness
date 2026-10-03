@@ -10,7 +10,7 @@ func (s *State) applyCreated(e SessionCreated, t time.Time) error {
 		return illegal("session.created has an empty model")
 	}
 	s.created = true
-	s.parentID, s.origin, s.model, s.settings = e.ParentID, e.Origin, e.Model, e.Settings
+	s.parentID, s.origin, s.model, s.settings, s.allowed = e.ParentID, e.Origin, e.Model, e.Settings, e.AllowedTools
 	s.createdAt = t
 	s.inputs = map[string]input{}
 	s.turnIDs = map[string]bool{}

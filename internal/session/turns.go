@@ -20,10 +20,14 @@ var (
 	errHandoff  = errors.New("harness: turn handed off")
 )
 
+// running is a turn. An interrupt or a lost ownership ends ctx, which stops
+// the running tools. A handoff ends only step: running tools finish.
 type running struct {
 	id       string
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
+	step     context.Context
+	handoff  context.CancelCauseFunc
 	steering bool
 	usage    eventlog.Usage
 	waiters  []func(struct{}, error)
@@ -70,15 +74,18 @@ func sameJSON(x, y any) bool {
 
 func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
+	step, handoff := context.WithCancelCause(ctx)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(),
 		History: a.state.History(), Resumed: resumed}
-	r := &running{id: id, ctx: ctx, cancel: cancel, steering: a.cfg.Backend.Capabilities(req.Model).Steering}
+	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
+		steering: a.cfg.Backend.Capabilities(req.Model).Steering}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	a.cfg.Go(func() { turn.Run(ctx, a.cfg.Backend, req, a, a.cfg.Retries) })
+	tools := turn.Restrict(a.cfg.Tools, a.state.AllowedTools())
+	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a, a.cfg.Retries) })
 }
 
 // Item records one completed message of turnID. After a stop or a handoff
@@ -93,7 +100,7 @@ func (a *Actor) item(turnID string, m eventlog.Message) error {
 	if r == nil || r.id != turnID {
 		return ErrTurnMismatch
 	}
-	if err := context.Cause(r.ctx); err != nil && slices.ContainsFunc(m.Parts, isCall) {
+	if err := context.Cause(r.step); err != nil && slices.ContainsFunc(m.Parts, isCall) {
 		return err
 	}
 	return a.append(eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m})
@@ -120,7 +127,7 @@ func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
 	if r == nil || r.id != turnID {
 		return nil, ErrTurnMismatch
 	}
-	if !r.steering || r.ctx.Err() != nil {
+	if !r.steering || r.step.Err() != nil {
 		return nil, nil
 	}
 	var events []eventlog.Event
@@ -157,7 +164,7 @@ func (a *Actor) ended(turnID string, runErr error) {
 		return
 	}
 	a.run = nil
-	cause := context.Cause(r.ctx)
+	cause := context.Cause(r.step)
 	r.cancel(nil)
 	var err error
 	next := false
@@ -256,7 +263,7 @@ func (a *Actor) Release(ctx context.Context) error {
 			a.stop(nil)
 			return
 		}
-		a.run.cancel(errHandoff)
+		a.run.handoff(errHandoff)
 	})
 	if err != nil {
 		return err
