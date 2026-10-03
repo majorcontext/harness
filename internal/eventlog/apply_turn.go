@@ -64,7 +64,14 @@ func (s *State) applyItem(e ItemCompleted) error {
 
 func (s *State) unanswered() error {
 	for _, c := range s.calls {
-		if !slices.ContainsFunc(s.requests, func(r RequestOpened) bool { return r.ItemID == c.ItemID }) {
+		open := 0
+		for _, o := range s.calls {
+			if o.ItemID == c.ItemID {
+				open++
+			}
+		}
+		asked := slices.ContainsFunc(s.requests, func(r RequestOpened) bool { return r.ItemID == c.ItemID })
+		if !asked || open > 1 {
 			return illegal("tool call %s has no result", c.CallID)
 		}
 	}

@@ -26,9 +26,12 @@ func start(turn string, inputs ...string) Event { return TurnStarted{TurnID: tur
 func promote(in, turn string) Event             { return InputPromoted{InputID: in, TurnID: turn} }
 func withdraw(in string) Event                  { return InputWithdrawn{InputID: in} }
 
-func call(turn, item, id string) Event {
-	return ItemCompleted{ItemID: item, TurnID: turn, Message: Message{Role: RoleAssistant, Parts: []Part{
-		{Type: PartToolCall, CallID: id, Name: "bash", Arguments: json.RawMessage(`{"cmd":"ls"}`)}}}}
+func call(turn, item string, ids ...string) Event {
+	m := Message{Role: RoleAssistant}
+	for _, id := range ids {
+		m.Parts = append(m.Parts, Part{Type: PartToolCall, CallID: id, Name: "bash", Arguments: json.RawMessage(`{"cmd":"ls"}`)})
+	}
+	return ItemCompleted{ItemID: item, TurnID: turn, Message: m}
 }
 
 func result(turn, item, id string) Event {
@@ -147,6 +150,7 @@ func TestApply(t *testing.T) {
 		{"a tool call id is open once", with(calling, call("t1", "i2", "c1")), "tool call c1 is open", view{}},
 		{"a turn does not end with an unanswered tool call", with(calling, end("t1", StopCompleted, "")), "tool call c1 has no result", view{}},
 		{"a request holds a tool call open past the turn", with(asking, end("t1", StopAwaitingInput, "")), "", view{Status: StatusWaiting, Requests: []string{"r1"}, Calls: []string{"c1"}}},
+		{"a request holds open only the one call of its item", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), end("t1", StopAwaitingInput, "")), "tool call c1 has no result", view{}},
 		{"awaiting_input needs an open request", with(running, end("t1", StopAwaitingInput, "")), "no open request", view{}},
 		{"a request resolves once", with(asking, resolve("r1"), resolve("r1")), "request r1 is not open", view{}},
 		{"a request opens only in a running turn", with(base, ask("r1", "i1")), "no running turn", view{}},
