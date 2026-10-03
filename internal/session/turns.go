@@ -25,6 +25,7 @@ type running struct {
 	ctx      context.Context
 	cancel   context.CancelCauseFunc
 	steering bool
+	usage    eventlog.Usage
 	waiters  []func(struct{}, error)
 }
 
@@ -69,14 +70,15 @@ func sameJSON(x, y any) bool {
 
 func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Resumed: resumed}
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(),
+		History: a.state.History(), Resumed: resumed}
 	r := &running{id: id, ctx: ctx, cancel: cancel, steering: a.cfg.Backend.Capabilities(req.Model).Steering}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	a.cfg.Go(func() { turn.Run(ctx, a.cfg.Backend, req, a) })
+	a.cfg.Go(func() { turn.Run(ctx, a.cfg.Backend, req, a, a.cfg.Retries) })
 }
 
 // Item records one completed message of turnID. After a stop or a handoff
@@ -95,6 +97,16 @@ func (a *Actor) item(turnID string, m eventlog.Message) error {
 		return err
 	}
 	return a.append(eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m})
+}
+
+// Telemetry adds the usage in t to turnID.
+func (a *Actor) Telemetry(turnID string, t turn.Telemetry) {
+	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		if r := a.run; r != nil && r.id == turnID {
+			r.usage = r.usage.Add(t.Usage)
+		}
+		reply(struct{}{}, nil)
+	})
 }
 
 // Steer promotes the queued steer inputs into turnID and returns them. A
@@ -132,14 +144,14 @@ func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }
 
 // Ended ends turnID by the cause of its stop, then starts the next queued
 // input after a normal end or a user interrupt.
-func (a *Actor) Ended(turnID string, res turn.Result, runErr error) {
+func (a *Actor) Ended(turnID string, runErr error) {
 	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-		a.ended(turnID, res, runErr)
+		a.ended(turnID, runErr)
 		reply(struct{}{}, nil)
 	})
 }
 
-func (a *Actor) ended(turnID string, res turn.Result, runErr error) {
+func (a *Actor) ended(turnID string, runErr error) {
 	r := a.run
 	if r == nil || r.id != turnID {
 		return
@@ -151,15 +163,15 @@ func (a *Actor) ended(turnID string, res turn.Result, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, res.Usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, r.usage)
 		next = true
 	case errors.Is(cause, errHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, res.Usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
 		next = true
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, res.Usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage)
 	}
 	for _, w := range r.waiters {
 		w(struct{}{}, err)

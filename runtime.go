@@ -5,10 +5,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
 
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
@@ -42,6 +44,12 @@ type Options struct {
 	Owner Owner
 	// Sync replicates every record that this Runtime appends. nil: no replication.
 	Sync Sync
+	// Config configures the model providers. A model ref "provider/model"
+	// selects the entry of Config.Providers named provider.
+	Config config.Config
+	// ModelTransport returns the HTTP transport for a model provider.
+	// nil, or a nil result: the default transport.
+	ModelTransport func(provider string) http.RoundTripper
 
 	backend turn.Backend
 }
@@ -52,6 +60,9 @@ type Runtime struct {
 	owner   Owner
 	sync    Sync
 	backend turn.Backend
+	// models is nil when Options.backend runs every turn.
+	models  *models
+	retries int
 	name    func() string
 	base    context.Context
 	cancel  context.CancelFunc
@@ -73,12 +84,14 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Store == nil {
 		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
 	}
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend, sessions: map[string]*entry{}}
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
+		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{}}
 	if r.owner == nil {
 		r.owner = newLocalOwner()
 	}
 	if r.backend == nil {
-		r.backend = noBackend{}
+		r.models = newModels(opts.Config, opts.ModelTransport)
+		r.backend = r.models
 	}
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
@@ -92,6 +105,11 @@ func New(opts Options) (*Runtime, error) {
 func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Session, error) {
 	if req.Model == "" {
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
+	}
+	if r.models != nil {
+		if err := r.models.check(req.Model); err != nil {
+			return nil, err
+		}
 	}
 	id := req.ID
 	if id == "" {
@@ -186,6 +204,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Owner:     r.name(),
 		Backend:   r.backend,
 		Sync:      r.sync,
+		Retries:   r.retries,
 		Base:      r.base,
 		Go:        r.group.Go,
 		Done:      func() { r.forget(id, e) },
@@ -240,9 +259,10 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 	return v.Session(), nil
 }
 
-// Close hands off every session and waits for every goroutine of the
-// runtime. When ctx ends first, it stops the remaining sessions without an
-// append and returns; their next Open finds a crashed turn.
+// Close hands off every session, waits for every goroutine of the runtime,
+// and closes the model connections. When ctx ends first, it stops the
+// remaining sessions without an append and returns; their next Open finds a
+// crashed turn.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -271,6 +291,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		r.group.Wait()
+		if r.models != nil {
+			r.models.Close()
+		}
 		close(done)
 	}()
 	defer r.cancel()
@@ -304,12 +327,4 @@ func (l storeLog) Read(ctx context.Context, afterSeq uint64, limit int) ([]event
 		out[i] = eventlog.Record{Seq: rec.Seq, Data: rec.Data}
 	}
 	return out, err
-}
-
-type noBackend struct{}
-
-func (noBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
-
-func (noBackend) Run(context.Context, turn.Request, turn.Sink) (turn.Result, error) {
-	return turn.Result{}, errors.New("harness: no model backend is configured")
 }

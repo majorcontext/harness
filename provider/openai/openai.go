@@ -21,15 +21,13 @@ import (
 
 const defaultBaseURL = "https://api.openai.com"
 
-// defaultResponsesPath is the request path the OpenAI Responses API
-// documents, and the only path this adapter could reach before
-// Client.ResponsesPath existed. An empty ResponsesPath resolves to it, so
-// every pre-existing caller's wire is unchanged.
+// defaultResponsesPath is the documented path. An empty ResponsesPath uses it.
 const defaultResponsesPath = "/v1/responses"
 
 // Client is a provider.Provider for the OpenAI Responses API. The zero value
 // plus APIKey is usable; nothing touches the network until Stream.
 type Client struct {
+	// APIKey may be empty when HTTPClient sets the Authorization header.
 	APIKey  string
 	BaseURL string // defaults to https://api.openai.com
 	// ExtraHeaders are sent verbatim on every request. A gateway that
@@ -152,7 +150,7 @@ type preparedRequest struct {
 }
 
 func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*preparedRequest, error) {
-	if c.APIKey == "" {
+	if c.APIKey == "" && c.HTTPClient == nil {
 		return nil, fmt.Errorf("openai: no API key configured (set OPENAI_API_KEY)")
 	}
 	wire, err := transcodeRequestFamilyWithOptions(req, c.family(), c.OmitResponseParams, c.SanitizeToolSchemas, transcodeRequestOptions{
@@ -171,7 +169,9 @@ func (c *Client) prepareRequest(req *provider.Request, allowEmptyInput bool) (*p
 	}
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Accept", "text/event-stream")
-	headers.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		headers.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	return &preparedRequest{
 		body:    body,
 		url:     responsesURL(c.BaseURL, c.ResponsesPath),

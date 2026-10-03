@@ -295,6 +295,23 @@ func TestWebSocketTransportPoolReusesConnection(t *testing.T) {
 	}
 }
 
+func TestCloseDropsThePooledConnection(t *testing.T) {
+	ts := newWSTestServer(t)
+	c := &Client{APIKey: "k", BaseURL: ts.URL, UseWebSocketTransport: true}
+	for range 2 {
+		s, err := c.Stream(context.Background(), wsRequest("sess-close"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		collect(t, s)
+		_ = s.Close()
+		c.Close()
+	}
+	if got := ts.upgrades.Load(); got != 2 {
+		t.Errorf("upgrades = %d, want 2", got)
+	}
+}
+
 // TestWebSocketTransportPoolDropsConnectionAfterFailedResponse: a terminal
 // event other than response.completed (here, response.failed) must not
 // leave its connection pooled for reuse — ported from opencode's

@@ -29,6 +29,9 @@ type Part struct {
 	Name      string          `json:"name,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// ProviderData holds the opaque, provider-tagged payload of a reasoning
+	// part, which the provider replays on the next request.
+	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`
 }
 
 // Message roles.
@@ -50,6 +53,12 @@ type Usage struct {
 	OutputTokens     int64 `json:"output_tokens"`
 	CacheReadTokens  int64 `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+}
+
+// Add returns the sum of u and v.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
+		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
 }
 
 // SessionCreated is the first record of every session.

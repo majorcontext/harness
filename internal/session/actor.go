@@ -57,6 +57,8 @@ type Config struct {
 	Backend turn.Backend
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
+	// Retries bounds the new attempts of a turn after a retryable error.
+	Retries int
 	// Base bounds the actor. When it ends, the actor stops without an append.
 	Base context.Context
 	// Go runs a goroutine that the runtime waits for at shutdown.

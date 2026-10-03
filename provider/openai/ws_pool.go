@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -67,6 +69,18 @@ func newWSPool() *wsPool {
 		streamRetries:    wsDefaultStreamRetries,
 		dial:             dialResponsesWebSocket,
 		entries:          make(map[string]*wsPoolEntry),
+	}
+}
+
+// Close closes the pooled websocket connections. Call it when no stream is
+// open. A later Stream dials again.
+func (c *Client) Close() {
+	p := c.wsPoolFor()
+	p.mu.Lock()
+	entries := slices.Collect(maps.Values(p.entries))
+	p.mu.Unlock()
+	for _, e := range entries {
+		p.invalidate(e)
 	}
 }
 
