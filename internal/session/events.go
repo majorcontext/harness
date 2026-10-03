@@ -33,19 +33,24 @@ func Describe(id string, s *eventlog.State) protocol.Session {
 // together, so no record falls between the read and the wait. It ends with
 // ErrNotOwned when the actor stops.
 func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
-	return events(ctx, a.cfg.Log, after, a.View)
+	return events(ctx, a.cfg.Log, after, 0, a.View)
 }
 
-// Stored yields the records in log after seq and ends at the head.
-func Stored(ctx context.Context, log Log, after uint64) iter.Seq2[protocol.Event, error] {
-	return events(ctx, log, after, nil)
+// Stored yields the records in log after seq and ends at seq through.
+func Stored(ctx context.Context, log Log, after, through uint64) iter.Seq2[protocol.Event, error] {
+	return events(ctx, log, after, through, nil)
 }
 
-func events(ctx context.Context, log Log, after uint64, view func() *View) iter.Seq2[protocol.Event, error] {
+func events(ctx context.Context, log Log, after, through uint64, view func() *View) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
 		for {
 			limit := page
-			if view != nil {
+			if view == nil {
+				if after >= through {
+					return
+				}
+				limit = int(min(through-after, page))
+			} else {
 				v := view()
 				if v.Session.HeadSeq <= after {
 					if v.Stopped {

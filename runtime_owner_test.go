@@ -301,3 +301,90 @@ func TestSteerInput(t *testing.T) {
 		})
 	}
 }
+
+func TestViewsReturnACopyOfQueued(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f := harness.NewMemStore(), newFake()
+		r := runtime(t, st, f)
+		s := create(t, r)
+		submit(t, s, text("a", "hi"))
+		run := <-f.runs
+		submit(t, s, text("b", "next"))
+		v, err := harness.OpenView(bg, st, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.View().Queued[0] = "x"
+		v.Session().Queued[0] = "x"
+		if got := s.View().Queued[0]; got != "b" {
+			t.Fatalf("Session.View Queued[0] = %q after a caller write, want b", got)
+		}
+		if got := v.Session().Queued[0]; got != "b" {
+			t.Fatalf("View.Session Queued[0] = %q after a caller write, want b", got)
+		}
+		run.end()
+		(<-f.runs).end()
+		closeRuntime(t, r)
+	})
+}
+
+func TestOpenViewEventsEndAtTheHeadItRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f := harness.NewMemStore(), newFake()
+		r := runtime(t, st, f)
+		s := create(t, r)
+		v, err := harness.OpenView(bg, st, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		submit(t, s, text("a", "hi"))
+		var seqs []uint64
+		for e, err := range v.Events(bg, 0) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			seqs = append(seqs, e.Seq)
+		}
+		if want := v.Session().HeadSeq; len(seqs) == 0 || seqs[len(seqs)-1] != want {
+			t.Fatalf("View.Events seqs = %v, want the last to be %d", seqs, want)
+		}
+		(<-f.runs).end()
+		closeRuntime(t, r)
+	})
+}
+
+// blocking is an Owner whose Acquire waits for ctx and reports that it started.
+type blocking struct{ entered chan struct{} }
+
+func (b blocking) Acquire(ctx context.Context, _ string) (harness.Ownership, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestCloseEndsAnOpenThatWaitsForOwnership(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := blocking{entered: make(chan struct{})}
+		r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: b}, newFake())
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened := make(chan error, 1)
+		go func() { _, err := r.Open(bg, "s1"); opened <- err }()
+		<-b.entered
+		ctx, cancel := context.WithCancel(bg)
+		cancel()
+		if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close = %v, want context.Canceled", err)
+		}
+		synctest.Wait()
+		select {
+		case err := <-opened:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Open = %v, want context.Canceled", err)
+			}
+		default:
+			t.Fatal("Open still waits for ownership after Close returned")
+		}
+	})
+}

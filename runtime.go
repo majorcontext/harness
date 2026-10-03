@@ -99,7 +99,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
 		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}}
-	return r.load(ctx, id, true, func(cfg session.Config) (*session.Actor, error) {
+	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
 		return session.Create(ctx, cfg, created)
 	})
 }
@@ -110,12 +110,12 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 	if err := checkName("session", id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return r.load(ctx, id, false, func(cfg session.Config) (*session.Actor, error) {
+	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
 		return session.Open(ctx, cfg)
 	})
 }
 
-func (r *Runtime) load(ctx context.Context, id string, create bool, start func(session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) load(ctx context.Context, id string, create bool, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
 	for {
 		r.mu.Lock()
 		if r.closed {
@@ -168,12 +168,15 @@ func (r *Runtime) forget(id string, e *entry) {
 	}
 }
 
-func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(r.base, cancel)()
 	own, err := r.owner.Acquire(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	a, err := start(session.Config{
+	a, err := start(ctx, session.Config{
 		ID:        id,
 		Log:       storeLog{r.store, id},
 		Ownership: own,

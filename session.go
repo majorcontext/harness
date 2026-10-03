@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
@@ -16,7 +17,12 @@ type Session struct {
 }
 
 // View returns the session as of its last durable record.
-func (s *Session) View() protocol.Session { return s.a.View().Session }
+func (s *Session) View() protocol.Session { return detach(s.a.View().Session) }
+
+func detach(s protocol.Session) protocol.Session {
+	s.Queued = slices.Clone(s.Queued)
+	return s
+}
 
 // Submit admits an input. It starts a turn when none runs and queues the
 // input otherwise. A steer input joins the running turn at its next item
@@ -92,9 +98,9 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 }
 
 // Session returns the session as of OpenView.
-func (v *View) Session() protocol.Session { return v.state }
+func (v *View) Session() protocol.Session { return detach(v.state) }
 
-// Events yields the events in the store after seq and ends at the head.
+// Events yields the events after seq and ends at the head that OpenView read.
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
-	return session.Stored(ctx, storeLog{v.st, v.id}, after)
+	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
 }
