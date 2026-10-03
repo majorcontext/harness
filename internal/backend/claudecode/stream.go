@@ -102,11 +102,8 @@ func (r *run) finish(ctx context.Context, err error) error {
 		r.proc.Interrupt()
 	}
 	exit := r.proc.Finish(grace, r.tail)
-	if r.stopped && (err == nil || errors.Is(err, context.Cause(ctx))) {
-		err = nil
-		if r.result == nil || r.result.IsError {
-			err = context.Cause(ctx)
-		}
+	if r.stopped {
+		err = stopError(err, context.Cause(ctx), r.result)
 	}
 	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
 	if r.taken && err != nil && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
@@ -118,6 +115,18 @@ func (r *run) finish(ctx context.Context, err error) error {
 		}
 	}
 	return err
+}
+
+// stopError returns the turn error of a run that the stop cause ended.
+// drive returned err; a stopped run completes only on a success result.
+func stopError(err, cause error, res *envelope) error {
+	if err != nil && !errors.Is(err, errExited) && !errors.Is(err, cause) {
+		return err
+	}
+	if res == nil || res.IsError {
+		return cause
+	}
+	return nil
 }
 
 // outcome returns the turn error of a run that ended with err and exit.

@@ -389,15 +389,17 @@ func TestClaudeCodeSteerReachesStdin(t *testing.T) {
 func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 	const stopped = "turn.ended interrupted stopped"
 	for _, tc := range []struct {
-		mode string
-		want []string
+		mode     string
+		want     []string
+		noResult bool
 	}{
-		{"hang_after_text", []string{"item.completed assistant Working on it.", stopped}},
-		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted, stopped}},
-		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted, stopped}},
-		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", stopped}},
-		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "turn.ended completed"}},
-		{"placeholder_on_interrupt", []string{stopped}},
+		{"hang_after_text", []string{"item.completed assistant Working on it.", stopped}, false},
+		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted, stopped}, false},
+		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted, stopped}, false},
+		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", stopped}, false},
+		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "turn.ended completed"}, false},
+		{"placeholder_on_interrupt", []string{stopped}, false},
+		{"exit_on_interrupt", []string{stopped}, true},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			signals := filepath.Join(t.TempDir(), "signals")
@@ -418,8 +420,12 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 			if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
 				t.Errorf("signals = %q, want one SIGINT", got)
 			}
-			if u := endedUsage(t, st); u.InputTokens != 7 || u.OutputTokens != 2 {
-				t.Errorf("turn usage = %+v, want the usage of the result after the SIGINT", u)
+			wantUsage := eventlog.Usage{InputTokens: 7, OutputTokens: 2}
+			if tc.noResult {
+				wantUsage = eventlog.Usage{}
+			}
+			if u := endedUsage(t, st); u.InputTokens != wantUsage.InputTokens || u.OutputTokens != wantUsage.OutputTokens {
+				t.Errorf("turn usage = %+v, want %+v from the result after the SIGINT", u, wantUsage)
 			}
 		})
 	}
