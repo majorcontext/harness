@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/provider"
 )
 
 // TestDeleteGoalNonResidentClearsAndJournals is issue #78's regression test:
@@ -22,7 +23,11 @@ import (
 // right back, the exact operator trap this test guards against.
 func TestDeleteGoalNonResidentClearsAndJournals(t *testing.T) {
 	dir := t.TempDir()
-	prov := &goalProv{name: "test"}
+	prov := &goalProv{
+		name:   "test",
+		worker: [][]provider.Event{asstTurn("try 1")},
+		eval:   [][]provider.Event{asstTurn("NOT MET: nope")},
+	}
 	mutate := func(o *Options) {
 		o.GoalEvaluator = message.ModelRef{Provider: prov.Name(), Model: "eval"}
 	}
@@ -31,16 +36,13 @@ func TestDeleteGoalNonResidentClearsAndJournals(t *testing.T) {
 	h1 := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv1, ts: ts1}
 
 	id := h1.createSession("test/m1")
-	resp, data := h1.do("POST", "/session/"+id+"/goal", map[string]any{"condition": "impossible", "defer": true})
-	if resp.StatusCode != 202 {
-		t.Fatalf("POST goal status %d: %s", resp.StatusCode, data)
-	}
+	h1.leaveGoalActive(id, "impossible", prov, 0)
 	if err := srv1.Close(); err != nil {
 		t.Fatalf("closing first server: %v", err)
 	}
 	ts1.Close()
 
-	// Restart: the goal is active (armed, never run or cleared) with
+	// Restart: the goal is active (aborted, never cleared) with
 	// no loop attached in the new process -- pauseArmedGoalsAtBoot marks it
 	// paused/restart. Nothing has touched the session in srv2 yet, so it is
 	// not resident.
@@ -60,7 +62,7 @@ func TestDeleteGoalNonResidentClearsAndJournals(t *testing.T) {
 		t.Fatal("test setup invariant broken: session must be non-resident before DELETE")
 	}
 
-	resp, data = h2.do("DELETE", "/session/"+id+"/goal", nil)
+	resp, data := h2.do("DELETE", "/session/"+id+"/goal", nil)
 	if resp.StatusCode != 204 {
 		t.Fatalf("DELETE goal status %d: %s", resp.StatusCode, data)
 	}

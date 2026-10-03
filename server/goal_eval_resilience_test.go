@@ -345,15 +345,16 @@ func TestGoalEvalFailedAdvisoryDuringRunNoSessionErrorOrTurnEnd(t *testing.T) {
 // parked in flight, and a drain with an expired context cancels the loop
 // instead of clearing the goal — the last durable goal.* record is
 // goal.eval_failed(count=2), with nothing after it to reset the streak, so
-// eval_failures must read 2 both before and after the restart. Two boundaries pay two backoff waits
-// (goalRetryDelay(1)+goalRetryDelay(2) == 1s+4s == 5s of real wall-clock
-// time); per AGENTS.md's synctest rule this runs on fake time inside a bubble,
-// driving handleGoal directly with an httptest.ResponseRecorder and reading
-// state through handleGet (no real listener; real network I/O does not work in
-// a bubble) so those backoffs cost nothing. The restart is a SECOND newServer
+// eval_failures must read 2 both before and after the restart. Two
+// boundaries pay two backoff waits (goalRetryDelay(1)+goalRetryDelay(2) ==
+// 1s+4s == 5s of real wall-clock time); per AGENTS.md's synctest rule this
+// runs on fake time inside a bubble, driving handleGoal directly with an
+// httptest.ResponseRecorder and reading state through handleGet (no real
+// listener; real network I/O does not work in a bubble) so those backoffs
+// cost nothing. The restart is a SECOND newServer
 // over the SAME dir — ADOPT — whose New reconciles the on-disk journal
 // synchronously (file I/O, which the terminal test above already exercises in
-// a bubble); srv1.wg.Wait guarantees every durable goal.eval_failed record is
+// a bubble); srv1.Drain guarantees every durable goal.eval_failed record is
 // flushed before the second server replays it.
 func TestGoalEvalFailuresSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
