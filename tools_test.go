@@ -99,8 +99,8 @@ func TestEmbedderTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			converse(t, sess, "run")
-			wantLog(t, st, 2, "input.admitted a", "turn.started a", "item.completed assistant call_1",
-				"item.completed tool call_1 "+tc.want, "item.completed assistant done", "turn.ended completed")
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant call_1",
+				"item.completed tool call_1 "+tc.want, "context.measured", "item.completed assistant done", "turn.ended completed")
 			reqs := s.Requests()
 			for i, req := range reqs {
 				if !slices.Equal(req.Tools, tc.tools) {
@@ -137,7 +137,7 @@ func TestInterruptStopsARunningTool(t *testing.T) {
 	if err := sess.Interrupt(bg, protocol.Interrupt{}); err != nil {
 		t.Fatal(err)
 	}
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "item.completed assistant call_1",
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant call_1",
 		"item.completed tool call_1 "+interrupted, "turn.ended interrupted stopped")
 }
 

@@ -80,9 +80,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
-			u := ev.Usage
-			out.Telemetry(turn.Telemetry{Usage: eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
-				CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}})
+			out.Telemetry(b.telemetry(req.Model, ev.Usage))
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
 				return turn.Result{}, fmt.Errorf("%w: openai: the response has no output", turn.ErrRetryable)
@@ -92,6 +90,14 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			}
 		}
 	}
+}
+
+// telemetry reports u, and the prompt of the call as the context reading.
+func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {
+	usage := eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
+		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
+	return turn.Telemetry{Usage: usage, Context: eventlog.ContextMeasured{Source: b.client.Family,
+		Tokens: usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens, Window: int64(b.Capabilities(model).ContextWindow)}}
 }
 
 // Close closes the pooled websocket connections. Call it when no Run is
@@ -115,8 +121,12 @@ func request(req turn.Request) (*provider.Request, error) {
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	return &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
-		SessionKey: req.SessionID}, nil
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
+		SessionKey: req.SessionID}
+	if req.Instructions != "" {
+		preq.System = []string{req.Instructions}
+	}
+	return preq, nil
 }
 
 func classify(err error) error {

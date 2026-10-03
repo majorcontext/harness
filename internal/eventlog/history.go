@@ -51,3 +51,25 @@ func cloneParts(parts []Part) []Part {
 	}
 	return parts
 }
+
+// Fold returns the history before the newest keep turns, and the seq before
+// the first kept turn. A user message starts a turn. ok is false when keep
+// turns or fewer exist, or when only the compaction summary would fold.
+func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
+	h := s.History()
+	lead := len(h) - len(s.history)
+	var starts []int
+	for i, m := range h {
+		if m.Role == RoleUser {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) <= keep {
+		return nil, 0, false
+	}
+	end := starts[len(starts)-keep]
+	if end <= lead {
+		return nil, 0, false
+	}
+	return h[:end], s.history[end-lead].seq - 1, true
+}

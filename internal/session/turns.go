@@ -30,6 +30,8 @@ type running struct {
 	steered  chan struct{}
 	usage    eventlog.Usage
 	waiters  []func(struct{}, error)
+	// done receives the outcome of a Compact that this run serves.
+	done func(struct{}, error)
 }
 
 // Submit admits in and returns the seq of its input.admitted record. A
@@ -60,9 +62,9 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string) (uint64, e
 	}
 	events := append(a.dismissRequests(), in)
 	seq := a.state.Head() + uint64(len(events))
-	if r := a.run; r != nil {
+	if r := a.run; r != nil || a.autoCompact() {
 		err := a.append(events...)
-		if err == nil && in.Delivery == eventlog.DeliverySteer && r.steering {
+		if r != nil && err == nil && in.Delivery == eventlog.DeliverySteer && r.steering {
 			select {
 			case r.steered <- struct{}{}:
 			default:
@@ -213,18 +215,23 @@ func (a *Actor) ended(turnID string, runErr error) {
 	for _, w := range r.waiters {
 		w(struct{}{}, err)
 	}
+	if r.done != nil {
+		r.done(struct{}{}, errors.Join(runErr, err))
+	}
 	if len(a.releasing) > 0 {
 		a.stop(err)
 		return
 	}
 	if next && err == nil {
-		a.next()
+		a.next(true)
 	}
 }
 
-func (a *Actor) next() {
+// next starts the next queued input. With check, a compaction runs first
+// when the context reading passes the threshold.
+func (a *Actor) next(check bool) {
 	q := a.state.Queue()
-	if len(q) == 0 {
+	if len(q) == 0 || check && a.autoCompact() {
 		return
 	}
 	id := newID("turn")

@@ -21,6 +21,7 @@ type Session interface {
 	View() protocol.Session
 	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
+	Compact(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 }
@@ -52,6 +53,7 @@ var statuses = map[string]int{
 	protocol.CodeSessionNotOwned:  http.StatusConflict,
 	protocol.CodeInputConflict:    http.StatusConflict,
 	protocol.CodeTurnMismatch:     http.StatusConflict,
+	protocol.CodeSessionBusy:      http.StatusConflict,
 	protocol.CodeModelUnavailable: http.StatusConflict,
 	protocol.CodePayloadTooLarge:  http.StatusRequestEntityTooLarge,
 	protocol.CodeDraining:         http.StatusServiceUnavailable,
@@ -76,6 +78,7 @@ func New[S Session](rt Runtime[S], codes []Code) http.Handler {
 	mux.HandleFunc("PATCH /sessions/{id}", h.session(h.update))
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
 	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
+	mux.HandleFunc("POST /sessions/{id}/compact", h.session(h.compact))
 	mux.HandleFunc("GET /sessions/{id}/events", h.session(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
@@ -268,6 +271,14 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	if err := s.Interrupt(r.Context(), req); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
+	if err := s.Compact(r.Context()); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

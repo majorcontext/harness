@@ -112,7 +112,7 @@ var codexTurns = []struct {
 	{name: "a text turn records the assistant item",
 		steps:  []harnesstest.Step{{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "item.completed assistant hello", "turn.ended completed"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed"},
 		calls:  []string{codexPost}},
 	{name: "a call to an unknown tool gets an error result and the next turn sees it",
 		steps: []harnesstest.Step{
@@ -120,9 +120,9 @@ var codexTurns = []struct {
 			{Name: "refused", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "noted"}},
 			{Name: "after", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}}},
 		inputs: []string{"run", "again"},
-		want: []string{"input.admitted a", "turn.started a", "item.completed assistant call_1", "item.completed tool call_1 " + noTool + "bash",
-			"item.completed assistant noted", "turn.ended completed",
-			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
+		want: []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant call_1", "item.completed tool call_1 " + noTool + "bash",
+			"context.measured", "item.completed assistant noted", "turn.ended completed",
+			"input.admitted b", "turn.started b", "context.measured", "item.completed assistant ok", "turn.ended completed"},
 		calls: []string{codexPost, codexPost, codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
 			got := transcript(s.Requests()[2])
@@ -141,7 +141,7 @@ var codexTurns = []struct {
 	{name: "a response with no output fails the turn as retryable",
 		steps:  []harnesstest.Step{{Name: "empty", Match: harnesstest.LastUserText("hi")}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
 		calls:  []string{codexPost}},
 	{name: "the reasoning item of a tool call turn is replayed",
 		opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan"}}}},
@@ -150,9 +150,9 @@ var codexTurns = []struct {
 			{Name: "refused", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "noted"}},
 			{Name: "after", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}}},
 		inputs: []string{"run", "again"},
-		want: []string{"input.admitted a", "turn.started a", "item.completed assistant plan call_1", "item.completed tool call_1 " + noTool + "bash",
-			"item.completed assistant noted", "turn.ended completed",
-			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
+		want: []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant plan call_1", "item.completed tool call_1 " + noTool + "bash",
+			"context.measured", "item.completed assistant noted", "turn.ended completed",
+			"input.admitted b", "turn.started b", "context.measured", "item.completed assistant ok", "turn.ended completed"},
 		calls: []string{codexPost, codexPost, codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
 			if got := s.WireEvents()[1].ReasoningItems; got != 1 {
@@ -163,18 +163,18 @@ var codexTurns = []struct {
 		opts:   harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"empty": {Reasoning: []string{"plan"}}}},
 		steps:  []harnesstest.Step{{Name: "empty", Match: harnesstest.LastUserText("hi")}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
 		calls:  []string{codexPost}},
 	{name: "the ModelTransport alone can supply the credentials", injected: true,
 		opts:   harnesstest.OpenAIOptions{APIKey: "k"},
 		steps:  []harnesstest.Step{{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "item.completed assistant hello", "turn.ended completed"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed"},
 		calls:  []string{codexPost}},
 	{name: "the session settings reach the request", effort: "high", tier: "priority",
 		steps:  []harnesstest.Step{{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "item.completed assistant hello", "turn.ended completed"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed"},
 		calls:  []string{codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
 			if e, tier := s.WireEvents()[0].ReasoningEffort, s.Requests()[0].ServiceTier; e != "high" || tier != "priority" {
@@ -184,7 +184,7 @@ var codexTurns = []struct {
 	{name: "the websocket dial goes through the transport", websocket: true,
 		steps:  []harnesstest.Step{{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "item.completed assistant hello", "turn.ended completed"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed"},
 		calls:  []string{"codex GET /backend-api/codex/responses"}},
 }
 

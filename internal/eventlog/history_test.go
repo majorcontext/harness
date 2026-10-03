@@ -39,3 +39,32 @@ func TestHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestFold(t *testing.T) {
+	turn := func(n, in, text string) []Event {
+		return []Event{says(in, DeliveryQueue, text), start(n, in), end(n, StopCompleted, "")}
+	}
+	three := with(with(with(base, turn("t1", "a", "one")...), turn("t2", "b", "two")...), turn("t3", "c", "three")...)
+	summarized := with(with(with(base, turn("t1", "a", "one")...), CompactionApplied{FromSeq: 1, ToSeq: 4, Summary: "sum"}), turn("t2", "b", "two")...)
+	for _, tc := range []struct {
+		name   string
+		events []Event
+		keep   int
+		want   []Message
+		to     uint64
+	}{
+		{"no more turns than keep fold nothing", with(with(base, turn("t1", "a", "one")...), turn("t2", "b", "two")...), 2, nil, 0},
+		{"the turns before the newest keep fold up to the first kept turn", three, 2, []Message{userText("one")}, 5},
+		{"keep one folds every turn but the newest", three, 1, []Message{userText("one"), userText("two")}, 8},
+		{"a summary alone folds nothing", with(summarized, turn("t3", "c", "three")...), 2, nil, 0},
+		{"a summary folds with the turns after it", with(summarized, turn("t3", "c", "three")...), 1,
+			[]Message{userText("sum"), userText("two")}, 9},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, to, ok := replay(t, tc.events).Fold(tc.keep)
+			if !reflect.DeepEqual(got, tc.want) || to != tc.to || ok != (tc.to != 0) {
+				t.Fatalf("Fold(%d) = %+v, %d, %v\nwant %+v, %d", tc.keep, got, to, ok, tc.want, tc.to)
+			}
+		})
+	}
+}
