@@ -164,6 +164,7 @@ func TestApply(t *testing.T) {
 		{"a suspended turn does not end", with(suspended, end("t1", StopCompleted, "")), "turn t1 is suspended", view{}},
 		{"an interrupted turn names its cause", with(running, end("t1", StopInterrupted, "")), "interrupt cause", view{}},
 		{"a goal counts evaluated turns", evaluated, "", view{Status: StatusIdle, Goal: "active 1"}},
+		{"a turn is evaluated once", with(evaluated, verdict("t1")), "turn t1 was evaluated", view{}},
 		{"a new goal resets the count", with(evaluated, setGoal), "", view{Status: StatusIdle, Goal: "active 0"}},
 		{"a paused goal becomes active", with(base, setGoal, goal(GoalPaused), goal(GoalActive)), "", view{Status: StatusIdle, Goal: "active 0"}},
 		{"an achieved goal stays achieved", with(base, setGoal, goal(GoalAchieved), goal(GoalActive)), "goal achieved cannot become active", view{}},

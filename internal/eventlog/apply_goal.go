@@ -25,10 +25,13 @@ func (s *State) applyGoalEvaluated(e GoalEvaluated) error {
 		return illegal("no active goal to evaluate")
 	case s.lastEnded.TurnID != e.TurnID || s.turn.ID != "":
 		return illegal("turn %s is not the last ended turn", e.TurnID)
+	case s.evaluated == e.TurnID:
+		return illegal("turn %s was evaluated", e.TurnID)
 	case e.Verdict != VerdictMet && e.Verdict != VerdictNotMet && e.Verdict != VerdictImpossible:
 		return illegal("goal verdict %q", e.Verdict)
 	}
 	s.goal.Turns++
+	s.evaluated = e.TurnID
 	return nil
 }
 

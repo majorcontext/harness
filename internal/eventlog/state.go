@@ -157,6 +157,7 @@ type State struct {
 	turn       Turn
 	turnIDs    map[string]bool
 	lastEnded  TurnEnded
+	evaluated  string
 	calls      []OpenToolCall
 	requests   []RequestOpened
 	goal       Goal
