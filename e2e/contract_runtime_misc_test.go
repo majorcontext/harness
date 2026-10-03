@@ -56,7 +56,7 @@ func TestContractRuntimeSessionSyncUnknownValue(t *testing.T) {
 	cmd := exec.CommandContext(ctx, harnessBin, "serve", "-addr", freeAddr(t))
 	cmd.Dir = t.TempDir()
 	cmd.Env = cleanEnv(map[string]string{
-		"HARNESS_RUN_TOKEN":   testToken,
+		"HARNESS_RUN_TOKEN":   "e2e-run-token",
 		"HARNESS_SESSION_DIR": t.TempDir(),
 		"HARNESS_CONFIG":      cfgPath,
 		"ANTHROPIC_API_KEY":   "e2e-dummy-key",

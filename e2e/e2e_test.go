@@ -28,7 +28,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -95,8 +94,6 @@ func buildHarness() (string, func(), error) {
 	}
 	return bin, func() { os.RemoveAll(dir) }, nil
 }
-
-const testToken = "e2e-run-token"
 
 // --- fake Anthropic Messages API ---------------------------------------
 
@@ -213,6 +210,7 @@ type serveProc struct {
 	*procGroup
 	t      *testing.T
 	addr   string
+	token  string
 	stderr *lockedBuffer
 }
 
@@ -229,38 +227,11 @@ func startServe(t *testing.T, sessDir, configPath string) *serveProc {
 // (the engine sets each session's WorkDir to the serve process's cwd).
 func startServeIn(t *testing.T, sessDir, configPath, workDir string) *serveProc {
 	t.Helper()
-	addr := freeAddr(t)
-	cmd := exec.Command(harnessBin, "serve", "-addr", addr)
-	cmd.Dir = workDir
-	cmd.Env = cleanEnv(map[string]string{
-		"HARNESS_RUN_TOKEN":   testToken,
+	return startServeProc(t, freeAddr, workDir, map[string]string{
 		"HARNESS_SESSION_DIR": sessDir,
 		"HARNESS_CONFIG":      configPath,
 		"ANTHROPIC_API_KEY":   "e2e-dummy-key",
 	})
-	stderr := &lockedBuffer{}
-	cmd.Stderr = stderr
-	p := &serveProc{procGroup: startGroup(t, cmd), t: t, addr: addr, stderr: stderr}
-	p.waitHealthy()
-	return p
-}
-
-// waitHealthy polls GET /health until 200 or a deadline. Real cross-process
-// startup: poll on a short interval bounded by a deadline (synctest N/A).
-func (p *serveProc) waitHealthy() {
-	p.t.Helper()
-	if !testpoll.UntilNoT(10*time.Second, func() bool {
-		resp, err := http.Get("http://" + p.addr + "/health")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return true
-			}
-		}
-		return false
-	}, 15*time.Millisecond) {
-		p.t.Fatalf("serve did not become healthy on %s\nstderr:\n%s", p.addr, p.stderr.String())
-	}
 }
 
 // freeAddr returns a localhost address that was free a moment ago. There is a
@@ -337,7 +308,7 @@ func (p *serveProc) send(method, path string, body any) (*http.Response, []byte,
 	if err != nil {
 		p.t.Fatalf("new request: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Authorization", "Bearer "+p.token)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, nil, err

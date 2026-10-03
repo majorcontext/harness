@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -56,15 +55,11 @@ func (l claudeLane) newDriver(t *testing.T, modelURL string) driver {
 
 func (d *claudeDriver) serve(t *testing.T) *serveProc {
 	t.Helper()
-	addr := freeAddr(t)
-	args := []string{"serve", "-addr", addr}
+	var args []string
 	if d.lane.ask {
 		args = append(args, "--ask-user-question")
 	}
-	cmd := exec.Command(harnessBin, args...)
-	cmd.Dir = d.workDir
-	cmd.Env = cleanEnv(map[string]string{
-		"HARNESS_RUN_TOKEN":     testToken,
+	return startServeProc(t, freeAddr, d.workDir, map[string]string{
 		"HARNESS_SESSION_DIR":   d.sessDir,
 		"HARNESS_CONFIG":        d.config,
 		"ANTHROPIC_API_KEY":     "e2e-dummy-key",
@@ -72,12 +67,7 @@ func (d *claudeDriver) serve(t *testing.T) *serveProc {
 		"FAKE_CLAUDE_LOG":       d.argvLog,
 		"FAKE_CLAUDE_STDIN_LOG": d.stdinLog,
 		"FAKE_CLAUDE_STATE":     filepath.Join(d.stateDir, "parked"),
-	})
-	stderr := &lockedBuffer{}
-	cmd.Stderr = stderr
-	p := &serveProc{procGroup: startGroup(t, cmd), t: t, addr: addr, stderr: stderr}
-	p.waitHealthy()
-	return p
+	}, args...)
 }
 
 func (d *claudeDriver) Restart(t *testing.T, kill bool) {
