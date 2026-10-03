@@ -98,28 +98,53 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 }
 
 func TestOpenEndsACrashedTurn(t *testing.T) {
-	eachStore(t, func(t *testing.T, openStore func() harness.Store) {
-		f1, f2 := newFake(), newFake()
-		k := killable{make(chan struct{})}
-		r1, err := harness.NewWithBackend(harness.Options{Store: openStore(), Owner: k}, f1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		submit(t, create(t, r1), text("a", "hi"))
-		(<-f1.runs).emit(callTool("c1"))
-		close(k.lost)
-		synctest.Wait()
-		r2 := runtime(t, openStore(), f2)
-		s := open(t, r2)
-		noRun(t, f2)
-		wantLog(t, openStore(), 4, "item.completed assistant c1", "owner.acquired 1",
-			"item.completed tool c1 "+cutOff, "turn.ended interrupted crashed")
-		if v := s.View(); v.Status != protocol.StatusIdle || v.TurnID != "" {
-			t.Fatalf("View = %+v, want idle", v)
-		}
-		closeRuntime(t, r1)
-		closeRuntime(t, r2)
-	})
+	crashed := []string{"item.completed assistant c1", "owner.acquired 1", "item.completed tool c1 " + cutOff, "turn.ended interrupted crashed"}
+	for _, tc := range []struct {
+		name    string
+		queued  []protocol.Input
+		want    []string
+		started []string
+		status  string
+	}{
+		{"with no queued input the session waits for input", nil, crashed, nil, protocol.StatusIdle},
+		{"the same Open starts the next queued input", []protocol.Input{text("b", "two"), text("c", "three")},
+			append(append([]string{"input.admitted b", "input.admitted c"}, crashed...), "turn.started b"),
+			[]string{"two"}, protocol.StatusRunning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eachStore(t, func(t *testing.T, openStore func() harness.Store) {
+				f1, f2 := newFake(), newFake()
+				k := killable{make(chan struct{})}
+				r1, err := harness.NewWithBackend(harness.Options{Store: openStore(), Owner: k}, f1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s1 := create(t, r1)
+				submit(t, s1, text("a", "hi"))
+				run := <-f1.runs
+				for _, in := range tc.queued {
+					submit(t, s1, in)
+				}
+				run.emit(callTool("c1"))
+				close(k.lost)
+				synctest.Wait()
+				r2 := runtime(t, openStore(), f2)
+				s := open(t, r2)
+				var started []string
+				select {
+				case next := <-f2.runs:
+					started = []string{next.req.Input[0].Parts[0].Text}
+				default:
+				}
+				wantLog(t, openStore(), 4, tc.want...)
+				if !slices.Equal(started, tc.started) || s.View().Status != tc.status {
+					t.Fatalf("started %q with status %s, want %q with status %s", started, s.View().Status, tc.started, tc.status)
+				}
+				closeRuntime(t, r1)
+				closeRuntime(t, r2)
+			})
+		})
+	}
 }
 
 func TestLostStopsTheActorBeforeItsNextAppend(t *testing.T) {

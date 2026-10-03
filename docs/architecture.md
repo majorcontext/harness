@@ -355,7 +355,7 @@ A turn ends early for one of four causes. A live owner carries the first three w
 | `stopped` | User interrupt | Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs |
 | `goal_cleared` | `ClearGoal` during a goal turn | Same as `stopped` |
 | `handoff` | `Session.Release`, `Runtime.Close` | Stop at an item boundary: admit no new tool call, let running tools finish within the budget, append `turn.suspended`. A delegated backend (`OwnsLoop`) cannot stop at an item boundary, so a handoff interrupts it, records every item that it already wrote, gives each open tool call a cut-off result, and appends `turn.suspended`. A suspended turn has no open tool call, so the next owner resumes it automatically. |
-| `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then waits for input, as in Claude Code. |
+| `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then starts the next queued input, or waits for input when none is queued. |
 
 No tool call is ever re-run after a stop. This matches Codex, Claude Code, opencode, pi, and fx. The log stays strictly append-only, and a client hides output by cause if it wants to.
 
@@ -744,6 +744,6 @@ Decided:
 - Embedders inject model credentials through `Options.ModelTransport`.
 - Every early stop keeps the partial; clearing a goal is a stop with cause `goal_cleared`.
 - One `pgstore` backs home sessions and the box mirror; `OpenView` reads both.
-- Handoff stops at an item boundary and resumes; a crash ends the turn, marks open tool calls cut off, and waits for input. No tool call is ever re-run.
+- Handoff stops at an item boundary and resumes; a crash ends the turn, marks open tool calls cut off, and starts the next queued input or waits for input. No tool call is ever re-run.
 - The scripted model is public as `harness/harnesstest`.
 - There is no comment purge. A history comment leaves when its code is rewritten or deleted; the gates stop new ones.
