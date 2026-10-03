@@ -99,7 +99,7 @@ The Go API:
 ```go
 package harness
 
-func New(opts Options) (*Runtime, error) // no I/O and no store writes until Create or Open
+func New(opts Options) (*Runtime, error) // no I/O; sessions load on Create, Open, or List
 
 type Options struct {
 	Config config.Config
@@ -347,7 +347,7 @@ running ─► completed | interrupted | failed | awaiting_input
 running ─► suspended ─► running   (next owner resumes from the last completed item)
 ```
 
-A turn ends early for one of three causes, carried by `context.WithCancelCause`:
+A turn ends early for one of four causes. A live owner carries the first three with `context.WithCancelCause`; `Open` detects `crashed` in the log:
 
 | Cause | Trigger | Effect |
 | --- | --- | --- |
@@ -449,7 +449,7 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 - One per-session `seq` serves paging and SSE resume.
 - SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A slow subscriber gets a `gap` frame and a close. It never loses a record silently.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver accepts it only if `from_seq` is its head plus one, a record at an existing seq has identical bytes (a duplicate is acknowledged), and the epoch is not older. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
 
 ### Errors
@@ -671,10 +671,10 @@ Boxes has its own re-architecture ("Boxes architecture") built on this one. The 
 | Read-only open | `OpenView` | 2 |
 | Public scripted model | `harness/harnesstest` | 1 |
 | Pump contract | `Sync` and `protocol.SyncBatch` | 2 |
-| `harness.Config` without server dependencies | `harness/config` | 3 |
-| Durable head per session | `View.HeadSeq` (Apply runs after a durable append) | 2 |
+| `config.Config` without server dependencies | `harness/config` | 3 |
+| Durable head per session | `protocol.Session.HeadSeq` from `Session.View()` or `View.Session()` (Apply runs after a durable append) | 2 |
 | Open after a forced stop | the `crashed` cause | 2 |
-| `Models()` with no sessions | `New` does no I/O until `Create` or `Open` | 2 |
+| `Models()` with no sessions | `New` does no I/O | 2 |
 | External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` fires `Lost` | 2 |
 
 Combined sequence:
