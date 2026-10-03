@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -53,7 +55,8 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 		select {
 		case m, ok := <-items:
 			if !ok {
-				return turn.Result{Usage: eventlog.Usage{InputTokens: 3, OutputTokens: 1}}, nil
+				out.Telemetry(turn.Telemetry{Usage: eventlog.Usage{InputTokens: 3, OutputTokens: 1}})
+				return turn.Result{}, nil
 			}
 			if err := f.report(out, m); err != nil {
 				return turn.Result{}, err
@@ -317,6 +320,69 @@ func TestQueuedInputsRunInOrder(t *testing.T) {
 				want := append([]string{"input.admitted a", "turn.started a", "item.completed assistant partial",
 					"item.completed assistant c1", "input.admitted b"}, tc.want...)
 				wantLog(t, st, 2, append(want, "turn.started b", "turn.ended completed")...)
+				closeRuntime(t, r)
+			})
+		})
+	}
+}
+
+// scripted is a Backend whose Run calls the next step, then repeats the last.
+type scripted struct {
+	steps []func(turn.Sink) error
+	runs  atomic.Int32
+}
+
+func (b *scripted) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
+
+func (b *scripted) Run(_ context.Context, _ turn.Request, out turn.Sink) (turn.Result, error) {
+	n := int(b.runs.Add(1)) - 1
+	return turn.Result{}, b.steps[min(n, len(b.steps)-1)](out)
+}
+
+func TestRetryableErrors(t *testing.T) {
+	errFlaky := fmt.Errorf("%w: flaky", turn.ErrRetryable)
+	flaky := func(turn.Sink) error { return errFlaky }
+	failed := "turn.ended failed " + errFlaky.Error()
+	for _, tc := range []struct {
+		name      string
+		steps     []func(turn.Sink) error
+		interrupt bool
+		runs      int32
+		want      []string
+	}{
+		{name: "a retryable error runs the turn again",
+			steps: []func(turn.Sink) error{flaky, func(out turn.Sink) error { return out.Item(say("done")) }},
+			runs:  2, want: []string{"item.completed assistant done", "turn.ended completed"}},
+		{name: "a retryable error after an item ends the turn",
+			steps: []func(turn.Sink) error{func(out turn.Sink) error { _ = out.Item(callTool("c1")); return errFlaky }},
+			runs:  1, want: []string{"item.completed assistant c1", "item.completed tool c1 " + cutOff, failed}},
+		{name: "the attempts stop after Config.PromptRetries retries",
+			steps: []func(turn.Sink) error{flaky},
+			runs:  4, want: []string{failed}},
+		{name: "an interrupt during the backoff ends the turn",
+			steps: []func(turn.Sink) error{flaky}, interrupt: true,
+			runs: 1, want: []string{"turn.ended interrupted stopped"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				st, b, retries := harness.NewMemStore(), &scripted{steps: tc.steps}, 3
+				r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{PromptRetries: &retries}}, b)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s := create(t, r)
+				if tc.interrupt {
+					submit(t, s, text("a", "hi"))
+					if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					converse(t, s, "hi")
+				}
+				wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
+				if got := b.runs.Load(); got != tc.runs {
+					t.Errorf("runs = %d, want %d", got, tc.runs)
+				}
 				closeRuntime(t, r)
 			})
 		})

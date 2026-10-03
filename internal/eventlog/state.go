@@ -177,6 +177,7 @@ type State struct {
 	compaction CompactionApplied
 	children   map[string]Outcome
 	backends   map[string]string
+	history    []entry
 }
 
 func (s *State) clone() *State {
@@ -188,6 +189,8 @@ func (s *State) clone() *State {
 	c.requests = slices.Clone(s.requests)
 	c.children = maps.Clone(s.children)
 	c.backends = maps.Clone(s.backends)
+	// A full cap makes an append to c copy, so c never writes into s.history.
+	c.history = s.history[:len(s.history):len(s.history)]
 	return &c
 }
 
@@ -222,10 +225,7 @@ func (s *State) Queue() []InputAdmitted {
 }
 
 func cloneInput(in InputAdmitted) InputAdmitted {
-	in.Parts = slices.Clone(in.Parts)
-	for i := range in.Parts {
-		in.Parts[i].Arguments = slices.Clone(in.Parts[i].Arguments)
-	}
+	in.Parts = cloneParts(in.Parts)
 	return in
 }
 
@@ -304,6 +304,7 @@ func (s *State) apply(env Envelope) error {
 	if err := s.step(env); err != nil {
 		return err
 	}
+	s.remember(env)
 	s.head = env.Seq
 	s.updatedAt = env.Time
 	return nil

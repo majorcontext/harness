@@ -52,6 +52,12 @@ type Usage struct {
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
+// Add returns the sum of u and v.
+func (u Usage) Add(v Usage) Usage {
+	return Usage{u.InputTokens + v.InputTokens, u.OutputTokens + v.OutputTokens,
+		u.CacheReadTokens + v.CacheReadTokens, u.CacheWriteTokens + v.CacheWriteTokens}
+}
+
 // SessionCreated is the first record of every session.
 type SessionCreated struct {
 	ParentID string   `json:"parent_id,omitempty"`

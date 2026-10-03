@@ -131,10 +131,7 @@ func (s *State) applyEnded(e TurnEnded) error {
 	}
 	s.turn = Turn{}
 	s.lastEnded = e
-	s.usage.InputTokens += e.Usage.InputTokens
-	s.usage.OutputTokens += e.Usage.OutputTokens
-	s.usage.CacheReadTokens += e.Usage.CacheReadTokens
-	s.usage.CacheWriteTokens += e.Usage.CacheWriteTokens
+	s.usage = s.usage.Add(e.Usage)
 	return nil
 }
 

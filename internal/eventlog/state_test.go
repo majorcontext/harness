@@ -254,6 +254,7 @@ func TestAccessorsDoNotAliasState(t *testing.T) {
 	s.Requests()[0].Payload[0] = 'x'
 	in, _, _ := s.Input("b")
 	in.Parts[0].Text = "x"
+	s.History()[1].Parts[0].Arguments[0] = 'x'
 	if !reflect.DeepEqual(s, replay(t, events)) {
 		t.Fatal("a caller changed the state through an accessor")
 	}
