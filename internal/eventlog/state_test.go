@@ -204,3 +204,9 @@ func TestApply(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckRejectsNilEvent(t *testing.T) {
+	if err := Check(&State{}, []Event{nil}); !errors.Is(err, ErrUnknownKind) {
+		t.Fatalf("Check = %v, want ErrUnknownKind", err)
+	}
+}

@@ -279,6 +279,9 @@ func (s *State) apply(env Envelope) error {
 }
 
 func (s *State) step(env Envelope) error {
+	if env.Event == nil {
+		return fmt.Errorf("%w: nil event", ErrUnknownKind)
+	}
 	if c, ok := env.Event.(SessionCreated); ok {
 		return s.applyCreated(c, env.Time)
 	}
