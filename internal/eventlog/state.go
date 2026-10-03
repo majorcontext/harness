@@ -134,6 +134,11 @@ type Summary struct {
 	UpdatedAt time.Time
 }
 
+type pendingRequest struct {
+	RequestOpened
+	turnID string
+}
+
 type inputState string
 
 const (
@@ -159,7 +164,7 @@ type State struct {
 	lastEnded  TurnEnded
 	evaluated  string
 	calls      []OpenToolCall
-	requests   []RequestOpened
+	requests   []pendingRequest
 	goal       Goal
 	usage      Usage
 	context    ContextMeasured
@@ -201,7 +206,13 @@ func (s *State) Turn() (Turn, bool) { return s.turn, s.turn.ID != "" }
 func (s *State) Queue() []InputAdmitted { return slices.Clone(s.queue) }
 
 // Requests returns the open requests, oldest first.
-func (s *State) Requests() []RequestOpened { return slices.Clone(s.requests) }
+func (s *State) Requests() []RequestOpened {
+	out := make([]RequestOpened, len(s.requests))
+	for i, r := range s.requests {
+		out[i] = r.RequestOpened
+	}
+	return out
+}
 
 // OpenToolCalls returns the tool calls with no result, oldest first.
 func (s *State) OpenToolCalls() []OpenToolCall { return slices.Clone(s.calls) }

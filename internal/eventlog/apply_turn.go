@@ -70,7 +70,7 @@ func (s *State) unanswered() error {
 				open++
 			}
 		}
-		asked := slices.ContainsFunc(s.requests, func(r RequestOpened) bool { return r.ItemID == c.ItemID })
+		asked := slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.ItemID == c.ItemID })
 		if !asked || open > 1 {
 			return illegal("tool call %s has no result", c.CallID)
 		}
@@ -118,8 +118,8 @@ func (s *State) applyEnded(e TurnEnded) error {
 			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Error)
 		}
 	case StopAwaitingInput:
-		if len(s.requests) == 0 {
-			return illegal("turn %s awaits input with no open request", e.TurnID)
+		if !slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.turnID == e.TurnID }) {
+			return illegal("turn %s awaits input with no open request from this turn", e.TurnID)
 		}
 	default:
 		return illegal("turn %s has stop reason %q", e.TurnID, e.StopReason)
@@ -143,7 +143,7 @@ func (s *State) applyRequestOpened(e RequestOpened) error {
 	if e.RequestID == "" || e.ItemID == "" || s.openRequest(e.RequestID) >= 0 {
 		return illegal("request %q on item %q is already open or unnamed", e.RequestID, e.ItemID)
 	}
-	s.requests = append(s.requests, e)
+	s.requests = append(s.requests, pendingRequest{e, s.turn.ID})
 	return nil
 }
 
@@ -160,5 +160,5 @@ func (s *State) applyRequestResolved(e RequestResolved) error {
 }
 
 func (s *State) openRequest(id string) int {
-	return slices.IndexFunc(s.requests, func(r RequestOpened) bool { return r.RequestID == id })
+	return slices.IndexFunc(s.requests, func(r pendingRequest) bool { return r.RequestID == id })
 }

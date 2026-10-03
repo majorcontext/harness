@@ -152,6 +152,7 @@ func TestApply(t *testing.T) {
 		{"a request holds a tool call open past the turn", with(asking, end("t1", StopAwaitingInput, "")), "", view{Status: StatusWaiting, Requests: []string{"r1"}, Calls: []string{"c1"}}},
 		{"a request holds open only the one call of its item", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), end("t1", StopAwaitingInput, "")), "tool call c1 has no result", view{}},
 		{"awaiting_input needs an open request", with(running, end("t1", StopAwaitingInput, "")), "no open request", view{}},
+		{"awaiting_input needs a request from its own turn", with(asking, result("t1", "i2", "c1"), end("t1", StopCompleted, ""), admit("b"), start("t2", "b"), end("t2", StopAwaitingInput, "")), "turn t2 awaits input with no open request from this turn", view{}},
 		{"a request resolves once", with(asking, resolve("r1"), resolve("r1")), "request r1 is not open", view{}},
 		{"a request opens only in a running turn", with(base, ask("r1", "i1")), "no running turn", view{}},
 		{"a handoff suspends the turn", suspended, "", view{Status: StatusIdle, Turn: "t1 suspended"}},
