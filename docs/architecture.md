@@ -394,6 +394,19 @@ pending ─► answered | dismissed
 
 Any backend can open a request. An input admitted while a request is open dismisses it first.
 
+### Compaction
+
+Compaction runs as the run of the actor, never beside a turn. It copies the engine rules.
+
+- A turn starts at a user message. A compaction folds every turn before the newest `compaction_keep_turns` (default 2). It never folds only the previous summary.
+- `to_seq` is the seq before the first kept message. The `input.admitted` record of a kept or queued input can have a lower seq, so a reader that hides `from_seq` through `to_seq` keeps each `input.admitted` record.
+- A backend without `OwnsContext` summarizes the folded messages with the session model and the engine compaction prompt. The actor appends `compaction.applied` with `by_backend: false`.
+- A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`.
+- `Compact()` fails with `session_busy` while a turn runs or inputs wait.
+- Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
+- A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
+- `Open` starts the next queued input when no turn is open. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
+
 ### Children
 
 A child is a session with `parent_id`. The parent holds a handle, not the child's state. When a child turn ends, the child sends `child.settled` to the parent, and the parent admits the outcome as an input with `source: child`. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
@@ -467,6 +480,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `session_not_owned` | 409 |
 | `input_conflict` | 409 |
 | `turn_mismatch` | 409 |
+| `session_busy` | 409 |
 | `model_unavailable` | 409 |
 | `payload_too_large` | 413 |
 | `draining` | 503 |

@@ -162,17 +162,17 @@ func TestSessionOverHTTP(t *testing.T) {
 		want(t, "receipt", got, protocol.Admitted{InputID: "a", Seq: 3})
 	}
 	want(t, "turn frames", live.until(t, "turn.ended"),
-		[]string{"3 input.admitted", "4 turn.started", "~4 item.started", "~4 item.delta text hello", "5 item.completed", "6 turn.ended"})
+		[]string{"3 input.admitted", "4 turn.started", "~4 item.started", "~4 item.delta text hello", "5 context.measured", "6 item.completed", "7 turn.ended"})
 
 	for _, tc := range []struct{ query, lastID string }{{"?after=4", ""}, {"", "4"}, {"?after=1", "4"}} {
 		want(t, "resume "+tc.query+" "+tc.lastID, subscribe(t, s1+"/events"+tc.query, tc.lastID).until(t, "turn.ended"),
-			[]string{"5 item.completed", "6 turn.ended"})
+			[]string{"5 context.measured", "6 item.completed", "7 turn.ended"})
 	}
 	for _, tc := range []struct {
 		query string
 		kinds []string
 		next  uint64
-	}{{"?after=2&limit=2", []string{"input.admitted", "turn.started"}, 4}, {"?after=4", []string{"item.completed", "turn.ended"}, 0}} {
+	}{{"?after=2&limit=2", []string{"input.admitted", "turn.started"}, 4}, {"?after=4", []string{"context.measured", "item.completed", "turn.ended"}, 0}} {
 		var page protocol.EventPage
 		call(t, "GET", s1+"/events"+tc.query, "", &page)
 		var got []string
@@ -184,7 +184,7 @@ func TestSessionOverHTTP(t *testing.T) {
 
 	var v protocol.Session
 	want(t, "patch status", call(t, "PATCH", s1, `{"model":"openai/gpt-6-sol","effort":"high"}`, &v), http.StatusOK)
-	want(t, "patched", [3]any{v.Model, v.Effort, v.HeadSeq}, [3]any{"openai/gpt-6-sol", "high", uint64(7)})
+	want(t, "patched", [3]any{v.Model, v.Effort, v.HeadSeq}, [3]any{"openai/gpt-6-sol", "high", uint64(8)})
 	var page protocol.SessionPage
 	call(t, "GET", strings.TrimSuffix(s1, "/s1"), "", &page)
 	call(t, "GET", s1, "", &v)
@@ -198,9 +198,13 @@ func TestInterruptOverHTTP(t *testing.T) {
 		Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "hold"}}}})
 	call(t, "POST", s1+"/inputs", `{"id":"a","parts":[{"type":"text","text":"run"}]}`, nil)
 	<-started
+	var busy protocol.ErrorBody
+	want(t, "compact while a turn runs", [2]any{call(t, "POST", s1+"/compact", "", &busy), busy.Error.Code},
+		[2]any{http.StatusConflict, protocol.CodeSessionBusy})
 	want(t, "interrupt status", call(t, "POST", s1+"/interrupt", "", nil), http.StatusNoContent)
+	want(t, "compact status", call(t, "POST", s1+"/compact", "", nil), http.StatusNoContent)
 	var page protocol.EventPage
-	call(t, "GET", s1+"/events?after=5", "", &page)
+	call(t, "GET", s1+"/events?after=6", "", &page)
 	want(t, "events after the interrupt", len(page.Events), 2)
 	if last := page.Events[len(page.Events)-1]; last.Kind != "turn.ended" || !bytes.Contains(last.Data, []byte(`"stop_reason":"interrupted"`)) {
 		t.Errorf("last event = %s %s, want an interrupted turn.ended", last.Kind, last.Data)
@@ -273,6 +277,7 @@ func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, 
 func (stub) Models() []protocol.Model                            { return nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
+func (stub) Compact(context.Context) error                       { return nil }
 func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session, error) {
 	return s.View(), nil
 }

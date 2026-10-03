@@ -17,6 +17,7 @@ func (r *Runtime) Handler() http.Handler {
 		{Err: ErrSessionNotOwned, Code: protocol.CodeSessionNotOwned},
 		{Err: ErrInputConflict, Code: protocol.CodeInputConflict},
 		{Err: ErrTurnMismatch, Code: protocol.CodeTurnMismatch},
+		{Err: ErrSessionBusy, Code: protocol.CodeSessionBusy},
 		{Err: ErrModelUnavailable, Code: protocol.CodeModelUnavailable},
 		{Err: ErrDraining, Code: protocol.CodeDraining},
 	})

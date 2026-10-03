@@ -71,6 +71,10 @@ type Config struct {
 	Sync Sync
 	// Retries bounds the new attempts of a turn after a retryable error.
 	Retries int
+	// Threshold is the share of the context window at which the next turn compacts first.
+	Threshold float64
+	// KeepTurns is the number of newest turns that a compaction keeps.
+	KeepTurns int
 	// Base bounds the actor. When it ends, the actor stops without an append.
 	Base context.Context
 	// Go runs a goroutine that the runtime waits for at shutdown.
@@ -133,7 +137,8 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated) (*Actor,
 }
 
 // Open fences every earlier owner, replays the log through the fence, ends a
-// crashed turn or resumes a suspended one, and runs the session.
+// crashed turn, resumes a suspended one, or starts the next queued input,
+// and runs the session.
 func Open(ctx context.Context, cfg Config) (*Actor, error) {
 	a, err := open(ctx, cfg)
 	if err != nil {
@@ -176,6 +181,8 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		}
 	case ok:
 		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})
+	default:
+		err = a.next(true)
 	}
 	return a, err
 }

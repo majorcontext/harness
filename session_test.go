@@ -81,7 +81,7 @@ func TestEventsStreamCodexDeltas(t *testing.T) {
 	}
 	wantEvents(t, watch(t, sess, 1, 0, text("a", "hi"), false), "2 owner.acquired", "3 input.admitted", "4 turn.started",
 		"~4 item.started i1", "~4 item.delta i1 reasoning plan", "~4 item.delta i1 text hello",
-		"5 item.completed i1", "6 turn.ended")
+		"5 context.measured", "6 item.completed i1", "7 turn.ended")
 }
 
 func deltas(n int, text string) func(turn.Sink) error {

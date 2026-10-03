@@ -208,6 +208,7 @@ const (
 	CodeSessionNotOwned  = "session_not_owned"
 	CodeInputConflict    = "input_conflict"
 	CodeTurnMismatch     = "turn_mismatch"
+	CodeSessionBusy      = "session_busy"
 	CodeModelUnavailable = "model_unavailable"
 	CodePayloadTooLarge  = "payload_too_large"
 	CodeDraining         = "draining"

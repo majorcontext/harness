@@ -44,7 +44,7 @@ func newModels(cfg config.Config, transport func(provider string) http.RoundTrip
 		if transport != nil {
 			rt = transport(name)
 		}
-		m.backends[name] = openai.New(name, p, rt)
+		m.backends[name] = openai.New(name, p, rt, cfg.ContextWindowTokens)
 	}
 	return m
 }

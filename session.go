@@ -84,6 +84,13 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 	return s.a.Interrupt(ctx, req.TurnID)
 }
 
+// Compact folds the turns before the newest compaction_keep_turns into a
+// summary that the next model call reads first. A backend that owns its
+// context runs its own /compact command instead. It returns when the
+// compaction ends, and fails with ErrSessionBusy while a turn runs or
+// inputs wait.
+func (s *Session) Compact(ctx context.Context) error { return s.a.Compact(ctx) }
+
 // Events yields the durable events after seq, then each new one as it is
 // appended, with the ephemeral frames of the running turn between them:
 // item.started, item.delta, and status. A slow reader can miss any frame,

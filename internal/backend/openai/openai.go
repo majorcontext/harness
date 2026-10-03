@@ -22,12 +22,15 @@ import (
 // Backend is a turn.Backend over one configured Responses provider.
 type Backend struct {
 	client *responses.Client
+	// window overrides the modelmeta context window when positive.
+	window int
 }
 
 // New returns the Backend of provider name. A nil rt uses the default
 // transport for HTTP requests and the websocket dial alike. A non-nil rt may
-// supply the credentials, so the key variable may be unset.
-func New(name string, p config.Provider, rt http.RoundTripper) *Backend {
+// supply the credentials, so the key variable may be unset. A positive
+// window replaces the modelmeta context window of every model.
+func New(name string, p config.Provider, rt http.RoundTripper, window int) *Backend {
 	c := &responses.Client{
 		Family:                name,
 		APIKey:                os.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")),
@@ -41,14 +44,17 @@ func New(name string, p config.Provider, rt http.RoundTripper) *Backend {
 	if rt != nil {
 		c.HTTPClient = &http.Client{Transport: rt}
 	}
-	return &Backend{client: c}
+	return &Backend{client: c, window: window}
 }
 
-// Capabilities reports the context window of model when it is known.
+// Capabilities reports the context window of model when it is known or overridden.
 func (b *Backend) Capabilities(model string) turn.Capabilities {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return turn.Capabilities{}
+	}
+	if b.window > 0 {
+		return turn.Capabilities{ContextWindow: b.window}
 	}
 	window, _ := modelmeta.ContextWindow(ref)
 	return turn.Capabilities{ContextWindow: window}
@@ -80,9 +86,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
-			u := ev.Usage
-			out.Telemetry(turn.Telemetry{Usage: eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
-				CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}})
+			out.Telemetry(b.telemetry(req.Model, ev.Usage))
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
 				return turn.Result{}, fmt.Errorf("%w: openai: the response has no output", turn.ErrRetryable)
@@ -92,6 +96,18 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			}
 		}
 	}
+}
+
+// telemetry reports u, and the prompt of the call as the context reading.
+// A call with no prompt tokens reports no reading, so the earlier reading stays.
+func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {
+	usage := eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
+		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
+	t := turn.Telemetry{Usage: usage}
+	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
+		t.Context = eventlog.ContextMeasured{Source: b.client.Family, Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
+	}
+	return t
 }
 
 // Close closes the pooled websocket connections. Call it when no Run is
@@ -115,8 +131,12 @@ func request(req turn.Request) (*provider.Request, error) {
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	return &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
-		SessionKey: req.SessionID}, nil
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
+		SessionKey: req.SessionID}
+	if req.Instructions != "" {
+		preq.System = []string{req.Instructions}
+	}
+	return preq, nil
 }
 
 func classify(err error) error {

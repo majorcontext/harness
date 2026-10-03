@@ -198,6 +198,21 @@ func TestClaudeCodeTurn(t *testing.T) {
 	}
 }
 
+func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
+	fakeClaude(t, "compact_turn")
+	st := harness.NewMemStore()
+	r := claudeRuntime(t, st, nil, false)
+	defer closeRuntime(t, r)
+	if err := createClaude(t, r, nil).Compact(bg); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	wantLog(t, st, 4, "backend.state", "compaction.applied", "turn.ended completed")
+	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
+	if len(stdin) != 1 || stdin[0].Message.Content != "/compact" {
+		t.Errorf("stdin lines = %+v, want /compact", stdin)
+	}
+}
+
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {

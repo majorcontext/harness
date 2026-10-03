@@ -48,6 +48,8 @@ type Request struct {
 	TurnID    string
 	Model     string
 	Settings  eventlog.Settings
+	// Instructions is the system prompt of the call; empty for a turn.
+	Instructions string
 	// Input holds the inputs that started the turn, as user messages.
 	Input []eventlog.Message
 	// History is the conversation that the model sees, Input included.

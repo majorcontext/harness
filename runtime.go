@@ -31,6 +31,8 @@ var (
 	ErrInputConflict = session.ErrInputConflict
 	// ErrTurnMismatch reports a turn ID that is not the running turn.
 	ErrTurnMismatch = session.ErrTurnMismatch
+	// ErrSessionBusy reports a Compact while a turn runs or inputs wait.
+	ErrSessionBusy = session.ErrBusy
 	// ErrDraining reports a call after Runtime.Close started.
 	ErrDraining = errors.New("harness: runtime is draining")
 )
@@ -67,10 +69,13 @@ type Runtime struct {
 	// models is nil when Options.backend runs every turn.
 	models  *models
 	retries int
-	name    func() string
-	base    context.Context
-	cancel  context.CancelFunc
-	group   sync.WaitGroup
+	// threshold and keep are the compaction settings of each session.
+	threshold float64
+	keep      int
+	name      func() string
+	base      context.Context
+	cancel    context.CancelFunc
+	group     sync.WaitGroup
 
 	mu       sync.Mutex
 	closed   bool
@@ -89,7 +94,8 @@ func New(opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
 	}
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
-		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{}}
+		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
+		threshold: positive(opts.Config.CompactionThreshold, 0.8), keep: positive(opts.Config.CompactionKeepTurns, 2)}
 	names := map[string]bool{}
 	for _, t := range opts.Tools {
 		name := t.Spec().Name
@@ -112,6 +118,14 @@ func New(opts Options) (*Runtime, error) {
 	})
 	r.base, r.cancel = context.WithCancel(context.Background())
 	return r, nil
+}
+
+// positive returns v, or def when v is not positive.
+func positive[T int | float64](v, def T) T {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Create creates a session and runs it.
@@ -220,6 +234,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Tools:     r.tools,
 		Sync:      r.sync,
 		Retries:   r.retries,
+		Threshold: r.threshold,
+		KeepTurns: r.keep,
 		Base:      r.base,
 		Go:        r.group.Go,
 		Done:      func() { r.forget(id, e) },
