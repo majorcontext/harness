@@ -32,16 +32,22 @@ func summarize(name string, rep harnesstest.Reply) harnesstest.Step {
 }
 
 // holdNth holds request n until its ctx ends, and closes held when it arrives.
+// With finish, it then serves the request, as a response that wins the race
+// with the handoff.
 type holdNth struct {
-	n    int32
-	seen *atomic.Int32
-	held chan struct{}
+	n      int32
+	seen   *atomic.Int32
+	held   chan struct{}
+	finish bool
 }
 
 func (h holdNth) RoundTrip(req *http.Request) (*http.Response, error) {
 	if h.seen.Add(1) == h.n {
 		close(h.held)
 		<-req.Context().Done()
+		if h.finish {
+			return http.DefaultTransport.RoundTrip(req.Clone(context.WithoutCancel(req.Context())))
+		}
 		return nil, req.Context().Err()
 	}
 	return http.DefaultTransport.RoundTrip(req)
@@ -177,6 +183,7 @@ func TestHandoffDuringCompaction(t *testing.T) {
 	charlie := protocol.Input{ID: "charlie", Parts: []protocol.Part{{Type: protocol.PartText, Text: "charlie"}}}
 	for _, tc := range []struct {
 		name      string
+		finish    bool
 		threshold float64
 		bravo     int
 		before    []string
@@ -185,7 +192,7 @@ func TestHandoffDuringCompaction(t *testing.T) {
 		next      func(*testing.T, *harness.Session, uint64) error
 		want      []string
 	}{
-		{"a manual compaction stops and the next owner compacts", 0, 5, []string{"alpha", "bravo", "charlie"},
+		{"a manual compaction stops and the next owner compacts", false, 0, 5, []string{"alpha", "bravo", "charlie"},
 			func(s *harness.Session) error {
 				if err := s.Compact(bg); err == nil {
 					return errors.New("Compact during a handoff = nil, want an error")
@@ -195,17 +202,30 @@ func TestHandoffDuringCompaction(t *testing.T) {
 			nil,
 			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg) },
 			[]string{"owner.acquired", "compaction.applied"}},
-		{"an auto-compaction stops and the next owner runs the queued input", 0.5, 200_000, []string{"alpha", "bravo"},
+		{"a summary that finishes during the handoff is not appended", true, 0, 5, []string{"alpha", "bravo", "charlie"},
+			func(s *harness.Session) error {
+				if err := s.Compact(bg); err == nil {
+					return errors.New("Compact during a handoff = nil, want an error")
+				}
+				return nil
+			},
+			nil,
+			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg) },
+			[]string{"owner.acquired", "compaction.applied"}},
+		{"an auto-compaction stops and the next owner runs the queued input", false, 0.5, 200_000, []string{"alpha", "bravo"},
 			func(s *harness.Session) error { _, err := s.Submit(bg, charlie); return err },
 			[]string{"input.admitted"},
 			func(t *testing.T, s *harness.Session, head uint64) error { await(t, s, head); return nil },
 			[]string{"input.admitted", "owner.acquired", "compaction.applied", "turn.started", "context.measured", "item.completed", "turn.ended"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, answer("alpha", 5), answer("bravo", tc.bravo), answer("charlie", 5),
-				summarize("summary", harnesstest.Reply{Text: "sum"}))
+			steps := []harnesstest.Step{answer("alpha", 5), answer("bravo", tc.bravo), answer("charlie", 5), summarize("summary", harnesstest.Reply{Text: "sum"})}
+			if tc.finish {
+				steps = append(steps, summarize("summary again", harnesstest.Reply{Text: "sum"}))
+			}
+			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
 			st := harness.NewMemStore()
-			hold := holdNth{n: int32(len(tc.before)) + 1, seen: new(atomic.Int32), held: make(chan struct{})}
+			hold := holdNth{n: int32(len(tc.before)) + 1, seen: new(atomic.Int32), held: make(chan struct{}), finish: tc.finish}
 			r1, sess := open(t, s, st, tc.threshold, 1, hold)
 			converse(t, sess, tc.before...)
 			head := sess.View().HeadSeq

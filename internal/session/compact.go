@@ -83,7 +83,7 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, err error) {
 	}
 	a.run = nil
 	r.cancel(nil)
-	if len(a.releasing) > 0 && err != nil {
+	if len(a.releasing) > 0 {
 		err = ErrNotOwned
 	}
 	if err == nil {

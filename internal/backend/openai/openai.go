@@ -22,12 +22,15 @@ import (
 // Backend is a turn.Backend over one configured Responses provider.
 type Backend struct {
 	client *responses.Client
+	// window overrides the modelmeta context window when positive.
+	window int
 }
 
 // New returns the Backend of provider name. A nil rt uses the default
 // transport for HTTP requests and the websocket dial alike. A non-nil rt may
-// supply the credentials, so the key variable may be unset.
-func New(name string, p config.Provider, rt http.RoundTripper) *Backend {
+// supply the credentials, so the key variable may be unset. A positive
+// window replaces the modelmeta context window of every model.
+func New(name string, p config.Provider, rt http.RoundTripper, window int) *Backend {
 	c := &responses.Client{
 		Family:                name,
 		APIKey:                os.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")),
@@ -41,14 +44,17 @@ func New(name string, p config.Provider, rt http.RoundTripper) *Backend {
 	if rt != nil {
 		c.HTTPClient = &http.Client{Transport: rt}
 	}
-	return &Backend{client: c}
+	return &Backend{client: c, window: window}
 }
 
-// Capabilities reports the context window of model when it is known.
+// Capabilities reports the context window of model when it is known or overridden.
 func (b *Backend) Capabilities(model string) turn.Capabilities {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return turn.Capabilities{}
+	}
+	if b.window > 0 {
+		return turn.Capabilities{ContextWindow: b.window}
 	}
 	window, _ := modelmeta.ContextWindow(ref)
 	return turn.Capabilities{ContextWindow: window}
