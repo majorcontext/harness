@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -119,7 +120,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
 	}
 	if r.models != nil {
-		if err := r.models.check(req.Model); err != nil {
+		if err := r.models.check(req.Model, req.AllowedTools); err != nil {
 			return nil, err
 		}
 	}
@@ -212,6 +213,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	a, err := start(ctx, session.Config{
 		ID:        id,
 		Log:       storeLog{r.store, id},
+		Blobs:     storeLog{r.store, id},
 		Ownership: own,
 		Owner:     r.name(),
 		Backend:   r.backend,
@@ -340,4 +342,12 @@ func (l storeLog) Read(ctx context.Context, afterSeq uint64, limit int) ([]event
 		out[i] = eventlog.Record{Seq: rec.Seq, Data: rec.Data}
 	}
 	return out, err
+}
+
+func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
+	return l.st.PutBlob(ctx, l.id, key, r)
+}
+
+func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
+	return l.st.GetBlob(ctx, l.id, key)
 }

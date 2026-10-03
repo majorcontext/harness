@@ -18,6 +18,7 @@ var stdinModes = map[string]mode{
 	"queue_injection_broken_pipe":   queueInjectionBrokenPipe,
 	"queue_injection_blocked_write": queueInjectionBlockedWrite,
 	"bg_leak":                       bgLeak,
+	"steer":                         steer,
 }
 
 func queuedContent(line string) (string, bool) {
@@ -53,21 +54,28 @@ func queueInjection(f *fake) {
 // turn registers no wake channel and so never delivers a second line.
 func compactQueueInjection(f *fake) {
 	f.emit(say(waitingMarker))
-	second := make(chan string, 1)
-	go func() {
-		if line, ok := f.readLine(); ok {
-			second <- line
-		}
-	}()
 	text := "no second message received"
-	select {
-	case line := <-second:
-		if content, ok := queuedContent(line); ok {
-			text = "received queued: " + content
-		}
-	case <-time.After(3 * time.Second):
+	if content, ok := awaitQueued(f); ok {
+		text = "received queued: " + content
 	}
 	f.emit(queueResult(text))
+}
+
+// awaitQueued reads one queued message from stdin. It gives up after a
+// bound, so a driver that never writes fails the test instead of hanging it.
+func awaitQueued(f *fake) (string, bool) {
+	line := make(chan string, 1)
+	go func() {
+		if l, ok := f.readLine(); ok {
+			line <- l
+		}
+	}()
+	select {
+	case l := <-line:
+		return queuedContent(l)
+	case <-time.After(3 * time.Second):
+		return "", false
+	}
 }
 
 // queueInjectionBrokenPipe closes its own stdin before announcing it, so the
@@ -110,4 +118,16 @@ func bgLeak(f *fake) {
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 	})
+}
+
+// steer runs a tool and reads one input line while the tool runs, as the
+// CLI takes a queued message at the next tool result. It answers with the
+// queued text.
+func steer(f *fake) {
+	f.emit(assistant(toolUse("toolu_s", "Bash", obj{"command": "sleep 1"})))
+	text := "no steer received"
+	if content, ok := awaitQueued(f); ok {
+		text = "steered: " + content
+	}
+	f.emit(user(toolResult("toolu_s", "slept", false)), say(text), success(text, 5, 5))
 }

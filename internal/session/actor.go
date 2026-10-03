@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,12 @@ type Log interface {
 	Read(ctx context.Context, afterSeq uint64, limit int) ([]eventlog.Record, error)
 }
 
+// Blobs holds the blobs of one session.
+type Blobs interface {
+	PutBlob(ctx context.Context, key string, r io.Reader) error
+	GetBlob(ctx context.Context, key string) (io.ReadCloser, error)
+}
+
 // Ownership is the grant to run one session.
 type Ownership interface {
 	Epoch() uint64
@@ -51,6 +58,7 @@ type Ownership interface {
 type Config struct {
 	ID        string
 	Log       Log
+	Blobs     Blobs
 	Ownership Ownership
 	// Owner names this process in owner.acquired.
 	Owner   string
@@ -88,7 +96,9 @@ type Actor struct {
 	synced  atomic.Uint64
 	syncErr error
 
-	state     *eventlog.State
+	state *eventlog.State
+	// fenced is the seq of the owner.acquired record of this actor.
+	fenced    uint64
 	run       *running
 	releasing []func(struct{}, error)
 	stopped   bool
@@ -113,6 +123,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated) (*Actor,
 		}
 		return nil, err
 	}
+	a.fenced = a.state.Head()
 	a.launch()
 	return a, nil
 }
@@ -151,6 +162,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		return nil, err
 	}
 	a := newActor(cfg, s)
+	a.fenced = head
 	t, ok := s.Turn()
 	switch {
 	case ok && t.Suspended:

@@ -99,6 +99,7 @@ func TestClaudeCodeFieldsRejectedOnOtherTypes(t *testing.T) {
 		{"binary_path", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", BinaryPath: "/bin/claude"}},
 		{"extra_args", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", ExtraArgs: []string{"--foo"}}},
 		{"permission_mode", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", PermissionMode: "acceptEdits"}},
+		{"session_mirror", Provider{Type: TypeOpenAICompat, BaseURL: "http://x", SessionMirror: true}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

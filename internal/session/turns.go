@@ -15,10 +15,7 @@ const (
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
 )
 
-var (
-	errStopTurn = errors.New("harness: turn stopped")
-	errHandoff  = errors.New("harness: turn handed off")
-)
+var errStopTurn = errors.New("harness: turn stopped")
 
 // running is a turn. An interrupt or a lost ownership ends ctx, which stops
 // the running tools. A handoff ends only step: running tools finish.
@@ -29,6 +26,8 @@ type running struct {
 	step     context.Context
 	handoff  context.CancelCauseFunc
 	steering bool
+	ownsLoop bool
+	steered  chan struct{}
 	usage    eventlog.Usage
 	waiters  []func(struct{}, error)
 }
@@ -51,8 +50,15 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string) (uint64, e
 	}
 	events := append(a.dismissRequests(), in)
 	seq := a.state.Head() + uint64(len(events))
-	if a.run != nil {
-		return seq, a.append(events...)
+	if r := a.run; r != nil {
+		err := a.append(events...)
+		if err == nil && in.Delivery == eventlog.DeliverySteer && r.steering {
+			select {
+			case r.steered <- struct{}{}:
+			default:
+			}
+		}
+		return seq, err
 	}
 	next := in.InputID
 	if q := a.state.Queue(); len(q) > 0 {
@@ -76,9 +82,14 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	step, handoff := context.WithCancelCause(ctx)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(),
-		History: a.state.History(), Resumed: resumed}
+		History: a.state.History(), Resumed: resumed, AllowedTools: a.state.AllowedTools()}
+	caps := a.cfg.Backend.Capabilities(req.Model)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
-		steering: a.cfg.Backend.Capabilities(req.Model).Steering}
+		steering: caps.Steering, ownsLoop: caps.OwnsLoop}
+	if r.steering {
+		r.steered = make(chan struct{}, 1)
+		req.Steered = r.steered
+	}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
@@ -89,7 +100,8 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 }
 
 // Item records one completed message of turnID. After a stop or a handoff
-// starts, it admits no new tool call.
+// starts, it admits no new tool call, except from a backend that owns the
+// loop: that backend has already run the call.
 func (a *Actor) Item(turnID string, m eventlog.Message) error {
 	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, m)) })
 	return err
@@ -100,19 +112,23 @@ func (a *Actor) item(turnID string, m eventlog.Message) error {
 	if r == nil || r.id != turnID {
 		return ErrTurnMismatch
 	}
-	if err := context.Cause(r.step); err != nil && slices.ContainsFunc(m.Parts, isCall) {
+	if err := context.Cause(r.step); err != nil && !r.ownsLoop && slices.ContainsFunc(m.Parts, isCall) {
 		return err
 	}
 	return a.append(eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: m})
 }
 
-// Telemetry adds the usage in t to turnID.
+// Telemetry adds the usage in t to turnID and records its context reading.
 func (a *Actor) Telemetry(turnID string, t turn.Telemetry) {
 	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+		var err error
 		if r := a.run; r != nil && r.id == turnID {
 			r.usage = r.usage.Add(t.Usage)
+			if t.Context != (eventlog.ContextMeasured{}) {
+				err = a.append(t.Context)
+			}
 		}
-		reply(struct{}{}, nil)
+		reply(struct{}{}, err)
 	})
 }
 
@@ -172,7 +188,7 @@ func (a *Actor) ended(turnID string, runErr error) {
 	case runErr == nil:
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, r.usage)
 		next = true
-	case errors.Is(cause, errHandoff):
+	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
@@ -263,7 +279,7 @@ func (a *Actor) Release(ctx context.Context) error {
 			a.stop(nil)
 			return
 		}
-		a.run.handoff(errHandoff)
+		a.run.handoff(turn.ErrHandoff)
 	})
 	if err != nil {
 		return err

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/backend/openai"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
@@ -19,15 +21,19 @@ var ErrModelUnavailable = errors.New("harness: model unavailable")
 
 // models routes each turn to the backend of its model's provider.
 type models struct {
-	backends map[string]*openai.Backend
+	backends map[string]turn.Backend
 	// strict refuses a model that modelmeta does not know.
 	strict bool
 }
 
 func newModels(cfg config.Config, transport func(provider string) http.RoundTripper) *models {
-	m := &models{backends: map[string]*openai.Backend{},
+	m := &models{backends: map[string]turn.Backend{},
 		strict: cfg.ContextWindowRequiredValue() && cfg.ContextWindowTokens == 0}
 	for name, p := range cfg.Providers {
+		if p.Type == config.TypeClaudeCodeCLI {
+			m.backends[name] = claudecode.New(p)
+			continue
+		}
 		// The entry keyed by the native family may leave Type empty.
 		if p.Type != config.TypeOpenAI && (p.Type != "" || name != responses.Family) {
 			continue
@@ -41,22 +47,31 @@ func newModels(cfg config.Config, transport func(provider string) http.RoundTrip
 	return m
 }
 
-// check reports why model cannot start a session.
-func (m *models) check(model string) error {
+// check reports why model cannot start a session that allows tools. A
+// backend that owns the loop runs only its built-in tools.
+func (m *models) check(model string, tools []string) error {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	if _, err := m.backend(model); err != nil {
+	be, err := m.backend(model)
+	if err != nil {
 		return err
 	}
 	if _, ok := modelmeta.ContextWindow(ref); !ok && m.strict {
 		return fmt.Errorf("%w: modelmeta does not know %s", ErrModelUnavailable, model)
 	}
+	if caps := be.Capabilities(model); caps.OwnsLoop {
+		for _, t := range tools {
+			if !slices.Contains(caps.Tools, t) {
+				return fmt.Errorf("%w: %s has no built-in tool %q", ErrInvalidRequest, model, t)
+			}
+		}
+	}
 	return nil
 }
 
-func (m *models) backend(model string) (*openai.Backend, error) {
+func (m *models) backend(model string) (turn.Backend, error) {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrModelUnavailable, err)
@@ -87,6 +102,8 @@ func (m *models) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 // Close closes the connections of every backend. Call it when no turn runs.
 func (m *models) Close() {
 	for _, be := range m.backends {
-		be.Close()
+		if c, ok := be.(interface{ Close() }); ok {
+			c.Close()
+		}
 	}
 }

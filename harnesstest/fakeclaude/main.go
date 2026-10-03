@@ -12,9 +12,12 @@
 //	FAKE_CLAUDE_STATE      file path that keeps the "question" mode parked state
 //	FAKE_CLAUDE_LEAK_PID_FILE  receives the pid of a leaked grandchild
 //	FAKE_CLAUDE_DISMISS_DIES   makes a dismissed parked question exit at once
+//	FAKE_CLAUDE_INIT_TOOLS     JSON tool list of the init frame
+//	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
+//	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
-// modes_stdin.go, and modes_question.go.
+// modes_stdin.go, modes_question.go, and modes_mirror.go.
 //
 // The normal turn is not byte-faithful to the real CLI in two ways. Its
 // result frame has no num_turns or session_id, so the driver takes its
@@ -82,6 +85,8 @@ func main() {
 		_ = os.Stdin.Close()
 	}
 	logArgv()
+	logEnv()
+	logInterrupt()
 
 	f := &fake{mode: mode, sessionID: os.Getenv("FAKE_CLAUDE_SESSION_ID"), out: bufio.NewWriter(os.Stdout), stdin: bufio.NewReader(os.Stdin)}
 	if f.sessionID == "" {
@@ -98,6 +103,7 @@ func main() {
 	if mode == "per_call_usage" {
 		init["model"] = "claude-opus-5-5[1m]"
 	}
+	initExtras(init)
 	f.emit(init)
 	if h, ok := modes[mode]; ok {
 		h(f)

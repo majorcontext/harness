@@ -53,24 +53,28 @@ func open(t *testing.T, r *harness.Runtime) *harness.Session {
 
 func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		last eventlog.Message
-		late []eventlog.Message
-		want []string
+		name     string
+		ownsLoop bool
+		last     eventlog.Message
+		late     []eventlog.Message
+		want     []string
 	}{
-		{"the turn suspends after its last item", say("partial"), nil,
+		{"the turn suspends after its last item", true, say("partial"), nil,
 			[]string{"item.completed assistant partial"}},
-		{"a running tool finishes within the budget", callTool("c1"), []eventlog.Message{toolResult("c1")},
+		{"a running tool finishes within the budget", true, callTool("c1"), []eventlog.Message{toolResult("c1")},
 			[]string{"item.completed assistant c1", "item.completed tool c1 ok"}},
-		{"a tool call after the handoff is refused", say("partial"), []eventlog.Message{callTool("c2")},
+		{"a tool call after the handoff is refused", false, say("partial"), []eventlog.Message{callTool("c2")},
 			[]string{"item.completed assistant partial"}},
-		{"an open tool call is cut off", callTool("c1"), nil,
+		{"a tool call that a loop-owning backend ran after the handoff is cut off", true, say("partial"),
+			[]eventlog.Message{callTool("c2")},
+			[]string{"item.completed assistant partial", "item.completed assistant c2", "item.completed tool c2 " + cutOff}},
+		{"an open tool call is cut off", true, callTool("c1"), nil,
 			[]string{"item.completed assistant c1", "item.completed tool c1 " + cutOff}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			eachStore(t, func(t *testing.T, openStore func() harness.Store) {
 				f1, f2 := newFake(), newFake()
-				f1.late = tc.late
+				f1.ownsLoop, f1.late = tc.ownsLoop, tc.late
 				r1 := runtime(t, openStore(), f1)
 				submit(t, create(t, r1), text("a", "hi"))
 				run := <-f1.runs

@@ -14,6 +14,10 @@ import (
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
 
+// ErrHandoff is the cause of a turn context that a handoff ended. The next
+// owner resumes the turn.
+var ErrHandoff = errors.New("harness: turn handed off")
+
 // Backend runs turns against one kind of model or agent harness.
 type Backend interface {
 	Capabilities(model string) Capabilities
@@ -26,6 +30,9 @@ type Capabilities struct {
 	OwnsContext   bool
 	Steering      bool
 	ContextWindow int
+	// Tools names the built-in tools of a backend that owns the loop. A
+	// session of that backend may allow only these.
+	Tools []string
 }
 
 // Tool is a tool that the loop runs for a backend that does not own the loop.
@@ -48,6 +55,12 @@ type Request struct {
 	Tools []protocol.ToolSpec
 	// Resumed counts the resumes of a turn suspended by a handoff; 0 for a new turn.
 	Resumed int
+	// AllowedTools restricts the tools of the turn. nil keeps every tool;
+	// an empty, non-nil list keeps none.
+	AllowedTools []string
+	// Steered receives a value when a steer input waits for Sink.Steer. It
+	// is nil when the backend does not accept steering.
+	Steered <-chan struct{}
 }
 
 // Delta is a piece of an item that is not complete yet.
@@ -60,6 +73,8 @@ type Delta struct {
 // Telemetry is what a backend measured during a turn.
 type Telemetry struct {
 	Usage eventlog.Usage
+	// Context is a context reading; the zero value is none.
+	Context eventlog.ContextMeasured
 }
 
 // Sink receives the items of a running turn.
@@ -73,6 +88,12 @@ type Sink interface {
 	// Steer takes the queued steer inputs into the turn. A backend with
 	// Steering calls it at each item boundary and must use each message.
 	Steer() ([]eventlog.Message, error)
+	// State returns the newest state blob that backend saved, or nil.
+	State(backend string) ([]byte, error)
+	// SaveState records blob as the newest state of backend.
+	SaveState(backend string, blob []byte) error
+	// Compacted records that the backend compacted its own context.
+	Compacted(summary string) error
 }
 
 // Result is the outcome of a turn that returned.
@@ -83,6 +104,9 @@ type Reporter interface {
 	Item(turnID string, m eventlog.Message) error
 	Telemetry(turnID string, t Telemetry)
 	Steer(turnID string) ([]eventlog.Message, error)
+	State(turnID, backend string) ([]byte, error)
+	SaveState(turnID, backend string, blob []byte) error
+	Compacted(turnID, summary string) error
 	Ended(turnID string, err error)
 }
 
@@ -180,3 +204,11 @@ func (s *sink) Steer() ([]eventlog.Message, error) {
 	s.items = append(s.items, in...)
 	return in, err
 }
+
+func (s *sink) State(backend string) ([]byte, error) { return s.to.State(s.turnID, backend) }
+
+func (s *sink) SaveState(backend string, blob []byte) error {
+	return s.to.SaveState(s.turnID, backend, blob)
+}
+
+func (s *sink) Compacted(summary string) error { return s.to.Compacted(s.turnID, summary) }
