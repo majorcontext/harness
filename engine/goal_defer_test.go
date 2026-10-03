@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -89,18 +90,19 @@ func TestPursueGoalDeferredEvaluatesBeforeAnyTurn(t *testing.T) {
 	}
 }
 
-// The deferral dies with the goal it armed: after an exhausted loop, a goal
-// registered afresh posts the condition like any non-deferred goal. The
-// preliminary evaluation does not count against MaxTurns.
-func TestPursueGoalDeferralEndsWithExhaustedGoal(t *testing.T) {
+// The deferral covers only the first loop entry: a later loop over the same
+// goal posts the condition like any non-deferred goal. The preliminary
+// evaluation does not count against MaxTurns.
+func TestPursueGoalDeferralConsumedByFirstLoop(t *testing.T) {
 	const cond = "write a summary"
 	prov := &goalProvider{
+		failCtx: true,
 		worker: [][]provider.Event{
 			asstTurn(provider.StopEndTurn, &message.Text{Text: "first"}),
 			asstTurn(provider.StopEndTurn, &message.Text{Text: "second"}),
 			asstTurn(provider.StopEndTurn, &message.Text{Text: "third"}),
 		},
-		eval: [][]provider.Event{evalTurn("NOT MET: x"), evalTurn("NOT MET: y"), evalTurn("MET: ok")},
+		eval: [][]provider.Event{evalTurn("NOT MET: x"), evalTurn("MET: ok")},
 	}
 	s := goalSession(t, prov, t.TempDir())
 	if err := s.RegisterGoalDeferred(cond); err != nil {
@@ -109,17 +111,17 @@ func TestPursueGoalDeferralEndsWithExhaustedGoal(t *testing.T) {
 	if _, err := s.Prompt(context.Background(), "hello"); err != nil {
 		t.Fatal(err)
 	}
-	opts := GoalOptions{Registered: true, MaxTurns: 1, Evaluator: evalModel}
-	if res, err := s.PursueGoal(context.Background(), cond, opts); err != nil || res.Reason != "max turns" {
-		t.Fatalf("first loop = %+v, %v; want max turns", res, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prov.onWorkerStream = func(int) { cancel() }
+	opts := GoalOptions{Registered: true, MaxTurns: 2, Evaluator: evalModel}
+	if _, err := s.PursueGoal(ctx, cond, opts); !errors.Is(err, context.Canceled) {
+		t.Fatalf("first loop err = %v, want context.Canceled", err)
 	}
 	if users := userTexts(s); len(users) != 2 || !strings.Contains(users[1], "x") {
 		t.Fatalf("user turns = %q, want one guidance turn after the prompt", users)
 	}
-	if err := s.RegisterGoal(cond); err != nil {
-		t.Fatal(err)
-	}
-	opts.MaxTurns = 0
+	prov.onWorkerStream = nil
 	if _, err := s.PursueGoal(context.Background(), cond, opts); err != nil {
 		t.Fatal(err)
 	}
@@ -155,4 +157,24 @@ func TestDeferActiveGoalSkipsConditionTurn(t *testing.T) {
 	if users := userTexts(s); len(users) != 1 {
 		t.Fatalf("user turns = %q, want only the prompt", users)
 	}
+}
+
+// goalSessionAbortedAfterEval returns a session whose PursueGoal loop was
+// cancelled right after one NOT MET evaluation, so the goal is still active
+// and the log holds its goal.eval record.
+func goalSessionAbortedAfterEval(t *testing.T, cond string) *Session {
+	t.Helper()
+	prov := &goalProvider{
+		failCtx: true,
+		worker:  [][]provider.Event{asstTurn(provider.StopEndTurn, &message.Text{Text: "try"})},
+		eval:    [][]provider.Event{evalTurn("NOT MET: keep going")},
+	}
+	s := goalSession(t, prov, t.TempDir())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prov.onEvalStream = func(int) { cancel() }
+	if _, err := s.PursueGoal(ctx, cond, GoalOptions{MaxTurns: 2, Evaluator: evalModel}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("PursueGoal err = %v, want context.Canceled", err)
+	}
+	return s
 }

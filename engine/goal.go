@@ -20,7 +20,8 @@ type GoalOptions struct {
 	// as cleared-before-start rather than registering a fresh one.
 	Registered bool
 
-	// MaxTurns caps the number of worker turns; 0 means unlimited.
+	// MaxTurns caps the number of worker turns; 0 means unlimited. A loop
+	// that spends the cap without a MET verdict clears the goal.
 	MaxTurns int
 	// Evaluator is the model ref used for the completion check. It is required
 	// — the engine hardcodes no default — and is resolved through the same
@@ -580,7 +581,7 @@ func (s *Session) clearGoalParkedAtEntry() {
 
 // PursueGoal prompts a worker and evaluates each completed turn.
 //
-// It records worker failures and parks the goal when retries end. Failure handling clears the goal only for context overflow or repeated evaluator failures. A canceled context leaves the goal active.
+// It records worker failures and parks the goal when retries end. Failure handling clears the goal for context overflow, repeated evaluator failures, or spending GoalOptions.MaxTurns without a MET verdict. A canceled context leaves the goal active.
 //
 // The loop reads the current goal at each turn boundary. It discards results from an earlier goal generation.
 func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOptions) (*GoalResult, error) {
@@ -645,14 +646,12 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 	if deferFirst {
 		firstTurn = 0
 	}
-	var lastGen uint64
 	for turn := firstTurn; opts.MaxTurns == 0 || turn <= opts.MaxTurns; turn++ {
 		// Per-turn-boundary snapshot (see goalSnapshot's doc comment): this
 		// is the single source of truth for the rest of this iteration,
 		// deliberately NOT the condition parameter or a value carried over
 		// from a previous iteration.
 		snap := s.snapshotGoal()
-		lastGen = snap.gen
 		if !snap.active {
 			// Cleared between registration and this turn (or mid-loop by a
 			// concurrent DELETE): clean stop, no turn runs.
@@ -953,8 +952,8 @@ func (s *Session) PursueGoal(ctx context.Context, condition string, opts GoalOpt
 		reason = evalReason
 		reasonGen = snap.gen
 	}
-	if !s.clearGoal(goalExhaustedReason(opts.MaxTurns), lastGen) && !s.goalActiveNow() {
-		return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "goal cleared"}, nil
+	if ctx.Err() == nil {
+		s.clearGoal(goalExhaustedReason(opts.MaxTurns))
 	}
 	return &GoalResult{Achieved: false, Turns: opts.MaxTurns, Reason: "max turns"}, nil
 }
@@ -1638,12 +1637,11 @@ func (s *Session) ClearGoal() bool {
 
 // clearGoal is ClearGoal's implementation, parameterized on the reason
 // recorded with goal.cleared. An empty reason means a caller cancelled the
-// goal; a non-empty reason means the loop ended it. A given onlyGen makes
-// the clear a no-op when the goal is at another generation.
-func (s *Session) clearGoal(reason string, onlyGen ...uint64) bool {
+// goal; a non-empty reason means the loop ended it.
+func (s *Session) clearGoal(reason string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.goalActive || (len(onlyGen) > 0 && s.goalGen != onlyGen[0]) {
+	if !s.goalActive {
 		return false
 	}
 	s.goalActive = false

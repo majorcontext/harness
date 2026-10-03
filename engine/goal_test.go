@@ -460,46 +460,53 @@ func TestPursueGoalRegisterErrorEmitsSessionError(t *testing.T) {
 }
 
 func TestPursueGoalMaxTurns(t *testing.T) {
-	dir := t.TempDir()
-	prov := &goalProvider{
-		worker: [][]provider.Event{
-			asstTurn(provider.StopEndTurn, &message.Text{Text: "try 1"}),
-			asstTurn(provider.StopEndTurn, &message.Text{Text: "try 2"}),
-		},
-		eval: [][]provider.Event{
-			evalTurn("NOT MET: nope"),
-			evalTurn("NOT MET: still nope"),
-		},
+	exhausted := []string{goalExhaustedReason(2)}
+	tests := []struct {
+		name       string
+		act        func(*Session, context.CancelFunc) // runs in the final turn's evaluator call
+		wantClears []string
+	}{
+		{"exhausted goal is cleared", func(*Session, context.CancelFunc) {}, exhausted},
+		{"update in the final turn is cleared", func(s *Session, _ context.CancelFunc) { _ = s.UpdateGoal("new") }, exhausted},
+		{"cancel in the final turn keeps the goal", func(_ *Session, cancel context.CancelFunc) { cancel() }, nil},
 	}
-	s := goalSession(t, prov, dir)
-	var cleared []string
-	s.cfg.OnEvent = func(ev Event) {
-		if ev.Type == EventGoalCleared {
-			cleared = append(cleared, ev.GoalReason)
-		}
-	}
-	res, err := s.PursueGoal(context.Background(), "impossible", GoalOptions{MaxTurns: 2, Evaluator: evalModel})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Achieved {
-		t.Fatalf("result = %+v, want not achieved", res)
-	}
-	if res.Turns != 2 || res.Reason != "max turns" {
-		t.Errorf("result = %+v, want turns=2 reason=%q", res, "max turns")
-	}
-	if want := []string{"goal exhausted max_turns (2)"}; !slices.Equal(cleared, want) {
-		t.Errorf("goal.cleared reasons = %q, want %q", cleared, want)
-	}
-	if cond, ok := s.ActiveGoal(); ok {
-		t.Errorf("ActiveGoal = %q, active; want the exhausted goal cleared", cond)
-	}
-	loaded, err := LoadSession(s.cfg, s.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cond, ok := loaded.ActiveGoal(); ok {
-		t.Errorf("resumed ActiveGoal = %q, active; want the exhausted goal cleared", cond)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := &goalProvider{
+				worker: [][]provider.Event{
+					asstTurn(provider.StopEndTurn, &message.Text{Text: "try 1"}),
+					asstTurn(provider.StopEndTurn, &message.Text{Text: "try 2"}),
+				},
+				eval: [][]provider.Event{evalTurn("NOT MET: nope"), evalTurn("NOT MET: still nope")},
+			}
+			s := goalSession(t, prov, t.TempDir())
+			var cleared []string
+			s.cfg.OnEvent = func(ev Event) {
+				if ev.Type == EventGoalCleared {
+					cleared = append(cleared, ev.GoalReason)
+				}
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			prov.onEvalStream = func(call int) {
+				if call == 2 {
+					tc.act(s, cancel)
+				}
+			}
+			res, err := s.PursueGoal(ctx, "impossible", GoalOptions{MaxTurns: 2, Evaluator: evalModel})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Achieved || res.Turns != 2 || res.Reason != "max turns" {
+				t.Errorf("result = %+v, want not achieved, turns=2 reason=%q", res, "max turns")
+			}
+			if !slices.Equal(cleared, tc.wantClears) {
+				t.Errorf("goal.cleared reasons = %q, want %q", cleared, tc.wantClears)
+			}
+			if _, active := s.ActiveGoal(); active != (tc.wantClears == nil) {
+				t.Errorf("goal active = %v, want %v", active, tc.wantClears == nil)
+			}
+		})
 	}
 }
 
@@ -890,10 +897,7 @@ func TestPursueGoalContextCancel(t *testing.T) {
 }
 
 func TestGoalRecordsResumeActive(t *testing.T) {
-	s := goalSession(t, &goalProvider{}, t.TempDir())
-	if err := s.RegisterGoal("ongoing goal"); err != nil {
-		t.Fatal(err)
-	}
+	s := goalSessionAbortedAfterEval(t, "ongoing goal")
 	if err := s.PersistErr(); err != nil {
 		t.Fatalf("PersistErr = %v", err)
 	}
@@ -987,15 +991,12 @@ func TestRegisterGoalRejectsSecondActive(t *testing.T) {
 }
 
 func TestClearGoalRecordsAndResets(t *testing.T) {
-	s := goalSession(t, &goalProvider{}, t.TempDir())
+	s := goalSessionAbortedAfterEval(t, "goalx")
 	var cleared int
 	s.cfg.OnEvent = func(ev Event) {
 		if ev.Type == EventGoalCleared {
 			cleared++
 		}
-	}
-	if err := s.RegisterGoal("goalx"); err != nil {
-		t.Fatal(err)
 	}
 	if !s.ClearGoal() {
 		t.Fatal("ClearGoal returned false for an active goal")
