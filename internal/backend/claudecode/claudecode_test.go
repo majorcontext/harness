@@ -254,6 +254,7 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted, stopped}},
 		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", stopped}},
 		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "turn.ended completed"}},
+		{"placeholder_on_interrupt", []string{stopped}},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			signals := filepath.Join(t.TempDir(), "signals")

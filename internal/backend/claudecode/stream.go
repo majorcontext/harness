@@ -158,6 +158,9 @@ func (r *run) tail(line []byte) {
 	var err error
 	switch {
 	case env.Type == "result":
+		if r.placeholder(env) {
+			return
+		}
 		r.result = &env
 		err = r.settle(env)
 	case r.stopped || env.Type == "transcript_mirror":

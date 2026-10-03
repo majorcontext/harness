@@ -113,6 +113,7 @@ var basicModes = map[string]mode{
 	"tool_on_interrupt":           hang,
 	"tool_result_on_interrupt":    hang,
 	"success_on_interrupt":        hang,
+	"placeholder_on_interrupt":    hang,
 	"crash":                       crashAfter(),
 	"fast_no_drain":               frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                       frames(result("error_during_execution", true, "fake failure", 11, 3)),
@@ -144,5 +145,6 @@ var onInterrupt = map[string][]obj{
 	"tool_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"}))},
 	"tool_result_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"})),
 		user(toolResult("toolu_i", "ok\n", false))},
-	"success_on_interrupt": {say("Finished anyway."), success("Finished anyway.", 7, 2)},
+	"success_on_interrupt":     {say("Finished anyway."), success("Finished anyway.", 7, 2)},
+	"placeholder_on_interrupt": {success("", 0, 0).set("num_turns", 0), result("error_during_execution", true, "", 7, 2)},
 }
