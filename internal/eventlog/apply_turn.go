@@ -75,8 +75,8 @@ func (s *State) applySuspended(e TurnSuspended) error {
 	if e.Cause != CauseHandoff {
 		return illegal("turn %s suspended with cause %s", e.TurnID, e.Cause)
 	}
-	if err := s.unanswered(); err != nil {
-		return err
+	if len(s.calls) > 0 {
+		return illegal("turn %s suspends with open tool call %s", e.TurnID, s.calls[0].CallID)
 	}
 	s.turn.Suspended = true
 	return nil
