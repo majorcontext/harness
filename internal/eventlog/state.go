@@ -141,6 +141,12 @@ type pendingRequest struct {
 
 type inputState string
 
+type input struct {
+	state inputState
+	seq   uint64
+	event InputAdmitted
+}
+
 const (
 	inputAdmitted  inputState = "admitted"
 	inputPromoted  inputState = "promoted"
@@ -157,7 +163,7 @@ type State struct {
 	head       uint64
 	createdAt  time.Time
 	updatedAt  time.Time
-	inputs     map[string]inputState
+	inputs     map[string]input
 	queue      []InputAdmitted
 	turn       Turn
 	turnIDs    map[string]bool
@@ -221,6 +227,12 @@ func cloneInput(in InputAdmitted) InputAdmitted {
 		in.Parts[i].Arguments = slices.Clone(in.Parts[i].Arguments)
 	}
 	return in
+}
+
+// Input returns an admitted input and the seq of its input.admitted record.
+func (s *State) Input(id string) (InputAdmitted, uint64, bool) {
+	in, ok := s.inputs[id]
+	return cloneInput(in.event), in.seq, ok
 }
 
 // Requests returns the open requests, oldest first.
@@ -313,7 +325,7 @@ func (s *State) step(env Envelope) error {
 	case SettingsChanged:
 		return s.applySettings(e)
 	case InputAdmitted:
-		return s.applyAdmitted(e)
+		return s.applyAdmitted(e, env.Seq)
 	case InputPromoted:
 		return s.applyPromoted(e)
 	case InputWithdrawn:

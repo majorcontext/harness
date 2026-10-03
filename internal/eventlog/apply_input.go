@@ -3,7 +3,7 @@ package eventlog
 import "slices"
 
 func (s *State) inputIs(id string, want inputState) error {
-	got := s.inputs[id]
+	got := s.inputs[id].state
 	if got == want {
 		return nil
 	}
@@ -13,9 +13,9 @@ func (s *State) inputIs(id string, want inputState) error {
 	return illegal("input %s is %s", id, got)
 }
 
-func (s *State) applyAdmitted(e InputAdmitted) error {
+func (s *State) applyAdmitted(e InputAdmitted, seq uint64) error {
 	if got, ok := s.inputs[e.InputID]; ok {
-		return illegal("input %s is %s", e.InputID, got)
+		return illegal("input %s is %s", e.InputID, got.state)
 	}
 	if e.InputID == "" {
 		return illegal("input.admitted has an empty input_id")
@@ -23,7 +23,10 @@ func (s *State) applyAdmitted(e InputAdmitted) error {
 	if e.Delivery != DeliveryQueue && e.Delivery != DeliverySteer {
 		return illegal("input %s has delivery %q", e.InputID, e.Delivery)
 	}
-	s.inputs[e.InputID] = inputAdmitted
+	if len(s.requests) > 0 {
+		return illegal("request %s is open", s.requests[0].RequestID)
+	}
+	s.inputs[e.InputID] = input{inputAdmitted, seq, e}
 	s.queue = append(s.queue, e)
 	return nil
 }
@@ -52,6 +55,8 @@ func (s *State) applyWithdrawn(e InputWithdrawn) error {
 }
 
 func (s *State) takeInput(id string, to inputState) {
-	s.inputs[id] = to
+	in := s.inputs[id]
+	in.state = to
+	s.inputs[id] = in
 	s.queue = slices.DeleteFunc(s.queue, func(in InputAdmitted) bool { return in.InputID == id })
 }

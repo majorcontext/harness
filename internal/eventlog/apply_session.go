@@ -12,7 +12,7 @@ func (s *State) applyCreated(e SessionCreated, t time.Time) error {
 	s.created = true
 	s.parentID, s.origin, s.model, s.settings = e.ParentID, e.Origin, e.Model, e.Settings
 	s.createdAt = t
-	s.inputs = map[string]inputState{}
+	s.inputs = map[string]input{}
 	s.turnIDs = map[string]bool{}
 	s.children = map[string]Outcome{}
 	s.backends = map[string]string{}

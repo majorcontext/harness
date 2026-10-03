@@ -133,7 +133,7 @@ type RequestOpened struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
-// RequestResolved closes an open request.
+// RequestResolved closes an open request. It is the result of the tool call of the request item.
 type RequestResolved struct {
 	RequestID  string          `json:"request_id"`
 	Resolution Resolution      `json:"resolution"`

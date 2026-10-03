@@ -66,7 +66,7 @@ func everyKind() []Event {
 		ChildSpawned{ChildID: "k", Agent: "explore"},
 		call("t1", "i1", "c1"), ask("r1", "i1"),
 		RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)},
-		result("t1", "i2", "c1"),
+		ItemCompleted{ItemID: "i2", TurnID: "t1", Message: Message{Role: RoleAssistant, Parts: []Part{{Type: PartText, Text: "done"}}}},
 		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider"},
 		BackendState{Backend: "codex", BlobKey: "b1"},
 		suspend("t1", CauseHandoff), resume("t1", 1),
