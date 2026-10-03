@@ -81,8 +81,8 @@ func (m *models) check(model string, names []string, tools []turn.Tool) error {
 // change reports why a session at model from that allows tools cannot move
 // to model to. A backend that owns its context never sees the history of
 // another provider, so neither side of a provider change may own it.
-func (m *models) change(from, to string, tools []string) error {
-	if err := m.check(to, tools); err != nil {
+func (m *models) change(from, to string, names []string, tools []turn.Tool) error {
+	if err := m.check(to, names, tools); err != nil {
 		return err
 	}
 	f, _ := message.ParseModelRef(from)

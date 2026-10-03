@@ -225,7 +225,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Done:      func() { r.forget(id, e) },
 	}
 	if r.models != nil {
-		cfg.Check = r.models.change
+		cfg.Check = func(from, to string, names []string) error { return r.models.change(from, to, names, r.tools) }
 	}
 	a, err := start(ctx, cfg)
 	if err != nil {
