@@ -28,7 +28,7 @@ Goals:
 
 - One owner and one source of truth for each piece of state.
 - Every public interface is designed from what its consumer needs. Nothing is kept because it exists.
-- A public Go API small enough to read in one sitting: `harness`, `harness/protocol`, `harness/storetest`, `harness/harnesstest`.
+- A public Go API small enough to read in one sitting: `harness`, `harness/config`, `harness/protocol`, `harness/storetest`, `harness/harnesstest`.
 - One HTTP contract, built from the same Go types as the Go API.
 - Pluggable storage and ownership, so a session survives process loss.
 - Delivery as PRs on `main`. Each PR ships alone.
@@ -86,28 +86,30 @@ The session layer is the one owner of state. The store write is the fence: a sta
 
 These are the compatibility surface.
 
-| Package | Owns |
-| --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `Store`, `Owner`, `Ownership`, `DiskStore`, `MemStore`, sentinel errors |
-| `harness/protocol` | Data types shared by the Go API and HTTP; source of the generated OpenAPI and TS |
-| `harness/storetest` | Conformance suite for a `Store` implementation |
-| `harness/harnesstest` | Scripted model server, so other modules test against the same wire fixtures |
+| Package | Owns | Consumer |
+| --- | --- | --- |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `Store`, `Owner`, `Ownership`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
+| `harness/config` | `Config`, defaults, `Validate`; imports nothing from the runtime | boxinit `BootConfig` |
+| `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated OpenAPI and TS | boxes server, web, boxctl |
+| `harness/storetest` | Conformance suite for a `Store` | boxes `pgstore` |
+| `harness/harnesstest` | Scripted model server for contract suites | harness and boxes contract suites |
 
 The Go API:
 
 ```go
 package harness
 
-func New(opts Options) (*Runtime, error)
+func New(opts Options) (*Runtime, error) // no I/O and no store writes until Create or Open
 
 type Options struct {
-	Config Config
-	Store  Store // nil: DiskStore under Config.Dir
-	Owner  Owner // nil: the local process owns every session
+	Config config.Config
+	Store  Store  // nil: DiskStore under Config.Dir
+	Owner  Owner  // nil: the local process owns every session
 	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
+	Sync           Sync // nil: no replication
 	Logger         *slog.Logger
 }
 
@@ -117,9 +119,11 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
-func (r *Runtime) Close(ctx context.Context) error // suspends every session with a handoff cause
+// Close hands off every session, then returns once Sync has acknowledged
+// every record through each handoff, or ctx ends.
+func (r *Runtime) Close(ctx context.Context) error
 
-func (s *Session) View() protocol.Session
+func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
@@ -128,7 +132,20 @@ func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
 func (s *Session) Compact(ctx context.Context) error
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
-func (s *Session) Release(ctx context.Context) error // suspend and release ownership
+func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
+
+// OpenView reads a session from any Store without owning it: no Acquire, no appends.
+func OpenView(ctx context.Context, st Store, id string) (*View, error)
+func (v *View) Session() protocol.Session
+func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protocol.Message, error)
+
+// Sync replicates each session's records elsewhere, in seq order.
+type Sync interface {
+	// Deliver returns the receiver's head on success and on a seq mismatch;
+	// the sender resends from Head+1. ErrStaleEpoch fires Ownership.Lost.
+	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
+}
 
 type Tool interface {
 	Spec() protocol.ToolSpec
@@ -149,14 +166,15 @@ Free to change.
 | `internal/eventlog` | Event schema, record codec, `Apply`, checkpoints |
 | `internal/session` | Session actor, mailbox, state machines, child tree, views |
 | `internal/turn` | One agent loop; declares `Backend` and `Tools` |
-| `internal/backend/anthropic`, `openai`, `openaicompat`, `claudecode` | Backend implementations |
+| `internal/backend/anthropic`, `openai`, `openaicompat` | Model API backends |
+| `internal/backend/external`, `claudecode`, `codexcli` | Third-party harness backends |
 | `internal/backend/httpx` | SSE reader, error classifier, retry policy, usage normalizer |
 | `internal/backend/wirenorm` | Wire repair |
 | `internal/message` | Conversation types used inside the runtime |
 | `internal/modelmeta` | Context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models` |
 | `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface, registry, sources |
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
-| `internal/prompt` | System-prompt segments and the `Memo` loader |
+| `internal/prompt` | System-prompt segments, the `Memo` loader, agent profiles |
 | `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is |
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
@@ -297,6 +315,7 @@ type Owner interface {
 }
 
 type Ownership interface {
+	Epoch() uint64 // recorded in owner.acquired and carried by every SyncBatch
 	Lost() <-chan struct{}
 	Release()
 }
@@ -332,11 +351,12 @@ A turn ends early for one of three causes, carried by `context.WithCancelCause`:
 
 | Cause | Trigger | Effect |
 | --- | --- | --- |
-| `stopped` | User interrupt | Keep the partial; unfinished tool calls get `interrupted` results; never resumes |
+| `stopped` | User interrupt | Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs |
 | `goal_cleared` | `ClearGoal` during a goal turn | Same as `stopped` |
-| `handoff` | `Session.Release`, `Runtime.Close` | Tool calls stay open; the next owner resumes from the last completed item with the same call ids, up to `MaxTurnResumes` |
+| `handoff` | `Session.Release`, `Runtime.Close` | Stop at an item boundary: admit no new tool call, let running tools finish within the budget, append `turn.suspended`. A suspended turn has no open tool call, so the next owner resumes it automatically. |
+| `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. Auto-continue once as a new turn carrying that notice; a second crash waits for input. |
 
-The log stays strictly append-only. A client hides output by cause if it wants to.
+No tool call is ever re-run after a stop. This matches Codex, Claude Code, opencode, pi, and fx. The log stays strictly append-only, and a client hides output by cause if it wants to.
 
 Input:
 
@@ -429,7 +449,8 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 - One per-session `seq` serves paging and SSE resume.
 - SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A slow subscriber gets a `gap` frame and a close. It never loses a record silently.
-- The outbound event sink becomes a per-session pump. Each delivery carries `{session, from_seq, records}`. The receiver keeps one cursor per session.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver accepts it only if `from_seq` is its head plus one, a record at an existing seq has identical bytes (a duplicate is acknowledged), and the epoch is not older. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`.
+- The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
 
 ### Errors
 
@@ -619,15 +640,65 @@ Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`.
 
 Gates compare a branch with its merge base, so old code never blocks a change and new code starts strict. A protocol drift gate (regenerate; fail on a diff) is planned for phase 4, when `protocol` generation exists. `AGENTS.md` shrinks to these gates and the four rules.
 
+## Boxes integration
+
+Boxes has its own re-architecture ("Boxes architecture") built on this one. The two share one pattern: a resource is one ordered log with one owner, every change is a command, every seam belongs to its consumer, and the contract is generated from Go types.
+
+```
+                 web · boxctl · Slack · MCP
+                          │ boxes protocol (generated)
+   ┌──────────────────────▼───────────────────────────────────────┐
+   │ boxes control plane                                          │
+   │  server ── box (Decide/Admit) ── lifecycle ── capacity        │
+   │    │ /v1/boxes/{id}/sessions/…  (harness protocol, 1:1)       │
+   │  SessionHost ─┬─ box  → reverse proxy to the harness in a box │
+   │               └─ home → harness.Runtime in-process (lease)     │
+   │  pgstore  =  harness.Store  ◀── home: direct · box: Sync ──┐   │
+   └─────────────────────────────────────────────────────────────┼─┘
+                          │ BootConfig{epoch, harness/config}    │
+               ┌──────────▼──────────────────────────┐           │
+               │ box: boxinit → harness serve         │ SyncBatch │
+               │      DiskStore · Owner(epoch) ───────┼───────────┘
+               └──────────────────────────────────────┘
+```
+
+- **Two session hosts.** A box session runs in the box's harness. A home session runs in an embedded `harness.Runtime` inside the control plane, under a lease. Boxes forwards `/v1/boxes/{id}/sessions/…` to one `SessionHost` seam: a reverse proxy to the box, or the local `Runtime.Handler()`, or a proxy to the replica that holds the lease. The console cannot tell them apart.
+- **One store for every session.** `pgstore` is one Postgres `harness.Store`, proven by `storetest`. Home sessions write it directly. Box sessions replicate into it through `Sync`. `OpenView` over it serves reads of a box that is not running.
+- **One epoch.** The box claim token is the `Ownership.Epoch`. It is recorded in `owner.acquired`, carried by every `SyncBatch`, and checked by boxes. A stale box learns it is fenced from the rejection.
+
+| Boxes requirement | Harness answer | Phase |
+| --- | --- | --- |
+| Read-only open | `OpenView` | 2 |
+| Public scripted model | `harness/harnesstest` | 1 |
+| Pump contract | `Sync` and `protocol.SyncBatch` | 2 |
+| `harness.Config` without server dependencies | `harness/config` | 3 |
+| Durable head per session | `View.HeadSeq` (Apply runs after a durable append) | 2 |
+| Open after a forced stop | the `crashed` cause | 2 |
+| `Models()` with no sessions | `New` does no I/O until `Create` or `Open` | 2 |
+| External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` fires `Lost` | 2 |
+
+Combined sequence:
+
+| Harness | Boxes |
+| --- | --- |
+| 1 contract suite, gates, `harnesstest` | 0 defect fixes · 1 protocol, contract suite, gates · 2+3 commands and lifecycle · 4 capacity (none need harness) |
+| 2 runtime core | Home chat on `pgstore` and `SessionHost` (meta) |
+| 3 leaves, `harness/config` | 5 `BootConfig` embeds `harness/config` |
+| 4 HTTP cutover | 7 session cutover with the read-only view, same release |
+| 5 backends, `codexcli`, requests | — |
+| 6 delete `engine`, `server` | — |
+
+Answered boxes requests: `Runtime.Close` and `Session.Release` return only after `Sync` acknowledges every record through the handoff, and `View` reports `SyncedSeq`; `Sync.Deliver` returns `SyncAck{head}` on every reply; the epoch is a monotonic number (`claim_epoch`). The home chat is one per person.
+
 ## Migration
 
 Each phase is one or more PRs on `main`. Each ships alone.
 
 | Phase | Work | Consumers |
 | --- | --- | --- |
-| 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md`; delete history comments | None |
-| 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner`; `Runtime`, `Session.Submit`, `Events`; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; turn resume and stop causes; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it; it is the first consumer |
-| 3 | Leaf cleanups: `httpx`, `wirenorm`, `tool` registry, `prompt.Memo` and agent profiles; move leaves to `internal/` | None |
+| 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
+| 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
+| 3 | Leaf cleanups: `httpx`, `wirenorm`, `tool` registry, `prompt.Memo` and agent profiles; publish `harness/config`; move leaves to `internal/` | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features | None |
@@ -652,3 +723,7 @@ Decided:
 - Embedders add in-process tools through `harness.Tool`; `call.ID` is stable across resume.
 - Embedders inject model credentials through `Options.ModelTransport`.
 - Every early stop keeps the partial; clearing a goal is a stop with cause `goal_cleared`.
+- One `pgstore` backs home sessions and the box mirror; `OpenView` reads both.
+- Handoff stops at an item boundary and resumes; a crash ends the turn, marks open tool calls cut off, and auto-continues once. No tool call is ever re-run.
+- The scripted model is public as `harness/harnesstest`.
+- There is no comment purge. A history comment leaves when its code is rewritten or deleted; the gates stop new ones.
