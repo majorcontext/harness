@@ -27,7 +27,10 @@ const (
 // fake is a scripted Backend. Each Run sends itself on runs; the test sends
 // the items of the turn on items and closes items to end the turn. When the
 // turn's ctx ends, it reports late, then waits for stuck when it is set.
+// With ownsLoop, the test reports the tool results; without it, the turn
+// loop runs the tools.
 type fake struct {
+	ownsLoop bool
 	steering bool
 	deaf     bool
 	late     []eventlog.Message
@@ -40,9 +43,11 @@ type fakeRun struct {
 	items chan<- eventlog.Message
 }
 
-func newFake() *fake { return &fake{runs: make(chan fakeRun)} }
+func newFake() *fake { return &fake{ownsLoop: true, runs: make(chan fakeRun)} }
 
-func (f *fake) Capabilities(string) turn.Capabilities { return turn.Capabilities{Steering: f.steering} }
+func (f *fake) Capabilities(string) turn.Capabilities {
+	return turn.Capabilities{OwnsLoop: f.ownsLoop, Steering: f.steering}
+}
 
 func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
 	items := make(chan eventlog.Message)

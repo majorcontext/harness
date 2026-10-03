@@ -55,6 +55,7 @@ type Config struct {
 	// Owner names this process in owner.acquired.
 	Owner   string
 	Backend turn.Backend
+	Tools   []turn.Tool
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Retries bounds the new attempts of a turn after a retryable error.

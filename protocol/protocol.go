@@ -30,6 +30,29 @@ type CreateSession struct {
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`
 	Origin      string `json:"origin,omitempty"`
+	// AllowedTools names the embedder tools that the model sees and may
+	// call. nil allows every tool; an empty list allows none.
+	AllowedTools []string `json:"allowed_tools,omitzero"`
+}
+
+// ToolSpec describes a tool to the model.
+type ToolSpec struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ToolCall is one call of a tool by the model. ID is the model's call ID.
+type ToolCall struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ToolResult is what a tool call returns to the model.
+type ToolResult struct {
+	Text    string `json:"text"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // Usage counts tokens.

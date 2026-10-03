@@ -67,6 +67,8 @@ type SessionCreated struct {
 	Model    string   `json:"model"`
 	Settings Settings `json:"settings"`
 	Origin   string   `json:"origin"`
+	// AllowedTools names the embedder tools of the session. nil allows every tool.
+	AllowedTools []string `json:"allowed_tools,omitzero"`
 }
 
 // OwnerAcquired fences every earlier owner of the session.

@@ -50,6 +50,8 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
+	// Tools are the embedder tools. Each name must be unique.
+	Tools []Tool
 
 	backend turn.Backend
 }
@@ -60,6 +62,7 @@ type Runtime struct {
 	owner   Owner
 	sync    Sync
 	backend turn.Backend
+	tools   []turn.Tool
 	// models is nil when Options.backend runs every turn.
 	models  *models
 	retries int
@@ -86,6 +89,15 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
 		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{}}
+	names := map[string]bool{}
+	for _, t := range opts.Tools {
+		name := t.Spec().Name
+		if name == "" || names[name] {
+			return nil, fmt.Errorf("%w: tool name %q is empty or repeated", ErrInvalidRequest, name)
+		}
+		names[name] = true
+		r.tools = append(r.tools, t)
+	}
 	if r.owner == nil {
 		r.owner = newLocalOwner()
 	}
@@ -119,7 +131,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
-		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}}
+		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
 	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
 		return session.Create(ctx, cfg, created)
 	})
@@ -203,6 +215,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Ownership: own,
 		Owner:     r.name(),
 		Backend:   r.backend,
+		Tools:     r.tools,
 		Sync:      r.sync,
 		Retries:   r.retries,
 		Base:      r.base,
