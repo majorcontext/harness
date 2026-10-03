@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -15,14 +16,17 @@ import (
 
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
 type run struct {
-	out     turn.Sink
-	turnID  string
-	proc    *external.Process
-	dir     string
-	mirror  external.Mirror
-	saved   []byte
-	allowed map[string]bool
-	names   map[string]string
+	out       turn.Sink
+	turnID    string
+	proc      *external.Process
+	tools     *external.Tools
+	mcpConfig string
+	dir       string
+	mirror    external.Mirror
+	saved     []byte
+	allowed   map[string]bool
+	bridged   map[string]bool
+	names     map[string]string
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
 	continues bool
@@ -49,8 +53,13 @@ type run struct {
 }
 
 func (r *run) cleanup() {
-	if r.dir != "" {
-		_ = os.RemoveAll(r.dir)
+	if r.tools != nil {
+		r.tools.Close()
+	}
+	for _, p := range []string{r.dir, r.mcpConfig} {
+		if p != "" {
+			_ = os.RemoveAll(p)
+		}
 	}
 }
 
@@ -283,12 +292,15 @@ func (r *run) assistant(env envelope) error {
 		}
 		r.pending, r.pendingID = &eventlog.Message{Role: eventlog.RoleAssistant}, m.ID
 	}
-	for _, p := range parts {
+	for i, p := range parts {
 		switch p.Type {
 		case eventlog.PartText, eventlog.PartReasoning:
 			r.out.Delta(r.pendingID, turn.Delta{Type: p.Type, Text: p.Text})
 		case eventlog.PartToolCall:
-			r.names[p.CallID] = p.Name
+			if name, ok := strings.CutPrefix(p.Name, mcpPrefix); ok && r.bridged[name] {
+				parts[i].Name = name
+			}
+			r.names[p.CallID] = parts[i].Name
 			r.open++
 		}
 	}

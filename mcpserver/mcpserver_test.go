@@ -117,16 +117,17 @@ func TestRegistryToolsListIncludesRegisteredTools(t *testing.T) {
 // object byte-for-byte (the concrete get_conversation_history tool's own
 // pagination args, e.g., ride this path unmodified).
 func TestRegistryToolsCallDispatchesToHandlerWithArguments(t *testing.T) {
-	var gotArgs json.RawMessage
+	var gotArgs, gotMeta json.RawMessage
 	reg := NewRegistry("test-server", "1.0.0")
-	reg.RegisterTool(mcp.Tool{Name: "echo"}, func(_ context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
-		gotArgs = args
+	reg.RegisterTool(mcp.Tool{Name: "echo"}, func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+		gotArgs, gotMeta = args, CallMeta(ctx)
 		return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: "echoed"}}}, nil
 	})
 
 	code, resp := post(t, reg, methodToolsCall, "1", map[string]any{
 		"name":      "echo",
 		"arguments": map[string]any{"offset": 5, "limit": 10},
+		"_meta":     map[string]any{"k": "v"},
 	})
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
@@ -154,6 +155,9 @@ func TestRegistryToolsCallDispatchesToHandlerWithArguments(t *testing.T) {
 	}
 	if args.Offset != 5 || args.Limit != 10 {
 		t.Errorf("handler received offset=%d limit=%d, want 5 and 10", args.Offset, args.Limit)
+	}
+	if string(gotMeta) != `{"k":"v"}` {
+		t.Errorf("CallMeta = %s, want {\"k\":\"v\"}", gotMeta)
 	}
 }
 

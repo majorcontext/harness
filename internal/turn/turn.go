@@ -31,11 +31,12 @@ type Capabilities struct {
 	Steering      bool
 	ContextWindow int
 	// Tools names the built-in tools of a backend that owns the loop. A
-	// session of that backend may allow only these.
+	// session of that backend may allow only these and the embedder tools.
 	Tools []string
 }
 
-// Tool is a tool that the loop runs for a backend that does not own the loop.
+// Tool is an embedder tool. The loop runs it, or Request.Call for a backend
+// that owns the loop.
 type Tool interface {
 	Spec() protocol.ToolSpec
 	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)
@@ -53,6 +54,8 @@ type Request struct {
 	History []eventlog.Message
 	// Tools describes the tools that the model may call.
 	Tools []protocol.ToolSpec
+	// Call runs a call to one of Tools. A backend that owns the loop calls it.
+	Call func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult
 	// Resumed counts the resumes of a turn suspended by a handoff; 0 for a new turn.
 	Resumed int
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
@@ -125,6 +128,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 	for _, t := range tools {
 		req.Tools = append(req.Tools, t.Spec())
 	}
+	req.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult { return runTool(ctx, tools, c) }
 	loop := !b.Capabilities(req.Model).OwnsLoop
 	for {
 		if step.Err() != nil {

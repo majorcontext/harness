@@ -67,7 +67,7 @@ type SessionCreated struct {
 	Model    string   `json:"model"`
 	Settings Settings `json:"settings"`
 	Origin   string   `json:"origin"`
-	// AllowedTools names the tools of the session: the embedder tools, or
+	// AllowedTools names the tools of the session: the embedder tools, and
 	// the built-in tools of a delegated backend. nil allows every tool.
 	AllowedTools []string `json:"allowed_tools,omitzero"`
 }
