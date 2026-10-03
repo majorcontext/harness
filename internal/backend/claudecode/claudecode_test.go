@@ -15,7 +15,6 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/internal/backend/claudecode"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -245,14 +244,16 @@ func TestClaudeCodeSteerReachesStdin(t *testing.T) {
 }
 
 func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
+	const stopped = "turn.ended interrupted stopped"
 	for _, tc := range []struct {
 		mode string
 		want []string
 	}{
-		{"hang_after_text", []string{"item.completed assistant Working on it."}},
-		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted}},
-		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted}},
-		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok"}},
+		{"hang_after_text", []string{"item.completed assistant Working on it.", stopped}},
+		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted, stopped}},
+		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted, stopped}},
+		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", stopped}},
+		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "turn.ended completed"}},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			signals := filepath.Join(t.TempDir(), "signals")
@@ -268,7 +269,7 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 			if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
 				t.Fatal(err)
 			}
-			want := append(append([]string{"input.admitted a", "turn.started a", "backend.state"}, tc.want...), "turn.ended interrupted stopped")
+			want := append([]string{"input.admitted a", "turn.started a", "backend.state"}, tc.want...)
 			wantLog(t, st, 2, want...)
 			if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
 				t.Errorf("signals = %q, want one SIGINT", got)
@@ -281,6 +282,8 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 }
 
 const (
+	continuation = "The previous turn was interrupted. Continue the unfinished work from the saved conversation. " +
+		"Check the current state before repeating actions that may already have completed."
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
 	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
 )
@@ -315,11 +318,11 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 		retries          int
 		want             string
 	}{
-		{name: "a handoff after init", mode: "hang", next: "thinking", seen: "backend.state", want: claudecode.Continuation},
+		{name: "a handoff after init", mode: "hang", next: "thinking", seen: "backend.state", want: continuation},
 		{name: "a mirrored handoff after a transcript", mode: "mirror", next: "mirror", hangAfter: "3", seen: "item.completed",
-			want: claudecode.Continuation},
+			want: continuation},
 		{name: "a mirrored handoff before a transcript", mode: "mirror", next: "mirror", hangAfter: "0", seen: "backend.state", want: "hi"},
-		{name: "a retry after init", mode: "crash", retries: 1, want: claudecode.Continuation},
+		{name: "a retry after init", mode: "crash", retries: 1, want: continuation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeClaude(t, tc.mode, "FAKE_CLAUDE_MIRROR_FIXTURE", fixtures+"run1.stdout.jsonl", "FAKE_CLAUDE_MIRROR_HANG_AFTER", tc.hangAfter)

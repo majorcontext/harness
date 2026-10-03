@@ -112,6 +112,7 @@ var basicModes = map[string]mode{
 	"hang_in_tool":                hangInTool,
 	"tool_on_interrupt":           hang,
 	"tool_result_on_interrupt":    hang,
+	"success_on_interrupt":        hang,
 	"crash":                       crashAfter(),
 	"fast_no_drain":               frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                       frames(result("error_during_execution", true, "fake failure", 11, 3)),
@@ -136,10 +137,12 @@ func hangInTool(f *fake) {
 	hang(f)
 }
 
-// onInterrupt holds the frames that a mode prints after a SIGINT, before its
-// result. They reach the driver only after it stopped reading the turn.
+// onInterrupt holds the frames that a mode prints after a SIGINT, before the
+// error result. A list that ends with a result replaces the error result.
+// They reach the driver only after it stopped reading the turn.
 var onInterrupt = map[string][]obj{
 	"tool_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"}))},
 	"tool_result_on_interrupt": {assistant(toolUse("toolu_i", "Bash", obj{"command": "sleep 60"})),
 		user(toolResult("toolu_i", "ok\n", false))},
+	"success_on_interrupt": {say("Finished anyway."), success("Finished anyway.", 7, 2)},
 }

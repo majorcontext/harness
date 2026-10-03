@@ -26,9 +26,9 @@ import (
 // stateKey names the state blob of the external session.
 const stateKey = "claude-code"
 
-// Continuation is the prompt of a run that continues a turn whose input the
+// continuation is the prompt of a run that continues a turn whose input the
 // CLI already took: a resume after a handoff, or a retry.
-const Continuation = "The session moved to a new host, which interrupted the previous turn. " +
+const continuation = "The previous turn was interrupted. " +
 	"Continue the unfinished work from the saved conversation. " +
 	"Check the current state before repeating actions that may already have completed."
 
@@ -172,9 +172,9 @@ func effortArg(e message.Effort) (string, bool) {
 }
 
 // prompt is the stdin line that starts the run. A run that continues the
-// turn sends Continuation: the resumed session already holds the input.
+// turn sends continuation: the resumed session already holds the input.
 func (r *run) prompt(req turn.Request) input {
-	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: Continuation}}}
+	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: continuation}}}
 	if !r.continues {
 		m.Parts = nil
 		for _, in := range req.Input {
