@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,8 +198,8 @@ func TestClaudeCodeTurn(t *testing.T) {
 	}
 }
 
-func TestClaudeCodeCreateRefusesAToolThatIsNotBuiltIn(t *testing.T) {
-	for _, name := range []string{"bash", "lookup"} {
+func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
+	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {
 			r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, lookup{})
 			defer closeRuntime(t, r)
@@ -210,13 +211,134 @@ func TestClaudeCodeCreateRefusesAToolThatIsNotBuiltIn(t *testing.T) {
 	}
 }
 
-// lookup is an embedder tool, which the CLI cannot run.
 type lookup struct{}
 
 func (lookup) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: "lookup"} }
 
 func (lookup) Run(context.Context, protocol.ToolCall) (protocol.ToolResult, error) {
 	return protocol.ToolResult{}, nil
+}
+
+// probe is an embedder tool that sends each call to ended when it returns.
+// A probe with started closes it, then runs until its ctx ends.
+type probe struct {
+	name    string
+	started chan struct{}
+	ended   chan protocol.ToolCall
+}
+
+func newProbe(name string, blocks bool) probe {
+	p := probe{name: name, ended: make(chan protocol.ToolCall, 1)}
+	if blocks {
+		p.started = make(chan struct{})
+	}
+	return p
+}
+
+func (p probe) Spec() protocol.ToolSpec { return protocol.ToolSpec{Name: p.name} }
+
+func (p probe) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
+	defer func() { p.ended <- c }()
+	if p.started != nil {
+		close(p.started)
+		<-ctx.Done()
+		return protocol.ToolResult{}, context.Cause(ctx)
+	}
+	return protocol.ToolResult{Text: p.name + " " + string(c.Arguments)}, nil
+}
+
+// mcpRun is what the fake CLI logged of the harness MCP endpoint.
+type mcpRun struct {
+	URL   string
+	Tools []string
+}
+
+// endedCall returns the call that p ran to its end, and checks that the
+// MCP endpoint of run is closed.
+func endedCall(t *testing.T, p probe, run mcpRun) protocol.ToolCall {
+	t.Helper()
+	if resp, err := http.Post(run.URL, "application/json", strings.NewReader("{}")); err == nil {
+		_ = resp.Body.Close()
+		t.Errorf("POST %s after the turn = %s, want a closed endpoint", run.URL, resp.Status)
+	}
+	select {
+	case c := <-p.ended:
+		return c
+	default:
+		t.Fatalf("tool %s did not return before the turn ended", p.name)
+		return protocol.ToolCall{}
+	}
+}
+
+func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		allowed []string
+		env     []string
+		offered []string
+		args    []string
+	}{
+		{name: "a tool call through MCP runs the embedder tool", offered: []string{"echo", "hidden"},
+			args: []string{"--allowedTools", "mcp__harness"}},
+		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
+			offered: []string{"echo"}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mcpLog := filepath.Join(t.TempDir(), "mcp")
+			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog)...)
+			st, echo := harness.NewMemStore(), newProbe("echo", false)
+			r := retryingRuntime(t, st, nil, false, 0, echo, newProbe("hidden", false))
+			defer closeRuntime(t, r)
+			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
+			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
+				`item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "turn.ended completed")
+			runs := jsonLines[mcpRun](t, mcpLog)
+			if len(runs) != 1 || !slices.Equal(runs[0].Tools, tc.offered) {
+				t.Fatalf("MCP runs = %+v, want one that offers %q", runs, tc.offered)
+			}
+			if c := endedCall(t, echo, runs[0]); c.ID != "toolu_m" || c.Name != "echo" {
+				t.Errorf("call = %+v, want ID toolu_m and name echo", c)
+			}
+			if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[0], tc.args...) {
+				t.Errorf("argv = %q, want %q in it", argv[0], tc.args)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
+	mcpLog := filepath.Join(t.TempDir(), "mcp")
+	fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
+	st, block := harness.NewMemStore(), newProbe("block", true)
+	r := retryingRuntime(t, st, nil, false, 0, block)
+	defer closeRuntime(t, r)
+	s := createClaude(t, r, nil)
+	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		for e, err := range s.Events(bg, 0) {
+			if err != nil || e.Kind == "turn.ended" {
+				return
+			}
+		}
+	}()
+	select {
+	case <-block.started:
+	case <-ended:
+		t.Fatal("the turn ended before the tool started")
+	}
+	if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
+		t.Fatal(err)
+	}
+	<-ended
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
+		"item.completed tool toolu_m "+interrupted, "turn.ended interrupted stopped")
+	if c := endedCall(t, block, jsonLines[mcpRun](t, mcpLog)[0]); c.ID != "toolu_m" {
+		t.Errorf("call = %+v, want ID toolu_m", c)
+	}
 }
 
 func TestClaudeCodeSteerReachesStdin(t *testing.T) {

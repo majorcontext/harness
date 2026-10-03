@@ -6,6 +6,7 @@ package claudecode
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -42,6 +43,12 @@ var ErrToolsNotRestricted = errors.New("claudecode: the CLI did not apply the to
 var builtins = []string{"Bash", "BashOutput", "Edit", "Glob", "Grep", "KillShell", "MultiEdit",
 	"NotebookEdit", "Read", "Skill", "TodoWrite", "WebFetch", "WebSearch", "Write"}
 
+// mcpPrefix starts the CLI name of each harness tool.
+const mcpPrefix = "mcp__" + external.ToolServer + "__"
+
+// toolUseMeta is the _meta field of an MCP tool call that holds the CLI tool use ID.
+const toolUseMeta = "claudecode/toolUseId"
+
 // disallowed are CLI tools that a box cannot serve: subagents bypass the
 // harness child tree, and the loop and cron tools need a process that a
 // hibernating box does not keep.
@@ -72,10 +79,10 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	if err != nil {
 		return turn.Result{}, err
 	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: restriction(req.AllowedTools), names: map[string]string{},
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: restriction(req), names: map[string]string{},
 		continues: b.resumes(mirror) && mirror.Turn == req.TurnID}
-	cmd, err := b.command(req, r)
 	defer r.cleanup()
+	cmd, err := b.command(ctx, req, r)
 	if err != nil {
 		return turn.Result{}, err
 	}
@@ -87,20 +94,26 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	return turn.Result{}, r.finish(ctx, err)
 }
 
-// restriction is the set of allowed tools, or nil to allow every tool. The
-// init frame check keeps a CLI that does not apply it from running.
-func restriction(names []string) map[string]bool {
-	if names == nil {
+// restriction is the set of tools that the CLI may show, or nil to allow
+// every tool. The init frame check keeps a CLI that does not apply it from
+// running. req.Tools holds only the allowed harness tools.
+func restriction(req turn.Request) map[string]bool {
+	if req.AllowedTools == nil {
 		return nil
 	}
 	allowed := map[string]bool{}
-	for _, n := range names {
-		allowed[n] = true
+	for _, n := range req.AllowedTools {
+		if slices.Contains(builtins, n) {
+			allowed[n] = true
+		}
+	}
+	for _, t := range req.Tools {
+		allowed[mcpPrefix+t.Name] = true
 	}
 	return allowed
 }
 
-func (b *Backend) command(req turn.Request, r *run) (*exec.Cmd, error) {
+func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.Cmd, error) {
 	ref, err := message.ParseModelRef(req.Model)
 	if err != nil {
 		return nil, err
@@ -112,7 +125,15 @@ func (b *Backend) command(req turn.Request, r *run) (*exec.Cmd, error) {
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
 		"--thinking-display", "summarized", "--disallowedTools", disallowed}
 	if r.allowed != nil {
-		args = append(args, "--tools", strings.Join(slices.Sorted(maps.Keys(r.allowed)), ","), "--strict-mcp-config")
+		tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
+		args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
+	}
+	if len(req.Tools) > 0 {
+		path, err := r.serveTools(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--mcp-config", path, "--allowedTools", "mcp__"+external.ToolServer)
 	}
 	if ref.Model != "" {
 		args = append(args, "--model", ref.Model)
@@ -157,6 +178,28 @@ func scratch(m external.Mirror) (string, error) {
 		dir = real
 	}
 	return dir, m.Restore(dir)
+}
+
+// serveTools serves the harness tools of req for this run and returns the
+// path of an --mcp-config file that names the endpoint. A file keeps the
+// endpoint URL out of the argv of the CLI.
+func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
+	var err error
+	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, req.Call); err != nil {
+		return "", err
+	}
+	cfg := map[string]any{"mcpServers": map[string]any{external.ToolServer: map[string]string{"type": "http", "url": r.tools.URL}}}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "harness-claude-mcp-*.json")
+	if err != nil {
+		return "", err
+	}
+	r.mcpConfig = f.Name()
+	_, err = f.Write(data)
+	return r.mcpConfig, errors.Join(err, f.Close())
 }
 
 func effortArg(e message.Effort) (string, bool) {

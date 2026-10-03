@@ -17,7 +17,7 @@
 //	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
-// modes_stdin.go, modes_question.go, and modes_mirror.go.
+// modes_stdin.go, modes_question.go, modes_mirror.go, and modes_mcp.go.
 //
 // The normal turn is not byte-faithful to the real CLI in two ways. Its
 // result frame has no num_turns or session_id, so the driver takes its

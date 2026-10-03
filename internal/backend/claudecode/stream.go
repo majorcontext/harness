@@ -15,14 +15,16 @@ import (
 
 // run is one CLI run: it maps the frames of the CLI to items of the turn.
 type run struct {
-	out     turn.Sink
-	turnID  string
-	proc    *external.Process
-	dir     string
-	mirror  external.Mirror
-	saved   []byte
-	allowed map[string]bool
-	names   map[string]string
+	out       turn.Sink
+	turnID    string
+	proc      *external.Process
+	tools     *external.Tools
+	mcpConfig string
+	dir       string
+	mirror    external.Mirror
+	saved     []byte
+	allowed   map[string]bool
+	names     map[string]string
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
 	continues bool
@@ -49,8 +51,13 @@ type run struct {
 }
 
 func (r *run) cleanup() {
-	if r.dir != "" {
-		_ = os.RemoveAll(r.dir)
+	if r.tools != nil {
+		r.tools.Close()
+	}
+	for _, p := range []string{r.dir, r.mcpConfig} {
+		if p != "" {
+			_ = os.RemoveAll(p)
+		}
 	}
 }
 

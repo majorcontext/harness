@@ -44,6 +44,16 @@ func (m rpcMessage) isNotification() bool { return m.Method != "" && len(m.ID) =
 type callToolParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
+	Meta      json.RawMessage `json:"_meta,omitempty"`
+}
+
+type metaKey struct{}
+
+// CallMeta returns the _meta object of the tools/call request that a
+// ToolHandler serves, or nil.
+func CallMeta(ctx context.Context) json.RawMessage {
+	m, _ := ctx.Value(metaKey{}).(json.RawMessage)
+	return m
 }
 
 // ToolHandler executes a registered tools/call request. args is nil when the
@@ -185,7 +195,7 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 		if !ok {
 			return nil, &mcp.RPCError{Code: codeInvalidParams, Message: fmt.Sprintf("unknown tool %q", req.Name)}
 		}
-		res, err := handler(ctx, req.Arguments)
+		res, err := handler(context.WithValue(ctx, metaKey{}, req.Meta), req.Arguments)
 		if err != nil {
 			return mcp.CallToolResult{
 				Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: err.Error()}},

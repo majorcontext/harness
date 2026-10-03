@@ -47,9 +47,9 @@ func newModels(cfg config.Config, transport func(provider string) http.RoundTrip
 	return m
 }
 
-// check reports why model cannot start a session that allows tools. A
-// backend that owns the loop runs only its built-in tools.
-func (m *models) check(model string, tools []string) error {
+// check reports why model cannot start a session that allows the names. A
+// backend that owns the loop runs only its built-in tools and the embedder tools.
+func (m *models) check(model string, names []string, tools []turn.Tool) error {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
@@ -62,9 +62,9 @@ func (m *models) check(model string, tools []string) error {
 		return fmt.Errorf("%w: modelmeta does not know %s", ErrModelUnavailable, model)
 	}
 	if caps := be.Capabilities(model); caps.OwnsLoop {
-		for _, t := range tools {
-			if !slices.Contains(caps.Tools, t) {
-				return fmt.Errorf("%w: %s has no built-in tool %q", ErrInvalidRequest, model, t)
+		for _, n := range names {
+			if !slices.Contains(caps.Tools, n) && !slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == n }) {
+				return fmt.Errorf("%w: %s has no tool %q", ErrInvalidRequest, model, n)
 			}
 		}
 	}

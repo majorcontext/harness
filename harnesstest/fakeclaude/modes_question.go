@@ -15,6 +15,7 @@ var preInitModes = map[string]func(f *fake) bool{
 	"question":                  question,
 	"mirror":                    replayMirror,
 	"no_init":                   noInit,
+	"mcp":                       mcpTurn,
 }
 
 // noInit prints a hook frame and a reply, but no init frame.
