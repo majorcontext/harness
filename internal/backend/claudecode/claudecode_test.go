@@ -225,8 +225,9 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 		want []string
 	}{
 		{"hang_after_text", []string{"item.completed assistant Working on it."}},
-		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h",
-			"item.completed tool toolu_h interrupted before a result was recorded; check whether it took effect before running it again"}},
+		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted}},
+		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted}},
+		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok"}},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			signals := filepath.Join(t.TempDir(), "signals")
@@ -252,6 +253,34 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 			}
 		})
 	}
+}
+
+const (
+	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
+	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
+)
+
+func TestClaudeCodeHandoffInterruptsTheCLI(t *testing.T) {
+	signals := filepath.Join(t.TempDir(), "signals")
+	fakeClaude(t, "tool_on_interrupt", "FAKE_CLAUDE_SIGNAL_LOG", signals)
+	st := harness.NewMemStore()
+	handOff(t, claudeRuntime(t, st, nil, false))
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_i",
+		"item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
+	if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
+		t.Errorf("signals = %q, want one SIGINT", got)
+	}
+}
+
+// handOff starts a turn on r, waits for the CLI to start, and closes r.
+func handOff(t *testing.T, r *harness.Runtime) {
+	t.Helper()
+	s := createClaude(t, r, nil)
+	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+		t.Fatal(err)
+	}
+	await(t, s, 0, "backend.state")
+	closeRuntime(t, r)
 }
 
 // endedUsage returns the usage of the last turn.ended record of session s1.

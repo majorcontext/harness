@@ -123,7 +123,8 @@ func logEnv() {
 }
 
 // logInterrupt appends "interrupt" to FAKE_CLAUDE_SIGNAL_LOG on SIGINT, then
-// prints the error result of the interrupted turn and exits.
+// prints the onInterrupt frames of the mode and the error result of the
+// interrupted turn, and exits.
 func logInterrupt() {
 	path := os.Getenv("FAKE_CLAUDE_SIGNAL_LOG")
 	if path == "" {
@@ -134,8 +135,10 @@ func logInterrupt() {
 	go func() {
 		<-ch
 		appendFile(path, "interrupt\n")
-		b, _ := json.Marshal(result("error_during_execution", true, "", 7, 2))
-		fmt.Println(string(b))
+		for _, v := range append(onInterrupt[os.Getenv("FAKE_CLAUDE_MODE")], result("error_during_execution", true, "", 7, 2)) {
+			b, _ := json.Marshal(v)
+			fmt.Println(string(b))
+		}
 		os.Exit(130)
 	}()
 }

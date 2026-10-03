@@ -22,6 +22,7 @@ type run struct {
 	saved   []byte
 	allowed map[string]bool
 	names   map[string]string
+	stopped bool
 
 	started bool
 	sendErr error
@@ -76,25 +77,31 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 
 var errExited = errors.New("claudecode: the CLI exited before its result")
 
-// finish ends the process, keeps the transcript frames that follow the
-// result, saves the external session, and returns the turn error. A turn
-// that stops early keeps its partial item.
+// finish ends the process, maps the frames that it writes until it exits,
+// saves the external session, and returns the turn error. A stopped turn
+// keeps every item that the CLI wrote.
 func (r *run) finish(ctx context.Context, err error) error {
+	r.stopped = ctx.Err() != nil
 	if err == nil {
 		r.proc.CloseInput()
-	} else {
-		err = errors.Join(err, r.flush())
-		if ctx.Err() == nil {
-			r.proc.Interrupt()
+		if r.stopped && r.result.IsError {
+			err = context.Cause(ctx)
 		}
+	} else if !r.stopped {
+		r.proc.Interrupt()
 	}
 	exit := r.proc.Finish(grace, r.tail)
-	err = errors.Join(err, r.tailErr)
+	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
 	if r.mirror.SessionID != "" {
 		if serr := r.save(); err == nil {
 			err = serr
 		}
 	}
+	return err
+}
+
+// outcome returns the turn error of a run that ended with err and exit.
+func (r *run) outcome(err, exit error) error {
 	switch {
 	case errors.Is(err, errExited):
 		if cause := errors.Join(exit, r.sendErr); cause != nil {
@@ -129,21 +136,24 @@ func (r *run) save() error {
 	return nil
 }
 
-// tail keeps the transcript frames that the CLI writes after its result,
-// and the usage of a result that follows a stop.
+// tail maps a frame that the CLI writes after its result or after the turn
+// failed: only its transcript and its result. After a stop, it maps every
+// frame: the CLI still writes the items that it already ran.
 func (r *run) tail(line []byte) {
 	var env envelope
-	if json.Unmarshal(line, &env) != nil {
+	if json.Unmarshal(line, &env) != nil || env.Type == "result" && r.result != nil {
 		return
 	}
+	var err error
 	switch {
-	case env.Type == "transcript_mirror":
-		if err := r.addMirror(env); r.tailErr == nil {
-			r.tailErr = err
-		}
-	case env.Type == "result" && r.result == nil:
+	case env.Type == "result":
 		r.result = &env
-		r.telemetry(env)
+		err = r.settle(env)
+	case r.stopped || env.Type == "transcript_mirror":
+		err = r.handle(env)
+	}
+	if r.tailErr == nil {
+		r.tailErr = err
 	}
 }
 
@@ -152,6 +162,10 @@ func (r *run) frame(line []byte) error {
 	if json.Unmarshal(line, &env) != nil {
 		return nil
 	}
+	return r.handle(env)
+}
+
+func (r *run) handle(env envelope) error {
 	if r.allowed != nil && !r.started && (env.Type == "assistant" || env.Type == "user" || env.Type == "result") {
 		return fmt.Errorf("%w: %s frame before init", ErrToolsNotRestricted, env.Type)
 	}
