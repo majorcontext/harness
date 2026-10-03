@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
@@ -13,6 +14,7 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
+	"github.com/majorcontext/harness/protocol"
 	responses "github.com/majorcontext/harness/provider/openai"
 )
 
@@ -102,6 +104,19 @@ func (m *models) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 		return turn.Result{}, err
 	}
 	return be.Run(ctx, req, out)
+}
+
+// list returns the models that modelmeta knows for each configured provider.
+func (m *models) list() []protocol.Model {
+	out := []protocol.Model{}
+	for name, be := range m.backends {
+		for _, id := range modelmeta.Models(name) {
+			ref := name + "/" + id
+			out = append(out, protocol.Model{ID: ref, Provider: name, ContextWindow: be.Capabilities(ref).ContextWindow})
+		}
+	}
+	slices.SortFunc(out, func(a, b protocol.Model) int { return strings.Compare(a.ID, b.ID) })
+	return out
 }
 
 // Close closes the connections of every backend. Call it when no turn runs.

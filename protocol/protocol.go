@@ -174,3 +174,12 @@ type SyncBatch struct {
 type SyncAck struct {
 	Head uint64 `json:"head"`
 }
+
+// Model is a model that a configured provider serves.
+type Model struct {
+	// ID is the provider/model ref that a session names.
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	// ContextWindow is 0 when the backend reports the window during a turn.
+	ContextWindow int `json:"context_window"`
+}

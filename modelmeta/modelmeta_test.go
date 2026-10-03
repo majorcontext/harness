@@ -291,3 +291,20 @@ func TestBedrockTableKeysAreNormalized(t *testing.T) {
 		}
 	}
 }
+
+func TestModelsAreKnownToContextWindow(t *testing.T) {
+	for _, provider := range []string{"anthropic", "openai", "codex", "claude-code"} {
+		models := Models(provider)
+		if len(models) == 0 {
+			t.Errorf("Models(%q) is empty", provider)
+		}
+		for _, m := range models {
+			if _, ok := ContextWindow(message.ModelRef{Provider: provider, Model: m}); !ok {
+				t.Errorf("Models(%q) lists %q, which ContextWindow does not know", provider, m)
+			}
+		}
+	}
+	if got := Models("bedrock"); got != nil {
+		t.Errorf("Models(bedrock) = %q, want nil", got)
+	}
+}

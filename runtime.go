@@ -351,3 +351,12 @@ func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
 func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
 	return l.st.GetBlob(ctx, l.id, key)
 }
+
+// Models returns the models that the configured providers serve, by ID. It
+// does no I/O.
+func (r *Runtime) Models() []protocol.Model {
+	if r.models == nil {
+		return []protocol.Model{}
+	}
+	return r.models.list()
+}
