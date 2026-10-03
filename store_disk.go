@@ -21,6 +21,7 @@ type DiskStore struct {
 
 	mu       sync.Mutex
 	sessions map[string]*diskSession
+	durable  map[string]bool
 }
 
 // diskSession guards one session's log. head and size are valid only while
@@ -35,7 +36,7 @@ type diskSession struct {
 
 // NewDiskStore returns a DiskStore rooted at root. It creates root on first write.
 func NewDiskStore(root string) *DiskStore {
-	return &DiskStore{root: filepath.Clean(root), sessions: map[string]*diskSession{}}
+	return &DiskStore{root: filepath.Clean(root), sessions: map[string]*diskSession{}, durable: map[string]bool{}}
 }
 
 func (d *DiskStore) logPath(session string) string {
@@ -122,7 +123,7 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 	if len(records) == 0 {
 		return nil
 	}
-	if err := d.writeLocked(session, s, head == 0, records); err != nil {
+	if err := d.writeLocked(session, s, records); err != nil {
 		s.loaded = false
 		return err
 	}
@@ -130,43 +131,47 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 	return nil
 }
 
-// writeLocked repairs a torn tail, then appends and fsyncs. A failure leaves
-// the log in an unknown state, so the caller reloads the head from disk.
-func (d *DiskStore) writeLocked(session string, s *diskSession, first bool, records [][]byte) error {
-	dir := filepath.Dir(d.logPath(session))
-	if first {
-		if err := mkdirSynced(d.root, dir); err != nil {
-			return err
-		}
+// writeLocked appends and fsyncs. A failure leaves the log in an unknown
+// state, so the caller reloads the head from disk.
+func (d *DiskStore) writeLocked(session string, s *diskSession, records [][]byte) error {
+	path := d.logPath(session)
+	dir := filepath.Dir(path)
+	if err := d.mkdirSynced(dir); err != nil {
+		return err
 	}
-	var buf bytes.Buffer
-	for _, r := range records {
-		buf.Write(r)
-		buf.WriteByte('\n')
-	}
-	f, err := os.OpenFile(d.logPath(session), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
 	if err != nil {
 		return err
 	}
-	if s.torn {
-		err = f.Truncate(s.size)
-	}
-	if err == nil {
-		_, err = f.Write(buf.Bytes())
-	}
-	if err == nil {
-		err = f.Sync()
+	if err = d.durably(path, func() error { return syncDir(dir) }); err == nil {
+		err = appendSynced(f, s, bytes.Join(records, []byte{'\n'}))
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
-	if err == nil && first {
-		err = syncDir(dir)
+	return err
+}
+
+// appendSynced writes b and a final newline after the whole lines, then
+// fsyncs. On failure it cuts the log back so the append reads as not landed.
+func appendSynced(f *os.File, s *diskSession, b []byte) error {
+	var err error
+	if s.torn {
+		err = f.Truncate(s.size)
 	}
 	if err == nil {
-		s.size += int64(buf.Len())
+		_, err = f.Write(append(b, '\n'))
 	}
-	return err
+	if err == nil {
+		err = f.Sync()
+	}
+	if err != nil {
+		_ = f.Truncate(s.size)
+		_ = f.Sync()
+		return err
+	}
+	s.size += int64(len(b)) + 1
+	return nil
 }
 
 func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
@@ -264,7 +269,7 @@ func (d *DiskStore) PutBlob(ctx context.Context, session, key string, r io.Reade
 		return err
 	}
 	dir := filepath.Dir(path)
-	if err := mkdirSynced(d.root, dir); err != nil {
+	if err := d.mkdirSynced(dir); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".put-*")
@@ -299,33 +304,37 @@ func (d *DiskStore) GetBlob(ctx context.Context, session, key string) (io.ReadCl
 	return os.Open(path)
 }
 
-// mkdirSynced creates dir and any missing parent below root, and fsyncs the
-// parent of each directory it creates.
-func mkdirSynced(root, dir string) error {
-	if _, err := os.Stat(dir); err == nil {
+// durably runs fn until it succeeds once for key.
+func (d *DiskStore) durably(key string, fn func() error) error {
+	d.mu.Lock()
+	done := d.durable[key]
+	d.mu.Unlock()
+	if done {
 		return nil
 	}
-	if dir == root {
-		return os.MkdirAll(dir, 0o755)
-	}
-	parent := filepath.Dir(dir)
-	if err := mkdirSynced(root, parent); err != nil {
+	if err := fn(); err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	return syncDir(parent)
+	d.mu.Lock()
+	d.durable[key] = true
+	d.mu.Unlock()
+	return nil
 }
 
-func syncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	err = f.Sync()
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	return err
+// mkdirSynced creates dir and any missing parent below root, and fsyncs the
+// parent of each directory until one fsync succeeds.
+func (d *DiskStore) mkdirSynced(dir string) error {
+	return d.durably(dir, func() error {
+		if dir == d.root {
+			return os.MkdirAll(dir, 0o755)
+		}
+		parent := filepath.Dir(dir)
+		if err := d.mkdirSynced(parent); err != nil {
+			return err
+		}
+		if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		return syncDir(parent)
+	})
 }
