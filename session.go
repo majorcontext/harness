@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -77,7 +78,11 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 }
 
 // Events yields the durable events after seq, then each new one as it is
-// appended. It ends with ErrSessionNotOwned when the session stops here.
+// appended, with the ephemeral frames of the running turn between them:
+// item.started, item.delta, and status. A slow reader can miss any frame,
+// never a durable event, so the deltas of an item can have holes; its
+// item.completed holds the whole item. It ends with ErrSessionNotOwned
+// when the session stops here.
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return s.a.Events(ctx, after)
 }
@@ -108,4 +113,22 @@ func (v *View) Session() protocol.Session { return detach(v.state) }
 // Events yields the events after seq and ends at the head that OpenView read.
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
+}
+
+// Update changes the settings of the session and returns its view. The next
+// turn uses them; a running turn keeps its own until a handoff resumes it.
+// A model that no configured provider serves fails with ErrModelUnavailable.
+// A move to another provider fails with ErrInvalidRequest when either
+// backend owns its context.
+func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
+	if p.Effort != nil {
+		if _, err := message.ParseEffort(*p.Effort); err != nil {
+			return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		}
+	}
+	err := s.a.Update(ctx, eventlog.SettingsChanged{Model: p.Model, Effort: p.Effort, ServiceTier: p.ServiceTier})
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return s.View(), nil
 }

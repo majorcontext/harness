@@ -104,7 +104,12 @@ type Result struct{}
 
 // Reporter takes no ctx: a backend reports items after the turn's ctx ends.
 type Reporter interface {
-	Item(turnID string, m eventlog.Message) error
+	// Item records m under itemID, or under a new ID when itemID is empty.
+	Item(turnID, itemID string, m eventlog.Message) error
+	// Started announces a new item to live subscribers and returns its ID.
+	Started(turnID string) string
+	Delta(turnID, itemID string, d Delta)
+	Status(turnID string, f protocol.StatusFrame)
 	Telemetry(turnID string, t Telemetry)
 	Steer(turnID string) ([]eventlog.Message, error)
 	State(turnID, backend string) ([]byte, error)
@@ -151,7 +156,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 			if ctx.Err() != nil {
 				return context.Cause(ctx)
 			}
-			if err := to.Item(req.TurnID, m); err != nil {
+			if err := to.Item(req.TurnID, "", m); err != nil {
 				return err
 			}
 			req.History = append(req.History, m)
@@ -164,19 +169,23 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 func callModel(ctx context.Context, b Backend, req Request, s *sink, retries int) error {
 	_, err := b.Run(ctx, req, s)
 	for n := 0; n < retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
-		if err = wait(ctx, n); err == nil {
+		s.item = ""
+		if err = s.wait(ctx, n); err == nil {
 			_, err = b.Run(ctx, req, s)
 		}
 	}
 	return err
 }
 
-func wait(ctx context.Context, attempt int) error {
+func (s *sink) wait(ctx context.Context, attempt int) error {
 	d := retryBackoff << attempt
-	t := time.NewTimer(d + rand.N(d/5) - d/10)
+	d += rand.N(d/5) - d/10
+	s.to.Status(s.turnID, protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
+	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-t.C:
+		s.to.Status(s.turnID, protocol.StatusFrame{Status: protocol.StatusRunning})
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
@@ -188,18 +197,28 @@ type sink struct {
 	turnID string
 	to     Reporter
 	items  []eventlog.Message
+	// item is the ID of the item that the deltas since the last Item build.
+	item string
 }
 
 func (s *sink) Item(m eventlog.Message) error {
-	if err := s.to.Item(s.turnID, m); err != nil {
+	id := s.item
+	s.item = ""
+	if err := s.to.Item(s.turnID, id, m); err != nil {
 		return err
 	}
 	s.items = append(s.items, m)
 	return nil
 }
 
-// Delta drops d: no subscriber reads ephemeral frames.
-func (*sink) Delta(string, Delta) {}
+// Delta adds d to the next item. The backend item ID is not used: one
+// harness item can join several backend items, such as reasoning and text.
+func (s *sink) Delta(_ string, d Delta) {
+	if s.item == "" {
+		s.item = s.to.Started(s.turnID)
+	}
+	s.to.Delta(s.turnID, s.item, d)
+}
 
 func (s *sink) Telemetry(t Telemetry) { s.to.Telemetry(s.turnID, t) }
 

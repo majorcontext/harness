@@ -260,7 +260,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `context.measured` | `tokens`, `window`, `source` |
 | `backend.state` | `backend`, `blob_key` |
 
-Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `status`. Each carries its `item_id` and the last durable seq, so a client can place it.
+Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `status`. Each has `ephemeral: true` and the last durable seq, and an item frame carries its `item_id`, so a client can place it.
 
 ### Apply
 

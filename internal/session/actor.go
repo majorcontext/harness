@@ -63,7 +63,10 @@ type Config struct {
 	// Owner names this process in owner.acquired.
 	Owner   string
 	Backend turn.Backend
-	Tools   []turn.Tool
+	// Check reports why a session at model from that allows tools cannot
+	// move to model to. nil accepts every model.
+	Check func(from, to string, tools []string) error
+	Tools []turn.Tool
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Retries bounds the new attempts of a turn after a retryable error.
@@ -90,6 +93,7 @@ type Actor struct {
 	quit chan struct{}
 	done chan struct{}
 	view atomic.Pointer[View]
+	live live
 
 	stale   chan struct{}
 	flushed chan struct{}
@@ -293,6 +297,8 @@ func (a *Actor) View() *View { return a.view.Load() }
 
 func (a *Actor) publish(stopped bool) {
 	next := &View{Session: Describe(a.cfg.ID, a.state), Stopped: stopped, changed: make(chan struct{})}
+	a.live.mu.Lock()
+	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)
 }
 

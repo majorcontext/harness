@@ -210,7 +210,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	a, err := start(ctx, session.Config{
+	cfg := session.Config{
 		ID:        id,
 		Log:       storeLog{r.store, id},
 		Blobs:     storeLog{r.store, id},
@@ -223,7 +223,11 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Base:      r.base,
 		Go:        r.group.Go,
 		Done:      func() { r.forget(id, e) },
-	})
+	}
+	if r.models != nil {
+		cfg.Check = func(from, to string, names []string) error { return r.models.change(from, to, names, r.tools) }
+	}
+	a, err := start(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -350,4 +354,13 @@ func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
 
 func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
 	return l.st.GetBlob(ctx, l.id, key)
+}
+
+// Models returns the models that the configured providers serve, by ID. It
+// does no I/O.
+func (r *Runtime) Models() []protocol.Model {
+	if r.models == nil {
+		return []protocol.Model{}
+	}
+	return r.models.list()
 }

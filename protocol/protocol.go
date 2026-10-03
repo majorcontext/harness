@@ -11,6 +11,8 @@ const (
 	StatusIdle    = "idle"
 	StatusRunning = "running"
 	StatusWaiting = "waiting"
+	// StatusRetrying appears only in status frames.
+	StatusRetrying = "retrying"
 )
 
 // Input deliveries.
@@ -110,12 +112,43 @@ type Interrupt struct {
 	TurnID string `json:"turn_id,omitempty"`
 }
 
-// Event is one durable record of a session log.
+// Event is one durable record of a session log, or an ephemeral frame of a
+// live subscription. An ephemeral frame is never stored; its Seq is the last
+// durable seq when it was sent.
 type Event struct {
-	Seq  uint64          `json:"seq"`
-	Time time.Time       `json:"t"`
-	Kind string          `json:"k"`
-	Data json.RawMessage `json:"d"`
+	Seq       uint64          `json:"seq"`
+	Time      time.Time       `json:"t"`
+	Kind      string          `json:"k"`
+	Data      json.RawMessage `json:"d"`
+	Ephemeral bool            `json:"ephemeral,omitempty"`
+}
+
+// Ephemeral frame kinds.
+const (
+	KindItemStarted = "item.started"
+	KindItemDelta   = "item.delta"
+	KindStatus      = "status"
+)
+
+// ItemFrame is the data of an item.started or item.delta frame. ItemID is
+// the item_id of the item.completed record that ends the item, unless a
+// failed attempt started the item: that item never completes.
+type ItemFrame struct {
+	ItemID string `json:"item_id"`
+	TurnID string `json:"turn_id"`
+	// Type is "text" or "reasoning" in an item.delta frame.
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+// StatusFrame is the data of a status frame. A retrying turn waits until
+// NextAt before its attempt number Attempt. An item that the failed attempt
+// started never completes.
+type StatusFrame struct {
+	Status  string    `json:"status"`
+	TurnID  string    `json:"turn_id"`
+	Attempt int       `json:"attempt,omitempty"`
+	NextAt  time.Time `json:"next_at,omitzero"`
 }
 
 // ListSessions selects a page of sessions in ID order.
@@ -142,4 +175,20 @@ type SyncBatch struct {
 // SyncAck is the head of the receiver after a SyncBatch, also on a seq mismatch.
 type SyncAck struct {
 	Head uint64 `json:"head"`
+}
+
+// Model is a model that a configured provider serves.
+type Model struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	// ContextWindow is 0 when the backend reports the window during a turn.
+	ContextWindow int `json:"context_window"`
+}
+
+// SettingsPatch changes each non-nil setting of a session. The next turn
+// uses the new settings; a running turn keeps its own.
+type SettingsPatch struct {
+	Model       *string `json:"model,omitempty"`
+	Effort      *string `json:"effort,omitempty"`
+	ServiceTier *string `json:"service_tier,omitempty"`
 }

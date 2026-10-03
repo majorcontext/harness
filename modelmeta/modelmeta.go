@@ -10,6 +10,7 @@ package modelmeta
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/message"
@@ -100,6 +101,25 @@ func ContextWindow(ref message.ModelRef) (tokens int, ok bool) {
 		tokens, ok = 0, true
 	}
 	return tokens, ok
+}
+
+// codexModels are the models that the ChatGPT subscription backend accepts.
+// It refuses most other OpenAI models, gpt-5.3-codex included.
+var codexModels = []string{"gpt-6-astra", "gpt-6-luna", "gpt-6-sol"}
+
+// claudeCodeModels are the model aliases that the Claude Code CLI resolves.
+var claudeCodeModels = []string{"fable", "haiku", "opus", "sonnet"}
+
+// Models returns, sorted, the models that a provider serves and that
+// ContextWindow knows. It returns nil for a provider with no curated list.
+func Models(provider string) []string {
+	switch provider {
+	case codexProvider:
+		return slices.Clone(codexModels)
+	case claudeCodeProvider:
+		return slices.Clone(claudeCodeModels)
+	}
+	return nil
 }
 
 // claudeCodeProvider is the message.ModelRef.Provider value that selects

@@ -1,0 +1,86 @@
+package session
+
+import (
+	"context"
+	"sync"
+	"testing"
+
+	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/turn"
+)
+
+type memLog struct {
+	mu   sync.Mutex
+	recs []eventlog.Record
+}
+
+func (l *memLog) Head(context.Context) (uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return uint64(len(l.recs)), nil
+}
+
+func (l *memLog) Append(_ context.Context, _ uint64, records ...[]byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range records {
+		l.recs = append(l.recs, eventlog.Record{Seq: uint64(len(l.recs)) + 1, Data: r})
+	}
+	return nil
+}
+
+func (l *memLog) Read(_ context.Context, after uint64, limit int) ([]eventlog.Record, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.recs[after:min(len(l.recs), int(after)+limit)], nil
+}
+
+type owned struct{}
+
+func (owned) Epoch() uint64         { return 1 }
+func (owned) Lost() <-chan struct{} { return nil }
+func (owned) Release()              {}
+
+func TestFramesNeverTrailTheDurableHead(t *testing.T) {
+	const appends = 3000
+	a := newActor(Config{ID: "s1", Log: &memLog{}, Ownership: owned{}, Base: t.Context()}, &eventlog.State{})
+	if err := a.appendCtx(t.Context(), eventlog.SessionCreated{Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range appends {
+			if err := a.appendCtx(t.Context(), eventlog.SettingsChanged{Effort: new([]string{"low", "high"}[i%2])}); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				a.Delta("t1", "i1", turn.Delta{Type: eventlog.PartText, Text: "x"})
+			}
+		}
+	}()
+	var head uint64
+	for e, err := range a.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Ephemeral && e.Seq < head {
+			t.Errorf("%s frame at seq %d came after durable seq %d", e.Kind, e.Seq, head)
+			break
+		}
+		if !e.Ephemeral {
+			head = e.Seq
+		}
+		if head == appends+1 {
+			break
+		}
+	}
+	<-done
+}

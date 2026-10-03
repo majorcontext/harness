@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"slices"
@@ -45,7 +46,8 @@ func (t *transport) Calls() []string {
 	return slices.Clone(t.calls)
 }
 
-// codexRuntime runs turns on s with no retries. The key is in the
+// codexRuntime runs turns on s, as provider codex and as provider openai,
+// with no retries, and also configures provider claude-code. The key is in the
 // environment, or, with injected set, only in the ModelTransport.
 func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool, tools ...harness.Tool) (*harness.Runtime, harness.Store, *transport) {
 	t.Helper()
@@ -55,13 +57,14 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 	}
 	t.Setenv("HARNESS_TEST_CODEX_KEY", envKey)
 	st, rec, retries := harness.NewMemStore(), &transport{}, 0
+	p := config.Provider{
+		Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
+		BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
+		OmitResponseParams: []string{"max_output_tokens"}, UseWebSocketTransport: websocket,
+	}
 	r, err := harness.New(harness.Options{
-		Store: st,
-		Config: config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": {
-			Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
-			BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses",
-			OmitResponseParams: []string{"max_output_tokens"}, UseWebSocketTransport: websocket,
-		}}},
+		Store:          st,
+		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
 		ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} },
 		Tools:          tools,
 	})
@@ -75,25 +78,20 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 // converse submits each text as an input and waits for the turn it starts to end.
 func converse(t *testing.T, s *harness.Session, texts ...string) {
 	t.Helper()
-	ended := 0
-	for i, text := range texts {
-		after := s.View().HeadSeq
-		if _, err := s.Submit(bg, protocol.Input{ID: string(rune('a' + i)), Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
-			t.Fatal(err)
-		}
-		for e, err := range s.Events(bg, after) {
-			if err != nil {
-				t.Fatal(err)
-			}
-			if e.Kind == "turn.ended" {
-				ended++
-				break
-			}
+	for i, txt := range texts {
+		watch(t, s, s.View().HeadSeq-1, s.View().HeadSeq, text(string(rune('a'+i)), txt), false)
+	}
+}
+
+// transcript prints each part of the messages of req as one line.
+func transcript(req harnesstest.Request) []string {
+	var out []string
+	for _, m := range req.Messages {
+		for _, p := range m.Parts {
+			out = append(out, m.Role+" "+p.Kind+" "+p.ToolName+":"+p.Text)
 		}
 	}
-	if ended != len(texts) {
-		t.Fatalf("%d turns ended, want %d", ended, len(texts))
-	}
+	return out
 }
 
 const codexPost = "codex POST /backend-api/codex/responses"
@@ -127,12 +125,7 @@ var codexTurns = []struct {
 			"input.admitted b", "turn.started b", "item.completed assistant ok", "turn.ended completed"},
 		calls: []string{codexPost, codexPost, codexPost},
 		check: func(t *testing.T, s *harnesstest.OpenAI) {
-			var got []string
-			for _, m := range s.Requests()[2].Messages {
-				for _, p := range m.Parts {
-					got = append(got, m.Role+" "+p.Kind+" "+p.ToolName+":"+p.Text)
-				}
-			}
+			got := transcript(s.Requests()[2])
 			want := []string{"user text :run", "assistant tool_use bash:", "user tool_result bash:[tool error] " + noTool + "bash",
 				"assistant text :noted", "user text :again"}
 			if !slices.Equal(got, want) {
@@ -250,5 +243,29 @@ func TestCreateChecksTheModel(t *testing.T) {
 				t.Errorf("Create(%q) = %v, want %v", tc.model, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestModelsListsTheConfiguredProviders(t *testing.T) {
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: config.Config{Providers: map[string]config.Provider{
+		"codex":       {Type: config.TypeOpenAI},
+		"claude-code": {Type: config.TypeClaudeCodeCLI},
+		"work":        {Type: config.TypeOpenAI},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeRuntime(t, r) })
+	var got []string
+	for _, m := range r.Models() {
+		got = append(got, fmt.Sprintf("%s %s %d", m.ID, m.Provider, m.ContextWindow))
+		if _, err := r.Create(bg, protocol.CreateSession{Model: m.ID}); err != nil {
+			t.Errorf("Create(%s): %v", m.ID, err)
+		}
+	}
+	want := []string{"claude-code/fable claude-code 0", "claude-code/haiku claude-code 0", "claude-code/opus claude-code 0",
+		"claude-code/sonnet claude-code 0", "codex/gpt-6-astra codex 1050000", "codex/gpt-6-luna codex 1050000", "codex/gpt-6-sol codex 1050000"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Models =\n%q\nwant\n%q", got, want)
 	}
 }
