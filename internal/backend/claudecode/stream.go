@@ -117,8 +117,8 @@ func (r *run) finish(ctx context.Context, err error) error {
 	return err
 }
 
-// stopError returns the error of a run that cause stopped after drive
-// returned err. A stopped run completes only on a success result.
+// stopError returns the turn error of a run that the stop cause ended.
+// drive returned err; a stopped run completes only on a success result.
 func stopError(err, cause error, res *envelope) error {
 	if err != nil && !errors.Is(err, errExited) && !errors.Is(err, cause) {
 		return err
