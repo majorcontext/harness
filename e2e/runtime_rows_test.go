@@ -25,12 +25,14 @@ const (
 	specBoxGlobal     = "| Box-global `events.jsonl` | Delete |"
 	specModelCheck    = "An unknown model fails with `model_unavailable` at create and at a settings change."
 	specChildResend   = "changes by design in one way: a later send is not refused"
+	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
 	specOpenPlugins      = "Does the switch keep the plugin inventory?"
 	specOpenCrashMarker  = "Does the switch keep the crash marker?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
+	specOpenBanner       = "Does the switch keep the engine banner"
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -86,15 +88,15 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_http_sse_text_turn":                                  reGolden(specItems),
 	"codex_http_sse_tool_round_trip_resends_history":            reGolden(specItems),
 	"codex_http_usage_headers_reach_session":                    pendingOn("F02"),
-	"codex_ws_chain_miss_resends_full_history":                  pendingOn("phase 5"),
-	"codex_ws_chains_two_turns":                                 pendingOn("phase 5"),
+	"codex_ws_chain_miss_resends_full_history":                  reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_chains_two_turns":                                 reGolden(specItems, specWarm, specOpenBanner),
 	"codex_ws_drop_mid_turn_resends_full_history":               pendingOn("F02", "phase 5"),
 	"codex_ws_effort_sets_reasoning_effort":                     pendingOn("phase 5"),
-	"codex_ws_prewarm_warms_first_turn":                         pendingOn("phase 5"),
-	"codex_ws_reasoning_chains_tool_round_trip":                 pendingOn("phase 5"),
-	"codex_ws_refused_falls_back_to_http":                       pendingOn("phase 5"),
-	"codex_ws_tool_round_trip":                                  pendingOn("phase 5"),
-	"codex_ws_uncoded_chain_miss_resends_full_history":          pendingOn("phase 5"),
+	"codex_ws_prewarm_warms_first_turn":                         reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_reasoning_chains_tool_round_trip":                 reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_refused_falls_back_to_http":                       reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_tool_round_trip":                                  reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_uncoded_chain_miss_resends_full_history":          reGolden(specItems, specWarm, specOpenBanner),
 	"codex_ws_usage_frame_reaches_session":                      pendingOn("F02", "phase 5"),
 	"compact_manual":                                            pendingOn("F02", "F18", "phase 4"),
 	"compact_survives_restart":                                  pendingOn("F02", "F18", "phase 4"),

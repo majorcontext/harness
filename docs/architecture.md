@@ -651,7 +651,7 @@ Delegating a turn to another agent harness is permanent. Claude Code is built, a
 
 ### Warm-up
 
-Warm-up is planned before the phase 4 switch, as the port of Codex prewarm. `turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn uses the warm connection if it is ready. No warm-up state lives on the session.
+Warm-up is planned before the phase 4 switch, as the port of Codex prewarm. `turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn waits for an in-flight warm-up, as the old engine's first prompt does. No warm-up state lives on the session.
 
 ## tool, prompt, and config
 

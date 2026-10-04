@@ -108,6 +108,7 @@ type OpenAI struct {
 
 	wmu       sync.Mutex // guards the fields below; never held with Server.mu
 	wire      []WireEvent
+	prewarms  []string // instructions of each websocket prewarm
 	conns     int
 	responses map[string]int    // by id prefix
 	callNames map[string]string // call id -> tool name, for chained requests that omit the call
@@ -169,6 +170,14 @@ func (o *OpenAI) WireEvents() []WireEvent {
 	o.wmu.Lock()
 	defer o.wmu.Unlock()
 	return append([]WireEvent(nil), o.wire...)
+}
+
+// PrewarmInstructions returns the instructions of each websocket prewarm, in
+// the order they arrived.
+func (o *OpenAI) PrewarmInstructions() []string {
+	o.wmu.Lock()
+	defer o.wmu.Unlock()
+	return append([]string(nil), o.prewarms...)
 }
 
 func (o *OpenAI) fault(format string, args ...any) {
@@ -324,6 +333,9 @@ func (o *OpenAI) serveCreate(ctx context.Context, conn *websocket.Conn, n int, d
 		return writeFrames(ctx, conn, previousResponseNotFound(b.PreviousResponseID, o.opts.UncodedChainMiss))
 	}
 	if prewarm {
+		o.wmu.Lock()
+		o.prewarms = append(o.prewarms, b.Instructions)
+		o.wmu.Unlock()
 		id, frames := o.prewarmFrames()
 		ok := writeFrames(ctx, conn, frames...)
 		o.markKnown(n, id)

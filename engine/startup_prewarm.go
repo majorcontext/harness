@@ -138,7 +138,7 @@ func (s *Session) runStartupPrewarm(ctx context.Context) error {
 	if !ok || !prewarmer.StartupPrewarmEnabled() {
 		return errStartupPrewarmProviderIneligible
 	}
-	return prewarmer.Prewarm(ctx, assembled.request)
+	return prewarmer.Warm(ctx, assembled.request)
 }
 
 func (s *Session) consumeStartupPrewarm(ctx context.Context) error {

@@ -128,6 +128,8 @@ type Actor struct {
 	pending  []func()
 	// runs counts the turn, compaction, and judge goroutines.
 	runs sync.WaitGroup
+	// warming closes when the warm-up that Run started ends. nil: none.
+	warming chan struct{}
 
 	state *eventlog.State
 	// fenced is the seq of the owner.acquired record of this actor.
@@ -186,6 +188,7 @@ func Open(ctx context.Context, cfg Config) (*Actor, error) {
 // or Open started. Call it once, after the actor is published: a tool of
 // that run can look up its own session.
 func (a *Actor) Run() {
+	a.warm()
 	a.launched = true
 	for _, f := range a.pending {
 		a.cfg.Go(f)

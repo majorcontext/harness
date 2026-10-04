@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/coder/websocket"
 	"github.com/majorcontext/harness/provider"
@@ -85,8 +86,8 @@ func TestCodexPrewarmSendsGenerateFalseAndEmptyInput(t *testing.T) {
 	}}
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 
-	if err := client.Prewarm(context.Background(), lineageRequest("prewarm-frame")); err != nil {
-		t.Fatalf("Prewarm: %v", err)
+	if err := client.Warm(context.Background(), lineageRequest("prewarm-frame")); err != nil {
+		t.Fatalf("Warm: %v", err)
 	}
 
 	got := <-server.frames
@@ -105,8 +106,8 @@ func TestCodexPrewarmEstablishesEmptyOutputLineage(t *testing.T) {
 	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_real", "answer")}
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 
-	if err := client.Prewarm(context.Background(), lineageRequest("prewarm-lineage")); err != nil {
-		t.Fatalf("Prewarm: %v", err)
+	if err := client.Warm(context.Background(), lineageRequest("prewarm-lineage")); err != nil {
+		t.Fatalf("Warm: %v", err)
 	}
 	streamLineageTurn(t, client, lineageRequest("prewarm-lineage", userMessage("question")))
 
@@ -133,8 +134,8 @@ func TestCodexPrewarmExistingInputDoesNotDropRealRequestInput(t *testing.T) {
 	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_real", "answer")}
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 
-	if err := client.Prewarm(context.Background(), lineageRequest("prewarm-existing-input", userMessage("existing"))); err != nil {
-		t.Fatalf("Prewarm: %v", err)
+	if err := client.Warm(context.Background(), lineageRequest("prewarm-existing-input", userMessage("existing"))); err != nil {
+		t.Fatalf("Warm: %v", err)
 	}
 	streamLineageTurn(t, client, lineageRequest("prewarm-existing-input", userMessage("existing"), userMessage("new")))
 
@@ -154,7 +155,7 @@ func TestCodexPrewarmExistingInputDoesNotDropRealRequestInput(t *testing.T) {
 
 func TestOpenAIFamilyPrewarmDoesNothing(t *testing.T) {
 	client := &Client{Family: Family, UseWebSocketTransport: true}
-	if err := client.Prewarm(context.Background(), &provider.Request{}); err != nil {
+	if err := client.Warm(context.Background(), &provider.Request{}); err != nil {
 		t.Fatalf("Prewarm for OpenAI family: %v", err)
 	}
 }
@@ -175,7 +176,7 @@ func TestPrewarmFailureLeavesFullRequestAvailable(t *testing.T) {
 	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_real", "answer")}
 	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
 
-	if err := client.Prewarm(context.Background(), lineageRequest("prewarm-failure")); err == nil {
+	if err := client.Warm(context.Background(), lineageRequest("prewarm-failure")); err == nil {
 		t.Fatal("Prewarm succeeded, want failure")
 	}
 	streamLineageTurn(t, client, lineageRequest("prewarm-failure", userMessage("question")))
@@ -189,4 +190,78 @@ func TestPrewarmFailureLeavesFullRequestAvailable(t *testing.T) {
 	if !reflect.DeepEqual(real.Input, wantInput) {
 		t.Fatalf("real input = %s, want complete request %s", real.Input, wantInput)
 	}
+}
+
+func TestWarmDuringTurnLeavesTheTurnChain(t *testing.T) {
+	server := newWSLineageServer(t)
+	release := make(chan struct{})
+	server.scripts <- wsLineageScript{
+		beforeWait: []string{`{"type":"response.created","response":{"id":"resp_one"}}`},
+		wait:       release,
+		afterWait:  []string{`{"type":"response.completed","response":{"id":"resp_one"}}`},
+	}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_two", "answer")}
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	turned := make(chan struct{})
+	go func() {
+		defer close(turned)
+		streamLineageTurn(t, client, lineageRequest("warm-busy", userMessage("one")))
+	}()
+	<-server.frames
+	if err := client.Warm(context.Background(), lineageRequest("warm-busy")); err == nil {
+		t.Fatal("Warm on a busy session succeeded, want failure")
+	}
+	close(release)
+	<-turned
+	streamLineageTurn(t, client, lineageRequest("warm-busy", userMessage("one"), assistantMessage("resp_one", ""), userMessage("two")))
+
+	second := decodeResponseCreate(t, <-server.frames)
+	if second.PreviousResponseID != "resp_one" {
+		t.Fatalf("previous_response_id = %q, want resp_one", second.PreviousResponseID)
+	}
+}
+
+func TestWarmAfterATurnLeavesTheTurnChain(t *testing.T) {
+	server := newWSLineageServer(t)
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_one", "two")}
+	server.scripts <- wsLineageScript{beforeWait: completedLineageFrames("resp_two", "four")}
+	client := &Client{APIKey: "***", BaseURL: server.URL, Family: CodexFamily, UseWebSocketTransport: true}
+
+	streamLineageTurn(t, client, lineageRequest("warm-late", userMessage("one")))
+	if err := client.Warm(context.Background(), lineageRequest("warm-late")); err == nil {
+		t.Fatal("Warm after a turn succeeded, want it refused")
+	}
+	streamLineageTurn(t, client, lineageRequest("warm-late", userMessage("one"), assistantMessage("resp_one", "two"), userMessage("three")))
+
+	<-server.frames
+	second := decodeResponseCreate(t, <-server.frames)
+	if second.PreviousResponseID != "resp_one" || len(second.Input) != 1 {
+		t.Fatalf("second request chains on %q with %d input items, want resp_one and 1", second.PreviousResponseID, len(second.Input))
+	}
+}
+
+func TestRequestWaitsForTheWarmUpOfItsEntry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newWSPool()
+		entry := p.entryFor("warm-wait")
+		if !p.acquire(context.Background(), entry, true) {
+			t.Fatal("acquire for a warm-up was refused on a new entry")
+		}
+		got := make(chan bool)
+		go func() { got <- p.acquire(context.Background(), entry, false) }()
+		synctest.Wait()
+		select {
+		case <-got:
+			t.Fatal("a request did not wait for the warm-up of its entry")
+		default:
+		}
+		entry.mu.Lock()
+		entry.busy = false
+		entry.mu.Unlock()
+		p.endWarm(entry)
+		if !<-got {
+			t.Fatal("a request after the warm-up was refused")
+		}
+	})
 }
