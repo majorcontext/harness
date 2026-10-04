@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -126,6 +127,20 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 		return stop(ctx)
 	}
 	return s.r.interruptTree(ctx, s.id, stop)
+}
+
+// Resolve answers or dismisses the open request requestID: with res.Answer, the
+// answer of the user, or with res.Dismiss. An answer runs a turn with no input,
+// which hands the answer to the backend that asked. A request that is not open
+// fails with ErrRequestNotPending. For a question of Claude Code the request
+// ID is the call ID of the AskUserQuestion item, and the answer maps each
+// question to the chosen label or free text.
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error {
+	answered := len(res.Answer) > 0 && !slices.Contains([]string{"null", "{}", `""`}, string(res.Answer))
+	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !answered || len(res.Answer) > 0 && !json.Valid(res.Answer) {
+		return fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
+	}
+	return s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
 }
 
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An

@@ -38,13 +38,14 @@ var (
 	}}
 	// runtimeHost sets env in the process, so a row that passes env runs alone.
 	runtimeHost = host{func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
-		if len(args) > 0 {
-			t.Fatalf("the runtime takes no serve flags: %q", args)
+		ask := slices.Contains(args, "--ask-user-question")
+		if len(args) > 1 || len(args) == 1 && !ask {
+			t.Fatalf("the runtime takes only the serve flag --ask-user-question: %q", args)
 		}
 		for k, v := range env {
 			t.Setenv(k, v)
 		}
-		return newRuntimeDriver(t, configPath)
+		return newRuntimeDriver(t, configPath, ask)
 	}}
 )
 

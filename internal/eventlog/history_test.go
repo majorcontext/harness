@@ -19,11 +19,23 @@ func TestHistory(t *testing.T) {
 	calling := Message{Role: RoleAssistant, Parts: []Part{{Type: PartToolCall, CallID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)}}}
 	answered := Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}
 	firstTurn := with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"), end("t1", StopCompleted, ""))
+	parked := with(asking, end("t1", StopAwaitingInput, ""))
+	callMsg := Message{Role: RoleAssistant, Parts: []Part{{Type: PartToolCall, CallID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)}}}
+	resultOf := func(text string, isErr bool) Message {
+		return Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Name: "bash", Text: text, IsError: isErr}}}
+	}
+	choice := RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: []byte(`{"Which database?":"SQLite","Which cache?":"none"}`)}
 	for _, tc := range []struct {
 		name   string
 		events []Event
 		want   []Message
 	}{
+		{"an answer is the result of the call", with(parked, choice),
+			[]Message{userText("hi"), callMsg, resultOf(`User has answered your questions: "Which cache?"="none", "Which database?"="SQLite". You can now continue with the user's answers in mind.`, false)}},
+		{"an answer that is not a map of choices is its JSON", with(parked, resolve("r1")),
+			[]Message{userText("hi"), callMsg, resultOf(`User answered: "yes"`, false)}},
+		{"a dismissal is an error result", with(parked, dismiss("r1")),
+			[]Message{userText("hi"), callMsg, resultOf("The user dismissed this question without answering.", true)}},
 		{"a queued input is not history until a turn takes it", with(base, says("a", DeliveryQueue, "one")), nil},
 		{"the inputs of a turn lead its items", firstTurn, []Message{userText("one"), calling, answered}},
 		{"a promoted steer input joins at its place as an operator message", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), call("t1", "i1", "c1"), promote("s", "t1")),
@@ -72,5 +84,15 @@ func TestFold(t *testing.T) {
 				t.Fatalf("Fold(%d) = %+v, %d, %v\nwant %+v, %d", tc.keep, got, to, ok, tc.want, tc.to)
 			}
 		})
+	}
+}
+
+func TestResolutionOutlivesTheRequest(t *testing.T) {
+	s := replay(t, with(asking, end("t1", StopAwaitingInput, ""), dismiss("r1")))
+	if got, ok := s.Resolution("r1"); !ok || got.Resolution != ResolutionDismissed {
+		t.Errorf("Resolution(r1) = %+v, %v, want the dismissal", got, ok)
+	}
+	if _, ok := s.Resolution("r2"); ok {
+		t.Error("Resolution(r2) found a request that never opened")
 	}
 }

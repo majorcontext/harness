@@ -3,8 +3,10 @@ package e2e
 import (
 	"cmp"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -52,6 +54,7 @@ type logEntry struct {
 func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 	t.Helper()
 	inputs := map[string][]logPart{}
+	callOf, itemOf := map[string]logPart{}, map[string]string{}
 	var entries []logEntry
 	var summary *transcriptMessage
 	say := func(seq uint64, id, role string, parts []logPart) {
@@ -84,6 +87,26 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 		case "item.completed":
 			it := decodeEvent[logItem](t, ev)
 			say(ev.Seq, "msg_"+it.ItemID, it.Message.Role, it.Message.Parts)
+			for _, p := range it.Message.Parts {
+				if p.Type == "tool_call" {
+					callOf[it.ItemID] = p
+				}
+			}
+		case "request.opened":
+			o := decodeEvent[struct {
+				RequestID string `json:"request_id"`
+				ItemID    string `json:"item_id"`
+			}](t, ev)
+			itemOf[o.RequestID] = o.ItemID
+		case "request.resolved":
+			r := decodeEvent[struct {
+				RequestID  string          `json:"request_id"`
+				Resolution string          `json:"resolution"`
+				Answer     json.RawMessage `json:"answer"`
+			}](t, ev)
+			call := callOf[itemOf[r.RequestID]]
+			part := logPart{Type: "tool_result", CallID: call.CallID, Name: call.Name, Text: resolutionText(r.Resolution, r.Answer), IsError: r.Resolution == "dismissed"}
+			say(ev.Seq, "msg_resolved_"+r.RequestID, "tool", []logPart{part})
 		case "compaction.applied":
 			c := decodeEvent[struct {
 				ToSeq   uint64 `json:"to_seq"`
@@ -145,4 +168,20 @@ func journalOfLog(t *testing.T, evs []protocol.Event) []journalEntry {
 		}
 	}
 	return out
+}
+
+// resolutionText is the result that the model reads for a resolved request.
+func resolutionText(resolution string, answer json.RawMessage) string {
+	var choices map[string]string
+	if resolution == "dismissed" {
+		return "The user dismissed this question without answering."
+	}
+	if json.Unmarshal(answer, &choices) != nil {
+		return "User answered: " + string(answer)
+	}
+	var parts []string
+	for _, q := range slices.Sorted(maps.Keys(choices)) {
+		parts = append(parts, strconv.Quote(q)+"="+strconv.Quote(choices[q]))
+	}
+	return "User has answered your questions: " + strings.Join(parts, ", ") + ". You can now continue with the user's answers in mind."
 }

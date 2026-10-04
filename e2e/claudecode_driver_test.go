@@ -408,7 +408,7 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 
 func (d *runtimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
 	t.Helper()
-	return notServed(t, "POST /sessions/{id}/requests/{request}", "phase 5")
+	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, map[string]any{"answer": answers})
 }
 
 // journalEvents lists the durable events of session id whose kind starts

@@ -179,6 +179,7 @@ type State struct {
 	lastEnded  TurnEnded
 	calls      []OpenToolCall
 	requests   []pendingRequest
+	resolved   map[string]RequestResolved
 	goal       Goal
 	usage      Usage
 	context    ContextMeasured
@@ -259,6 +260,13 @@ func (s *State) Requests() []RequestOpened {
 		out[i].Payload = slices.Clone(r.Payload)
 	}
 	return out
+}
+
+// Resolution returns the record that closed request id, if it ever opened and closed.
+func (s *State) Resolution(id string) (RequestResolved, bool) {
+	r, ok := s.resolved[id]
+	r.Answer = slices.Clone(r.Answer)
+	return r, ok
 }
 
 // OpenToolCalls returns the tool calls with no result, oldest first.
@@ -395,7 +403,7 @@ func (s *State) step(env Envelope) error {
 	case RequestOpened:
 		return s.applyRequestOpened(e)
 	case RequestResolved:
-		return s.applyRequestResolved(e)
+		return s.applyRequestResolved(e, env.Seq)
 	case GoalSet:
 		return s.applyGoalSet(e)
 	case GoalEvaluated:

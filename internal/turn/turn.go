@@ -3,6 +3,7 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -81,6 +82,8 @@ type Request struct {
 	// Steered receives a value when a steer input waits for Sink.Steer. It
 	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
+	// Questions reports that the backend may ask the user a question.
+	Questions bool
 	// Foreign reports History messages that another provider recorded since
 	// the last turn of this one.
 	Foreign bool
@@ -126,6 +129,10 @@ type Sink interface {
 	SaveState(backend string, blob []byte) error
 	// Compacted records that the backend compacted its own context.
 	Compacted(summary string) error
+	// Ask opens a request on the open tool call callID, which is its ID.
+	Ask(callID, kind string, payload json.RawMessage) error
+	// Resolution returns the record that closed request id.
+	Resolution(id string) (eventlog.RequestResolved, bool)
 }
 
 // Result is the outcome of a Run that returned.

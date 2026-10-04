@@ -24,6 +24,7 @@ type Session interface {
 	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
+	Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
 	SetGoal(ctx context.Context, g protocol.Goal) error
 	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -72,20 +73,21 @@ const (
 )
 
 var statuses = map[string]int{
-	protocol.CodeInvalidRequest:   http.StatusBadRequest,
-	protocol.CodeSessionNotFound:  http.StatusNotFound,
-	protocol.CodeSessionExists:    http.StatusConflict,
-	protocol.CodeSessionNotOwned:  http.StatusConflict,
-	protocol.CodeInputConflict:    http.StatusConflict,
-	protocol.CodeTurnMismatch:     http.StatusConflict,
-	protocol.CodeSessionBusy:      http.StatusConflict,
-	protocol.CodeModelUnavailable: http.StatusConflict,
-	protocol.CodePayloadTooLarge:  http.StatusRequestEntityTooLarge,
-	protocol.CodeDraining:         http.StatusServiceUnavailable,
-	protocol.CodeNotAGitRepo:      http.StatusConflict,
-	protocol.CodeNoBase:           http.StatusConflict,
-	protocol.CodeTooManyChanges:   http.StatusConflict,
-	protocol.CodeProcessNotFound:  http.StatusNotFound,
+	protocol.CodeInvalidRequest:    http.StatusBadRequest,
+	protocol.CodeSessionNotFound:   http.StatusNotFound,
+	protocol.CodeSessionExists:     http.StatusConflict,
+	protocol.CodeSessionNotOwned:   http.StatusConflict,
+	protocol.CodeInputConflict:     http.StatusConflict,
+	protocol.CodeTurnMismatch:      http.StatusConflict,
+	protocol.CodeSessionBusy:       http.StatusConflict,
+	protocol.CodeRequestNotPending: http.StatusConflict,
+	protocol.CodeModelUnavailable:  http.StatusConflict,
+	protocol.CodePayloadTooLarge:   http.StatusRequestEntityTooLarge,
+	protocol.CodeDraining:          http.StatusServiceUnavailable,
+	protocol.CodeNotAGitRepo:       http.StatusConflict,
+	protocol.CodeNoBase:            http.StatusConflict,
+	protocol.CodeTooManyChanges:    http.StatusConflict,
+	protocol.CodeProcessNotFound:   http.StatusNotFound,
 }
 
 // errInvalid reports a request that the handler cannot decode.
@@ -112,6 +114,7 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
 	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
 	mux.HandleFunc("POST /sessions/{id}/compact", h.session(h.compact))
+	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
 	mux.HandleFunc("PUT /sessions/{id}/goal", h.session(h.setGoal))
 	mux.HandleFunc("DELETE /sessions/{id}/goal", h.session(h.clearGoal))
 	mux.HandleFunc("GET /sessions/{id}/events", h.session(h.events))
@@ -340,6 +343,18 @@ func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	reply(w, http.StatusOK, c)
+	return nil
+}
+
+func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error {
+	var res protocol.Resolution
+	if err := decode(w, r, &res); err != nil {
+		return err
+	}
+	if err := s.Resolve(r.Context(), r.PathValue("request"), res); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

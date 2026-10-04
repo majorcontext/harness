@@ -82,9 +82,31 @@ func (b *Backend) Capabilities(string) turn.Capabilities {
 	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins)}
 }
 
-// Run runs one turn of the CLI on the external session in the state blob.
+// Run runs one turn of the CLI on the external session in the state blob. A
+// session that waits on a question first gets its resolution: an answer with
+// no input is this turn, and anything else is a denial in a run of its own.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
 	blob, err := out.State(stateKey)
+	if err != nil {
+		return turn.Result{}, err
+	}
+	mirror, err := external.LoadMirror(blob)
+	if err != nil || mirror.Parked == "" {
+		return b.once(ctx, req, out, blob, nil, err)
+	}
+	res, only, err := resolve(req, out, mirror.Parked)
+	if err == nil && !only {
+		if _, err = b.once(ctx, req, out, blob, res, nil); err == nil {
+			blob, err = out.State(stateKey)
+		}
+		res = nil
+	}
+	return b.once(ctx, req, out, blob, res, err)
+}
+
+// once runs the CLI once. A failed earlier step is err. With res, the run
+// sends no prompt and answers the parked call.
+func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, blob []byte, res *resolution, err error) (turn.Result, error) {
 	if err != nil {
 		return turn.Result{}, err
 	}
@@ -93,7 +115,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		return turn.Result{}, err
 	}
 	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: restriction(req), names: map[string]string{},
-		continues: b.resumes(mirror) && mirror.Turn == req.TurnID}
+		continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: req.Questions || res != nil}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)
 	if err != nil {
@@ -135,8 +157,19 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if err != nil {
 		return nil, err
 	}
+	denied := disallowed
+	if r.questions {
+		denied += planMode
+	}
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--forward-subagent-text", "--thinking-display", "summarized", "--disallowedTools", disallowed}
+		"--forward-subagent-text", "--thinking-display", "summarized", "--disallowedTools", denied}
+	if r.questions {
+		pass := ""
+		if r.resolution != nil {
+			pass = r.resolution.callID
+		}
+		args = append(args, "--permission-prompt-tool", "stdio", "--settings", questionSettings(pass))
+	}
 	if r.allowed != nil {
 		tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 		args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")

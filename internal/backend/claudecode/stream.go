@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/backend/external"
@@ -27,6 +28,12 @@ type run struct {
 	allowed   map[string]bool
 	bridged   map[string]bool
 	names     map[string]string
+	// questions reports a run with the question channel; resolution answers
+	// the parked call, and question is the call that the main thread asked.
+	questions  bool
+	denied     bool
+	resolution *resolution
+	question   *question
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
 	continues bool
@@ -55,6 +62,9 @@ type run struct {
 	sawCompact bool
 }
 
+// dismissing reports a run that only denies the parked call.
+func (r *run) dismissing() bool { return r.resolution != nil && r.resolution.dismiss }
+
 func (r *run) cleanup() {
 	if r.tools != nil {
 		r.tools.Close()
@@ -69,7 +79,9 @@ func (r *run) cleanup() {
 // drive sends the prompt and handles frames until the result, the end of
 // stdout, or the end of ctx.
 func (r *run) drive(ctx context.Context, req turn.Request) error {
-	r.sendErr = r.proc.Send(r.prompt(req))
+	if r.resolution == nil {
+		r.sendErr = r.proc.Send(r.prompt(req))
+	}
 	for {
 		select {
 		case line, ok := <-r.proc.Lines():
@@ -109,6 +121,12 @@ func (r *run) finish(ctx context.Context, err error) error {
 		err = stopError(err, context.Cause(ctx), r.result)
 	}
 	err = r.outcome(errors.Join(err, r.tailErr, r.flush()), exit)
+	if r.dismissing() && (r.result != nil || r.denied) && !r.stopped {
+		err = nil
+	}
+	if r.resolution != nil && err == nil && r.mirror.Parked == r.resolution.callID {
+		r.mirror.Parked = ""
+	}
 	if r.taken && err != nil && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
 		r.mirror.Turn = r.turnID
 	}
@@ -209,6 +227,9 @@ func (r *run) handle(env envelope) error {
 			return err
 		}
 	}
+	if r.dismissing() && (env.Type == "assistant" || env.Type == "user") {
+		return nil
+	}
 	switch env.Type {
 	case "system":
 		return r.system(env)
@@ -216,11 +237,16 @@ func (r *run) handle(env envelope) error {
 		return r.assistant(env)
 	case "user":
 		return r.toolResults(env)
+	case "control_request":
+		return r.control(env)
 	case "result":
 		if r.placeholder(env) {
 			return nil
 		}
 		r.result = &env
+		if r.dismissing() {
+			return nil
+		}
 		return r.settle(env)
 	case "transcript_mirror":
 		return r.addMirror(env)
@@ -317,6 +343,9 @@ func (r *run) assistant(env envelope) error {
 			if env.ParentToolUseID == "" {
 				r.open++
 			}
+			if p.Name == askTool && env.ParentToolUseID == "" {
+				r.question = &question{callID: p.CallID, input: p.Arguments}
+			}
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
@@ -328,6 +357,9 @@ func (r *run) assistant(env envelope) error {
 
 func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
+	if r.resolution != nil {
+		parts = slices.DeleteFunc(parts, func(p eventlog.Part) bool { return p.CallID == r.resolution.callID })
+	}
 	if len(parts) == 0 {
 		return nil
 	}
@@ -391,7 +423,7 @@ func (r *run) settle(env envelope) error {
 		return err
 	}
 	r.telemetry(env)
-	return nil
+	return r.ask()
 }
 
 func (r *run) telemetry(env envelope) {

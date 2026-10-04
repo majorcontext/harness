@@ -98,6 +98,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
 	}
+	req.Questions = a.questions()
 	if a.cfg.Banner != "" && !r.ownsLoop {
 		req.Banner, req.BannerAt = a.cfg.Banner, a.bannerAt(len(req.History))
 	}
@@ -194,7 +195,7 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
-		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
+		err = a.append(append(a.closeOpen(turnID, cutOff, false), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted)
 		next = true
@@ -222,7 +223,7 @@ func (a *Actor) next(check bool) error {
 		return nil
 	}
 	id := newID("turn")
-	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err != nil {
+	if err := a.append(append(a.dismissRequests(), eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}})...); err != nil {
 		return err
 	}
 	a.start(id, []string{q[0].InputID})
@@ -230,7 +231,11 @@ func (a *Actor) next(check bool) error {
 }
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
-	events := a.closeOpen(turnID, text)
+	awaiting := reason == eventlog.StopCompleted && len(a.state.Requests()) > 0
+	events := a.closeOpen(turnID, text, awaiting)
+	if awaiting {
+		reason = eventlog.StopAwaitingInput
+	}
 	if cause == string(eventlog.CauseCrashed) {
 		marker := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: lostToRestart}}}
 		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: marker})
@@ -243,10 +248,13 @@ func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.Stop
 	return nil
 }
 
-// closeOpen dismisses every open request, which closes its tool call, and
-// gives every other open tool call a result with text.
-func (a *Actor) closeOpen(turnID, text string) []eventlog.Event {
-	events := a.dismissRequests()
+// closeOpen dismisses every open request unless keep is set, which closes its
+// tool call, and gives every other open tool call a result with text.
+func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
+	var events []eventlog.Event
+	if !keep {
+		events = a.dismissRequests()
+	}
 	asked := map[string]bool{}
 	for _, r := range a.state.Requests() {
 		asked[r.ItemID] = true

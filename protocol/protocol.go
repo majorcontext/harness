@@ -136,8 +136,7 @@ type Session struct {
 	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
-// Plugin is a configured plugin. State is "not-spawned" until its first hook
-// or tool call, then "running" while its process lives.
+// Plugin is a configured plugin. State is not-spawned, running, or errored.
 type Plugin struct {
 	Name  string   `json:"name"`
 	State string   `json:"state"`
@@ -210,6 +209,13 @@ type Compacted struct {
 	ToSeq     uint64 `json:"to_seq,omitempty"`
 	ByBackend bool   `json:"by_backend,omitempty"`
 	Folded    bool   `json:"folded"`
+}
+
+// Resolution answers an open request with the answer of the user as JSON, or
+// dismisses it. Exactly one is set. A question takes a map of question to choice.
+type Resolution struct {
+	Answer  json.RawMessage `json:"answer,omitempty"`
+	Dismiss bool            `json:"dismiss,omitempty"`
 }
 
 // Event is one durable record of a session log, or an ephemeral frame of a
@@ -302,21 +308,22 @@ type EventPage struct {
 
 // Error codes of the HTTP API.
 const (
-	CodeInvalidRequest   = "invalid_request"
-	CodeSessionNotFound  = "session_not_found"
-	CodeSessionExists    = "session_exists"
-	CodeSessionNotOwned  = "session_not_owned"
-	CodeInputConflict    = "input_conflict"
-	CodeTurnMismatch     = "turn_mismatch"
-	CodeSessionBusy      = "session_busy"
-	CodeModelUnavailable = "model_unavailable"
-	CodePayloadTooLarge  = "payload_too_large"
-	CodeDraining         = "draining"
-	CodeInternal         = "internal"
-	CodeNotAGitRepo      = "not_a_git_repo"
-	CodeNoBase           = "no_base"
-	CodeTooManyChanges   = "too_many_changes"
-	CodeProcessNotFound  = "process_not_found"
+	CodeInvalidRequest    = "invalid_request"
+	CodeSessionNotFound   = "session_not_found"
+	CodeSessionExists     = "session_exists"
+	CodeSessionNotOwned   = "session_not_owned"
+	CodeInputConflict     = "input_conflict"
+	CodeTurnMismatch      = "turn_mismatch"
+	CodeSessionBusy       = "session_busy"
+	CodeRequestNotPending = "request_not_pending"
+	CodeModelUnavailable  = "model_unavailable"
+	CodePayloadTooLarge   = "payload_too_large"
+	CodeDraining          = "draining"
+	CodeInternal          = "internal"
+	CodeNotAGitRepo       = "not_a_git_repo"
+	CodeNoBase            = "no_base"
+	CodeTooManyChanges    = "too_many_changes"
+	CodeProcessNotFound   = "process_not_found"
 )
 
 // ErrorBody is the body of every HTTP error response.

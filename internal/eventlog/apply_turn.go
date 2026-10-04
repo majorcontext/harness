@@ -1,6 +1,9 @@
 package eventlog
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 func (s *State) runningTurn(id string) error {
 	if s.turn.ID != id || s.turn.Suspended || id == "" {
@@ -146,7 +149,7 @@ func (s *State) applyRequestOpened(e RequestOpened) error {
 	return nil
 }
 
-func (s *State) applyRequestResolved(e RequestResolved) error {
+func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 	i := s.openRequest(e.RequestID)
 	if i < 0 {
 		return illegal("request %s is not open", e.RequestID)
@@ -160,8 +163,16 @@ func (s *State) applyRequestResolved(e RequestResolved) error {
 	if n := len(s.calls) - len(calls); n > 1 {
 		return illegal("request %s has %d open tool calls", e.RequestID, n)
 	}
+	if k := slices.IndexFunc(s.calls, open); k >= 0 {
+		s.say(seq, requestResult(s.calls[k], e))
+	}
 	s.calls = calls
 	s.requests = slices.Delete(s.requests, i, i+1)
+	s.resolved = maps.Clone(s.resolved)
+	if s.resolved == nil {
+		s.resolved = map[string]RequestResolved{}
+	}
+	s.resolved[e.RequestID] = e
 	return nil
 }
 

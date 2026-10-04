@@ -1,7 +1,9 @@
 package eventlog
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -132,4 +134,36 @@ func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 		return nil, 0, false
 	}
 	return h[:end], s.history[end-lead].seq - 1, true
+}
+
+// requestResult is the result of the tool call that a closed request held
+// open: what the model reads in the history.
+func requestResult(c OpenToolCall, r RequestResolved) Message {
+	p := Part{Type: PartToolResult, CallID: c.CallID, Name: c.Name}
+	switch {
+	case r.Resolution == ResolutionDismissed:
+		p.Text, p.IsError = "The user dismissed this question without answering.", true
+	default:
+		p.Text = answerText(r.Answer)
+	}
+	return Message{Role: RoleTool, Parts: []Part{p}}
+}
+
+// answerText reads a map of questions to choices as Claude Code words it,
+// and any other answer as its JSON.
+func answerText(answer json.RawMessage) string {
+	var choices map[string]string
+	if json.Unmarshal(answer, &choices) != nil || len(choices) == 0 {
+		return "User answered: " + string(answer)
+	}
+	var b strings.Builder
+	b.WriteString("User has answered your questions: ")
+	for i, q := range slices.Sorted(maps.Keys(choices)) {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%q=%q", q, choices[q])
+	}
+	b.WriteString(". You can now continue with the user's answers in mind.")
+	return b.String()
 }

@@ -68,6 +68,9 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
+	// AskUserQuestion lets a backend ask the user a question; the embedder
+	// answers with Resolve.
+	AskUserQuestion bool
 	// Banner is the engine status that each model call of a turn sends as
 	// engine context. Empty: none.
 	Banner string
