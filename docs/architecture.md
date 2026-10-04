@@ -411,6 +411,8 @@ A turn ends early for one of five causes. A live owner carries the first three w
 | `provider_exhausted` | A usage limit of the provider: a spent quota, credit balance, or spend cap | Append `turn.ended{failed, provider_exhausted}`; keep the partial; queued inputs wait for the next input |
 | `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then starts the next queued input, or waits for input when none is queued. |
 
+After any other failed turn, the next queued input runs, as after a completed turn. Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule: it starts the next queued input when no turn is open, except after a turn that ended `provider_exhausted`.
+
 No tool call is ever re-run after a stop. This matches Codex, Claude Code, opencode, pi, and fx. The log stays strictly append-only, and a client hides output by cause if it wants to.
 
 Input:
@@ -464,7 +466,7 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
 - A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
-- `Open` starts the next queued input when no turn is open. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
+- `Open` starts the next queued input when no turn is open, unless the last turn ended `provider_exhausted`. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
 
 ### Children
 

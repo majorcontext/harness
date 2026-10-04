@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -148,4 +150,72 @@ func appliedCompaction(a *Actor) bool {
 		reply(ok, nil)
 	})
 	return ok
+}
+
+func submitText(t *testing.T, a *Actor, id, text string) {
+	t.Helper()
+	in := eventlog.InputAdmitted{InputID: id, Delivery: eventlog.DeliveryQueue, Source: "user", Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+	if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		ended string
+		runs  bool
+	}{
+		{"a failed turn", errors.New("bad request"), "turn.ended failed bad request", true},
+		{"a usage limit", turn.ErrExhausted, "turn.ended failed provider_exhausted", false},
+	} {
+		t.Run(tc.name+" live", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				log, b := &memLog{}, &goalBackend{errs: []error{tc.err, nil}, gated: true, gate: make(chan struct{})}
+				a := goalActor(t, log, b, true, new(atomic.Int32))
+				submitText(t, a, "one", "one")
+				submitText(t, a, "two", "two")
+				close(b.gate)
+				synctest.Wait()
+				want := []string{"input.admitted", "turn.started", "input.admitted", tc.ended}
+				if tc.runs {
+					want = append(want, "turn.started", "item.completed assistant re two", "turn.ended completed")
+				}
+				if got := lines(t, log, 2); !slices.Equal(got, want) {
+					t.Errorf("log =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+				}
+			})
+		})
+		t.Run(tc.name+" after a restart", func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ended := eventlog.TurnEnded{TurnID: "turn_1", StopReason: eventlog.StopFailed, Error: "bad request"}
+				if !tc.runs {
+					ended.Error = string(eventlog.CauseProviderExhausted)
+				}
+				log := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1}, *firstInput(),
+					eventlog.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}},
+					eventlog.InputAdmitted{InputID: "in2", Delivery: eventlog.DeliveryQueue, Source: "user", Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "two"}}},
+					ended)
+				b := newHeldBackend(false)
+				a, err := Open(context.Background(), actorConfig(t, log, owned{}, b))
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.Run()
+				synctest.Wait()
+				select {
+				case <-b.ran:
+					if !tc.runs {
+						t.Error("Open ran the input that waited after a usage limit")
+					}
+					close(b.gate)
+				default:
+					if tc.runs {
+						t.Error("Open left a queued input waiting after a failed turn")
+					}
+				}
+			})
+		})
+	}
 }

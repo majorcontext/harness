@@ -191,6 +191,7 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage, a.goalStop(runErr)...)
 	default:
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage, a.goalStop(runErr)...)
+		next = true
 	}
 	var after func() error
 	if next && err == nil {

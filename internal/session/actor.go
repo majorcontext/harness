@@ -231,10 +231,18 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		if err == nil {
 			err = a.settle(true)
 		}
-	default:
+	case !a.waitsForInput():
 		err = a.settle(true)
 	}
 	return a, err
+}
+
+// waitsForInput reports whether the last turn failed at a usage limit of
+// the provider. Its queued inputs then wait for the next input, live and
+// after a restart.
+func (a *Actor) waitsForInput() bool {
+	last := a.state.LastEnded()
+	return last.StopReason == eventlog.StopFailed && eventlog.Cause(last.Error) == eventlog.CauseProviderExhausted
 }
 
 // fence appends owner.acquired at the head. An append of an earlier owner
