@@ -27,21 +27,9 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 	if ps == nil {
 		return "", ErrSessionNotOwned
 	}
-	root, depth, err := r.lineage(ctx, parent)
-	if err != nil {
-		return "", err
-	}
 	id := "ses_" + newSuffix()
-	if _, err := r.sup.admit(root, id, depth+1); err != nil {
-		return "", err
-	}
-	if err := r.withinBudget(ctx, root); err != nil {
-		r.sup.done(id)
-		return "", err
-	}
-	c, err := ps.a.Spawn(ctx, id, agent)
+	c, err := r.spawnChild(ctx, ps, id, agent)
 	if err != nil {
-		r.sup.done(id)
 		return "", err
 	}
 	if p.Model != "" {
@@ -52,10 +40,45 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}
 	ctx = context.WithoutCancel(ctx)
 	if _, err := r.create(ctx, id, launch{created: &c, first: &first, profile: &p}); err != nil {
-		r.sup.done(id)
 		return "", errors.Join(err, ps.a.Settle(ctx, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, ""))
 	}
 	return id, nil
+}
+
+// spawnChild appends child.spawned to parent ps and returns the
+// session.created record of the child, unless the tree of ps is at a limit.
+// One lock for each tree makes the count of the unsettled children and the
+// append one step.
+func (r *Runtime) spawnChild(ctx context.Context, ps *Session, child, agent string) (eventlog.SessionCreated, error) {
+	if depth := ps.depth + 1; depth > r.sup.depth {
+		return eventlog.SessionCreated{}, fmt.Errorf("max_task_depth %d allows no child at depth %d", r.sup.depth, depth)
+	}
+	defer r.sup.lock(ps.root)()
+	if n := r.unsettled(ps.root); n >= r.sup.running {
+		return eventlog.SessionCreated{}, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", r.sup.running, n)
+	}
+	if err := r.withinBudget(ctx, ps.root); err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	return ps.a.Spawn(ctx, child, agent)
+}
+
+// unsettled returns how many children of the tree of root have not settled,
+// over the sessions that this runtime runs.
+func (r *Runtime) unsettled(root string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, e := range r.sessions {
+		select {
+		case <-e.ready:
+			if e.s != nil && e.s.root == root {
+				n += len(e.s.a.View().Unsettled)
+			}
+		default:
+		}
+	}
+	return n
 }
 
 // narrow returns the names of a profile that the parent allows. nil allows every name.
@@ -82,34 +105,56 @@ func (r *Runtime) available(model string, names []string) []string {
 	return out
 }
 
-// lineage returns the root of the tree of session id and the depth of id below it.
-func (r *Runtime) lineage(ctx context.Context, id string) (string, int, error) {
-	up, err := r.ancestors(ctx, id)
-	if err != nil || len(up) == 0 {
-		return id, 0, err
+// tree returns the root of the tree of session id, whose parent is parent,
+// and the depth of id below it.
+func (r *Runtime) tree(ctx context.Context, id, parent string) (string, int, error) {
+	if parent == "" {
+		return id, 0, nil
 	}
-	return up[len(up)-1], len(up), nil
+	if ps := r.running(parent); ps != nil {
+		return ps.root, ps.depth + 1, nil
+	}
+	up, err := r.ancestors(ctx, parent)
+	if err != nil {
+		return "", 0, err
+	}
+	root := parent
+	if len(up) > 0 {
+		root = up[len(up)-1]
+	}
+	return root, len(up) + 1, nil
 }
 
-// ancestors returns the parents of session id, nearest first. It reads the
-// session.created record of each, up to the root.
+// ancestors returns the parents of session id, nearest first, up to the root.
 func (r *Runtime) ancestors(ctx context.Context, id string) ([]string, error) {
 	var up []string
 	for {
-		c, err := r.created(ctx, id)
+		parent, err := r.parent(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		if c.ParentID == "" {
+		if parent == "" {
 			break
 		}
-		id = c.ParentID
+		id = parent
 		up = append(up, id)
 	}
 	return up, nil
 }
 
-// created returns the session.created record of session id.
+// parent returns the parent of session id. A session that this runtime runs
+// answers from its view; any other session answers from its session.created
+// record.
+func (r *Runtime) parent(ctx context.Context, id string) (string, error) {
+	if s := r.running(id); s != nil {
+		return s.a.View().Session.ParentID, nil
+	}
+	c, err := r.created(ctx, id)
+	return c.ParentID, err
+}
+
+// created returns the session.created record of session id, which is its
+// first record.
 func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
 	recs, err := r.store.Read(ctx, id, 0, 1)
 	if err == nil && len(recs) == 0 {
@@ -122,8 +167,28 @@ func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreat
 	if err != nil {
 		return eventlog.SessionCreated{}, err
 	}
-	c, _ := env.Event.(eventlog.SessionCreated)
+	c, ok := env.Event.(eventlog.SessionCreated)
+	if !ok {
+		return c, fmt.Errorf("harness: session %s starts with %s, not session.created", id, env.Event.Kind())
+	}
 	return c, nil
+}
+
+// read runs f with the state of session id, which f must not keep. A session
+// that this runtime runs answers through its actor; any other session
+// replays from the store.
+func (r *Runtime) read(ctx context.Context, id string, f func(*eventlog.State)) error {
+	if s := r.running(id); s != nil {
+		if err := s.a.Read(ctx, f); !errors.Is(err, ErrSessionNotOwned) {
+			return err
+		}
+	}
+	st, err := session.Load(ctx, id, storeLog{r.store, id})
+	if err != nil {
+		return err
+	}
+	f(st)
+	return nil
 }
 
 // withinBudget fails once the sessions of the tree of root have used
@@ -141,16 +206,19 @@ func (r *Runtime) withinBudget(ctx context.Context, root string) error {
 
 // tokens returns the tokens that session id and its descendants have used.
 func (r *Runtime) tokens(ctx context.Context, id string) (int64, error) {
-	st, err := session.Load(ctx, id, storeLog{r.store, id})
+	var n int64
+	var kids []string
+	err := r.read(ctx, id, func(st *eventlog.State) {
+		u := st.Usage()
+		n, kids = u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens, st.Children()
+	})
 	if errors.Is(err, ErrSessionNotFound) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	u := st.Usage()
-	n := u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
-	for _, kid := range st.Children() {
+	for _, kid := range kids {
 		k, err := r.tokens(ctx, kid)
 		if err != nil {
 			return 0, err
@@ -169,7 +237,6 @@ func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
 		text = ""
 	}
 	r.group.Go(func() {
-		r.sup.done(s.ChildID)
 		if p, err := r.Open(r.base, parent); err == nil {
 			_ = p.a.Settle(r.base, s, text)
 		}
@@ -178,35 +245,23 @@ func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
 
 // recoverChildren settles each unsettled child of a that has ended, or
 // that never started, and opens each other one, which reports when its
-// turn ends. Each opened child counts against the limits of its tree. A
-// crash can come between the end of a child turn and its child.settled
-// record.
-func (r *Runtime) recoverChildren(parent string, a *session.Actor) {
-	ids, err := a.Unsettled(r.base)
-	if err != nil {
-		return
-	}
-	root, _, err := r.lineage(r.base, parent)
-	if err != nil {
-		return
-	}
-	for _, id := range ids {
-		st, err := session.Load(r.base, id, storeLog{r.store, id})
-		if errors.Is(err, ErrSessionNotFound) {
-			r.sup.done(id)
+// turn ends. A crash can come between the end of a child turn and its
+// child.settled record.
+func (r *Runtime) recoverChildren(a *session.Actor) {
+	for _, id := range a.View().Unsettled {
+		var s eventlog.ChildSettled
+		var text string
+		var ended bool
+		err := r.read(r.base, id, func(st *eventlog.State) { s, text, ended = session.Settlement(id, st) })
+		switch {
+		case errors.Is(err, ErrSessionNotFound):
 			_ = a.Settle(r.base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, "")
-			continue
-		}
-		if err != nil {
-			continue
-		}
-		if s, text, ok := session.Settlement(id, st); ok {
-			r.sup.done(id)
+		case err != nil:
+		case ended:
 			_ = a.Settle(r.base, s, text)
-			continue
+		default:
+			_, _ = r.Open(r.base, id)
 		}
-		r.sup.adopt(root, id)
-		_, _ = r.Open(r.base, id)
 	}
 }
 
@@ -217,44 +272,34 @@ type supervisor struct {
 	depth, running, tokens int
 
 	mu    sync.Mutex
-	roots map[string]string
+	locks map[string]*treeLock
 	quiet map[string]int
 }
 
-// admit counts child against the limits of root. added is false for a
-// child that the supervisor already counts.
-func (s *supervisor) admit(root, child string, depth int) (added bool, err error) {
-	if depth > s.depth {
-		return false, fmt.Errorf("max_task_depth %d allows no child at depth %d", s.depth, depth)
-	}
+type treeLock struct {
+	mu sync.Mutex
+	n  int
+}
+
+// lock holds the lock of the tree of root, and returns its unlock.
+func (s *supervisor) lock(root string) (unlock func()) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.roots[child]; ok {
-		return false, nil
+	l := s.locks[root]
+	if l == nil {
+		l = &treeLock{}
+		s.locks[root] = l
 	}
-	n := 0
-	for _, r := range s.roots {
-		if r == root {
-			n++
+	l.n++
+	s.mu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if l.n--; l.n == 0 {
+			delete(s.locks, root)
 		}
 	}
-	if n >= s.running {
-		return false, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", s.running, n)
-	}
-	s.roots[child] = root
-	return true, nil
-}
-
-func (s *supervisor) adopt(root, child string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.roots[child] = root
-}
-
-func (s *supervisor) done(child string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.roots, child)
 }
 
 // silence adds n to the tree interrupts that stop child.

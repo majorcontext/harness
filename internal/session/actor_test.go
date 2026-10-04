@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -152,4 +153,27 @@ func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
 	if want := []uint64{2}; !slices.Equal(heads, want) {
 		t.Errorf("heads seen by Appended = %v, want %v", heads, want)
 	}
+}
+
+func TestReadGivesTheLiveStateToTheCallerAndStopsWithTheActor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, firstInput())
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		<-b.ran
+		var turnID string
+		if err := a.Read(context.Background(), func(st *eventlog.State) { t, _ := st.Turn(); turnID = t.ID }); err != nil || turnID == "" {
+			t.Errorf("Read during a turn = %v, turn %q, want the running turn", err, turnID)
+		}
+		close(own.lost)
+		synctest.Wait()
+		if err := a.Read(context.Background(), func(*eventlog.State) { t.Error("Read ran after the actor stopped") }); !errors.Is(err, ErrNotOwned) {
+			t.Errorf("Read after the actor stopped = %v, want ErrNotOwned", err)
+		}
+		close(b.gate)
+		<-a.Done()
+	})
 }

@@ -397,3 +397,48 @@ func TestAChildReadsItsProfileOnceWhenItStarts(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+// gated is a Store that holds each read of session id until open closes.
+type gated struct {
+	harness.Store
+	id   atomic.Value
+	open chan struct{}
+}
+
+func (g *gated) Read(ctx context.Context, id string, after uint64, limit int) ([]harness.Record, error) {
+	if id == g.id.Load() {
+		select {
+		case <-g.open:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.Store.Read(ctx, id, after, limit)
+}
+
+func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, dir := harness.NewMemStore(), t.TempDir()
+		cfg := config.Config{MaxConcurrentTasks: 1}
+		f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { return nil })}
+		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
+		submit(t, create(t, r1), text("a", "delegate"))
+		kid := children(t, r1)[0].ID
+		closeRuntime(t, r1)
+		g := &gated{Store: st, open: make(chan struct{})}
+		g.id.Store(kid)
+		f2 := &family{answer: f1.answer}
+		r2 := familyRuntime(t, g, f2, nil, cfg, dir)
+		s, err := r2.Open(bg, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		submit(t, s, text("b", "delegate"))
+		if _, got := f2.last("s1", "task: max_concurrent_tasks 1"); got == "" {
+			t.Error("a spawn beside an unsettled child fails on max_concurrent_tasks only after the recovery reads that child")
+		}
+		close(g.open)
+		closeRuntime(t, r2)
+	})
+}

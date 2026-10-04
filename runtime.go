@@ -159,7 +159,7 @@ func New(opts Options) (*Runtime, error) {
 	r.commandDirs = commandDirs(opts.WorkDir, opts.Config.CommandsDirs)
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
-		roots: map[string]string{}, quiet: map[string]int{}}
+		locks: map[string]*treeLock{}, quiet: map[string]int{}}
 	tools := opts.Tools
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
@@ -275,7 +275,7 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			}
 			close(e.ready)
 			if e.err == nil {
-				r.run(id, e.s, l.created != nil)
+				r.run(e.s, l.created != nil)
 			}
 			r.group.Done()
 			return e.s, e.err
@@ -306,14 +306,14 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 
 // run runs session s after load publishes it, so a tool of its first run
 // finds it. An opened session then settles or opens its unsettled children.
-func (r *Runtime) run(id string, s *Session, create bool) {
+func (r *Runtime) run(s *Session, create bool) {
 	s.a.Run()
 	if create {
 		close(s.recovered)
 		return
 	}
 	r.group.Go(func() {
-		r.recoverChildren(id, s.a)
+		r.recoverChildren(s.a)
 		close(s.recovered)
 	})
 }
@@ -341,6 +341,11 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if l.created != nil {
 		c = *l.created
 	} else if c, err = r.created(ctx, id); err != nil {
+		own.Release()
+		return nil, err
+	}
+	root, depth, err := r.tree(ctx, id, c.ParentID)
+	if err != nil {
 		own.Release()
 		return nil, err
 	}
@@ -380,7 +385,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
+	return &Session{a: a, r: r, id: id, root: root, depth: depth, recovered: make(chan struct{})}, nil
 }
 
 // profile returns the agent profile of a session: read, or read from the
@@ -597,13 +602,11 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
 }
 
-// history returns the conversation of session id from the store.
+// history returns the conversation of session id.
 func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, error) {
-	st, err := session.Load(ctx, id, storeLog{r.store, id})
-	if err != nil {
-		return nil, err
-	}
-	return st.History(), nil
+	var h []eventlog.Message
+	err := r.read(ctx, id, func(st *eventlog.State) { h = st.History() })
+	return h, err
 }
 
 // closeTools stops the processes, the plugins, and the MCP servers, and

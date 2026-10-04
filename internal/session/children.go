@@ -52,11 +52,6 @@ func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, text string
 	return err
 }
 
-// Unsettled returns the spawned children that have not settled.
-func (a *Actor) Unsettled(ctx context.Context) ([]string, error) {
-	return call(ctx, a, func(reply func([]string, error)) { reply(a.state.Unsettled(), nil) })
-}
-
 // Settlement returns the outcome of the last ended turn of child session
 // id, and the text that reports it to the parent: the last assistant text,
 // as the Task tool of Claude Code returns. ok is false while a turn runs,

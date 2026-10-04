@@ -112,8 +112,12 @@ type Config struct {
 // View is an immutable snapshot that the actor publishes after each append.
 type View struct {
 	Session protocol.Session
-	Stopped bool
-	changed chan struct{}
+	// Agent is the profile of a child session, or "".
+	Agent string
+	// Unsettled are the spawned children that have not settled, sorted.
+	Unsettled []string
+	Stopped   bool
+	changed   chan struct{}
 }
 
 // Actor is the one goroutine that runs a session.
@@ -392,9 +396,20 @@ func (a *Actor) Done() <-chan struct{} { return a.done }
 // View returns the newest published view.
 func (a *Actor) View() *View { return a.view.Load() }
 
+// Read runs f on the actor goroutine with the state of the session, which f
+// must not keep. It fails with ErrNotOwned once the actor stops.
+func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
+	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+		f(a.state)
+		reply(struct{}{}, nil)
+	})
+	return err
+}
+
 func (a *Actor) publish(stopped bool) {
 	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
-	next := &View{Session: Describe(a.cfg.ID, a.state, window), Stopped: stopped, changed: make(chan struct{})}
+	next := &View{Session: Describe(a.cfg.ID, a.state, window), Agent: a.state.Agent(), Unsettled: a.state.Unsettled(),
+		Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)

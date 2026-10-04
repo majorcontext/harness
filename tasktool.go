@@ -144,7 +144,7 @@ func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
 	if err := t.r.interruptTree(ctx, id, func(ctx context.Context) error { return t.r.cancelTurn(ctx, id) }); err != nil {
 		return nil, err
 	}
-	k, err := t.r.child(ctx, id)
+	k, err := t.r.child(ctx, id, 0)
 	return struct {
 		SessionID string `json:"session_id"`
 		Status    string `json:"status"`
@@ -152,11 +152,11 @@ func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
 }
 
 func (t taskTool) status(ctx context.Context, id string, up []string) (any, error) {
-	k, err := t.r.child(ctx, id)
+	k, err := t.r.child(ctx, id, 0)
 	if err != nil {
 		return nil, err
 	}
-	u := k.st.Usage()
+	u := k.usage
 	return struct {
 		SessionID  string         `json:"session_id"`
 		ParentID   string         `json:"parent_id"`
@@ -168,7 +168,7 @@ func (t taskTool) status(ctx context.Context, id string, up []string) (any, erro
 		FailReason string         `json:"fail_reason,omitempty"`
 		FailKind   string         `json:"fail_kind,omitempty"`
 		Usage      protocol.Usage `json:"usage"`
-	}{id, up[0], len(up), k.status, append([]string{}, k.st.Children()...), k.st.Agent(), k.result, k.reason, k.kind,
+	}{id, up[0], len(up), k.status, k.children, k.agent, k.result, k.reason, k.kind,
 		protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens}}, nil
 }
 
@@ -196,12 +196,11 @@ func (t taskTool) log(ctx context.Context, in taskArgs) (any, error) {
 	if in.Tail < 0 {
 		return nil, errors.New(`tail must not be negative for action "log"`)
 	}
-	k, err := t.r.child(ctx, in.SessionID)
+	k, err := t.r.child(ctx, in.SessionID, min(cmp.Or(in.Tail, logTail), logMaxTail))
 	if err != nil {
 		return nil, err
 	}
-	h := k.st.History()
-	entries := renderLog(h[max(0, len(h)-min(cmp.Or(in.Tail, logTail), logMaxTail)):])
+	entries := renderLog(k.tail)
 	return struct {
 		SessionID  string     `json:"session_id"`
 		Status     string     `json:"status"`
@@ -211,38 +210,47 @@ func (t taskTool) log(ctx context.Context, in taskArgs) (any, error) {
 		Total      int        `json:"total_messages"`
 		Returned   int        `json:"returned"`
 		Entries    []logEntry `json:"entries"`
-	}{in.SessionID, k.status, k.st.Agent(), k.reason, k.kind, len(h), len(entries), entries}, nil
+	}{in.SessionID, k.status, k.agent, k.reason, k.kind, k.total, len(entries), entries}, nil
 }
 
 // childView is a child session as its ancestors see it.
 type childView struct {
-	st                           *eventlog.State
-	status, result, reason, kind string
+	status, result, reason, kind, agent string
+	usage                               eventlog.Usage
+	children                            []string
+	// tail holds the newest messages of the conversation that the caller
+	// asked for, and total is the length of the whole conversation.
+	tail  []eventlog.Message
+	total int
 }
 
-// child reads session id from the store. Its status is running until its
-// last turn ends, then the outcome that it reports to its parent.
-func (r *Runtime) child(ctx context.Context, id string) (childView, error) {
-	st, err := session.Load(ctx, id, storeLog{r.store, id})
-	if err != nil {
-		return childView{}, err
-	}
-	k := childView{st: st, status: "running"}
-	s, _, ok := session.Settlement(id, st)
-	if !ok {
-		return k, nil
-	}
-	k.status = string(s.Outcome)
-	switch last := st.LastEnded(); s.Outcome {
-	case eventlog.OutcomeDone:
-		k.result, _ = capRunes(session.LastText(st.History()), resultCap)
-	case eventlog.OutcomeFailed:
-		k.reason = last.Error
-		if eventlog.Cause(last.Error) == eventlog.CauseProviderExhausted {
-			k.kind = string(eventlog.CauseProviderExhausted)
+// child reads session id, with the newest tail messages of its conversation.
+// Its status is running until its last turn ends, then the outcome that it
+// reports to its parent.
+func (r *Runtime) child(ctx context.Context, id string, tail int) (childView, error) {
+	k := childView{status: "running"}
+	err := r.read(ctx, id, func(st *eventlog.State) {
+		k.usage, k.children, k.agent = st.Usage(), append([]string{}, st.Children()...), st.Agent()
+		if tail > 0 {
+			h := st.History()
+			k.total, k.tail = len(h), h[max(0, len(h)-tail):]
 		}
-	}
-	return k, nil
+		s, _, ok := session.Settlement(id, st)
+		if !ok {
+			return
+		}
+		k.status = string(s.Outcome)
+		switch last := st.LastEnded(); s.Outcome {
+		case eventlog.OutcomeDone:
+			k.result, _ = capRunes(session.LastText(st.History()), resultCap)
+		case eventlog.OutcomeFailed:
+			k.reason = last.Error
+			if eventlog.Cause(last.Error) == eventlog.CauseProviderExhausted {
+				k.kind = string(eventlog.CauseProviderExhausted)
+			}
+		}
+	})
+	return k, err
 }
 
 // send admits text to child as an input with source parent. When the
@@ -262,13 +270,9 @@ func (r *Runtime) send(ctx context.Context, up []string, child, text string) (bo
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
-	unsettled, err := p.a.Unsettled(ctx)
-	if err != nil {
-		return false, err
-	}
-	rearm, added := !slices.Contains(unsettled, child), false
+	rearm := !slices.Contains(p.a.View().Unsettled, child)
 	if rearm {
-		if added, err = r.rearm(ctx, p, up[len(up)-1], child, len(up)); err != nil {
+		if _, err := r.spawnChild(ctx, p, child, c.a.View().Agent); err != nil {
 			return false, err
 		}
 	}
@@ -276,34 +280,12 @@ func (r *Runtime) send(ctx context.Context, up []string, child, text string) (bo
 	in := eventlog.InputAdmitted{InputID: "input_" + newSuffix(), Delivery: eventlog.DeliverySteer, Source: "parent",
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 	if _, _, err := c.a.Submit(ctx, in, ""); err != nil {
-		if added {
-			r.sup.done(child)
-		}
 		if rearm {
 			err = errors.Join(err, p.a.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, ""))
 		}
 		return false, err
 	}
 	return queued, nil
-}
-
-// rearm spawns the settled child of p again with its agent. added reports
-// whether the supervisor counts child because of this call.
-func (r *Runtime) rearm(ctx context.Context, p *Session, root, child string, depth int) (added bool, err error) {
-	c, err := r.created(ctx, child)
-	if err != nil {
-		return false, err
-	}
-	if added, err = r.sup.admit(root, child, depth); err != nil {
-		return false, err
-	}
-	if _, err := p.a.Spawn(ctx, child, c.Agent); err != nil {
-		if added {
-			r.sup.done(child)
-		}
-		return false, err
-	}
-	return added, nil
 }
 
 // cancelTurn withdraws the queued inputs of session id and stops its turn,
@@ -339,20 +321,21 @@ func (r *Runtime) interruptTree(ctx context.Context, id string, stop func(contex
 
 func (r *Runtime) stopTree(ctx context.Context, id string, stop func(context.Context) error, quiet map[string]bool) error {
 	silence := func() ([]string, error) {
-		st, err := session.Load(ctx, id, storeLog{r.store, id})
+		var kids []string
+		err := r.read(ctx, id, func(st *eventlog.State) { kids = st.Children() })
 		if errors.Is(err, ErrSessionNotFound) {
 			return nil, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		for _, kid := range st.Children() {
+		for _, kid := range kids {
 			if !quiet[kid] {
 				quiet[kid] = true
 				r.sup.silence(kid, 1)
 			}
 		}
-		return st.Children(), nil
+		return kids, nil
 	}
 	if _, err := silence(); err != nil {
 		return err
