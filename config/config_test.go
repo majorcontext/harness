@@ -119,7 +119,7 @@ func TestLoadProviderUnknownTypeFails(t *testing.T) {
 // suppress-but-register-nothing bug: an entry with a missing or typo'd
 // type used to silently disable a zero-config default the moment the key
 // was present at all, while never itself registering a client. A partial
-// entry for a key with no built-in default (see nativeDefaultProviders)
+// entry for a key with no built-in default (see Defaults().Providers)
 // must still fail loudly, naming the key and the valid types, even though
 // validation now runs post-merge.
 func TestLoadProviderEmptyTypeOnUnknownKeyFails(t *testing.T) {
@@ -173,7 +173,7 @@ func TestLoadProviderOpenAICompatMissingBaseURLFails(t *testing.T) {
 // TestProviderNativeDefaultKeyOnlyOverride verifies that an "openrouter"
 // entry may set only the field it needs
 // (api_key_env here) and inherit type/base_url from the built-in default
-// (nativeDefaultProviders) — it is a complete, valid entry without ever
+// (Defaults().Providers) — it is a complete, valid entry without ever
 // naming type or base_url itself.
 func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
 	c := &Config{Providers: map[string]Provider{
@@ -187,7 +187,7 @@ func TestProviderNativeDefaultKeyOnlyOverride(t *testing.T) {
 	if pr.Type != TypeOpenAICompat {
 		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
 	}
-	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+	if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
 		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
 	}
 	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
@@ -211,7 +211,7 @@ func TestEnsureProviderDefaultsIdempotent(t *testing.T) {
 	if pr.Type != TypeOpenAICompat {
 		t.Errorf("Type = %q, want inherited %q", pr.Type, TypeOpenAICompat)
 	}
-	if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+	if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
 		t.Errorf("BaseURL = %q, want inherited default", pr.BaseURL)
 	}
 	if pr.APIKeyEnv != "MY_OPENROUTER_KEY" {
@@ -365,68 +365,26 @@ func TestPath(t *testing.T) {
 }
 
 func TestResolveModel(t *testing.T) {
-	t.Run("empty falls back to config model", func(t *testing.T) {
-		c := &Config{Model: "anthropic/claude-opus-4-8"}
-		ref, err := c.ResolveModel("")
-		if err != nil {
-			t.Fatalf("ResolveModel: %v", err)
-		}
-		if ref.String() != "anthropic/claude-opus-4-8" {
-			t.Errorf("ref = %q", ref)
-		}
-	})
-	t.Run("empty and no config model falls back to hard default", func(t *testing.T) {
-		c := &Config{}
-		ref, err := c.ResolveModel("")
-		if err != nil {
-			t.Fatalf("ResolveModel: %v", err)
-		}
-		if ref.String() != DefaultModel {
-			t.Errorf("ref = %q, want %q", ref, DefaultModel)
-		}
-	})
-	t.Run("alias resolves one level", func(t *testing.T) {
-		c := &Config{Aliases: map[string]string{"fast": "anthropic/claude-haiku-4-5"}}
-		ref, err := c.ResolveModel("fast")
-		if err != nil {
-			t.Fatalf("ResolveModel: %v", err)
-		}
-		if ref.String() != "anthropic/claude-haiku-4-5" {
-			t.Errorf("ref = %q", ref)
-		}
-	})
-	t.Run("config model may itself be an alias", func(t *testing.T) {
-		c := &Config{Model: "smart", Aliases: map[string]string{"smart": "anthropic/claude-fable-5"}}
-		ref, err := c.ResolveModel("")
-		if err != nil {
-			t.Fatalf("ResolveModel: %v", err)
-		}
-		if ref.String() != "anthropic/claude-fable-5" {
-			t.Errorf("ref = %q", ref)
-		}
-	})
-	t.Run("unknown alias errors", func(t *testing.T) {
-		c := &Config{}
-		if _, err := c.ResolveModel("nope"); err == nil {
-			t.Error("expected error for unknown alias / bare name")
-		}
-	})
-	t.Run("aliases do not recurse", func(t *testing.T) {
-		c := &Config{Aliases: map[string]string{"a": "b", "b": "anthropic/claude-fable-5"}}
-		if _, err := c.ResolveModel("a"); err == nil {
-			t.Error("expected error: alias should resolve one level only, not recurse")
-		}
-	})
-	t.Run("explicit ref passes through", func(t *testing.T) {
-		c := &Config{}
-		ref, err := c.ResolveModel("openai/gpt-5")
-		if err != nil {
-			t.Fatalf("ResolveModel: %v", err)
-		}
-		if ref.String() != "openai/gpt-5" {
-			t.Errorf("ref = %q", ref)
-		}
-	})
+	for _, tc := range []struct {
+		name string
+		c    *Config
+		in   string
+		want string
+	}{
+		{"empty falls back to config model", &Config{Model: "anthropic/claude-opus-4-8"}, "", "anthropic/claude-opus-4-8"},
+		{"empty and no config model falls back to hard default", &Config{}, "", DefaultModel},
+		{"alias resolves one level", &Config{Aliases: map[string]string{"fast": "anthropic/claude-haiku-4-5"}}, "fast", "anthropic/claude-haiku-4-5"},
+		{"config model may itself be an alias", &Config{Model: "smart", Aliases: map[string]string{"smart": "anthropic/claude-fable-5"}}, "", "anthropic/claude-fable-5"},
+		{"returns nope verbatim", &Config{}, "nope", "nope"},
+		{"returns b", &Config{Aliases: map[string]string{"a": "b", "b": "anthropic/claude-fable-5"}}, "a", "b"},
+		{"explicit ref passes through", &Config{}, "openai/gpt-5", "openai/gpt-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.c.ResolveModel(tc.in); got != tc.want {
+				t.Errorf("ResolveModel(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestLoadInstructionsFields(t *testing.T) {
@@ -777,12 +735,8 @@ func TestGoalEvaluatorModel(t *testing.T) {
 	})
 	t.Run("resolves through aliases", func(t *testing.T) {
 		c := &Config{Aliases: map[string]string{"judge": "anthropic/claude-opus-4-8"}}
-		ref, err := c.ResolveModel("judge")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ref.String() != "anthropic/claude-opus-4-8" {
-			t.Errorf("ResolveModel(judge) = %q", ref.String())
+		if got := c.ResolveModel("judge"); got != "anthropic/claude-opus-4-8" {
+			t.Errorf("ResolveModel(judge) = %q", got)
 		}
 	})
 }
@@ -1084,7 +1038,7 @@ func TestLoadProject(t *testing.T) {
 		if pr.Type != TypeOpenAICompat {
 			t.Errorf("Type = %q, want inherited native default %q", pr.Type, TypeOpenAICompat)
 		}
-		if pr.BaseURL != nativeDefaultProviders["openrouter"].BaseURL {
+		if pr.BaseURL != Defaults().Providers["openrouter"].BaseURL {
 			t.Errorf("BaseURL = %q, want inherited native default", pr.BaseURL)
 		}
 		if pr.APIKeyEnv != "PROJECT_OR_KEY" {
@@ -1093,7 +1047,7 @@ func TestLoadProject(t *testing.T) {
 	})
 	// A project-only providers entry naming an unknown key with no type is
 	// still rejected once merged — the native default only applies to
-	// nativeDefaultProviders keys.
+	// Defaults().Providers keys.
 	t.Run("project layer cannot smuggle in an incomplete non-default provider", func(t *testing.T) {
 		userPath := filepath.Join(t.TempDir(), "config.json")
 		writeFile(t, userPath, `{"model": "anthropic/claude-fable-5"}`)

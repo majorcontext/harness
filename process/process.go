@@ -14,13 +14,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/majorcontext/harness/config"
 )
 
 // State is a managed process's lifecycle state.
@@ -134,72 +135,9 @@ type Def struct {
 	Origin Origin
 }
 
-// ValidateDef fails loudly on a definition that cannot possibly be
-// spawned: a non-empty Command; every Ports entry (and ReadyPort, if set)
-// in [1, 65535]; at most one of ReadyRegex/ReadyPort/ReadyHTTP set; a
-// ReadyRegex that compiles (RE2); a ReadyHTTP that parses as an absolute
-// URL. Used by Manager.Declare AND config.validateProcesses — the config
-// package calls this directly rather than reimplementing it, so a runtime
-// `declare` and a config-file process entry are rejected with byte-for-
-// byte identical error text, never two independently-drifting messages.
+// ValidateDef returns an error for a definition that cannot be spawned.
 func ValidateDef(def Def) error {
-	if len(def.Command) == 0 {
-		return errors.New("command is required (non-empty argv)")
-	}
-	for _, port := range def.Ports {
-		if err := validatePort(port); err != nil {
-			return fmt.Errorf("invalid ports entry: %w", err)
-		}
-	}
-	gates := 0
-	if def.ReadyRegex != "" {
-		gates++
-	}
-	if def.ReadyPort != 0 {
-		gates++
-	}
-	if def.ReadyHTTP != "" {
-		gates++
-	}
-	if gates > 1 {
-		return errors.New("at most one of ready_regex, ready_port, ready_http may be set")
-	}
-	if def.ReadyRegex != "" {
-		if _, err := regexp.Compile(def.ReadyRegex); err != nil {
-			return fmt.Errorf("invalid ready_regex: %w", err)
-		}
-	}
-	if def.ReadyPort != 0 {
-		if err := validatePort(def.ReadyPort); err != nil {
-			return fmt.Errorf("invalid ready_port: %w", err)
-		}
-	}
-	if def.ReadyHTTP != "" {
-		// ParseRequestURI alone accepts inputs http.Get can never satisfy
-		// (a forgotten scheme parses as scheme "localhost", ftp://, an
-		// empty host) — the gate would then spin silently to timeout,
-		// exactly the failure class ready_http exists to eliminate.
-		// Require an http(s) URL with a host.
-		u, err := url.ParseRequestURI(def.ReadyHTTP)
-		if err != nil {
-			return fmt.Errorf("invalid ready_http: %w", err)
-		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("invalid ready_http %q: scheme must be http or https (did you forget the http:// prefix?)", def.ReadyHTTP)
-		}
-		if u.Host == "" {
-			return fmt.Errorf("invalid ready_http %q: missing host", def.ReadyHTTP)
-		}
-	}
-	return nil
-}
-
-// validatePort reports whether port is a valid TCP port number.
-func validatePort(port int) error {
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("port %d out of range (1-65535)", port)
-	}
-	return nil
+	return config.ProcessSpec{Command: def.Command, Ports: def.Ports, ReadyRegex: def.ReadyRegex, ReadyPort: def.ReadyPort, ReadyHTTP: def.ReadyHTTP}.Validate()
 }
 
 // Status is a point-in-time snapshot of one managed process.

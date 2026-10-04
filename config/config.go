@@ -14,13 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/process"
 )
-
-// DefaultModel is the hard fallback when neither a flag nor config names one.
-const DefaultModel = "anthropic/claude-fable-5"
 
 // Config is the parsed harness configuration. The zero value is valid and
 // represents "no configuration": every method degrades to built-in defaults.
@@ -492,85 +486,13 @@ const TypeClaudeCodeCLI = "claude-code-cli"
 // with no further defaulting: the built-in adapters cmd/harness's registry
 // wires directly by name (provider/anthropic.Family and
 // provider/openai.Family). A missing or typo'd Type on any other key must
-// not silently produce no adapter at startup — see nativeDefaultProviders
+// not silently produce no adapter at startup — see Defaults().Providers
 // for the one key ("openrouter") that gets real built-in field defaults
 // instead of a bare pass, and validateProviders for the loud failure every
 // other key gets.
 var nativeProviderKeys = map[string]bool{
 	"anthropic": true,
 	"openai":    true,
-}
-
-// nativeDefaultProviders holds the built-in field values for providers map
-// keys that have a zero-config default outside this package — today just
-// "openrouter" (cmd/harness's ensureDefaultOpenRouter registers it with
-// these same values when the providers map has no "openrouter" key at
-// all). When the key *is* present, applyProviderDefaults fills in whatever
-// fields the entry leaves empty from here before validateProviders runs, so
-// {"openrouter": {"api_key_env": "X"}} is a complete, valid entry: type and
-// base_url are inherited, only api_key_env is overridden. This is what
-// keeps the unrepresentable-bad-state property (see validateProviders)
-// from overcorrecting into requiring a full entry for the one key that has
-// a sensible built-in default to begin with — a typo'd or unsupported type
-// still fails loudly, but a same-name key with only one field set to
-// override does not.
-var nativeDefaultProviders = map[string]Provider{
-	"openrouter": {
-		Type:      TypeOpenAICompat,
-		BaseURL:   "https://openrouter.ai/api/v1",
-		APIKeyEnv: "OPENROUTER_API_KEY",
-	},
-}
-
-// EnsureProviderDefaults fills empty fields of any nativeDefaultProviders
-// entry present in providers (in place) from the built-in default — the
-// same defaulting mergeAndValidate applies to every *Config LoadProject
-// returns, exported here so a caller that builds providers by some other
-// route (a hand-built *Config in a test, an embedder that skips
-// LoadProject) can apply the identical guarantee itself.
-//
-// It is idempotent: every field it sets is only set when empty, so calling
-// it twice, or calling it on a map LoadProject already defaulted, is a
-// no-op the second time. That idempotence is what makes it safe to use
-// defensively — e.g. cmd/harness's registry() calls this on cfg.Providers
-// before building provider clients, so a minimal {"openrouter": {...}}
-// entry resolves to the same adapter whether or not the *Config in hand
-// ever passed through LoadProject. Without that call, registry() would
-// instead silently depend on its caller already having run this — an
-// init-order dependency that fails by producing no adapter at all rather
-// than an error, exactly the failure mode this package's provider
-// validation otherwise refuses to allow (see validateProviders).
-func EnsureProviderDefaults(providers map[string]Provider) {
-	applyProviderDefaults(providers)
-}
-
-// applyProviderDefaults is EnsureProviderDefaults' unexported
-// implementation, shared by mergeAndValidate (the load-path choke point)
-// and EnsureProviderDefaults (the defensive entry point for callers that
-// bypass it). It must run on the fully merged config, after layering user
-// and project files together and before validateProviders — a per-layer
-// entry (e.g. a project override naming only api_key_env) is not itself a
-// complete entry, but the merged result must be.
-func applyProviderDefaults(providers map[string]Provider) {
-	for name, def := range nativeDefaultProviders {
-		p, ok := providers[name]
-		if !ok {
-			continue // wholly absent: cmd/harness's own default registration handles this case
-		}
-		if p.Type == "" {
-			p.Type = def.Type
-		}
-		if p.BaseURL == "" {
-			p.BaseURL = def.BaseURL
-		}
-		if p.APIKeyEnv == "" {
-			p.APIKeyEnv = def.APIKeyEnv
-		}
-		if p.Family == "" {
-			p.Family = def.Family
-		}
-		providers[name] = p
-	}
 }
 
 // Provider is per-family provider configuration.
@@ -826,22 +748,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
 	c.SessionDir = expandHome(c.SessionDir)
-	if err := validatePlugins(c.Plugins); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
-	if err := validateMCPServers(c.MCPServers); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
-	if err := validateProcesses(c.Processes); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
-	if err := validateEventSink(c.EventSink); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
-	if err := validateSessionSync(c.SessionSync); err != nil {
-		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
-	}
-	if err := validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold); err != nil {
+	if err := c.validateFile(); err != nil {
 		return nil, fmt.Errorf("config: parsing %s: %w", path, err)
 	}
 	return &c, nil
@@ -851,9 +758,9 @@ func Load(path string) (*Config, error) {
 // be wired: an unrecognized Type (a typo must not silently produce no
 // adapter at startup — same philosophy as validatePlugins), an empty Type
 // on a key that is neither native (nativeProviderKeys) nor native-default
-// (nativeDefaultProviders), or a TypeOpenAICompat entry missing the BaseURL
+// (Defaults().Providers), or a TypeOpenAICompat entry missing the BaseURL
 // it has no built-in default for. Callers must run applyProviderDefaults on
-// the same (fully merged) providers map first, so a nativeDefaultProviders
+// the same (fully merged) providers map first, so a Defaults().Providers
 // key that only overrides one field is validated as the complete entry it
 // becomes after defaulting, not the partial one a single config layer
 // wrote.
@@ -1133,26 +1040,13 @@ func validateMCPServers(servers map[string]MCPServerSpec) error {
 // wired: the map key naming it must be non-empty (it is the identity a
 // caller uses to start/stop/restart/status/logs it — same "cannot possibly
 // be wired" philosophy as validateMCPServers/validatePlugins). Everything
-// else (Command, Ports, and the ready gates) is validated by
-// process.ValidateDef itself — called directly, not reimplemented, so a
-// config-file process entry and the process tool's runtime `declare`
-// action are rejected with byte-for-byte identical error text (see that
-// function's doc comment). An invalid entry would otherwise only fail the
-// first time a session actually starts the process, far from the config
-// that caused it.
+// else is ProcessSpec.Validate, the rule process.Declare also uses.
 func validateProcesses(processes map[string]ProcessSpec) error {
 	for name, p := range processes {
 		if name == "" {
 			return fmt.Errorf("processes: process name is required (empty key)")
 		}
-		def := process.Def{
-			Command:    p.Command,
-			Ports:      p.Ports,
-			ReadyRegex: p.ReadyRegex,
-			ReadyPort:  p.ReadyPort,
-			ReadyHTTP:  p.ReadyHTTP,
-		}
-		if err := process.ValidateDef(def); err != nil {
+		if err := p.Validate(); err != nil {
 			return fmt.Errorf("processes.%s: %w", name, err)
 		}
 	}
@@ -1259,7 +1153,7 @@ func Path() string {
 // override is a no-op).
 //
 // Providers are validated once, here, after the two layers are merged and
-// applyProviderDefaults has filled in any nativeDefaultProviders field an
+// applyProviderDefaults has filled in any Defaults().Providers field an
 // entry left empty — never per file (see Load) — so a project override
 // naming only a provider's api_key_env is validated as the complete entry
 // it becomes once merged with the user layer (or with a native default),
@@ -1348,21 +1242,11 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-// mergeAndValidate merges over onto base (see merge), applies built-in
-// field defaults to any nativeDefaultProviders entry present in the result
-// (see applyProviderDefaults), and validates the merged providers map (see
-// validateProviders). This is the single point where a providers entry is
-// judged complete or incomplete: always after layering, never per file.
+// mergeAndValidate returns the merged config with provider defaults applied, because the registry reads them.
 func mergeAndValidate(base, over *Config) (*Config, error) {
 	out := merge(base, over)
 	applyProviderDefaults(out.Providers)
-	if err := validateProviders(out.Providers); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	if err := validateAppendSystemPromptArgs(out); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	return out, nil
+	return out, out.Validate()
 }
 
 // validateAppendSystemPromptArgs prevents ExtraArgs from replacing the managed
@@ -1714,11 +1598,8 @@ func copyMCPServerSpec(s MCPServerSpec) MCPServerSpec {
 	return s
 }
 
-// ResolveModel turns a model string into a ModelRef. An empty string falls
-// back to the config's Model, then to DefaultModel. The result is looked up
-// once in Aliases (one level, no recursion) and then parsed. A bare name that
-// is neither a known alias nor a valid "provider/model" ref is an error.
-func (c *Config) ResolveModel(s string) (message.ModelRef, error) {
+// ResolveModel returns s, else Model, else DefaultModel, after one alias lookup. It does not parse.
+func (c *Config) ResolveModel(s string) string {
 	if s == "" && c != nil {
 		s = c.Model
 	}
@@ -1730,114 +1611,7 @@ func (c *Config) ResolveModel(s string) (message.ModelRef, error) {
 			s = target
 		}
 	}
-	return message.ParseModelRef(s)
-}
-
-// defaultPromptRetries is the product default for the base interactive Prompt
-// loop's retry budget when `prompt_retries` is unset (see PromptRetriesValue
-// and engine.Config.PromptRetries).
-const defaultPromptRetries = 2
-
-// PromptRetriesValue reports the base interactive Prompt loop's retry budget.
-// The default is defaultPromptRetries (2): only an explicit `prompt_retries:
-// 0` disables the retry. A nil receiver (no config) uses the default too.
-func (c *Config) PromptRetriesValue() int {
-	if c == nil || c.PromptRetries == nil {
-		return defaultPromptRetries
-	}
-	return *c.PromptRetries
-}
-
-// ContextWindowRequiredValue reports whether an unrecognized model is a
-// hard refusal. The default is TRUE: only an explicit
-// `context_window_required: false` allows a model with no known context
-// window to run with compaction silently disabled. A nil receiver (no
-// config) uses the default too.
-func (c *Config) ContextWindowRequiredValue() bool {
-	if c == nil || c.ContextWindowRequired == nil {
-		return true
-	}
-	return *c.ContextWindowRequired
-}
-
-// defaultMaxTokensContinuations is the product default for how many
-// consecutive max_tokens stops the base interactive Prompt loop
-// auto-continues when `max_tokens_continuations` is unset (see
-// MaxTokensContinuationsValue and engine.Config.MaxTokensContinuations).
-const defaultMaxTokensContinuations = 3
-
-// MaxTokensContinuationsValue reports the base interactive Prompt loop's
-// max_tokens auto-continuation budget. The default is
-// defaultMaxTokensContinuations (3): only an explicit
-// `max_tokens_continuations: 0` disables auto-continue. A nil receiver (no
-// config) uses the default too.
-func (c *Config) MaxTokensContinuationsValue() int {
-	if c == nil || c.MaxTokensContinuations == nil {
-		return defaultMaxTokensContinuations
-	}
-	return *c.MaxTokensContinuations
-}
-
-// defaultSnapshotEveryRecords is the product default journal-snapshot
-// cadence when `snapshot_every_records` is unset (see
-// SnapshotEveryRecordsValue and engine.Config.SnapshotEveryRecords). It
-// lives here, not in engine.Config's zero value, so an embedder building a
-// bare engine.Config keeps the pre-snapshot behavior — the same split
-// defaultPromptRetries uses.
-const defaultSnapshotEveryRecords = 64
-
-// SnapshotEveryRecordsValue reports the journal-snapshot cadence. The
-// default is defaultSnapshotEveryRecords (64): only an explicit
-// `snapshot_every_records: 0` turns snapshot writing off. A nil receiver
-// (no config) uses the default too.
-func (c *Config) SnapshotEveryRecordsValue() int {
-	if c == nil || c.SnapshotEveryRecords == nil {
-		return defaultSnapshotEveryRecords
-	}
-	return *c.SnapshotEveryRecords
-}
-
-// defaultToolResultInlineBytes / defaultToolResultRetainedBytes are the
-// product defaults for the tool-result retention keys (see the
-// ToolResultInlineBytes/ToolResultRetainedBytes fields and package engine's
-// toolresult.go). They live here, not in engine.Config's zero value, so an
-// embedder building a bare engine.Config keeps the pre-retention behavior
-// — the same split defaultPromptRetries uses.
-const (
-	defaultToolResultInlineBytes   = 16384
-	defaultToolResultRetainedBytes = 4 * 1024 * 1024
-)
-
-// ToolResultInlineBytesValue reports the tool-result retention threshold.
-// Unset takes defaultToolResultInlineBytes (16384); an explicit value is
-// returned verbatim, INCLUDING a non-positive one, which the engine reads
-// as "retention disabled".
-func (c *Config) ToolResultInlineBytesValue() int {
-	if c == nil || c.ToolResultInlineBytes == nil {
-		return defaultToolResultInlineBytes
-	}
-	return *c.ToolResultInlineBytes
-}
-
-// ToolResultRetainedBytesValue reports the per-session retained-bytes
-// ceiling. Unset takes defaultToolResultRetainedBytes (4194304); an
-// explicit value is returned verbatim, including a non-positive one, which
-// the engine reads as "no ceiling".
-func (c *Config) ToolResultRetainedBytesValue() int {
-	if c == nil || c.ToolResultRetainedBytes == nil {
-		return defaultToolResultRetainedBytes
-	}
-	return *c.ToolResultRetainedBytes
-}
-
-// ModelToolEnabled reports whether the built-in `model` session tool is on.
-// The default is ON: only an explicit `model_tool: false` disables it. A nil
-// receiver (no config) is on too.
-func (c *Config) ModelToolEnabled() bool {
-	if c == nil || c.ModelTool == nil {
-		return true
-	}
-	return *c.ModelTool
+	return s
 }
 
 // expandHome expands a leading "~/" (or a lone "~") against $HOME.

@@ -89,7 +89,7 @@ These are the compatibility surface.
 | Package | Owns | Consumer |
 | --- | --- | --- |
 | `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `Store`, `Owner`, `Ownership`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
-| `harness/config` | `Config`, defaults, `Validate`; imports nothing from the runtime | boxinit `BootConfig` |
+| `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`; imports only the standard library | boxinit `BootConfig` |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated OpenAPI and TS | boxes server, web, boxctl |
 | `harness/storetest` | Conformance suite for a `Store` | boxes `pgstore` |
 | `harness/harnesstest` | Scripted model server for contract suites | harness and boxes contract suites |
@@ -102,8 +102,8 @@ package harness
 func New(opts Options) (*Runtime, error) // no I/O; sessions load on Create, Open, or List
 
 type Options struct {
-	Config config.Config
-	Store  Store  // nil: DiskStore under Config.Dir
+	Config config.Config // New checks it with Validate
+	Store  Store         // required
 	Owner  Owner  // nil: the local process owns every session
 	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
 	// ModelTransport returns the HTTP transport for a model provider.
@@ -167,16 +167,14 @@ Free to change.
 | `internal/eventlog` | Event schema, record codec, `Apply`, checkpoints |
 | `internal/session` | Session actor, mailbox, state machines, child tree, views |
 | `internal/turn` | One agent loop; declares `Backend` and `Tools` |
-| `internal/backend/anthropic`, `openai`, `openaicompat` | Model API backends |
+| `internal/backend/modelapi` | The one model API backend, for every provider wire |
 | `internal/backend/external`, `claudecode`, `codexcli` | Third-party harness backends |
-| `internal/backend/httpx` | SSE reader, error classifier, retry policy, usage normalizer |
-| `internal/backend/wirenorm` | Wire repair |
 | `internal/message` | Conversation types used inside the runtime |
 | `internal/modelmeta` | Context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models` |
-| `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface, registry, sources |
+| `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface and sources |
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
-| `internal/prompt` | System-prompt segments, the `Memo` loader, agent profiles |
-| `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is |
+| `internal/prompt` | System-prompt segments and agent profiles |
+| `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is in phase 6 |
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
 
@@ -593,7 +591,11 @@ Each segment declares whether a load error fails the turn or degrades with a not
 
 ### config
 
-One `Config` struct. One defaults table. One `Validate`. Environment variables override fields by name; there are no env-only knobs.
+One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject` runs it on the merged config, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
+
+`ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. The phase 4 switch wires `ApplyEnv` into `cmd/harness`.
+
+The package imports only the standard library. The `config-leaf` depguard rule enforces it.
 
 ## Feature disposition
 
@@ -718,10 +720,10 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | Leaf cleanups: `httpx`, `wirenorm`, `tool` registry, `prompt.Memo` and agent profiles; publish `harness/config`; move leaves to `internal/` | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
-| 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
-| 6 | Delete `engine`, `server`, old formats, dead features | None |
+| 5 | Remaining backends on capabilities, as one `modelapi` backend; `codexcli`; requests; `Warmer` | None |
+| 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
 
 PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route, format, or Go API survives it.
 

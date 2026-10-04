@@ -730,7 +730,7 @@ func runCmd(args []string) error {
 	}
 	// Aliases resolve here; an empty -model falls back to the config's
 	// model, then the hard default.
-	model, err := cfg.ResolveModel(opts.model)
+	model, err := message.ParseModelRef(cfg.ResolveModel(opts.model))
 	if err != nil {
 		return err
 	}
@@ -1029,7 +1029,7 @@ func runGoal(ctx context.Context, cfg *config.Config, s *engine.Session, sessMgr
 	if cfg.GoalEvaluatorModel == "" {
 		return nil, fmt.Errorf("goal_evaluator_model must be set in config to use -goal")
 	}
-	evaluator, err := cfg.ResolveModel(cfg.GoalEvaluatorModel)
+	evaluator, err := message.ParseModelRef(cfg.ResolveModel(cfg.GoalEvaluatorModel))
 	if err != nil {
 		return nil, fmt.Errorf("goal_evaluator_model: %w", err)
 	}
@@ -1080,7 +1080,7 @@ func loadConfig() (*config.Config, error) {
 // ensureDefaultOpenRouter.
 //
 // registry does not assume cfg came from config.LoadProject (the load path
-// that guarantees nativeDefaultProviders fields are filled in — see
+// that guarantees config.Defaults().Providers fields are filled in — see
 // config.EnsureProviderDefaults): it calls EnsureProviderDefaults itself
 // first, idempotently, so a hand-built *config.Config (as tests use, and
 // any future embedder that skips LoadProject might too) resolves a minimal
@@ -1596,7 +1596,7 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	defModel, err := cfg.ResolveModel("")
+	defModel, err := message.ParseModelRef(cfg.ResolveModel(""))
 	if err != nil {
 		return err
 	}
@@ -1604,7 +1604,7 @@ func serveCmd(args []string) error {
 	// requests are rejected until goal_evaluator_model is configured).
 	var goalEval message.ModelRef
 	if cfg.GoalEvaluatorModel != "" {
-		goalEval, err = cfg.ResolveModel(cfg.GoalEvaluatorModel)
+		goalEval, err = message.ParseModelRef(cfg.ResolveModel(cfg.GoalEvaluatorModel))
 		if err != nil {
 			return fmt.Errorf("goal_evaluator_model: %w", err)
 		}

@@ -20,6 +20,12 @@ linters:
               desc: internal packages never import server
             - pkg: github.com/majorcontext/harness/cmd
               desc: internal packages never import cmd
+        config-leaf:
+          files:
+            - "**/config/**"
+          list-mode: strict
+          allow:
+            - $gostd
     revive:
       rules:
         - name: exported
