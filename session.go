@@ -131,7 +131,7 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 	if !req.Tree {
 		return stop(ctx)
 	}
-	return s.r.interruptTree(ctx, s.id, stop)
+	return s.r.tree.Interrupt(ctx, s.id, stop)
 }
 
 // Resolve answers or dismisses the open request requestID: with res.Answer, the

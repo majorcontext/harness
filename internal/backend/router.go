@@ -89,7 +89,7 @@ func (m *Router) Check(model string) (turn.Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	be, err := m.Backend(model)
+	be, err := m.lookup(model)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,8 @@ func (m *Router) Check(model string) (turn.Backend, error) {
 	return be, nil
 }
 
-func (m *Router) Backend(model string) (turn.Backend, error) {
+// lookup returns the backend of the provider of model.
+func (m *Router) lookup(model string) (turn.Backend, error) {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -111,16 +112,18 @@ func (m *Router) Backend(model string) (turn.Backend, error) {
 	return be, nil
 }
 
+// Capabilities returns the capabilities of the backend of model, or none for a model with no backend.
 func (m *Router) Capabilities(model string) turn.Capabilities {
-	be, err := m.Backend(model)
+	be, err := m.lookup(model)
 	if err != nil {
 		return turn.Capabilities{}
 	}
 	return be.Capabilities(model)
 }
 
+// Run runs the turn on the backend of req.Model.
 func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	be, err := m.Backend(req.Model)
+	be, err := m.lookup(req.Model)
 	if err != nil {
 		return turn.Result{}, err
 	}
@@ -129,7 +132,7 @@ func (m *Router) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 
 // CanWarm reports whether the backend of model has a warm-up to run.
 func (m *Router) CanWarm(model string) bool {
-	be, err := m.Backend(model)
+	be, err := m.lookup(model)
 	if err != nil {
 		return false
 	}
@@ -143,7 +146,7 @@ func (m *Router) CanWarm(model string) bool {
 
 // Warm warms the backend of req.Model, when that backend can warm.
 func (m *Router) Warm(ctx context.Context, req turn.Request) error {
-	be, err := m.Backend(req.Model)
+	be, err := m.lookup(req.Model)
 	if err != nil {
 		return err
 	}

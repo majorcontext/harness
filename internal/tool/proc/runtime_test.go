@@ -1,7 +1,8 @@
-package harness_test
+package proc_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"slices"
@@ -15,6 +16,60 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 )
+
+var bg = context.Background()
+
+const noTool = "no such tool available: "
+
+func text(id, s string) protocol.Input {
+	return protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: s}}}
+}
+
+func lastText(req harnesstest.Request) string {
+	return req.Messages[len(req.Messages)-1].Parts[0].Text
+}
+
+func closeRuntime(t *testing.T, r *harness.Runtime) {
+	t.Helper()
+	if err := r.Close(bg); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// converse submits each text in turn and returns after its turn ends.
+func converse(t *testing.T, s *harness.Session, texts ...string) {
+	t.Helper()
+	for i, txt := range texts {
+		head, submitted := s.View().HeadSeq, false
+		for e, err := range s.Events(bg, head-1) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !submitted {
+				submitted = true
+				if _, err := s.Submit(bg, text(string(rune('a'+i)), txt)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if e.Kind == "turn.ended" && e.Seq > head {
+				break
+			}
+		}
+	}
+}
+
+// holdTool is an embedder tool that reports its call and waits for its ctx to end.
+type holdTool struct{ started chan struct{} }
+
+func (holdTool) Spec() protocol.ToolSpec {
+	return protocol.ToolSpec{Name: "wait", Description: "waits", InputSchema: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (h holdTool) Run(ctx context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
+	close(h.started)
+	<-ctx.Done()
+	return protocol.ToolResult{}, context.Cause(ctx)
+}
 
 var pidRE = regexp.MustCompile(`"pid":(\d+),`)
 
@@ -43,10 +98,6 @@ func processRuntime(t *testing.T, workDir bool, tools []harness.Tool, steps ...h
 		t.Fatal(err)
 	}
 	return r, sess, s, opts.WorkDir
-}
-
-func lastText(req harnesstest.Request) string {
-	return req.Messages[len(req.Messages)-1].Parts[0].Text
 }
 
 func wantGone(t *testing.T, startResult string) {
@@ -100,7 +151,7 @@ func TestConfiguredProcesses(t *testing.T) {
 }
 
 func TestCloseStopsProcessesWhenItsContextEnds(t *testing.T) {
-	wait := newProbe("wait", true)
+	wait := holdTool{started: make(chan struct{})}
 	r, sess, s, _ := processRuntime(t, true, []harness.Tool{wait},
 		harnesstest.Step{Name: "start", Match: harnesstest.LastUserText("run"), Reply: processCall("call_1", "dev")},
 		harnesstest.Step{Name: "wait", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{

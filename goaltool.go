@@ -48,7 +48,8 @@ func (goalTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "goal", Description: goalDescription, InputSchema: json.RawMessage(goalSchema)}
 }
 
-func (t goalTool) bind(id string, child bool) turn.Tool {
+// Bind returns the tool of session id, or nil for a child session.
+func (t goalTool) Bind(id string, child bool) turn.Tool {
 	if child {
 		return nil
 	}

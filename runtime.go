@@ -22,6 +22,7 @@ import (
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
 	"github.com/majorcontext/harness/internal/tool/proc"
+	"github.com/majorcontext/harness/internal/tree"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -106,7 +107,7 @@ type Runtime struct {
 	prompt    func() string
 	evaluator string
 	resolve   func(string) string
-	sup       *supervisor
+	tree      *tree.Tree
 	// procs is nil without a WorkDir.
 	procs *process.Manager
 	// mcp is nil without MCP servers.
@@ -165,16 +166,18 @@ func New(opts Options) (*Runtime, error) {
 	r.resolve = opts.Config.ResolveModel
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
-	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
-		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
-		locks: map[string]*treeLock{}, quiet: map[string]int{}}
+	r.base, r.cancel = context.WithCancel(context.Background())
+	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
+		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
+		Base: r.base, Go: r.group.Go, Profiles: func() map[string]prompt.Profile { return prompt.Profiles(r.agentDirs) },
+		Resolve: opts.Config.ResolveModel, Suffix: newSuffix})
 	tools := opts.Tools
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
 	}
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
-		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), taskTool{r: r})
+		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
@@ -193,7 +196,6 @@ func New(opts Options) (*Runtime, error) {
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
 	r.banner, r.questions = banner(opts.Version, opts.Config.SessionSync, time.Now()), opts.AskUserQuestion
-	r.base, r.cancel = context.WithCancel(context.Background())
 	return r, nil
 }
 
@@ -321,7 +323,7 @@ func (r *Runtime) run(s *Session, create bool) {
 		return
 	}
 	r.group.Go(func() {
-		r.recoverChildren(s.a)
+		r.tree.Recover(s.a)
 		close(s.recovered)
 	})
 }
@@ -352,7 +354,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		own.Release()
 		return nil, err
 	}
-	root, depth, err := r.tree(ctx, id, c.ParentID)
+	root, depth, err := r.tree.Lineage(ctx, id, c.ParentID)
 	if err != nil {
 		own.Release()
 		return nil, err
@@ -439,7 +441,7 @@ func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]eventlog.E
 			return
 		}
 		if s, text, ok := session.Settlement(id, st); ok {
-			r.report(parent, s, text)
+			r.tree.Report(parent, s, text)
 		}
 	}
 }
@@ -608,6 +610,44 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
+}
+
+// created returns the session.created record of session id, which is its
+// first record.
+func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
+	recs, err := r.store.Read(ctx, id, 0, 1)
+	if err == nil && len(recs) == 0 {
+		err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
+	}
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	env, err := eventlog.Decode(recs[0].Data)
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	c, ok := env.Event.(eventlog.SessionCreated)
+	if !ok {
+		return c, fmt.Errorf("harness: session %s starts with %s, not session.created", id, env.Event.Kind())
+	}
+	return c, nil
+}
+
+// read runs f with the state of session id, which f must not keep. A session
+// that this runtime runs answers through its actor; any other session
+// replays from the store.
+func (r *Runtime) read(ctx context.Context, id string, f func(*eventlog.State)) error {
+	if s := r.running(id); s != nil {
+		if err := s.a.Read(ctx, f); !errors.Is(err, ErrSessionNotOwned) {
+			return err
+		}
+	}
+	st, err := session.Load(ctx, id, storeLog{r.store, id})
+	if err != nil {
+		return err
+	}
+	f(st)
+	return nil
 }
 
 // history returns the conversation of session id.

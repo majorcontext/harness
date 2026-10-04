@@ -38,6 +38,6 @@ func PanicIn(t testing.TB, o command.Op) {
 // SpawnChild runs the admission and the child.spawned append of a spawn of
 // child by the session id, which the runtime runs.
 func (r *Runtime) SpawnChild(ctx context.Context, id, child, agent string) error {
-	_, err := r.spawnChild(ctx, r.running(id), child, agent)
+	_, err := r.tree.SpawnChild(ctx, node(r.running(id)), child, agent)
 	return err
 }
