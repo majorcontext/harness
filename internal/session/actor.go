@@ -48,6 +48,12 @@ type Blobs interface {
 	GetBlob(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// Storage is the log and the blobs of one session.
+type Storage interface {
+	Log
+	Blobs
+}
+
 // Ownership is the grant to run one session.
 type Ownership interface {
 	Epoch() uint64
@@ -59,8 +65,7 @@ type Ownership interface {
 // and also when Create or Open fails.
 type Config struct {
 	ID        string
-	Log       Log
-	Blobs     Blobs
+	Store     Storage
 	Ownership Ownership
 	// Owner names this process in owner.acquired.
 	Owner   string
@@ -76,21 +81,18 @@ type Config struct {
 	Banner string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
-	Tools     []turn.Tool
-	// Source gives more tools to each model call. nil: Tools only.
+	// Source gives the tools of each model call, and the hooks around each
+	// tool call. nil: no tool.
 	Source turn.Source
-	// Prompt returns the system prompt of a turn of a session with the
-	// agent profile, when the turn starts.
-	Prompt func(agent string) string
-	// Appended receives the events of each append on the actor goroutine.
-	// It must not block. nil: none.
-	Appended func([]eventlog.Event)
-	// Report receives the outcome of each turn of a child session that
-	// ends, for its parent. It must not wait for the actor. nil: no report.
-	Report func(parent string, s eventlog.ChildSettled, text string)
-	// Agent are the file tools of a coding agent. A harness-loop turn gets
-	// them and read_tool_result, and retains each large result. nil: none.
-	Agent []turn.Tool
+	// Retain gives a harness-loop turn read_tool_result and keeps each large
+	// result out of the history, after the hooks of Source.
+	Retain bool
+	// Prompt returns the system prompt of a turn, when the turn starts.
+	Prompt func() string
+	// Appended receives the events of each append, and the state after it,
+	// on the actor goroutine. It must not block, wait for the actor, or keep
+	// the state. nil: none.
+	Appended func([]eventlog.Event, *eventlog.State)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.
@@ -110,8 +112,12 @@ type Config struct {
 // View is an immutable snapshot that the actor publishes after each append.
 type View struct {
 	Session protocol.Session
-	Stopped bool
-	changed chan struct{}
+	// Agent is the profile of a child session, or "".
+	Agent string
+	// Unsettled are the spawned children that have not settled, sorted.
+	Unsettled []string
+	Stopped   bool
+	changed   chan struct{}
 }
 
 // Actor is the one goroutine that runs a session.
@@ -220,7 +226,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		return nil, err
 	}
 	s := &eventlog.State{}
-	if err := replay(ctx, cfg.Log, s, head); err != nil {
+	if err := replay(ctx, cfg.Store, s, head); err != nil {
 		return nil, err
 	}
 	a := newActor(cfg, s)
@@ -258,7 +264,7 @@ func (a *Actor) waitsForInput() bool {
 // that lands first is ordered before the fence.
 func fence(ctx context.Context, cfg Config) (uint64, error) {
 	for {
-		head, err := cfg.Log.Head(ctx)
+		head, err := cfg.Store.Head(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -270,7 +276,7 @@ func fence(ctx context.Context, cfg Config) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		err = cfg.Log.Append(ctx, head, data)
+		err = cfg.Store.Append(ctx, head, data)
 		if !errors.Is(err, ErrConflict) {
 			return head + 1, err
 		}
@@ -390,9 +396,30 @@ func (a *Actor) Done() <-chan struct{} { return a.done }
 // View returns the newest published view.
 func (a *Actor) View() *View { return a.view.Load() }
 
+// Read runs f on the actor goroutine with the state of the session, which f
+// must not keep. It fails with ErrNotOwned once the actor stops. When Read
+// returns, f is not running and never runs, so a caller may read what f wrote
+// whatever the error.
+func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
+	var claimed atomic.Bool
+	ended := make(chan struct{})
+	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+		if claimed.CompareAndSwap(false, true) {
+			f(a.state)
+		}
+		close(ended)
+		reply(struct{}{}, nil)
+	})
+	if err != nil && !claimed.CompareAndSwap(false, true) {
+		<-ended
+	}
+	return err
+}
+
 func (a *Actor) publish(stopped bool) {
 	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
-	next := &View{Session: Describe(a.cfg.ID, a.state, window), Stopped: stopped, changed: make(chan struct{})}
+	next := &View{Session: Describe(a.cfg.ID, a.state, window), Agent: a.state.Agent(), Unsettled: a.state.Unsettled(),
+		Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)
@@ -454,7 +481,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 	if a.lost() {
 		return ErrNotOwned
 	}
-	if err := a.cfg.Log.Append(ctx, head, recs...); err != nil {
+	if err := a.cfg.Store.Append(ctx, head, recs...); err != nil {
 		a.stopped = true
 		if errors.Is(err, ErrConflict) {
 			return fmt.Errorf("%w: %w", ErrNotOwned, err)
@@ -471,7 +498,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 		a.stopRetry()
 	}
 	if a.cfg.Appended != nil {
-		a.cfg.Appended(events)
+		a.cfg.Appended(events, a.state)
 	}
 	a.publish(false)
 	return nil

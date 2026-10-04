@@ -175,21 +175,21 @@ const (
 	continuation = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
 )
 
-// Run runs req on b and reports its items and its end to to. Only tools,
-// and the tools that src gives each model call, reach the model. When b
+// Run runs req on b and reports its items and its end to to. Only the tools
+// that src gives each model call reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
 // order, takes the steer inputs, and calls b again until a call asks for no
 // tool. Model calls run under step and tools under ctx: when only step ends,
 // a running tool finishes and no new tool starts.
-func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) {
-	to.Ended(run(ctx, step, b, req, tools, src, to, lim))
+func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) {
+	to.Ended(run(ctx, step, b, req, src, to, lim))
 }
 
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context. A response that max_tokens cut off runs
 // none of its tool calls, and the next call asks the model to continue, at
 // most lim.Continuations times.
-func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) error {
+func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle = 0
@@ -204,7 +204,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 			req.Model, req.Settings = m, set
 		}
 		s, call := &sink{Turn: to}, req
-		runTool := describe(step, &call, tools, src, caps.OwnsLoop)
+		runTool := describe(step, &call, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {

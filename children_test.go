@@ -108,17 +108,43 @@ func familyRuntime(t *testing.T, st harness.Store, f *family, own harness.Owner,
 
 const report = "A background task you started has finished."
 
+const readerProfile = "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: fake/small\ncolor: blue\n---\n\nOnly read files.\n"
+
+// profileApplied checks that the child ran with the reader profile.
+func profileApplied(t *testing.T, f *family, children []protocol.Session) {
+	t.Helper()
+	req, _ := f.last(children[0].ID, "child work")
+	if len(req.Tools) != 1 || req.Tools[0].Name != "ls" || req.Model != "fake/small" || !strings.HasSuffix(req.Instructions, "Only read files.") {
+		t.Errorf("child request tools %v, model %s, prompt %q", req.Tools, req.Model, req.Instructions)
+	}
+}
+
+// rewriteReader returns a Store that rewrites the reader profile of dir
+// when the first child.spawned record arrives.
+func rewriteReader(t *testing.T, dir string) harness.Store {
+	var once sync.Once
+	return &hooked{Store: harness.NewMemStore(), before: func(string) {
+		once.Do(func() {
+			v2 := strings.NewReplacer("tools: ls", "tools: grep", "Only read files.", "Version two.").Replace(readerProfile)
+			if err := os.WriteFile(filepath.Join(dir, ".agents", "reader.md"), []byte(v2), 0o644); err != nil {
+				t.Error(err)
+			}
+		})
+	}}
+}
+
 func TestTaskSpawnsAChild(t *testing.T) {
-	reader := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: test/small\ncolor: blue\n---\n\nOnly read files.\n"
 	for _, tc := range []struct {
 		name   string
 		agent  string
 		spawns int
 		owns   string
 		cfg    config.Config
-		child  func() []eventlog.Message
-		kids   int
-		check  func(t *testing.T, f *family, children []protocol.Session)
+		// store returns the Store of the runtime, or nil for a MemStore.
+		store func(t *testing.T, dir string) harness.Store
+		child func() []eventlog.Message
+		kids  int
+		check func(t *testing.T, f *family, children []protocol.Session)
 	}{
 		{name: "the result of the child reaches its parent as an input", agent: "general-purpose", child: done, kids: 1,
 			check: func(t *testing.T, f *family, children []protocol.Session) {
@@ -126,13 +152,8 @@ func TestTaskSpawnsAChild(t *testing.T) {
 					t.Errorf("report %q, want outcome done", got)
 				}
 			}},
-		{name: "a profile sets the tools, model, and prompt of the child", agent: "reader", child: done, kids: 1,
-			check: func(t *testing.T, f *family, children []protocol.Session) {
-				req, _ := f.last(children[0].ID, "child work")
-				if len(req.Tools) != 1 || req.Tools[0].Name != "ls" || req.Model != "test/small" || !strings.HasSuffix(req.Instructions, "Only read files.") {
-					t.Errorf("child request tools %v, model %s, prompt %q", req.Tools, req.Model, req.Instructions)
-				}
-			}},
+		{name: "a profile sets the tools, model, and prompt of the child", agent: "reader", child: done, kids: 1, check: profileApplied},
+		{name: "a profile is read once, when the spawn reads it", agent: "reader", child: done, kids: 1, store: rewriteReader, check: profileApplied},
 		{name: "an unknown agent spawns no child and names the agents", agent: "nope",
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				if _, got := f.last("s1", `task: unknown agent "nope"; the agents are explore, general-purpose, plan, reader`); got == "" {
@@ -153,7 +174,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},
-		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "test/small", child: done, kids: 1,
+		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "fake/small", child: done, kids: 1,
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				if req, _ := f.last(children[0].ID, "child work"); slices.Contains(req.AllowedTools, "ls") {
 					t.Errorf("child allowed tools %v, want no ls", req.AllowedTools)
@@ -167,12 +188,16 @@ func TestTaskSpawnsAChild(t *testing.T) {
 			if err := os.MkdirAll(filepath.Join(dir, ".agents"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, ".agents", "reader.md"), []byte(reader), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, ".agents", "reader.md"), []byte(readerProfile), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			synctest.Test(t, func(t *testing.T) {
 				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child), owns: tc.owns}
-				r := familyRuntime(t, harness.NewMemStore(), f, nil, tc.cfg, dir)
+				var st harness.Store = harness.NewMemStore()
+				if tc.store != nil {
+					st = tc.store(t, dir)
+				}
+				r := familyRuntime(t, st, f, nil, tc.cfg, dir)
 				submit(t, create(t, r), text("a", "delegate"))
 				if kids := children(t, r); len(kids) != tc.kids {
 					t.Errorf("children %+v, want %d", kids, tc.kids)
@@ -309,29 +334,6 @@ func events(t *testing.T, st harness.Store, id string) []eventlog.Event {
 	return out
 }
 
-func TestRecoveredChildCountsAgainstMaxConcurrentTasks(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		st, dir := harness.NewMemStore(), t.TempDir()
-		cfg := config.Config{MaxConcurrentTasks: 1}
-		f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { return nil })}
-		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
-		submit(t, create(t, r1), text("a", "delegate"))
-		closeRuntime(t, r1)
-		f2 := &family{answer: f1.answer}
-		r2 := familyRuntime(t, st, f2, nil, cfg, dir)
-		s, err := r2.Open(bg, "s1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		synctest.Wait()
-		submit(t, s, text("b", "delegate"))
-		if _, got := f2.last("s1", "task: max_concurrent_tasks 1"); got == "" {
-			t.Error("a spawn beside the recovered running child does not fail on max_concurrent_tasks")
-		}
-		closeRuntime(t, r2)
-	})
-}
-
 func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		call := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{
@@ -346,6 +348,114 @@ func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
 		submit(t, create(t, r), text("a", "delegate"))
 		if _, got := f.last("s1", "task: invalid arguments"); got == "" {
 			t.Error("a task call with arguments of the wrong type does not report invalid arguments")
+		}
+		closeRuntime(t, r)
+	})
+}
+
+// hooked is a Store that runs before on each append of a child.spawned record
+// to session id, and holds the append until before returns.
+type hooked struct {
+	harness.Store
+	before func(id string)
+}
+
+func (h *hooked) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
+	for _, rec := range records {
+		if env, err := eventlog.Decode(rec); err == nil && env.Event.Kind() == (eventlog.ChildSpawned{}).Kind() {
+			h.before(id)
+		}
+	}
+	return h.Store.Append(ctx, id, expectedSeq, records...)
+}
+
+// gated is a Store that holds each read of session id until open closes.
+type gated struct {
+	harness.Store
+	id   atomic.Value
+	open chan struct{}
+}
+
+func (g *gated) Read(ctx context.Context, id string, after uint64, limit int) ([]harness.Record, error) {
+	if id == g.id.Load() {
+		select {
+		case <-g.open:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return g.Store.Read(ctx, id, after, limit)
+}
+
+func TestAnOpenedParentCountsItsUnsettledChildrenBeforeItRecoversThem(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, dir := harness.NewMemStore(), t.TempDir()
+		cfg := config.Config{MaxConcurrentTasks: 1}
+		f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { return nil })}
+		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
+		submit(t, create(t, r1), text("a", "delegate"))
+		kid := children(t, r1)[0].ID
+		closeRuntime(t, r1)
+		g := &gated{Store: st, open: make(chan struct{})}
+		g.id.Store(kid)
+		f2 := &family{answer: f1.answer}
+		r2 := familyRuntime(t, g, f2, nil, cfg, dir)
+		s, err := r2.Open(bg, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		submit(t, s, text("b", "delegate"))
+		if _, got := f2.last("s1", "task: max_concurrent_tasks 1"); got == "" {
+			t.Error("a spawn beside an unsettled child fails on max_concurrent_tasks only after the recovery reads that child")
+		}
+		close(g.open)
+		closeRuntime(t, r2)
+	})
+}
+
+func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release, calls := make(chan struct{}), atomic.Int32{}
+		f := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message {
+			if calls.Add(1) > 1 {
+				return nil
+			}
+			<-release
+			return []eventlog.Message{task("general-purpose", 1)}
+		})}
+		open, spawned := make(chan struct{}), 0
+		st := &hooked{Store: harness.NewMemStore(), before: func(id string) {
+			if id == "s1" {
+				if spawned++; spawned == 2 {
+					<-open
+				}
+			}
+		}}
+		r := familyRuntime(t, st, f, nil, config.Config{MaxConcurrentTasks: 2}, t.TempDir())
+		s := create(t, r)
+		submit(t, s, text("a", "delegate"))
+		first := children(t, r)[0].ID
+		submit(t, s, text("b", "delegate"))
+		close(release)
+		synctest.Wait()
+		close(open)
+		synctest.Wait()
+		if _, got := f.last(first, "task: max_concurrent_tasks 2"); got == "" {
+			t.Error("a child spawns beside a spawn of the root that has not settled its append, and the tree passes max_concurrent_tasks")
+		}
+		closeRuntime(t, r)
+	})
+}
+
+func TestASpawnOfAnUnsettledChildNeedsNoSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := familyRuntime(t, harness.NewMemStore(), &family{}, nil, config.Config{MaxConcurrentTasks: 1}, t.TempDir())
+		create(t, r)
+		for range 2 {
+			if err := r.SpawnChild(bg, "s1", "ses_kid", "general-purpose"); err != nil {
+				t.Errorf("SpawnChild of a child that max_concurrent_tasks 1 already counts = %v, want nil", err)
+			}
 		}
 		closeRuntime(t, r)
 	})

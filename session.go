@@ -22,6 +22,10 @@ type Session struct {
 	a  *session.Actor
 	r  *Runtime
 	id string
+	// root is the first ancestor of the session, or its own ID, and depth is
+	// the number of its ancestors.
+	root  string
+	depth int
 	// recovered closes once Open has settled or opened each unsettled child.
 	recovered chan struct{}
 }

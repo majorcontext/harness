@@ -76,7 +76,7 @@ func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Eve
 		frames := a.live.subscribe()
 		defer a.live.unsubscribe(frames)
 		place := func(f protocol.Event) bool {
-			return through(ctx, a.cfg.Log, &after, f.Seq, yield) && yield(f, nil)
+			return through(ctx, a.cfg.Store, &after, f.Seq, yield) && yield(f, nil)
 		}
 		for {
 			v := a.View()
@@ -90,7 +90,7 @@ func (a *Actor) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Eve
 					drained = true
 				}
 			}
-			if !through(ctx, a.cfg.Log, &after, v.Session.HeadSeq, yield) {
+			if !through(ctx, a.cfg.Store, &after, v.Session.HeadSeq, yield) {
 				return
 			}
 			if v.Stopped {

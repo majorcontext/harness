@@ -1,0 +1,371 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "waiting"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: crashed\n\n[harness: this turn was interrupted by a process restart and could not complete]"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delegate"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "prompt": "child work"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "waiting"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: crashed\n\n[harness: this turn was interrupted by a process restart and could not complete]"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "rest"
+          }
+        ]
+      }
+    ],
+    "kid": [
+      {
+        "id": "msg#7",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child work"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 6
+        }
+      }
+    },
+    "get_session.kid": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 4,
+        "id": "ses:kid",
+        "model": "anthropic/claude-fable-5",
+        "origin": "task",
+        "parent_id": "ses:a",
+        "status": "running",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "turn_id": "turn#1",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "get_session.kid#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 7,
+        "id": "ses:kid",
+        "last_turn": {
+          "error": "crashed",
+          "stop_reason": "interrupted",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "task",
+        "parent_id": "ses:a",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    }
+  }
+}

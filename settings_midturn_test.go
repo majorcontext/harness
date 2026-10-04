@@ -23,7 +23,7 @@ func TestSettingsChangeReachesTheNextModelCallOfARunningTurn(t *testing.T) {
 		first.emit(callTool("c1"))
 		first.end()
 		<-bash.started
-		model, effort := "test/other", "high"
+		model, effort := "fake/other", "high"
 		if _, err := s.Update(bg, protocol.SettingsPatch{Model: &model, Effort: &effort}); err != nil {
 			t.Fatal(err)
 		}
@@ -32,19 +32,19 @@ func TestSettingsChangeReachesTheNextModelCallOfARunningTurn(t *testing.T) {
 		if second.req.Model != model || second.req.Settings.Effort != effort {
 			t.Errorf("model call after the change = %s, %q; want %s, %q", second.req.Model, second.req.Settings.Effort, model, effort)
 		}
-		if first.req.Model != "test/model" {
-			t.Errorf("model call before the change = %s, want test/model", first.req.Model)
+		if first.req.Model != "fake/model" {
+			t.Errorf("model call before the change = %s, want fake/model", first.req.Model)
 		}
 		second.end()
 		closeRuntime(t, r)
 	})
 }
 
-// byModel owns the loop only for model test/own.
+// byModel owns the loop only for model fake/own.
 type byModel struct{ *fake }
 
 func (byModel) Capabilities(model string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: model == "test/own"}
+	return turn.Capabilities{OwnsLoop: model == "fake/own"}
 }
 
 func TestSettingsChangeToAnotherKindOfBackendWaitsForTheNextTurn(t *testing.T) {
@@ -60,14 +60,14 @@ func TestSettingsChangeToAnotherKindOfBackendWaitsForTheNextTurn(t *testing.T) {
 		first.emit(callTool("c1"))
 		first.end()
 		<-bash.started
-		own := "test/own"
+		own := "fake/own"
 		if _, err := s.Update(bg, protocol.SettingsPatch{Model: &own}); err != nil {
 			t.Fatal(err)
 		}
 		close(bash.release)
 		second := <-f.runs
-		if second.req.Model != "test/model" {
-			t.Errorf("model call after a change to a loop-owning model = %s, want test/model until the next turn", second.req.Model)
+		if second.req.Model != "fake/model" {
+			t.Errorf("model call after a change to a loop-owning model = %s, want fake/model until the next turn", second.req.Model)
 		}
 		second.end()
 		submit(t, s, text("b", "again"))

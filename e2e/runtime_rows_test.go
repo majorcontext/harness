@@ -64,7 +64,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bootstrap_cold_window_after_kill":                            pendingOn("phase 4"),
 	"builtin_commands_run_and_record":                             pendingOn("phase 4"),
 	"busy_deferred_goal_with_max_turns":                           deletedBy(specGoalDeferred),
-	"child_crash_recovered":                                       pendingOn("F11"),
+	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
 	"claudecode_compact_delegated":                                pendingOn("F20"),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),

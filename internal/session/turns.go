@@ -90,7 +90,7 @@ func sameJSON(x, y any) bool {
 
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
 		History: a.state.History(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model())}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
@@ -107,11 +107,11 @@ func (a *Actor) start(id string, inputIDs []string) {
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	tools, src := a.turnTools(r)
+	src := a.source(r)
 	t := &turnRun{a: a, r: r}
 	a.spawn(func() {
 		a.awaitWarm(r.ctx)
-		turn.Run(r.ctx, r.step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
+		turn.Run(r.ctx, r.step, a.cfg.Backend, req, src, t, a.cfg.Limits)
 	})
 }
 
@@ -241,11 +241,7 @@ func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.Stop
 		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: marker})
 	}
 	events = append(events, eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
-	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
-		return err
-	}
-	a.report()
-	return nil
+	return a.appendCtx(ctx, append(events, after...)...)
 }
 
 // closeOpen dismisses every open request unless keep is set, which closes its

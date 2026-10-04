@@ -18,10 +18,8 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
-	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -91,18 +89,15 @@ type Options struct {
 	// the newest message of the session when its first request left. Empty:
 	// no banner.
 	Version string
-
-	backend turn.Backend
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
 type Runtime struct {
-	store   Store
-	owner   Owner
-	sync    Sync
-	backend turn.Backend
-	tools   []turn.Tool
-	// models is nil when Options.backend runs every turn.
+	store Store
+	owner Owner
+	sync  Sync
+	tools []turn.Tool
+	// models routes each turn to the backend of its model.
 	models *models
 	limits turn.Limits
 	// prompt reads the system prompt of a session.
@@ -151,7 +146,7 @@ func New(opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
 		sessions:  map[string]*entry{},
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
@@ -164,7 +159,7 @@ func New(opts Options) (*Runtime, error) {
 	r.commandDirs = commandDirs(opts.WorkDir, opts.Config.CommandsDirs)
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
-		roots: map[string]string{}, quiet: map[string]int{}}
+		locks: map[string]*treeLock{}, quiet: map[string]int{}}
 	tools := opts.Tools
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
@@ -175,21 +170,15 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
-	names := map[string]bool{}
+	r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
-		name := t.Spec().Name
-		if name == "" || names[name] || r.taken(name) {
+		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
 		}
-		names[name] = true
 		r.tools = append(r.tools, t)
 	}
 	if r.owner == nil {
 		r.owner = newLocalOwner()
-	}
-	if r.backend == nil {
-		r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
-		r.backend = r.models
 	}
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
@@ -235,19 +224,14 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
 		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
-	return r.create(ctx, id, created, nil)
+	return r.create(ctx, id, launch{created: &created})
 }
 
-func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Session, error) {
-	if r.models != nil {
-		if err := r.models.check(c.Model, r.unowned(c.AllowedTools), r.named()); err != nil {
-			return nil, err
-		}
+func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
+	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
+		return nil, err
 	}
-	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
-		return session.Create(ctx, cfg, c, first)
-	})
+	return r.load(ctx, id, l)
 }
 
 func newSuffix() string { return strings.ToLower(rand.Text()) }
@@ -258,24 +242,21 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 	if err := checkName("session", id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		if c, err := r.created(ctx, id); err == nil {
-			cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
-		}
-		return session.Open(ctx, cfg)
-	})
+	return r.load(ctx, id, launch{})
 }
 
-// sessionTools returns the tools of a session with parent. A child has no
-// goal tool, as no goal of an engine child ever ran.
-func sessionTools(tools []turn.Tool, parent string) []turn.Tool {
-	if parent == "" {
-		return tools
-	}
-	return slices.DeleteFunc(tools, func(t turn.Tool) bool { _, ok := t.(goalTool); return ok })
+// launch is how a load starts a session that this runtime does not run yet.
+type launch struct {
+	// created and first start a new session. A nil created opens the session
+	// from its log.
+	created *eventlog.SessionCreated
+	first   *eventlog.InputAdmitted
+	// profile is the agent profile of the session, when the caller has read
+	// it.
+	profile *prompt.Profile
 }
 
-func (r *Runtime) load(ctx context.Context, id string, create bool, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, error) {
 	for {
 		r.mu.Lock()
 		if r.closed {
@@ -288,19 +269,19 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.sessions[id] = e
 			r.group.Add(1)
 			r.mu.Unlock()
-			e.s, e.err = r.start(ctx, id, e, start)
+			e.s, e.err = r.start(ctx, id, e, l)
 			if e.err != nil {
 				r.forget(id, e)
 			}
 			close(e.ready)
 			if e.err == nil {
-				r.run(id, e.s, create)
+				r.run(e.s, l.created != nil)
 			}
 			r.group.Done()
 			return e.s, e.err
 		}
 		r.mu.Unlock()
-		if create {
+		if l.created != nil {
 			return nil, fmt.Errorf("%w: %s", ErrSessionExists, id)
 		}
 		select {
@@ -325,14 +306,14 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 
 // run runs session s after load publishes it, so a tool of its first run
 // finds it. An opened session then settles or opens its unsettled children.
-func (r *Runtime) run(id string, s *Session, create bool) {
+func (r *Runtime) run(s *Session, create bool) {
 	s.a.Run()
 	if create {
 		close(s.recovered)
 		return
 	}
 	r.group.Go(func() {
-		r.recoverChildren(id, s.a)
+		r.recoverChildren(s.a)
 		close(s.recovered)
 	})
 }
@@ -345,7 +326,7 @@ func (r *Runtime) forget(id string, e *entry) {
 	}
 }
 
-func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
@@ -356,20 +337,36 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
+	var c eventlog.SessionCreated
+	if l.created != nil {
+		c = *l.created
+	} else if c, err = r.created(ctx, id); err != nil {
+		own.Release()
+		return nil, err
+	}
+	root, depth, err := r.tree(ctx, id, c.ParentID)
+	if err != nil {
+		own.Release()
+		return nil, err
+	}
+	profile := r.profile(c.Agent, l.profile)
+	var plug *pluginsrc.Session
+	if r.plugins != nil {
+		plug = r.plugins.Session(id)
+	}
 	cfg := session.Config{
 		ID:              id,
-		Log:             storeLog{r.store, id},
-		Blobs:           storeLog{r.store, id},
+		Store:           storeLog{r.store, id},
 		Ownership:       own,
 		Owner:           r.name(),
-		Backend:         r.backend,
+		Backend:         r.models,
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Tools:           r.bind(id),
-		Prompt:          r.instructions(),
-		Report:          r.report,
-		Agent:           r.agent(),
+		Source:          r.source(id, c.ParentID != "", plug),
+		Retain:          r.workDir != "",
+		Prompt:          r.instructions(c.Agent, profile),
+		Appended:        r.appended(id, plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
 		Threshold:       r.threshold,
@@ -377,73 +374,66 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Base:            r.base,
 		Go:              r.group.Go,
 		Done:            func() { r.forget(id, e) },
+		Check:           r.changeModel,
 	}
-	if r.models != nil {
-		cfg.Check = func(from, to string, names []string) error {
-			return r.models.change(from, to, r.unowned(names), r.named())
-		}
+	var a *session.Actor
+	if l.created != nil {
+		a, err = session.Create(ctx, cfg, c, l.first)
+	} else {
+		a, err = session.Open(ctx, cfg)
 	}
-	var srcs turn.Sources
-	if r.mcp != nil {
-		srcs = append(srcs, mcpTools{r.mcp, r.backend})
-	}
-	if r.plugins != nil {
-		p := r.plugins.Session(id)
-		srcs, cfg.Appended = append(srcs, p), p.Appended
-	}
-	if srcs != nil {
-		cfg.Source = srcs
-	}
-	a, err := start(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
+	return &Session{a: a, r: r, id: id, root: root, depth: depth, recovered: make(chan struct{})}, nil
 }
 
-// mcpTools gives the MCP tools to each turn whose backend does not connect
-// the servers itself.
-type mcpTools struct {
-	src     *mcpsrc.Source
-	backend turn.Backend
-}
-
-func (m mcpTools) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
-	if allowed == nil && m.backend.Capabilities(model).OwnsMCP {
-		return turn.Toolset{}
+// profile returns the agent profile of a session: read, or read from the
+// WorkDir now. The zero profile is no profile.
+func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
+	switch {
+	case read != nil:
+		return *read
+	case agent == "":
+		return prompt.Profile{}
 	}
-	return m.src.Toolset(ctx, history, allowed, model)
+	return prompt.Profiles(r.workDir)[agent]
 }
 
 // instructions reads the system prompt of a session once and returns the
 // system prompt of each of its turns: that prompt, the prompt of its agent
-// profile, and the process status. The actor calls it from one goroutine.
-func (r *Runtime) instructions() func(agent string) string {
-	p, read := r.prompt(), false
-	return func(agent string) string {
-		if !read && agent != "" {
-			p = strings.Trim(p+"\n\n"+prompt.Profiles(r.workDir)[agent].Prompt, "\n")
-		}
-		read = true
+// profile, and the process status.
+func (r *Runtime) instructions(agent string, p prompt.Profile) func() string {
+	base := r.prompt()
+	if agent != "" {
+		base = strings.Trim(base+"\n\n"+p.Prompt, "\n")
+	}
+	return func() string {
 		if r.procs == nil {
-			return p
+			return base
 		}
 		if s := processStatus(r.procs, r.workDir); s != "" {
-			return strings.Join([]string{p, message.RenderEngineContext(s)}, "\n\n")
+			return strings.Join([]string{base, message.RenderEngineContext(s)}, "\n\n")
 		}
-		return p
+		return base
 	}
 }
 
-// bind returns the tools of session id, with each session tool bound to id.
-func (r *Runtime) bind(id string) []turn.Tool {
-	tools := slices.Clone(r.tools)
-	for i, t := range tools {
-		if b, ok := t.(interface{ bind(string) turn.Tool }); ok {
-			tools[i] = b.bind(id)
+// appended gives the events of session id to its plugins, and reports the
+// end of a turn of a child to its parent.
+func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]eventlog.Event, *eventlog.State) {
+	return func(events []eventlog.Event, st *eventlog.State) {
+		if plug != nil {
+			plug.Appended(events)
+		}
+		parent := st.Summary().ParentID
+		if parent == "" || !slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.TurnEnded); return ok }) {
+			return
+		}
+		if s, text, ok := session.Settlement(id, st); ok {
+			r.report(parent, s, text)
 		}
 	}
-	return tools
 }
 
 // running returns session id when this runtime runs it, or nil.
@@ -579,28 +569,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 		<-stopped
 	}
 	r.cancel()
-	if r.models != nil {
-		r.models.Close()
-	}
+	r.models.Close()
 	r.closeTools(ctx)
 	return errors.Join(errs...)
-}
-
-// unowned returns the allowed names that the Options.Tools and the backend
-// do not own. The MCP source owns its names, which depend on the servers.
-func (r *Runtime) unowned(names []string) []string {
-	if r.mcp == nil {
-		return names
-	}
-	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
-}
-
-// named returns the Options.Tools and the plugin tools, for their names.
-func (r *Runtime) named() []turn.Tool {
-	if r.plugins == nil {
-		return r.tools
-	}
-	return append(slices.Clip(r.tools), r.plugins.Tools()...)
 }
 
 // hold adds one unit of the work that Close waits for, unless Close started.
@@ -628,37 +599,14 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	return r.plugins.Start(ctx, func(name string) bool {
-		return r.taken(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
-	})
+	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
 }
 
-// agent returns the file tools of a new session. Each session gets its own:
-// the read guard of write_file belongs to one session. nil without a WorkDir.
-func (r *Runtime) agent() []turn.Tool {
-	if r.workDir == "" {
-		return nil
-	}
-	return builtin.Tools(r.workDir)
-}
-
-// taken reports whether name belongs to a tool that the runtime provides.
-func (r *Runtime) taken(name string) bool {
-	return name == turn.HistoryTool || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name)
-}
-
-// builtin reports whether name is a built-in tool of the WorkDir.
-func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName)
-}
-
-// history returns the conversation of session id from the store.
+// history returns the conversation of session id.
 func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, error) {
-	st, err := session.Load(ctx, id, storeLog{r.store, id})
-	if err != nil {
-		return nil, err
-	}
-	return st.History(), nil
+	var h []eventlog.Message
+	err := r.read(ctx, id, func(st *eventlog.State) { h = st.History() })
+	return h, err
 }
 
 // closeTools stops the processes, the plugins, and the MCP servers, and
@@ -717,9 +665,4 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
-func (r *Runtime) Models() []protocol.Model {
-	if r.models == nil {
-		return []protocol.Model{}
-	}
-	return r.models.list()
-}
+func (r *Runtime) Models() []protocol.Model { return r.models.list() }

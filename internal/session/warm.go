@@ -19,9 +19,9 @@ func (a *Actor) warm() {
 	if _, ok := a.cfg.Backend.(turn.Warmer); !ok {
 		return
 	}
-	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
+	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
 		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
-	tools, src := a.turnTools(&running{ownsLoop: a.cfg.Backend.Capabilities(req.Model).OwnsLoop})
+	src := a.source(&running{})
 	warming := make(chan struct{})
 	a.warming = warming
 	a.cfg.Go(func() {
@@ -35,7 +35,7 @@ func (a *Actor) warm() {
 			case <-ctx.Done():
 			}
 		}()
-		_ = turn.Warm(ctx, a.cfg.Backend, req, tools, src)
+		_ = turn.Warm(ctx, a.cfg.Backend, req, src)
 	})
 }
 

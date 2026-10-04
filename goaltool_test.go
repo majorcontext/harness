@@ -88,7 +88,7 @@ func TestGoalTool(t *testing.T) {
 					}
 					return []eventlog.Message{say("ok")}
 				})}
-				r := goalRuntime(t, f, "test/eval")
+				r := goalRuntime(t, f, "fake/eval")
 				submit(t, create(t, r), text("a", "go"))
 				if got := f.results("s1"); !slices.Equal(got, tc.want) {
 					t.Errorf("results =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
@@ -108,9 +108,9 @@ func TestGoalToolIsOffered(t *testing.T) {
 		want           bool
 	}{
 		{name: "a runtime with no goal_evaluator_model offers no goal tool"},
-		{name: "a root session gets the goal tool", evaluator: "test/eval", want: true},
-		{name: "a child gets no goal tool", evaluator: "test/eval", child: true},
-		{name: "a child opened after a restart gets no goal tool", evaluator: "test/eval", child: true, restart: true},
+		{name: "a root session gets the goal tool", evaluator: "fake/eval", want: true},
+		{name: "a child gets no goal tool", evaluator: "fake/eval", child: true},
+		{name: "a child opened after a restart gets no goal tool", evaluator: "fake/eval", child: true, restart: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -149,7 +149,7 @@ func TestGoalToolSetPostsTheConditionAsATurnOfItsOwn(t *testing.T) {
 			}
 			return []eventlog.Message{say("ok")}
 		})}
-		r := goalRuntime(t, f, "test/eval")
+		r := goalRuntime(t, f, "fake/eval")
 		submit(t, create(t, r), text("a", "go"))
 		judged := 0
 		for _, req := range f.reqs {
@@ -174,7 +174,7 @@ func TestGoalToolAdjustKeepsTheTurnLimit(t *testing.T) {
 			}
 			return []eventlog.Message{say("working")}
 		})}
-		r := goalRuntime(t, f, "test/eval")
+		r := goalRuntime(t, f, "fake/eval")
 		s := create(t, r)
 		if err := s.SetGoal(bg, protocol.Goal{Condition: "say done", MaxTurns: 2}); err != nil {
 			t.Fatal(err)

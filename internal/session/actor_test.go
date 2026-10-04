@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -51,13 +53,13 @@ func (*lease) Epoch() uint64           { return 1 }
 func (l *lease) Lost() <-chan struct{} { return l.lost }
 func (l *lease) Release()              { l.released.Store(true) }
 
-func actorConfig(t *testing.T, log Log, own Ownership, b turn.Backend) Config {
+func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Config {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return Config{ID: "s1", Log: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func() {},
-		Prompt: func(string) string { return "" }}
+	return Config{ID: "s1", Store: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func() {},
+		Prompt: func() string { return "" }}
 }
 
 func firstInput() *eventlog.InputAdmitted {
@@ -138,5 +140,70 @@ func TestAStoppedActorReleasesAfterItsTurnExits(t *testing.T) {
 		if !own.released.Load() {
 			t.Fatal("the ownership was not released after the turn exited")
 		}
+	})
+}
+
+func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
+	cfg := actorConfig(t, &memLog{}, owned{}, newHeldBackend(false))
+	var heads []uint64
+	cfg.Appended = func(_ []eventlog.Event, st *eventlog.State) { heads = append(heads, st.Head()) }
+	if _, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := []uint64{2}; !slices.Equal(heads, want) {
+		t.Errorf("heads seen by Appended = %v, want %v", heads, want)
+	}
+}
+
+func TestReadGivesTheLiveStateToTheCallerAndStopsWithTheActor(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, firstInput())
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		<-b.ran
+		var turnID string
+		if err := a.Read(context.Background(), func(st *eventlog.State) { t, _ := st.Turn(); turnID = t.ID }); err != nil || turnID == "" {
+			t.Errorf("Read during a turn = %v, turn %q, want the running turn", err, turnID)
+		}
+		close(own.lost)
+		synctest.Wait()
+		if err := a.Read(context.Background(), func(*eventlog.State) { t.Error("Read ran after the actor stopped") }); !errors.Is(err, ErrNotOwned) {
+			t.Errorf("Read after the actor stopped = %v, want ErrNotOwned", err)
+		}
+		close(b.gate)
+		<-a.Done()
+	})
+}
+
+func TestReadReturnsAfterItsFunctionHasFinishedWhenTheCallerLeaves(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		ctx, cancel := context.WithCancel(context.Background())
+		gate, finished, returned := make(chan struct{}), false, false
+		go func() {
+			_ = a.Read(ctx, func(*eventlog.State) { <-gate; finished = true })
+			returned = true
+		}()
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		if returned {
+			t.Error("Read returned while its function still ran on the actor goroutine, so the caller could read what the function writes")
+		}
+		close(gate)
+		synctest.Wait()
+		if !returned || !finished {
+			t.Errorf("after the function ended: returned = %v, finished = %v, want both", returned, finished)
+		}
+		close(own.lost)
+		<-a.Done()
 	})
 }

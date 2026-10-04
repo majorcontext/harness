@@ -14,9 +14,9 @@ type WarmGate interface {
 	CanWarm(model string) bool
 }
 
-// Warm warms b with req described as the first model call, with tools and
-// src. A model that cannot warm costs no tool discovery and no hook.
-func Warm(ctx context.Context, b Backend, req Request, tools []Tool, src Source) error {
+// Warm warms b with req described as the first model call, with the tools
+// of src. A model that cannot warm costs no tool discovery and no hook.
+func Warm(ctx context.Context, b Backend, req Request, src Source) error {
 	w, ok := b.(Warmer)
 	if !ok {
 		return nil
@@ -24,6 +24,6 @@ func Warm(ctx context.Context, b Backend, req Request, tools []Tool, src Source)
 	if g, ok := b.(WarmGate); ok && !g.CanWarm(req.Model) {
 		return nil
 	}
-	describe(ctx, &req, tools, src, b.Capabilities(req.Model).OwnsLoop)
+	describe(ctx, &req, src, b.Capabilities(req.Model).OwnsLoop)
 	return w.Warm(ctx, req)
 }

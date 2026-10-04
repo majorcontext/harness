@@ -37,7 +37,8 @@ const goalSchema = `{
 const adjustInstead = `use action "adjust" to change its condition instead`
 
 // goalTool lets the model read, set, and adjust the goal of its session.
-// The runtime binds session when the session starts.
+// The runtime binds session when the session starts. A child session has no
+// goal tool, as no goal of an engine child ever ran.
 type goalTool struct {
 	r       *Runtime
 	session string
@@ -47,7 +48,13 @@ func (goalTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "goal", Description: goalDescription, InputSchema: json.RawMessage(goalSchema)}
 }
 
-func (t goalTool) bind(id string) turn.Tool { t.session = id; return t }
+func (t goalTool) bind(id string, child bool) turn.Tool {
+	if child {
+		return nil
+	}
+	t.session = id
+	return t
+}
 
 func (t goalTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in struct{ Action, Condition string }

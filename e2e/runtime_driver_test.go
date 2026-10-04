@@ -60,6 +60,31 @@ func (d *runtimeDriver) start(t *testing.T) {
 		t.Fatalf("harness.New: %v", err)
 	}
 	d.rt, d.srv = rt, httptest.NewServer(rt.Handler())
+	d.openAll(t)
+}
+
+// openAll opens each session of the store, as an embedder does when it
+// starts: a route that only reads a session never opens it, so a turn or a
+// queued input that a restart left resumes here.
+func (d *runtimeDriver) openAll(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+	defer cancel()
+	for after := ""; ; {
+		page, err := d.rt.List(ctx, protocol.ListSessions{After: after})
+		if err != nil {
+			t.Fatalf("list sessions: %v", err)
+		}
+		for _, s := range page.Sessions {
+			if _, err := d.rt.Open(ctx, s.ID); err != nil {
+				t.Fatalf("open %s: %v", s.ID, err)
+			}
+		}
+		if page.Next == "" {
+			return
+		}
+		after = page.Next
+	}
 }
 
 // stop closes the runtime first, which ends its event streams, then the server.

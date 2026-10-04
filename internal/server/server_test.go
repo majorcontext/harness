@@ -309,6 +309,7 @@ func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) err
 
 func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }
 func (s stub) Open(context.Context, string) (stub, error)                   { return s, s.openErr }
+func (s stub) Read(context.Context, string) (server.Reader, error)          { return reader{s}, s.openErr }
 func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, error) {
 	return protocol.SessionPage{}, nil
 }
@@ -328,6 +329,11 @@ func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { r
 func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, bool, error) {
 	return s.receipt, s.repeat, nil
 }
+
+// reader is a stub as a server.Reader.
+type reader struct{ stub }
+
+func (r reader) Session() protocol.Session { return r.View() }
 
 func TestInternalErrorHidesItsCause(t *testing.T) {
 	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, server.Options{}))

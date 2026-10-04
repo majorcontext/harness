@@ -183,7 +183,7 @@ func runtime(t *testing.T, st harness.Store, b turn.Backend) *harness.Runtime {
 
 func create(t *testing.T, r *harness.Runtime) *harness.Session {
 	t.Helper()
-	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "test/model", Origin: "test"})
+	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model", Origin: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,5 +417,20 @@ func TestRetryableErrors(t *testing.T) {
 				closeRuntime(t, r)
 			})
 		})
+	}
+}
+
+func TestRuntimeOnABackendValidatesModelsAsProductionDoes(t *testing.T) {
+	r := runtime(t, harness.NewMemStore(), newFake())
+	t.Cleanup(func() { _ = r.Close(bg) })
+	if _, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "nope/model"}); !errors.Is(err, harness.ErrModelUnavailable) {
+		t.Errorf("Create on a provider that no backend serves = %v, want %v", err, harness.ErrModelUnavailable)
+	}
+	s, err := r.Create(bg, protocol.CreateSession{ID: "s2", Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(bg, protocol.SettingsPatch{Model: new("nope/model")}); !errors.Is(err, harness.ErrModelUnavailable) {
+		t.Errorf("Update to a provider that no backend serves = %v, want %v", err, harness.ErrModelUnavailable)
 	}
 }
