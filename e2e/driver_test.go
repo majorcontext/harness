@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,7 +26,9 @@ type driver interface {
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)
 	Messages(t *testing.T, id string) []transcriptMessage
-	Events(t *testing.T) []journalEntry
+	// Journals returns each event journal: one for the instance, or one
+	// for each session where each session has its own seq.
+	Journals(t *testing.T) [][]journalEntry
 	Restart(t *testing.T, kill bool)
 	Queued(t *testing.T, id string) []string
 	AwaitGoalExhausted(t *testing.T)
@@ -75,6 +76,8 @@ var waitMargin = 10 * time.Second
 
 type httpDriver struct {
 	sessDir, workDir, config string
+	env                      map[string]string
+	args                     []string
 	p                        *serveProc
 	enqSeq                   map[string]int64
 }
@@ -86,16 +89,30 @@ func newHTTPDriver(t *testing.T, modelURL string) *httpDriver {
 
 func newHTTPDriverWith(t *testing.T, modelURL string, extra map[string]any) *httpDriver {
 	t.Helper()
+	return newHTTPDriverAt(t, writeGoalConfigWith(t, modelURL, scenarioConfig(extra)), nil)
+}
+
+// scenarioConfig is the served config of a scenario: extra over the defaults.
+func scenarioConfig(extra map[string]any) map[string]any {
 	cfg := map[string]any{"context_window_tokens": 1_000_000} // the modelmeta table is bot-refreshed
 	maps.Copy(cfg, extra)
-	d := &httpDriver{
-		sessDir: t.TempDir(),
-		workDir: t.TempDir(),
-		config:  writeGoalConfigWith(t, modelURL, cfg),
-		enqSeq:  map[string]int64{},
-	}
-	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
+	return cfg
+}
+
+// newHTTPDriverAt starts serve on configPath with env added to its
+// environment and args after its flags.
+func newHTTPDriverAt(t *testing.T, configPath string, env map[string]string, args ...string) *httpDriver {
+	t.Helper()
+	d := &httpDriver{sessDir: t.TempDir(), workDir: t.TempDir(), config: configPath, env: env, args: args, enqSeq: map[string]int64{}}
+	d.p = d.serve(t)
 	return d
+}
+
+func (d *httpDriver) serve(t *testing.T) *serveProc {
+	t.Helper()
+	env := map[string]string{"HARNESS_SESSION_DIR": d.sessDir, "HARNESS_CONFIG": d.config, "ANTHROPIC_API_KEY": "e2e-dummy-key"}
+	maps.Copy(env, d.env)
+	return startServeProc(t, freeAddr, d.workDir, env, d.args...)
 }
 
 func (d *httpDriver) expect(t *testing.T, want int, method, path string, body any) []byte {
@@ -208,9 +225,9 @@ func journalOf(events []apiEvent) []journalEntry {
 	return out
 }
 
-// Events reads the journal from the start up to the tip observed first, so the
-// read ends on an event count, not a deadline.
-func (d *httpDriver) Events(t *testing.T) []journalEntry {
+// Journals reads the journal from the start up to the tip observed first, so
+// the read ends on an event count, not a deadline.
+func (d *httpDriver) Journals(t *testing.T) [][]journalEntry {
 	t.Helper()
 	var tip struct {
 		Seq int64 `json:"seq"`
@@ -234,7 +251,7 @@ func (d *httpDriver) Events(t *testing.T) []journalEntry {
 	if err != nil {
 		t.Fatalf("event stream ended at %d events before tip %d: %v\nstderr:\n%s", len(events), tip.Seq, err, d.Stderr())
 	}
-	return journalOf(events)
+	return [][]journalEntry{journalOf(events)}
 }
 
 func (d *httpDriver) Queued(t *testing.T, id string) []string {
@@ -253,21 +270,16 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 	} else {
 		d.p.terminate(t)
 	}
-	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
+	d.p = d.serve(t)
 }
 
 func (d *httpDriver) call(t *testing.T, method, path string, body any) callResult {
 	t.Helper()
 	resp, data := d.p.do(method, path, body)
 	res := callResult{Status: resp.StatusCode}
-	if len(bytes.TrimSpace(data)) == 0 {
+	v := decodeBody(t, method+" "+path, data)
+	if v == nil {
 		return res
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		t.Fatalf("%s %s: decode body: %v (%s)", method, path, err, data)
 	}
 	if obj, ok := v.(map[string]any); ok {
 		if list, ok := obj["messages"].([]any); ok {

@@ -190,10 +190,11 @@ func positive[T int | float64](v, def T) T {
 	return v
 }
 
-// Create creates a session and runs it.
+// Create creates a session and runs it. An empty model is Config.Model, or
+// config.DefaultModel.
 func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Session, error) {
 	if req.Model == "" {
-		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
+		req.Model = r.resolve("")
 	}
 	if err := r.startPlugins(ctx); err != nil {
 		return nil, err

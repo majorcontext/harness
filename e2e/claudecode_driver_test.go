@@ -9,31 +9,44 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/majorcontext/harness/protocol"
 )
 
 // fakeClaudePath is the harnesstest/fakeclaude binary that buildHarness
 // compiles beside the harness binary.
 func fakeClaudePath() string { return filepath.Join(filepath.Dir(harnessBin), "fakeclaude") }
 
-// claudeLane describes one serve process whose default model is the
-// delegated claude-code backend, run against fakeclaude in the given mode.
+// claudeLane describes one host whose default model is the delegated
+// claude-code backend, run against fakeclaude in the given mode.
 type claudeLane struct {
 	mode string
 	ask  bool           // pass --ask-user-question to serve
 	mcp  map[string]any // config mcp_servers
 }
 
-// claudeDriver is an httpDriver whose serve process delegates to fakeclaude.
-type claudeDriver struct {
-	*httpDriver
-	lane     claudeLane
-	argvLog  string
-	stdinLog string
-	mcpLog   string
-	stateDir string
+// claudeLogs are the files where fakeclaude records what it received.
+type claudeLogs struct {
+	argvLog, stdinLog, mcpLog, stateDir string
 }
 
-func (l claudeLane) newDriver(t *testing.T, modelURL string) driver {
+func (l claudeLogs) env(mode string) map[string]string {
+	return map[string]string{
+		"FAKE_CLAUDE_MODE":           mode,
+		"FAKE_CLAUDE_LOG":            l.argvLog,
+		"FAKE_CLAUDE_STDIN_LOG":      l.stdinLog,
+		"FAKE_CLAUDE_MCP_CONFIG_LOG": l.mcpLog,
+		"FAKE_CLAUDE_STATE":          filepath.Join(l.stateDir, "parked"),
+	}
+}
+
+// claudeDriver is the driver of a host that delegates to fakeclaude.
+type claudeDriver struct {
+	laneHost
+	claudeLogs
+}
+
+func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	t.Helper()
 	cfg := map[string]any{
 		"model": "claude-code/sonnet",
@@ -45,46 +58,14 @@ func (l claudeLane) newDriver(t *testing.T, modelURL string) driver {
 	if l.mcp != nil {
 		cfg["mcp_servers"] = l.mcp
 	}
-	d := &claudeDriver{lane: l, stateDir: t.TempDir()}
-	d.mcpLog = filepath.Join(d.stateDir, "mcp-config.jsonl")
-	d.argvLog = filepath.Join(d.stateDir, "argv.jsonl")
-	d.stdinLog = filepath.Join(d.stateDir, "stdin.jsonl")
-	d.httpDriver = &httpDriver{
-		sessDir: t.TempDir(),
-		workDir: t.TempDir(),
-		config:  writeGoalConfigWith(t, modelURL, cfg),
-		enqSeq:  map[string]int64{},
-	}
-	d.p = d.serve(t)
-	return d
-}
-
-func (d *claudeDriver) serve(t *testing.T) *serveProc {
-	t.Helper()
+	stateDir := t.TempDir()
+	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"),
+		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
 	var args []string
-	if d.lane.ask {
+	if l.ask {
 		args = append(args, "--ask-user-question")
 	}
-	return startServeProc(t, freeAddr, d.workDir, map[string]string{
-		"HARNESS_SESSION_DIR":        d.sessDir,
-		"HARNESS_CONFIG":             d.config,
-		"ANTHROPIC_API_KEY":          "e2e-dummy-key",
-		"FAKE_CLAUDE_MODE":           d.lane.mode,
-		"FAKE_CLAUDE_LOG":            d.argvLog,
-		"FAKE_CLAUDE_STDIN_LOG":      d.stdinLog,
-		"FAKE_CLAUDE_MCP_CONFIG_LOG": d.mcpLog,
-		"FAKE_CLAUDE_STATE":          filepath.Join(d.stateDir, "parked"),
-	}, args...)
-}
-
-func (d *claudeDriver) Restart(t *testing.T, kill bool) {
-	t.Helper()
-	if kill {
-		d.p.kill()
-	} else {
-		d.p.terminate(t)
-	}
-	d.p = d.serve(t)
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode), args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
@@ -96,14 +77,24 @@ func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
 	return d
 }
 
+// serveLaneOf is the serve process of a claude lane, for an action that
+// reads a route that only serve has.
+func serveLaneOf(t *testing.T, r *run) *httpDriver {
+	t.Helper()
+	d, ok := claudeDriverOf(t, r).laneHost.(*httpDriver)
+	if !ok {
+		t.Fatalf("scenario action reads a serve route, the host is %T", claudeDriverOf(t, r).laneHost)
+	}
+	return d
+}
+
 // claudeInvocations records, for each fakeclaude spawn in order, the argv
 // facts a delegated turn depends on. The argv carries ports and temp paths,
 // so only stable facts are kept.
 type claudeInvocations struct{ as string }
 
 func (a claudeInvocations) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	f, err := os.Open(d.argvLog)
+	f, err := os.Open(claudeDriverOf(t, r).argvLog)
 	if err != nil {
 		t.Fatalf("open argv log: %v", err)
 	}
@@ -148,8 +139,7 @@ func argvFacts(argv []string) map[string]any {
 type claudeMCPConfig struct{ as string }
 
 func (a claudeMCPConfig) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	data, err := os.ReadFile(d.mcpLog)
+	data, err := os.ReadFile(claudeDriverOf(t, r).mcpLog)
 	if err != nil {
 		t.Fatalf("read mcp config log: %v", err)
 	}
@@ -179,9 +169,8 @@ func (a claudeMCPConfig) run(t *testing.T, r *run) {
 type claudeInputs struct{ as string }
 
 func (a claudeInputs) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
 	out := []any{}
-	if f, err := os.Open(d.stdinLog); err == nil {
+	if f, err := os.Open(claudeDriverOf(t, r).stdinLog); err == nil {
 		defer func() { _ = f.Close() }()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
@@ -223,8 +212,12 @@ type claudeAwaitText struct{ as, text string }
 
 func (a claudeAwaitText) run(t *testing.T, r *run) {
 	t.Helper()
-	id := r.id(t, a.as)
-	err := claudeDriverOf(t, r).scan(t, func(raw []byte) bool {
+	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
+}
+
+func (d *httpDriver) awaitAssistantText(t *testing.T, id, text string) {
+	t.Helper()
+	err := d.scan(t, func(raw []byte) bool {
 		var ev struct {
 			Type      string `json:"type"`
 			SessionID string `json:"session_id"`
@@ -239,14 +232,14 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 			return false
 		}
 		for _, p := range ev.Message.Parts {
-			if strings.Contains(p.Text, a.text) {
+			if strings.Contains(p.Text, text) {
 				return true
 			}
 		}
 		return false
 	})
 	if err != nil {
-		t.Fatalf("no assistant message containing %q: %v\nstderr:\n%s", a.text, err, r.drv.Stderr())
+		t.Fatalf("no assistant message containing %q: %v\nstderr:\n%s", text, err, d.Stderr())
 	}
 }
 
@@ -258,9 +251,12 @@ type claudeAnswer struct {
 }
 
 func (a claudeAnswer) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	path := "/session/" + r.id(t, a.as) + "/question/" + a.callID + "/answer"
-	r.record(t, "answer_question", a.as, d.call(t, http.MethodPost, path, map[string]any{"answers": a.answers}))
+	r.record(t, "answer_question", a.as, claudeDriverOf(t, r).answerQuestion(t, r.id(t, a.as), a.callID, a.answers))
+}
+
+func (d *httpDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/question/"+callID+"/answer", map[string]any{"answers": answers})
 }
 
 // claudeHistoryTool calls get_conversation_history on the session's hosted MCP
@@ -268,12 +264,16 @@ func (a claudeAnswer) run(t *testing.T, r *run) {
 type claudeHistoryTool struct{ as string }
 
 func (a claudeHistoryTool) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
+	r.record(t, "history_tool", a.as, serveLaneOf(t, r).historyTool(t, r.id(t, a.as)))
+}
+
+func (d *httpDriver) historyTool(t *testing.T, id string) callResult {
+	t.Helper()
 	rpc := map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{"name": "get_conversation_history", "arguments": map[string]any{}},
 	}
-	r.record(t, "history_tool", a.as, d.call(t, http.MethodPost, "/session/"+r.id(t, a.as)+"/mcp", rpc))
+	return d.call(t, http.MethodPost, "/session/"+id+"/mcp", rpc)
 }
 
 // claudeSession records GET /session/{id} without the journal seq, and with
@@ -281,10 +281,8 @@ func (a claudeHistoryTool) run(t *testing.T, r *run) {
 type claudeSession struct{ as string }
 
 func (a claudeSession) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	res := d.call(t, http.MethodGet, "/session/"+r.id(t, a.as), nil)
+	res := claudeDriverOf(t, r).GetSession(t, r.id(t, a.as))
 	if body, ok := res.Body.(map[string]any); ok {
-		delete(body, "seq")
 		if sub, ok := body["subscription_usage"].(map[string]any); ok && sub["captured_at"] != json.Number("0") {
 			sub["captured_at"] = "<time>"
 		}
@@ -297,8 +295,12 @@ func (a claudeSession) run(t *testing.T, r *run) {
 type claudeMessageParents struct{ as string }
 
 func (a claudeMessageParents) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	resp, data := d.p.do(http.MethodGet, "/session/"+r.id(t, a.as)+"/message", nil)
+	r.record(t, "message_parents", a.as, serveLaneOf(t, r).messageParents(t, r.id(t, a.as)))
+}
+
+func (d *httpDriver) messageParents(t *testing.T, id string) callResult {
+	t.Helper()
+	resp, data := d.p.do(http.MethodGet, "/session/"+id+"/message", nil)
 	var msgs []struct {
 		Role   string `json:"role"`
 		Parent string `json:"parent_tool_use_id"`
@@ -310,7 +312,7 @@ func (a claudeMessageParents) run(t *testing.T, r *run) {
 	for _, m := range msgs {
 		out = append(out, map[string]any{"role": m.Role, "parent_tool_use_id": m.Parent})
 	}
-	r.record(t, "message_parents", a.as, callResult{Status: resp.StatusCode, Body: out})
+	return callResult{Status: resp.StatusCode, Body: out}
 }
 
 // claudeJournalEvents records the type and compaction fields of the session's
@@ -318,8 +320,12 @@ func (a claudeMessageParents) run(t *testing.T, r *run) {
 type claudeJournalEvents struct{ as, prefix string }
 
 func (a claudeJournalEvents) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	id := r.id(t, a.as)
+	events := claudeDriverOf(t, r).journalEvents(t, r.id(t, a.as), a.prefix)
+	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
+}
+
+func (d *httpDriver) journalEvents(t *testing.T, id, prefix string) []any {
+	t.Helper()
 	var tip struct {
 		Seq int64 `json:"seq"`
 	}
@@ -339,7 +345,7 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 		if json.Unmarshal(raw, &ev) != nil || ev.Seq == 0 {
 			return false
 		}
-		if ev.SessionID == id && strings.HasPrefix(ev.Type, a.prefix) {
+		if ev.SessionID == id && strings.HasPrefix(ev.Type, prefix) {
 			events = append(events, map[string]any{
 				"type": ev.Type, "trigger": ev.Trigger, "pre_tokens": ev.PreTokens, "post_tokens": ev.PostTokens,
 			})
@@ -349,5 +355,49 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 	if err != nil {
 		t.Fatalf("journal scan: %v\nstderr:\n%s", err, d.Stderr())
 	}
-	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
+	return events
+}
+
+var (
+	_ laneHost = (*httpDriver)(nil)
+	_ laneHost = (*runtimeDriver)(nil)
+)
+
+// awaitAssistantText also takes the streamed text: the CLI can wait for
+// input before its message completes.
+func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
+	t.Helper()
+	var streamed strings.Builder
+	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
+		switch ev.Kind {
+		case protocol.KindItemDelta:
+			streamed.WriteString(decodeEvent[protocol.ItemFrame](t, ev).Text)
+			return strings.Contains(streamed.String(), text)
+		case "item.completed":
+			it := decodeEvent[logItem](t, ev)
+			return it.Message.Role == "assistant" && strings.Contains(partsText(it.Message.Parts), text)
+		}
+		return false
+	})
+}
+
+func (d *runtimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, map[string]any{"answer": answers})
+}
+
+// journalEvents lists the durable events of session id whose kind starts
+// with prefix, with the fields of a compaction.
+func (d *runtimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
+	t.Helper()
+	out := []any{}
+	for _, ev := range d.events(t, id) {
+		if strings.HasPrefix(ev.Kind, prefix) {
+			c := decodeEvent[struct {
+				ByBackend bool `json:"by_backend"`
+			}](t, ev)
+			out = append(out, map[string]any{"type": ev.Kind, "by_backend": c.ByBackend})
+		}
+	}
+	return out
 }

@@ -287,6 +287,11 @@ func TestCreateChecksTheModel(t *testing.T) {
 			}},
 		{name: "a provider entry of an unknown type fails New", model: "codex/gpt-5", want: harness.ErrInvalidRequest,
 			cfg: func(c *config.Config) { c.Providers["bad"] = config.Provider{Type: "bogus"} }},
+		{name: "an empty model takes the configured model", model: "", want: harness.ErrModelUnavailable,
+			cfg: func(c *config.Config) { c.Model = "nope/gpt-5" }},
+		{name: "an empty model with no configured model takes the default model", model: ""},
+		{name: "an empty model resolves a configured alias", model: "", want: harness.ErrModelUnavailable,
+			cfg: func(c *config.Config) { c.Model, c.Aliases = "fast", map[string]string{"fast": "nope/gpt-5"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.Config{Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, BaseURL: "https://codex.test"}, "openai": {},

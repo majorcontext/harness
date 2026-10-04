@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -13,7 +14,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_`)
+var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_`)
 
 var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 
@@ -21,7 +22,14 @@ var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
 var enginePattern = regexp.MustCompile(`engine: harness \S+`)
 
+// runtimeOwner is the owner name that an in-process runtime records.
+var runtimeOwner = func() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s/%d", host, os.Getpid())
+}()
+
 func maskUnstable(s string) string {
+	s = strings.ReplaceAll(s, runtimeOwner, "<owner>")
 	s = timePattern.ReplaceAllString(s, "<time>")
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
 	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
@@ -173,7 +181,7 @@ type normCall struct {
 	Messages []normMessage `json:"messages,omitempty"`
 }
 
-var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_[0-9A-Za-z_]+$`)
+var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_[0-9A-Za-z_]+$`)
 
 // value normalizes decoded JSON. Object keys are visited in sorted order so
 // the first-seen id numbering does not depend on map order. A session id that
@@ -183,7 +191,7 @@ func (n *normalizer) value(key string, v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for _, k := range slices.Sorted(maps.Keys(x)) {
-			out[n.str(k)] = n.value(k, x[k])
+			out[n.key(k)] = n.value(k, x[k])
 		}
 		return out
 	case []any:
@@ -199,6 +207,14 @@ func (n *normalizer) value(key string, v any) any {
 		return n.str(x)
 	}
 	return v
+}
+
+// key normalizes an object key. A key named *_id is a field name, not an id.
+func (n *normalizer) key(k string) string {
+	if strings.HasSuffix(k, "_id") {
+		return k
+	}
+	return n.str(k)
 }
 
 func (n *normalizer) str(s string) string {
@@ -495,6 +511,11 @@ func TestNormalizeCalls(t *testing.T) {
 			name: "id_as_object_key",
 			body: `{"ses_abc":{"state":"idle"}}`,
 			want: `{"status":200,"body":{"ses:a":{"state":"idle"}}}`,
+		},
+		{
+			name: "id_field_name_key_is_kept",
+			body: `{"turn_id":"turn_x","item_id":"item_y"}`,
+			want: `{"status":200,"body":{"item_id":"item#1","turn_id":"turn#1"}}`,
 		},
 		{
 			name: "transcript_ids_numbered_with_the_run",

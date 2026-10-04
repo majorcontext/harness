@@ -1,0 +1,58 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "fireworks/accounts/fireworks/routers/firerouter",
+      "user": "ses:a",
+      "prompt_cache_key": "ses:a",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -6,7 +6,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-func claudeLaneDriver(mode string) func(*testing.T, string) driver {
+func claudeLaneDriver(mode string) func(*testing.T, host, string) driver {
 	return claudeLane{mode: mode}.newDriver
 }
 

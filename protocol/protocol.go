@@ -27,7 +27,8 @@ const PartText = "text"
 // CreateSession is the request that creates a session.
 type CreateSession struct {
 	// ID is minted by the client, or by the runtime when it is empty.
-	ID          string `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
+	// Model is a provider/model ref. Empty selects the configured default.
 	Model       string `json:"model"`
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`

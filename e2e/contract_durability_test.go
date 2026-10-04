@@ -37,6 +37,24 @@ func TestContractDurability(t *testing.T) {
 			},
 		},
 		{
+			name: "usage_survives_a_mid_turn_restart",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{Usage: harnesstest.Usage{Input: 100, Output: 10},
+					ToolCalls: []harnesstest.ToolCall{{ID: "toolu_usage", Name: "bash", Input: map[string]any{"command": "echo tool"}}}}},
+				{Name: "after", Match: harnesstest.LastToolResult("bash"), Repeat: true,
+					Reply: harnesstest.Reply{Text: "done", Block: true, Usage: harnesstest.Usage{Input: 40, Output: 4}}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run"},
+				awaitRequests{n: 2},
+				restart{},
+				release{step: "after"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+		{
 			// Known defect, pinned: after SIGKILL the refolded queue entry is not dispatched.
 			name:  "queued_input_survives_kill",
 			model: []harnesstest.Step{slow},
@@ -47,6 +65,19 @@ func TestContractDurability(t *testing.T) {
 				enqueue{as: "a", text: "second"},
 				restart{kill: true},
 				expectQueued{as: "a", texts: []string{"second"}},
+			},
+		},
+		{
+			// Known defect, pinned: after SIGKILL the queued input never runs.
+			name:  "queued_input_runs_after_kill",
+			model: []harnesstest.Step{slow, {Name: "next", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "done"}, Repeat: true}},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				enqueue{as: "a", text: "second"},
+				restart{kill: true},
+				waitIdle{as: "a"},
 			},
 		},
 	})

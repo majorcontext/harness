@@ -1,0 +1,329 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-haiku-4-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-haiku-4-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 6,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "service_tier": "priority",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 12,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "service_tier": "priority",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "get_session.a#3": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "set_model.a": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: modelmeta does not know anthropic/no-such-model"
+        }
+      }
+    },
+    "set_model.a#2": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"nosuch\" is configured for nosuch/model"
+        }
+      }
+    },
+    "set_model.a#3": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "harness: invalid request: message: model ref \"bare\" is not of the form \"provider/model\""
+        }
+      }
+    },
+    "set_model.a#4": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 3,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "set_service_tier.a": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 5,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "service_tier": "bogus",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "set_service_tier.a#2": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 6,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "service_tier": "priority",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "set_service_tier.a#3": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "set_thinking.a": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "harness: invalid request: message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)"
+        }
+      }
+    },
+    "set_thinking.a#2": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 4,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "set_thinking.a#3": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 13,
+        "id": "ses:a",
+        "model": "anthropic/claude-haiku-4-5",
+        "origin": "",
+        "service_tier": "priority",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    }
+  }
+}

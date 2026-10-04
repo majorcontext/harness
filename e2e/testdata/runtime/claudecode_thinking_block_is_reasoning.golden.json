@@ -1,0 +1,56 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "Let me reason about this."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Here is my answer."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 8,
+        "id": "ses:a",
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 10
+        }
+      }
+    }
+  }
+}
