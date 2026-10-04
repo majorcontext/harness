@@ -54,11 +54,12 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		return turn.Result{}, classify(err)
 	}
 	defer func() { _ = st.Close() }()
+	var res turn.Result
 	for {
 		// A truncated stream wraps io.EOF, so only the bare sentinel is a clean end.
 		ev, err := st.Next()
 		if err == io.EOF {
-			return turn.Result{}, nil
+			return res, nil
 		}
 		if err != nil {
 			return turn.Result{}, classify(err)
@@ -70,6 +71,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
 			out.Telemetry(b.telemetry(req.Model, ev.Usage))
+			res.MaxTokens = ev.StopReason == provider.StopMaxTokens
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
 				return turn.Result{}, fmt.Errorf("%w: modelapi: the response has no output", turn.ErrRetryable)
@@ -77,6 +79,8 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			if err := out.Item(m); err != nil {
 				return turn.Result{}, err
 			}
+		default:
+			out.Alive()
 		}
 	}
 }
@@ -127,7 +131,14 @@ func request(req turn.Request) (*provider.Request, error) {
 }
 
 func classify(err error) error {
-	if _, ok := provider.AsRetryable(err); ok {
+	_, retryable := provider.AsRetryable(err)
+	_, exhausted := provider.AsProviderExhausted(err)
+	switch {
+	case exhausted:
+		return fmt.Errorf("%w: %w", turn.ErrExhausted, err)
+	case provider.IsContextOverflow(err):
+		return fmt.Errorf("%w: %w", turn.ErrContextOverflow, err)
+	case retryable:
 		return fmt.Errorf("%w: %w", turn.ErrRetryable, err)
 	}
 	return err

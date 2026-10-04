@@ -71,8 +71,8 @@ type Config struct {
 	Prompt func() string
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
-	// Retries bounds the new attempts of a turn after a retryable error.
-	Retries int
+	// Limits bounds how each turn recovers from a failed model call.
+	Limits turn.Limits
 	// Threshold is the share of the context window at which the next turn compacts first.
 	Threshold float64
 	// KeepTurns is the number of newest turns that a compaction keeps.

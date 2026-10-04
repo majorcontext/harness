@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 )
@@ -29,14 +30,15 @@ const summaryInstruction = "Summarize the conversation above, following the syst
 var errEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
-// req.History, and returns the summary after SummaryBanner.
-func Summarize(ctx context.Context, b Backend, req Request) (string, error) {
+// req.History, and returns the summary after SummaryBanner. A positive idle
+// bounds the silence of the call, as Limits.Idle does.
+func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
 	req.Instructions = summaryPrompt
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	var s summary
-	if _, err := b.Run(ctx, req, &s); err != nil {
+	if _, err := watch(ctx, b, req, &s, idle); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(s.text.String()) == "" {
@@ -58,6 +60,7 @@ func (s *summary) Item(m eventlog.Message) error {
 }
 
 func (*summary) Delta(string, Delta)                {}
+func (*summary) Alive()                             {}
 func (*summary) Telemetry(Telemetry)                {}
 func (*summary) Steer() ([]eventlog.Message, error) { return nil, nil }
 func (*summary) State(string) ([]byte, error)       { return nil, nil }

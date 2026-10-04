@@ -48,12 +48,14 @@ const (
 // Cause says why a turn stopped early.
 type Cause string
 
-// Causes. Only CauseHandoff suspends a turn; the others interrupt it.
+// Causes. Only CauseHandoff suspends a turn and only CauseProviderExhausted
+// fails it; the others interrupt it.
 const (
-	CauseStopped     Cause = "stopped"
-	CauseGoalCleared Cause = "goal_cleared"
-	CauseHandoff     Cause = "handoff"
-	CauseCrashed     Cause = "crashed"
+	CauseStopped           Cause = "stopped"
+	CauseGoalCleared       Cause = "goal_cleared"
+	CauseHandoff           Cause = "handoff"
+	CauseCrashed           Cause = "crashed"
+	CauseProviderExhausted Cause = "provider_exhausted"
 )
 
 // Resolution says how a request closed.

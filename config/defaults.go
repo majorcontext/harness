@@ -11,6 +11,7 @@ func Defaults() Config {
 		PromptRetries:           new(2),
 		MaxTokensContinuations:  new(3),
 		SnapshotEveryRecords:    new(64),
+		StreamIdleTimeoutS:      300,
 		CompactionThreshold:     0.8,
 		CompactionKeepTurns:     2,
 		ToolResultInlineBytes:   new(16384),
