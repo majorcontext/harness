@@ -67,6 +67,8 @@ type Config struct {
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
 	Tools []turn.Tool
+	// Prompt is the system prompt of each turn.
+	Prompt string
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Retries bounds the new attempts of a turn after a retryable error.

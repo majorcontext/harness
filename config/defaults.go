@@ -16,6 +16,7 @@ func Defaults() Config {
 		ToolResultInlineBytes:   new(16384),
 		ToolResultRetainedBytes: new(4 << 20),
 		ModelTool:               new(true),
+		InstructionsMaxBytes:    64 << 10,
 		Providers: map[string]Provider{
 			"openrouter": {Type: TypeOpenAICompat, BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"},
 		},
