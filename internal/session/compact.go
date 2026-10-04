@@ -111,8 +111,17 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 	return req, c, true
 }
 
+// recordUsage records the usage of a model call that produced no other
+// record. A call with no usage records nothing.
+func (a *Actor) recordUsage(u eventlog.Usage) error {
+	if u == (eventlog.Usage{}) {
+		return nil
+	}
+	return a.append(eventlog.ContextMeasured{Usage: u})
+}
+
 // compacted appends the summary of run r, then starts the next queued
-// input with no new compaction. A failed summary appends nothing.
+// input with no new compaction. A failed summary appends only its usage.
 func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error) {
 	if a.run != r {
 		return
@@ -125,6 +134,9 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error
 		runErr = ErrNotOwned
 	case runErr == nil:
 		appendErr = a.append(c)
+	}
+	if runErr != nil {
+		appendErr = a.recordUsage(c.Usage)
 	}
 	a.finishRun(r, runErr, appendErr, func() error { return a.settle(false) })
 }

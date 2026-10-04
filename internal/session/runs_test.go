@@ -36,6 +36,11 @@ type kindBackend struct {
 	windows map[string]int
 	calls   []runKind
 	reqs    map[runKind]turn.Request
+	// fail is the error that a call of each kind returns after it reports
+	// its usage.
+	fail map[runKind]error
+	// overflow makes the first call of a turn answer ErrContextOverflow.
+	overflow bool
 }
 
 func (b *kindBackend) Capabilities(model string) turn.Capabilities {
@@ -87,6 +92,16 @@ func (b *kindBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 		t.Context = eventlog.ContextMeasured{Tokens: b.tokens, Window: int64(b.windows[req.Model]), Source: "m"}
 	}
 	out.Telemetry(t)
+	if err := b.fail[kind]; err != nil {
+		return turn.Result{}, err
+	}
+	b.mu.Lock()
+	over := kind == kindTurn && b.overflow
+	b.overflow = false
+	b.mu.Unlock()
+	if over {
+		return turn.Result{}, turn.ErrContextOverflow
+	}
 	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
 
@@ -402,6 +417,45 @@ func TestTheViewTakesTheWindowOfTheModelBeforeThatOfTheReading(t *testing.T) {
 			if got := Describe("s1", s, tc.window).Context; got != tc.want {
 				t.Errorf("Context = %+v, want %+v", got, tc.want)
 			}
+		})
+	}
+}
+
+func TestAFailedSummaryKeepsItsUsageInTheSession(t *testing.T) {
+	boom := errors.New("summary failed")
+	for _, tc := range []struct {
+		name string
+		run  func(t *testing.T, a *Actor, b *kindBackend)
+	}{
+		{"manual compaction", func(t *testing.T, a *Actor, _ *kindBackend) {
+			if _, _, err := a.Compact(context.Background(), 0); !errors.Is(err, boom) {
+				t.Fatalf("Compact error = %v, want the summary error", err)
+			}
+		}},
+		{"overflow inside a turn", func(t *testing.T, a *Actor, b *kindBackend) {
+			b.overflow = true
+			converse(t, a, "three")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{}),
+					usage: map[runKind]int64{kindTurn: 1, kindCompaction: 20}}
+				cfg := actorConfig(t, &memLog{}, owned{}, b)
+				cfg.KeepTurns = 1
+				a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				a.Run()
+				converse(t, a, "one", "two")
+				b.fail = map[runKind]error{kindCompaction: boom}
+				tc.run(t, a, b)
+				synctest.Wait()
+				if got := a.View().Session.Usage.InputTokens; got < 1+1+20 {
+					t.Errorf("input tokens = %d, want the 20 of the failed summary counted", got)
+				}
+			})
 		})
 	}
 }

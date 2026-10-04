@@ -92,6 +92,13 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 	}
 	summary, usage, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
 	if err != nil {
+		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
+			if a.run == r {
+				reply(struct{}{}, a.recordUsage(usage))
+				return
+			}
+			reply(struct{}{}, nil)
+		})
 		return nil, false, err
 	}
 	f.c.Summary, f.c.Usage = a.indexed(summary, f.metas), usage

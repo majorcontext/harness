@@ -296,8 +296,8 @@ func (s *State) Unsettled() []string {
 // Children returns every spawned child, settled or not, sorted.
 func (s *State) Children() []string { return slices.Sorted(maps.Keys(s.children)) }
 
-// Usage returns the token usage summed over every recorded model call, the
-// summary and evaluator calls included.
+// Usage returns the token usage summed over every recorded model call and
+// every summary call. A goal evaluator call records none.
 func (s *State) Usage() Usage { return s.usage }
 
 // Context returns the newest context measurement, with no usage.

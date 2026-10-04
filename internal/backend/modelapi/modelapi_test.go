@@ -205,19 +205,19 @@ func TestHandoffDuringCompaction(t *testing.T) {
 				return err
 			},
 			[]string{"owner.acquired", "compaction.applied"}},
-		{"a summary that finishes during the handoff is not appended", true, 0, 5, []string{"alpha", "bravo", "charlie"},
+		{"a summary that finishes during the handoff records its usage and no compaction", true, 0, 5, []string{"alpha", "bravo", "charlie"},
 			func(s *harness.Session) error {
 				if _, err := s.Compact(bg, protocol.Compact{}); err == nil {
 					return errors.New("Compact during a handoff = nil, want an error")
 				}
 				return nil
 			},
-			nil,
+			[]string{"context.measured"},
 			func(_ *testing.T, s *harness.Session, _ uint64) error {
 				_, err := s.Compact(bg, protocol.Compact{})
 				return err
 			},
-			[]string{"owner.acquired", "compaction.applied"}},
+			[]string{"context.measured", "owner.acquired", "compaction.applied"}},
 		{"an auto-compaction stops and the next owner runs the queued input", false, 0.5, 200_000, []string{"alpha", "bravo"},
 			func(s *harness.Session) error { _, err := s.Submit(bg, charlie); return err },
 			[]string{"input.admitted"},

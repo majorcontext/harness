@@ -109,9 +109,9 @@ type SubscriptionOverage struct {
 	ResetsAt int64  `json:"resets_at"`
 }
 
-// Session is a view of one session at HeadSeq. Usage sums every model call
-// of the session, the summary calls included.
-// SubscriptionUsage is null until a call carries a snapshot.
+// Session is a view of one session at HeadSeq. Usage sums every model and
+// summary call, but no goal evaluator call. SubscriptionUsage is null until a
+// call carries a snapshot.
 type Session struct {
 	ID                string             `json:"id"`
 	ParentID          string             `json:"parent_id,omitempty"`

@@ -33,6 +33,9 @@ type run struct {
 	taken     bool
 	stopped   bool
 
+	// limits is the newest subscription snapshot of the run; the result
+	// reports it with the usage of its call.
+	limits  *eventlog.SubscriptionUsage
 	started bool
 	sendErr error
 	tailErr error
@@ -223,7 +226,7 @@ func (r *run) handle(env envelope) error {
 		return r.addMirror(env)
 	case "rate_limit_event":
 		if u := env.RateLimitInfo.subscription(); u != nil {
-			r.out.Telemetry(turn.Telemetry{SubscriptionUsage: u})
+			r.limits = u
 		}
 	}
 	return nil
@@ -389,7 +392,7 @@ func (r *run) settle(env envelope) error {
 }
 
 func (r *run) telemetry(env envelope) {
-	t := turn.Telemetry{Usage: env.Usage.usage()}
+	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits}
 	if w, tokens := env.ModelUsage[r.mainModel].ContextWindow, r.lastCall.prompt(); w > 0 || tokens > 0 {
 		t.Context = eventlog.ContextMeasured{Tokens: tokens, Window: w, Source: stateKey}
 	}
