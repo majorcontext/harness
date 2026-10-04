@@ -41,7 +41,7 @@ func newModels(cfg config.Config, workDir string, transport func(provider string
 	config.EnsureProviderDefaults(providers)
 	for name, p := range providers {
 		if p.Type == config.TypeClaudeCodeCLI {
-			m.backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir)
+			m.backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir, cfg.MCPServers)
 		} else if c := client(name, p, transport); c != nil {
 			m.backends[name] = modelapi.New(c, cfg.ContextWindowTokens)
 		}

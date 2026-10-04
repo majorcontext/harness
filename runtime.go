@@ -315,7 +315,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	}
 	var srcs turn.Sources
 	if r.mcp != nil {
-		srcs = append(srcs, r.mcp)
+		srcs = append(srcs, mcpTools{r.mcp, r.backend})
 	}
 	if r.plugins != nil {
 		p := r.plugins.Session(id)
@@ -329,6 +329,20 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		return nil, err
 	}
 	return &Session{a: a, hasEvaluator: r.evaluator != ""}, nil
+}
+
+// mcpTools gives the MCP tools to each turn whose backend does not connect
+// the servers itself.
+type mcpTools struct {
+	src     *mcpsrc.Source
+	backend turn.Backend
+}
+
+func (m mcpTools) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
+	if allowed == nil && m.backend.Capabilities(model).OwnsMCP {
+		return turn.Toolset{}
+	}
+	return m.src.Toolset(ctx, history, allowed, model)
 }
 
 // instructions reads the system prompt of a session once and returns the

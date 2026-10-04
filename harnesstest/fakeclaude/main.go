@@ -16,6 +16,7 @@
 //	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
 //	FAKE_CLAUDE_CWD_LOG        receives the working directory
 //	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
+//	FAKE_CLAUDE_MCP_CONFIG_LOG append the --mcp-config file of each invocation as one line
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
 // modes_stdin.go, modes_question.go, modes_mirror.go, and modes_mcp.go.
@@ -93,6 +94,7 @@ func main() {
 		_ = os.Stdin.Close()
 	}
 	logArgv()
+	logMCPConfig()
 	logCwd()
 	logEnv()
 	logInterrupt()

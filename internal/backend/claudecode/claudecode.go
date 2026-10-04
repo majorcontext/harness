@@ -59,20 +59,22 @@ type Backend struct {
 	p       config.Provider
 	system  string
 	workDir string
+	servers map[string]config.MCPServerSpec
 }
 
 // New returns the Backend of provider entry p. The CLI keeps only the last
 // --append-system-prompt, so the entries of system join into one value. The
 // CLI runs in workDir, or in the process directory when workDir is empty.
-func New(p config.Provider, system []string, workDir string) *Backend {
-	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir}
+// The CLI connects the MCP servers itself.
+func New(p config.Provider, system []string, workDir string, servers map[string]config.MCPServerSpec) *Backend {
+	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir, servers: servers}
 }
 
 // Capabilities reports that the CLI runs the loop with its built-in tools,
-// owns its context, and takes steer input. It reports the context window
-// itself.
+// owns its context and the MCP servers, and takes steer input. It reports
+// the context window itself.
 func (b *Backend) Capabilities(string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, Steering: true, Tools: slices.Clone(builtins)}
+	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins)}
 }
 
 // Run runs one turn of the CLI on the external session in the state blob.
@@ -134,13 +136,11 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 		args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")
 	}
-	if len(req.Tools) > 0 {
-		path, err := r.serveTools(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, "--mcp-config", path, "--allowedTools", "mcp__"+external.ToolServer)
+	mcpArgs, err := r.mcpArgs(ctx, req, b.servers)
+	if err != nil {
+		return nil, err
 	}
+	args = append(args, mcpArgs...)
 	if ref.Model != "" {
 		args = append(args, "--model", ref.Model)
 	}
@@ -190,10 +190,42 @@ func scratch(m external.Mirror) (string, error) {
 	return dir, m.Restore(dir)
 }
 
+// mcpArgs returns the MCP flags of the run. An unrestricted run gives the
+// CLI the configured servers, beside the harness tools of req.
+func (r *run) mcpArgs(ctx context.Context, req turn.Request, configured map[string]config.MCPServerSpec) ([]string, error) {
+	servers := map[string]mcpServer{}
+	if r.allowed == nil {
+		for name, spec := range configured {
+			servers[name] = serverOf(spec)
+		}
+	}
+	if len(req.Tools) > 0 {
+		url, err := r.serveTools(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		servers[external.ToolServer] = mcpServer{Type: "http", URL: url}
+	}
+	if len(servers) == 0 {
+		return nil, nil
+	}
+	path, err := r.writeMCPConfig(servers)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--mcp-config", path}
+	if r.allowed == nil {
+		args = append(args, "--strict-mcp-config")
+	}
+	if len(req.Tools) > 0 {
+		args = append(args, "--allowedTools", "mcp__"+external.ToolServer)
+	}
+	return args, nil
+}
+
 // serveTools serves the harness tools of req for this run and returns the
-// path of an --mcp-config file that names the endpoint. A file keeps the
-// endpoint URL out of the argv of the CLI. Items record a served tool by
-// its harness name, as on the other backends.
+// URL of the endpoint. Items record a served tool by its harness name, as
+// on the other backends.
 func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) {
 	var err error
 	if r.tools, err = external.ServeTools(ctx, req.Tools, toolUseMeta, req.Call); err != nil {
@@ -203,8 +235,42 @@ func (r *run) serveTools(ctx context.Context, req turn.Request) (string, error) 
 	for _, t := range req.Tools {
 		r.bridged[t.Name] = true
 	}
-	cfg := map[string]any{"mcpServers": map[string]any{external.ToolServer: map[string]string{"type": "http", "url": r.tools.URL}}}
-	data, err := json.Marshal(cfg)
+	return r.tools.URL, nil
+}
+
+// mcpServer is one server of an --mcp-config file. A stdio server has no Type.
+type mcpServer struct {
+	Type    string            `json:"type,omitempty"`
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// serverOf returns the --mcp-config entry of spec. It skips an env entry
+// with no "=".
+func serverOf(spec config.MCPServerSpec) mcpServer {
+	if spec.URL != "" {
+		return mcpServer{Type: "http", URL: spec.URL, Headers: spec.Headers}
+	}
+	out := mcpServer{Command: spec.Command[0], Args: spec.Command[1:]}
+	for _, kv := range spec.Env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			if out.Env == nil {
+				out.Env = map[string]string{}
+			}
+			out.Env[k] = v
+		}
+	}
+	return out
+}
+
+// writeMCPConfig writes servers to an --mcp-config file and returns its
+// path. A file keeps the headers, the env, and the endpoint URL out of the
+// argv of the CLI.
+func (r *run) writeMCPConfig(servers map[string]mcpServer) (string, error) {
+	data, err := json.Marshal(map[string]any{"mcpServers": servers})
 	if err != nil {
 		return "", err
 	}

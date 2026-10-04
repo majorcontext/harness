@@ -315,10 +315,9 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		env     []string
 		offered []string
 		args    []string
-		absent  string
 	}{
-		{name: "a tool call through MCP runs the embedder tool beside the operator MCP servers", offered: []string{"echo", "hidden"},
-			args: []string{"--allowedTools", "mcp__harness"}, absent: "--strict-mcp-config"},
+		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden"},
+			args: []string{"--strict-mcp-config", "--allowedTools", "mcp__harness"}},
 		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
 			offered: []string{"echo"}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
 	} {
@@ -339,8 +338,8 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			if c := endedCall(t, echo, runs[0], argv); c.ID != "toolu_m" || c.Name != "echo" {
 				t.Errorf("call = %+v, want ID toolu_m and name echo", c)
 			}
-			if !hasArgs(argv, tc.args...) || slices.Contains(argv, tc.absent) {
-				t.Errorf("argv = %q, want %q in it and no %q", argv, tc.args, tc.absent)
+			if !hasArgs(argv, tc.args...) {
+				t.Errorf("argv = %q, want %q in it", argv, tc.args)
 			}
 			if names := toolPartNames(t, st); !slices.Equal(names, []string{"echo", "echo"}) {
 				t.Errorf("recorded tool part names = %q, want the embedder name echo for the call and the result", names)
