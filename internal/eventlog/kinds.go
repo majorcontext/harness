@@ -44,9 +44,8 @@ const (
 	RoleTool      = "tool"
 )
 
-// Message is one completed conversation item. ParentCallID is the ID of the
-// tool call that started the subagent that wrote the message, or empty for a
-// message of the session itself. Only a client reads it; the model never does.
+// Message is one completed conversation item. ParentCallID names the tool call
+// that started the subagent that wrote it. Only a client reads it.
 type Message struct {
 	Role         string `json:"role"`
 	Parts        []Part `json:"parts"`

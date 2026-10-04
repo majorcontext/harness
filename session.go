@@ -212,8 +212,8 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 // turn that owns no loop uses them from its next model call; a backend that
 // owns its loop uses them from its next run.
 // A model that no configured provider serves fails with ErrModelUnavailable.
-// A move to another provider fails with ErrInvalidRequest when either
-// backend owns its context.
+// A backend that owns its loop reads the history of another provider through
+// the get_conversation_history tool, so any two models may follow each other.
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
 	if p.Effort != nil {
 		if _, err := message.ParseEffort(*p.Effort); err != nil {

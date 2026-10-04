@@ -1,0 +1,298 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run it"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Let me check that."
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "Bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Done — it printed hi."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "native"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "native"
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "native reply"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "back"
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Let me check that."
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Done — it printed hi."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": true,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        }
+      ]
+    },
+    "history_tool.a": {
+      "status": 200,
+      "body": {
+        "id": 1,
+        "jsonrpc": "2.0",
+        "result": {
+          "content": [
+            {
+              "text": "The following is PRIOR conversation history for this session that already happened. It is context for you to read, not a new message to respond to.\n\nShowing messages 1-12 of 12 total (oldest first).\n\nUser: run it\nAssistant: Let me check that.\nAssistant called tool Bash({\"command\":\"echo hi\"})\nTool result (Bash, ok): hi\n\nAssistant: Done — it printed hi.\nUser: native\nAssistant: native reply\nUser: back\nAssistant: Let me check that.\nAssistant called tool Bash({\"command\":\"echo hi\"})\nTool result (Bash, ok): hi\n\nAssistant: Done — it printed hi.\n",
+              "type": "text"
+            }
+          ]
+        }
+      }
+    },
+    "set_model.a": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 11,
+        "id": "ses:a",
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 101,
+          "output_tokens": 42
+        }
+      }
+    },
+    "set_model.a#2": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 17,
+        "id": "ses:a",
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 106,
+          "output_tokens": 45
+        }
+      }
+    }
+  }
+}

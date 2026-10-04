@@ -320,10 +320,10 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		offered []string
 		args    []string
 	}{
-		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden"},
+		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", hist},
 			args: []string{"--strict-mcp-config", "--allowedTools", "mcp__harness"}},
 		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
-			offered: []string{"echo"}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
+			offered: []string{"echo", hist}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")

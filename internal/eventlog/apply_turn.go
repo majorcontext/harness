@@ -29,6 +29,7 @@ func (s *State) applyStarted(e TurnStarted) error {
 		s.takeInput(id, inputPromoted)
 	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
+	s.turnAt = len(s.history)
 	s.turnIDs[e.TurnID] = true
 	return nil
 }

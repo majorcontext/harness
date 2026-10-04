@@ -91,7 +91,7 @@ func sameJSON(x, y any) bool {
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
-		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
+		History: a.state.History(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model())}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {

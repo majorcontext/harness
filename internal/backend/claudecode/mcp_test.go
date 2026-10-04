@@ -19,6 +19,9 @@ type mcpConfigFile struct {
 	MCPServers map[string]map[string]any `json:"mcpServers"`
 }
 
+// hist is the history tool that every turn of a backend that owns its loop gets.
+const hist = "get_conversation_history"
+
 func TestClaudeCodeGetsTheConfiguredMCPServers(t *testing.T) {
 	reg := mcpserver.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -34,10 +37,10 @@ func TestClaudeCodeGetsTheConfiguredMCPServers(t *testing.T) {
 		offered []string
 		want    map[string]map[string]any
 	}{
-		{name: "the CLI gets every configured server beside the bridge", offered: []string{"echo"},
+		{name: "the CLI gets every configured server beside the bridge", offered: []string{"echo", hist},
 			want: map[string]map[string]any{"chrome-devtools": stdio, "gateway": remote}},
 		{name: "a restricted turn keeps the configured servers on the bridge", allowed: []string{"Read", "echo", "mcp__gateway__ping"},
-			env: []string{toolsInit, `["Read"]`}, offered: []string{"echo", "mcp__gateway__ping"}, want: map[string]map[string]any{}},
+			env: []string{toolsInit, `["Read"]`}, offered: []string{"echo", hist, "mcp__gateway__ping"}, want: map[string]map[string]any{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

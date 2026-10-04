@@ -13,12 +13,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// turnTools returns the tools and the source of turn r. A harness-loop
-// turn of an agent gets the agent tools. Its source retains each result
+// turnTools returns the tools and the source of turn r. A turn of a backend
+// that owns its loop also gets the history tool, which no allow list hides. A
+// harness-loop turn of an agent gets the agent tools. Its source retains each result
 // after the hooks, unless the profile removes read_tool_result.
 func (a *Actor) turnTools(r *running) ([]turn.Tool, turn.Source) {
 	src := a.cfg.Source
-	if r.ownsLoop || a.cfg.Agent == nil {
+	if r.ownsLoop {
+		return append(slices.Clip(turn.Restrict(a.cfg.Tools, a.state.AllowedTools())), historyTool{a}), src
+	}
+	if a.cfg.Agent == nil {
 		return turn.Restrict(a.cfg.Tools, a.state.AllowedTools()), src
 	}
 	tools := turn.Restrict(slices.Concat(a.cfg.Tools, a.cfg.Agent, []turn.Tool{toolresult.NewTool(a)}), a.state.AllowedTools())

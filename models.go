@@ -103,19 +103,11 @@ func (m *models) check(model string, names []string, tools []turn.Tool) error {
 	return nil
 }
 
-// change reports why a session at model from that allows tools cannot move
-// to model to. A backend that owns its context never sees the history of
-// another provider, so neither side of a provider change may own it.
-func (m *models) change(from, to string, names []string, tools []turn.Tool) error {
-	if err := m.check(to, names, tools); err != nil {
-		return err
-	}
-	f, _ := message.ParseModelRef(from)
-	t, _ := message.ParseModelRef(to)
-	if f.Provider != t.Provider && (m.Capabilities(from).OwnsContext || m.Capabilities(to).OwnsContext) {
-		return fmt.Errorf("%w: %s cannot take the history of %s", ErrInvalidRequest, to, from)
-	}
-	return nil
+// change reports why a session that allows tools cannot move to model to.
+// A backend that owns its context reads the history of another provider
+// through the history tool, so any two models may follow each other.
+func (m *models) change(_, to string, names []string, tools []turn.Tool) error {
+	return m.check(to, names, tools)
 }
 
 func (m *models) backend(model string) (turn.Backend, error) {

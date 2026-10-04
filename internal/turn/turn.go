@@ -81,9 +81,11 @@ type Request struct {
 	// Steered receives a value when a steer input waits for Sink.Steer. It
 	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
-	// Banner is trusted engine status that every model call of the turn
-	// sends as engine context after History[:BannerAt]. A backend that
-	// owns the loop gets none. Empty: none.
+	// Foreign reports History messages that another provider recorded since
+	// the last turn of this one.
+	Foreign bool
+	// Banner is engine context that each model call sends after
+	// History[:BannerAt]. Empty: none.
 	Banner   string
 	BannerAt int
 }
@@ -195,7 +197,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		if m, set := to.Settings(); m != "" {
+		if m, set := to.Settings(); m != "" && b.Capabilities(m).OwnsLoop == caps.OwnsLoop {
 			req.Model, req.Settings = m, set
 		}
 		s, call := &sink{Turn: to}, req

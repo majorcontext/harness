@@ -9,6 +9,8 @@ import (
 type entry struct {
 	seq uint64
 	msg Message
+	// by is the provider of the session model when the message was recorded.
+	by string
 	// promoted holds the inputs that one append promoted into a running turn
 	// as this message, and last the seq of the newest of them.
 	promoted [][]Part
@@ -62,7 +64,7 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), promoted: [][]Part{parts}, last: env.Seq})
+		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), by: providerOf(s.model), promoted: [][]Part{parts}, last: env.Seq})
 	case ItemCompleted:
 		s.say(env.Seq, e.Message)
 	case CompactionApplied:
@@ -71,11 +73,35 @@ func (s *State) remember(env Envelope) {
 			i = len(s.history)
 		}
 		s.history = slices.Clone(s.history[i:])
+		s.turnAt = max(0, s.turnAt-i)
 	}
 }
 
 func (s *State) say(seq uint64, m Message) {
-	s.history = append(s.history, entry{seq: seq, msg: m})
+	s.history = append(s.history, entry{seq: seq, msg: m, by: providerOf(s.model)})
+}
+
+func providerOf(model string) string {
+	p, _, _ := strings.Cut(model, "/")
+	return p
+}
+
+// Foreign reports whether the history holds a message that another provider
+// recorded after the newest message that the provider of model recorded
+// before the current turn. A backend that keeps its own session has not seen
+// such a message. The current turn is left out, as it brings its own input.
+func (s *State) Foreign(model string) bool {
+	by, end := providerOf(model), len(s.history)
+	if s.turn.ID != "" {
+		end = s.turnAt
+	}
+	last := -1
+	for i := end - 1; i >= 0 && last < 0; i-- {
+		if s.history[i].by == by {
+			last = i
+		}
+	}
+	return slices.ContainsFunc(s.history[last+1:end], func(e entry) bool { return e.by != by })
 }
 
 func cloneParts(parts []Part) []Part {

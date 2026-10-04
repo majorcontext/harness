@@ -190,6 +190,8 @@ type State struct {
 	retained   []ToolResultRetained
 	commands   map[string]command
 	history    []entry
+	// turnAt is the length of history when the current turn started.
+	turnAt int
 }
 
 func (s *State) clone() *State {

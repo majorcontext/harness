@@ -33,6 +33,11 @@ const continuation = "The previous turn was interrupted. " +
 	"Continue the unfinished work from the saved conversation. " +
 	"Check the current state before repeating actions that may already have completed."
 
+// historyDirective tells a CLI session that lacks part of the conversation to
+// read it through the history tool before it answers.
+const historyDirective = "You are continuing a conversation that happened on another model. " +
+	"Before responding, call the " + turn.HistoryTool + " tool to read what happened so far."
+
 // grace bounds the wait for the CLI to exit after its result or a signal.
 const grace = 5 * time.Second
 
@@ -153,8 +158,12 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	if e, ok := effortArg(effort); ok {
 		args = append(args, "--effort", e)
 	}
-	if b.system != "" {
-		args = append(args, "--append-system-prompt", b.system)
+	system := b.system
+	if req.Foreign {
+		system = strings.Trim(system+"\n\n"+historyDirective, "\n")
+	}
+	if system != "" {
+		args = append(args, "--append-system-prompt", system)
 	}
 	env := os.Environ()
 	if b.p.SessionMirror {

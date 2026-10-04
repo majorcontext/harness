@@ -69,7 +69,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_configured_mcp_servers_reach_the_cli":           sameAsServe(),
 	"claudecode_context_window_from_model_usage":                reGolden(specView),
 	"claudecode_error_result_fails_turn":                        pendingOn("F20"),
-	"claudecode_history_bridge_after_native_turn":               pendingOn("F20"),
+	"claudecode_history_bridge_after_native_turn":               reGolden(specUpdate),
 	"claudecode_interrupt_mid_turn":                             pendingOn("F20"),
 	"claudecode_question_dismissed_by_compact":                  pendingOn("phase 5"),
 	"claudecode_question_dismissed_by_next_prompt":              pendingOn("phase 5"),

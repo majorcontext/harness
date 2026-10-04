@@ -155,7 +155,6 @@ func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
 	converse(t, s, "hi")
 	for p, want := range map[protocol.SettingsPatch]error{{Model: new("codex/no-such-model")}: harness.ErrModelUnavailable,
 		{Model: new("nope/gpt-5")}: harness.ErrModelUnavailable, {Effort: new("hard")}: harness.ErrInvalidRequest,
-		{Model: new("claude-code/sonnet")}:                harness.ErrInvalidRequest,
 		{Model: new("openai/gpt-5"), Effort: new("high")}: nil} {
 		if _, err := s.Update(bg, p); !errors.Is(err, want) {
 			t.Errorf("Update(%v) = %v, want %v", p, err, want)
@@ -165,7 +164,7 @@ func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for m, want := range map[string]error{"codex/gpt-5": harness.ErrInvalidRequest, "claude-code/sonnet": nil} {
+	for m, want := range map[string]error{"codex/gpt-5": nil, "claude-code/sonnet": nil} {
 		if _, err := cc.Update(bg, protocol.SettingsPatch{Model: new(m)}); !errors.Is(err, want) {
 			t.Errorf("claude-code Update(%s) = %v, want %v", m, err, want)
 		}

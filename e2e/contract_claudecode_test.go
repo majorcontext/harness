@@ -106,7 +106,7 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 	native := harnesstest.Step{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}
 	runScenarios(t, []scenario{{
 		name:   "claudecode_history_bridge_after_native_turn",
-		driver: claudeLaneDriver("normal"),
+		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
 		model:  []harnesstest.Step{native},
 		actions: withActions(claudeOneTurn,
 			setModel{as: "a", model: "anthropic/claude-fable-5"},
