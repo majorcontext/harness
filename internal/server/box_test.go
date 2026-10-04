@@ -27,8 +27,14 @@ func serveBox(t *testing.T, workDir string) string {
 
 func box(t *testing.T, workDir string) (*harness.Runtime, string) {
 	t.Helper()
+	return boxWith(t, workDir, config.ProcessSpec{Command: []string{"sh", "-c", "echo one; echo two; sleep 100"}, ReadyRegex: "two"})
+}
+
+// boxWith serves a Runtime with process dev as dev.
+func boxWith(t *testing.T, workDir string, dev config.ProcessSpec) (*harness.Runtime, string) {
+	t.Helper()
 	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: workDir, Config: config.Config{
-		Processes: map[string]config.ProcessSpec{"dev": {Command: []string{"sh", "-c", "echo one; echo two; sleep 100"}, ReadyRegex: "two"}}}})
+		Processes: map[string]config.ProcessSpec{"dev": dev}}})
 	if err != nil {
 		t.Fatal(err)
 	}
