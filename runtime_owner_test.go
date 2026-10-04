@@ -202,6 +202,24 @@ func TestCloseWaitsForTheTurnsThatItsEndedContextCancels(t *testing.T) {
 	})
 }
 
+func TestCloseWithAnEndedContextNeverHandsOff(t *testing.T) {
+	for range 300 {
+		synctest.Test(t, func(t *testing.T) {
+			f := newFake()
+			st := harness.NewMemStore()
+			r := runtime(t, st, f)
+			submit(t, create(t, r), text("a", "hi"))
+			<-f.runs
+			ctx, cancel := context.WithCancel(bg)
+			cancel()
+			if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Close = %v, want Canceled", err)
+			}
+			wantLog(t, st, 2, "input.admitted a", "turn.started a")
+		})
+	}
+}
+
 func TestFenceStopsTheStaleOwner(t *testing.T) {
 	eachStore(t, func(t *testing.T, openStore func() harness.Store) {
 		st := openStore()

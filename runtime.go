@@ -512,6 +512,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 			select {
 			case <-e.ready:
 			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
 				return
 			}
 			if e.s != nil {
