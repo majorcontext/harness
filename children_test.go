@@ -25,9 +25,11 @@ import (
 // history and records each request. A nil answer blocks until the call ends.
 type family struct {
 	answer func(last eventlog.Part) []eventlog.Message
-	owns   string
-	mu     sync.Mutex
-	reqs   []turn.Request
+	owns string
+	// usage is the usage of each model call.
+	usage eventlog.Usage
+	mu    sync.Mutex
+	reqs  []turn.Request
 }
 
 func (f *family) Capabilities(model string) turn.Capabilities {
@@ -39,6 +41,7 @@ func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 	f.reqs = append(f.reqs, req)
 	f.mu.Unlock()
 	m := req.History[len(req.History)-1]
+	out.Telemetry(turn.Telemetry{Usage: f.usage})
 	items := f.answer(m.Parts[len(m.Parts)-1])
 	if items == nil {
 		<-ctx.Done()

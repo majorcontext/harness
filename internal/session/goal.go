@@ -35,20 +35,67 @@ const (
 	transcriptBytes = 128 << 10
 )
 
-var errGoalCleared = errors.New("harness: goal cleared")
+var (
+	errGoalCleared = errors.New("harness: goal cleared")
+	// ErrGoalActive reports a StartGoal while a goal is active or paused.
+	ErrGoalActive = errors.New("harness: a goal is already active")
+	// ErrNoGoal reports an AdjustGoal with no active or paused goal.
+	ErrNoGoal = errors.New("harness: no active goal")
+)
 
 // SetGoal replaces the goal and resets its turn count. With no turn running
 // and no input queued, it admits the condition as an input with source
 // goal. Otherwise the next turn that ends is the first one judged.
 func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) error {
+	return a.setGoal(ctx, func(eventlog.Goal, bool) (*eventlog.GoalSet, error) {
+		return &eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns}, nil
+	})
+}
+
+// StartGoal is SetGoal with no turn limit. It fails with ErrGoalActive
+// while a goal is active or paused.
+func (a *Actor) StartGoal(ctx context.Context, condition string) error {
+	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+		if live {
+			return nil, ErrGoalActive
+		}
+		return &eventlog.GoalSet{Condition: condition}, nil
+	})
+}
+
+// AdjustGoal replaces the condition of the active or paused goal. It keeps
+// max_turns and the turn count, so an adjust never extends the turn limit.
+// The same condition changes nothing. It fails with ErrNoGoal when no goal
+// is active or paused.
+func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
+	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+		switch {
+		case !live:
+			return nil, ErrNoGoal
+		case g.Condition == condition:
+			return nil, nil
+		}
+		return &eventlog.GoalSet{Condition: condition, MaxTurns: g.MaxTurns, Turns: g.Turns}, nil
+	})
+}
+
+// setGoal appends the goal that set returns for the current goal, and
+// whether that goal is active or paused. A nil goal appends nothing.
+func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		events := append(a.withdrawGoal(), eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns})
+		g, _ := a.state.Goal()
+		gs, err := set(g, g.State == eventlog.GoalActive || g.State == eventlog.GoalPaused)
+		if err != nil || gs == nil {
+			reply(struct{}{}, err)
+			return
+		}
+		events := append(a.withdrawGoal(), *gs)
 		_, busy := a.state.Turn()
 		idle := !busy && len(a.state.Queue()) == len(events)-1
 		if idle {
-			events = append(append(events, a.dismissRequests()...), goalInput(condition))
+			events = append(append(events, a.dismissRequests()...), goalInput(gs.Condition))
 		}
-		err := a.append(events...)
+		err = a.append(events...)
 		if err == nil && idle && a.run == nil {
 			err = a.next(true)
 		}

@@ -15,8 +15,9 @@ import (
 
 // Session is a session that this runtime runs.
 type Session struct {
-	a            *session.Actor
-	hasEvaluator bool
+	a  *session.Actor
+	r  *Runtime
+	id string
 }
 
 // View returns the session as of its last durable record.
@@ -85,9 +86,16 @@ func admission(in protocol.Input) (eventlog.InputAdmitted, error) {
 }
 
 // Interrupt stops the running turn and returns after it has ended. The
-// partial turn stays in the log, and the next queued input starts.
+// partial turn stays in the log, and the next queued input starts. With
+// Tree, it then stops the turn of each descendant that this runtime runs.
+// A stopped descendant settles canceled with its parent, and starts no
+// turn of a parent inside the tree.
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
-	return s.a.Interrupt(ctx, req.TurnID)
+	err := s.a.Interrupt(ctx, req.TurnID)
+	if err != nil || !req.Tree {
+		return err
+	}
+	return s.r.interruptChildren(ctx, s.id)
 }
 
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An
@@ -96,7 +104,7 @@ func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
 	if strings.TrimSpace(g.Condition) == "" || g.MaxTurns < 0 {
 		return fmt.Errorf("%w: a goal needs a condition and max_turns >= 0", ErrInvalidRequest)
 	}
-	if !s.hasEvaluator {
+	if s.r.evaluator == "" {
 		return fmt.Errorf("%w: a goal needs goal_evaluator_model", ErrInvalidRequest)
 	}
 	return s.a.SetGoal(ctx, g.Condition, g.MaxTurns)

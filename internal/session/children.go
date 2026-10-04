@@ -67,10 +67,12 @@ func (a *Actor) report() {
 // Settlement returns the outcome of the last ended turn of child session
 // id, and the text that reports it to the parent: the last assistant text,
 // as the Task tool of Claude Code returns. ok is false while a turn runs,
-// is suspended, or waits for an answer.
+// is suspended, or waits for an answer, and after a completed turn while
+// an input waits: the next turn reports.
 func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, string, bool) {
 	last := s.LastEnded()
-	if _, busy := s.Turn(); busy || last.TurnID == "" || last.StopReason == eventlog.StopAwaitingInput {
+	_, busy := s.Turn()
+	if busy || last.TurnID == "" || last.StopReason == eventlog.StopAwaitingInput || last.StopReason == eventlog.StopCompleted && len(s.Queue()) > 0 {
 		return eventlog.ChildSettled{}, "", false
 	}
 	out := eventlog.OutcomeDone
@@ -85,13 +87,14 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, string, bo
 	if last.Error != "" {
 		b.WriteString(": " + last.Error)
 	}
-	if text := lastText(s.History()); text != "" {
+	if text := LastText(s.History()); text != "" {
 		b.WriteString("\n\n" + text)
 	}
 	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, b.String(), true
 }
 
-func lastText(h []eventlog.Message) string {
+// LastText returns the text of the newest assistant message with text in h.
+func LastText(h []eventlog.Message) string {
 	for _, m := range slices.Backward(h) {
 		var parts []string
 		for _, p := range m.Parts {

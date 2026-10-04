@@ -289,6 +289,9 @@ func (s *State) Unsettled() []string {
 	return out
 }
 
+// Children returns every spawned child, settled or not, sorted.
+func (s *State) Children() []string { return slices.Sorted(maps.Keys(s.children)) }
+
 // Usage returns the token usage summed over every ended turn.
 func (s *State) Usage() Usage { return s.usage }
 

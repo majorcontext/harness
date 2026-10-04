@@ -65,9 +65,9 @@ type Options struct {
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, or a built-in tool name. With Config.MCPServers, no
-	// name may be mcp, list_mcp_resources, read_mcp_resource, or start
-	// with mcp__.
+	// WorkDir, no name may be process, task, or a built-in tool name. With a
+	// goal evaluator, no name may be goal. With Config.MCPServers, no name
+	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
 	// AGENTS.md chain and skills when it starts, gets the file, search, and
@@ -143,8 +143,12 @@ func New(opts Options) (*Runtime, error) {
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	r.resolve = opts.Config.ResolveModel
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
-		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), roots: map[string]string{}}
+		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
+		roots: map[string]string{}, quiet: map[string]int{}}
 	tools := opts.Tools
+	if r.evaluator != "" {
+		tools = append(slices.Clip(tools), goalTool{r: r})
+	}
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
 		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes), taskTool{r: r})
@@ -332,7 +336,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a, hasEvaluator: r.evaluator != ""}, nil
+	return &Session{a: a, r: r, id: id}, nil
 }
 
 // mcpTools gives the MCP tools to each turn whose backend does not connect
@@ -369,13 +373,12 @@ func (r *Runtime) instructions() func(agent string) string {
 	}
 }
 
-// bind returns the tools of session id: the task tool starts children of id.
+// bind returns the tools of session id, with each session tool bound to id.
 func (r *Runtime) bind(id string) []turn.Tool {
 	tools := slices.Clone(r.tools)
 	for i, t := range tools {
-		if task, ok := t.(taskTool); ok {
-			task.parent = id
-			tools[i] = task
+		if b, ok := t.(interface{ bind(string) turn.Tool }); ok {
+			tools[i] = b.bind(id)
 		}
 	}
 	return tools

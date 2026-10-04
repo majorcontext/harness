@@ -94,6 +94,8 @@ func (c *Config) validateTaskLimits() error {
 		return fmt.Errorf("max_task_depth must not be negative, got %d", c.MaxTaskDepth)
 	case c.MaxConcurrentTasks < 0:
 		return fmt.Errorf("max_concurrent_tasks must not be negative, got %d", c.MaxConcurrentTasks)
+	case c.MaxTreeTokens < 0:
+		return fmt.Errorf("max_tree_tokens must not be negative, got %d", c.MaxTreeTokens)
 	}
 	return nil
 }

@@ -174,7 +174,7 @@ Free to change.
 | --- | --- |
 | `internal/server` | HTTP mapping of the Go API |
 | `internal/eventlog` | Event schema, record codec, `Apply`, and `Check` |
-| `internal/session` | Session actor, mailbox, state machines, views, replication; the child tree is planned |
+| `internal/session` | Session actor, mailbox, state machines, views, replication, and the child commands |
 | `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
 | `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
@@ -259,7 +259,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `turn.ended` | `turn_id`, `stop_reason`, `error?`, `usage` |
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
-| `goal.set` | `condition`, `max_turns` |
+| `goal.set` | `condition`, `max_turns`, `turns?` |
 | `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
 | `goal.changed` | `state`, `reason?`, `retry_at?` |
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
@@ -303,9 +303,9 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Submit(input)` | Append `input.admitted`; start a turn, queue, or steer |
 | `Interrupt(turnID?)` | Cancel the turn; reply when it has stopped |
 | `Update(settings)` | Check the model; append `settings.changed` |
-| `SetGoal(...)`, `ClearGoal()` | Append goal events |
+| `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
 | `Compact()` | Run a compaction as the run of the actor |
-| `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child |
+| `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool |
 | `Settle(outcome, report)` | Append `child.settled` and admit the report as an input with `source: child`; a settled child changes nothing |
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
 | `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
@@ -399,7 +399,8 @@ Goals follow Claude Code `/goal`. There is no deferred goal and no parked goal.
 - After each turn that completes or is interrupted, the evaluator runs as the run of the actor, as a compaction does. It reads the condition and the history, and returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `met` yields `achieved`, and `impossible` yields `failed`. The evaluator skips leading markdown marks. A reply with no verdict is `not_met`, and the reply is the guidance.
 - The evaluator is `goal_evaluator_model`, resolved through `aliases`. `SetGoal` without it is an invalid request. Its prompt copies the engine prompt, with a third form for `impossible`.
 - A turn or an evaluation that fails on a retryable error or a usage limit yields `paused` with `retry_at`. The wait starts at 30 s and doubles with each pause before the next verdict, up to 30 min. At `retry_at`, the goal becomes `active` and judges the last turn again after an evaluator error, or admits an input that continues the goal. Any input resumes the goal at once. An error the user must fix yields `failed`.
-- `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`.
+- `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`. `goal.set` carries `turns`, the count that the goal starts at: 0 for a new goal, and the current count for an adjust.
+- With `goal_evaluator_model`, the runtime adds the `goal` tool to each session, as the engine does. `status` reports whether a goal is active or paused and its condition. `set` calls `StartGoal`: `SetGoal` with no turn limit, which fails while a goal is active or paused. `adjust` calls `AdjustGoal`: it replaces the condition of the active or paused goal, keeps `max_turns` and the turn count, and does nothing for the same condition. So the model cannot extend its own turn limit. There is no `clear` action; clearing stays with the operator. The tool copies the engine description and error wording.
 - `ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends. When the actor then runs nothing, `ClearGoal` starts the next queued input. An interrupt stops only the turn, and the goal judges the partial turn. An interrupt during an evaluation stops nothing.
 - The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session judges the last turn when the goal has not judged it, and a `paused` goal keeps its retry time.
 - At the switch, the `goal_met_first_turn`, `goal_not_met_then_met`, `goal_exhausts_max_turns`, and `bifrost_goal_*` rows are the oracle. The deferred and parked rows are deleted.
@@ -431,10 +432,11 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 A child is a session with `parent_id`. The `task` tool starts it in the background, as the Task tool of Claude Code starts a background subagent. The runtime adds the `task` tool only with a `WorkDir`. The parent holds the child ID, not the child's state. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
 
 - Spawn. The tool reads the agent profile (default `general-purpose`) and checks the tree limits. The parent actor appends `child.spawned`. Then the runtime creates the child in one append: `session.created` with `parent_id`, `agent`, the model and settings of the parent, and the allowed tools of the parent narrowed by the profile; the task as an input with `source: parent`; and the `turn.started` of that input. The tool returns the child ID at once. A child that fails to start settles `failed` with no input, and the tool call fails.
-- Settle. When a turn of a child ends, the child reports to its parent: `done` for a completed turn, `failed` for a failed or crashed turn, `canceled` for a stopped turn. The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child, as the Task tool of Claude Code returns. The parent appends `child.settled`, with the child turn ID as `result_ref`, and the report as an input with `source: child`, in one append. An idle parent starts a turn with it; a busy parent queues it. A child settles once, so a later report changes nothing. Each turn end of a child reports, and the runtime opens a parent that it does not run, so a later input to a settled child opens its parent again.
+- Settle. When a turn of a child ends, the child reports to its parent: `done` for a completed turn, `failed` for a failed or crashed turn, `canceled` for a stopped turn. A completed turn with a queued input does not report; the next turn reports, as the engine runs a queued message before it notifies the parent. The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child, as the Task tool of Claude Code returns. The parent appends `child.settled`, with the child turn ID as `result_ref`, and the report as an input with `source: child`, in one append. An idle parent starts a turn with it; a busy parent queues it. A child settles once, so a later report changes nothing until a `send` of the `task` tool spawns it again. Each turn end of a child reports, and the runtime opens a parent that it does not run, so a later input to a settled child opens its parent again.
 - Crash and handoff. Each session follows its own rules. A child that a handoff suspended resumes when it opens. A crashed child turn ends `crashed` and settles `failed`. When a parent opens, it settles each unsettled child that has ended, because a crash can come between the `turn.ended` of the child and the `child.settled` of the parent. It settles a child with no log `failed` with no input, and opens each other child, which reports when its turn ends. No tool call runs again.
-- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned. A child that a parent opens after a restart does not count. A spawn past either limit fails the tool call. `HARNESS_MAX_TASK_DEPTH` and `HARNESS_MAX_CONCURRENT_TASKS` set the keys through `ApplyEnv`.
-- A client sends an input to a child, or interrupts it, as it does any session. There is no tree interrupt, no token budget, and no `send`, `status`, `cancel`, or `log` action. At the switch, the `contract_children` rows are the oracle; the cancel-tree row waits for `interrupt {tree}`.
+- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned or opened: a child that a parent opens after a restart counts too, and so does a settled child that a `send` runs again. `max_tree_tokens` (default 0, no limit) is the token budget of a tree, as in the engine: a spawn fails once the root and its descendants have used that many tokens, input, output, and cache tokens summed. The sum reads the usage of the ended turns in each log of the tree, so it holds across a restart. A spawn past any limit fails the tool call. `HARNESS_MAX_TASK_DEPTH`, `HARNESS_MAX_CONCURRENT_TASKS`, and `HARNESS_MAX_TREE_TOKENS` set the keys through `ApplyEnv`.
+- Actions. The `task` tool keeps the engine actions and wording. `action` defaults to `spawn`. `cancel`, `status`, `send`, and `log` take a `session_id` that the caller spawned, directly or through its own children; the tool walks the `session.created` records of the target to check it. `status` reads the log of the target: its status (`running` until its last turn ends, then its outcome), parent, depth, children, agent, final text, failure, and usage. `log` returns the newest `tail` messages (default 20, at most 100) as text entries, each cut at 2000 runes, newest first within 20000 runes. `send` admits the text as a steer input with `source: parent`, so a running child takes it at its next item boundary and an idle child starts a turn. When the parent has settled the child, the parent appends `child.spawned` again first, so the child reports the new turn. `cancel` interrupts the target and each of its descendants, as `interrupt {tree}` does; the report of the target reaches its parent.
+- Tree interrupt. `interrupt {tree}` stops the turn of the session, then the turn of each descendant that this runtime runs. A stopped descendant settles `canceled` with no report input, so no parent inside the tree starts a turn. A queued input of a descendant then starts, as after any interrupt. At the switch, the `contract_children` rows are the oracle; the cancel-tree row changes by design: the canceled child takes its queued send, and a later send is not refused.
 
 ### Shutdown
 
@@ -469,7 +471,7 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, and `GET /health`. Phase 4 adds the other routes; `requests` comes with phase 5 and `tree` with children. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -627,11 +629,11 @@ type Toolset struct {
 }
 ```
 
-- `New` builds the tool list from `Options.Tools` and, with a `WorkDir`, the `process` tool. An empty or repeated name fails `New`. The built-in tools of a `WorkDir` belong to each session; see "Built-in tools".
+- `New` builds the tool list from `Options.Tools`, the `goal` tool with `goal_evaluator_model`, and, with a `WorkDir`, the `process` and `task` tools. An empty or repeated name fails `New`. The built-in tools of a `WorkDir` belong to each session; see "Built-in tools".
 - When a turn starts, `turn.Restrict` applies the session's `AllowedTools`. The `Source` gets the same list for each model call.
 - `internal/tool/mcpsrc` and `internal/tool/pluginsrc` are the `Source`s, joined by `turn.Sources`.
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
-- No tool receives a session.
+- No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.
 
 Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `<workdir>/.agents/*.md` at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. Tool names differ by backend, so a spawn keeps only the names of a profile that the child has: a runtime tool or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid, or that repeats a name, is skipped with a WARN log line. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child, which the child reads at its first turn after it opens.
 
@@ -744,7 +746,7 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Worktrees, `workdir_isolation`, worktree sweep | Delete |
 | Modal guide and `scripts/modal-e2e.py` | Delete |
 | `/debug/pprof`, `/debug/goroutines` | Delete |
-| `cancel_tree` | Merge into `interrupt {tree}` |
+| `cancel_tree` | Merged into `interrupt {tree}` |
 | `HARNESS_SEQUENTIAL_TOOLS`, read-budget and tuning knobs | Delete |
 | `/wait`, `/request`, `/session/status`, `/event/tip` | Delete; the new API covers them |
 
