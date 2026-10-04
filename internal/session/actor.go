@@ -80,6 +80,9 @@ type Config struct {
 	// Report receives the outcome of each turn of a child session that
 	// ends, for its parent. It must not wait for the actor. nil: no report.
 	Report func(parent string, s eventlog.ChildSettled, text string)
+	// Agent are the file tools of a coding agent. A harness-loop turn gets
+	// them and read_tool_result, and retains each large result. nil: none.
+	Agent []turn.Tool
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.

@@ -259,3 +259,11 @@ func TestAccessorsDoNotAliasState(t *testing.T) {
 		t.Fatal("a caller changed the state through an accessor")
 	}
 }
+
+func TestRetainedIsACopy(t *testing.T) {
+	s := replay(t, []Event{created(), ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "k"}})
+	s.Retained()[0].Handle = "x"
+	if got := s.Retained()[0].Handle; got != "trh_1" {
+		t.Errorf("handle after a caller write = %q, want trh_1", got)
+	}
+}

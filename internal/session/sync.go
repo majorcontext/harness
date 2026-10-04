@@ -98,11 +98,16 @@ func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
 	if err != nil {
 		return err
 	}
-	s, ok := env.Event.(eventlog.BackendState)
-	if !ok {
+	var key string
+	switch e := env.Event.(type) {
+	case eventlog.BackendState:
+		key = e.BlobKey
+	case eventlog.ToolResultRetained:
+		key = e.BlobKey
+	default:
 		return nil
 	}
-	rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, s.BlobKey)
+	rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, key)
 	if err != nil {
 		return err
 	}
@@ -114,7 +119,7 @@ func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
 	if b.Blobs == nil {
 		b.Blobs = map[string][]byte{}
 	}
-	b.Blobs[s.BlobKey] = data
+	b.Blobs[key] = data
 	return nil
 }
 

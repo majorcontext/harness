@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 and 2 are built. Phase 3 is built except tool-result retention. The new runtime runs beside `engine` and `server` until the phase 4 switch. A statement that names a later phase describes planned work.
+Phases 1 to 3 are built. The new runtime runs beside `engine` and `server` until the phase 4 switch. A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -111,11 +111,11 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
-	Tools          []Tool // embedder tools, beside MCP tools and the process tool
-	// WorkDir is the directory of a coding agent. It grants command
-	// execution through the process tool's declare action. Empty: no file
-	// is read, no process runs, and the system prompt is
-	// append_system_prompt alone.
+	Tools          []Tool // embedder tools, beside the built-in, process, task, MCP, and plugin tools
+	// WorkDir is the directory of a coding agent. Each session gets the
+	// built-in tools, bash among them, so it grants command execution.
+	// Empty: no file is read, no process runs, no built-in tool exists,
+	// and the system prompt is append_system_prompt alone.
 	WorkDir string
 }
 
@@ -180,8 +180,8 @@ Free to change.
 | `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
 | `internal/tool/mcpsrc` | A `turn.Source` that gives MCP tools to each model call |
 | `internal/tool/pluginsrc` | A `turn.Source` and `turn.Hooks` that give the plugin tools, hooks, and events to each session |
-| `internal/tool/builtin` | Planned: the built-in tools |
-| `internal/toolresult` | Planned for phase 3: large-result retention and `read_tool_result`, at parity with the engine |
+| `internal/tool/builtin` | The file, search, and shell tools of a coding agent |
+| `internal/toolresult` | Large-result retention and `read_tool_result`, at parity with the engine |
 | `internal/prompt` | System-prompt segments; agent profiles are planned |
 
 Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
@@ -267,6 +267,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
 | `context.measured` | `tokens`, `window`, `source` |
 | `backend.state` | `backend`, `blob_key` |
+| `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
 
 Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `status`. Each has `ephemeral: true` and the last durable seq, and an item frame carries its `item_id`, so a client can place it.
 
@@ -626,13 +627,34 @@ type Toolset struct {
 }
 ```
 
-- `New` builds the tool list from `Options.Tools` and, with a `WorkDir`, the `process` tool. An empty or repeated name fails `New`.
+- `New` builds the tool list from `Options.Tools` and, with a `WorkDir`, the `process` tool. An empty or repeated name fails `New`. The built-in tools of a `WorkDir` belong to each session; see "Built-in tools".
 - When a turn starts, `turn.Restrict` applies the session's `AllowedTools`. The `Source` gets the same list for each model call.
-- `internal/tool/mcpsrc` and `internal/tool/pluginsrc` are the `Source`s today, joined by `turn.Sources`. The planned built-in tools join through the same two seams.
+- `internal/tool/mcpsrc` and `internal/tool/pluginsrc` are the `Source`s, joined by `turn.Sources`.
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session.
 
 Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `<workdir>/.agents/*.md` at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. Tool names differ by backend, so a spawn keeps only the names of a profile that the child has: a runtime tool or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid, or that repeats a name, is skipped with a WARN log line. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child, which the child reads at its first turn after it opens.
+
+### Built-in tools
+
+With a `WorkDir`, each session of the harness loop gets the built-in tools of the engine, with their behavior, limits, and text: `read_file`, `write_file`, `edit_file`, `glob`, `grep`, `ls`, `bash`, and `read_tool_result`. An embedder tool or a plugin tool with one of these names fails. `session_info` and `model` are not in this set; see Open questions. Without a `WorkDir`, a session has none of them, and no result is retained. Switch oracle: the `file_tools_*` rows; `internal/tool/builtin` runs their calls with the texts of their goldens.
+
+- `session.Config.Agent` gives each session its own file tools, because the `write_file` guard belongs to one session: `write_file` overwrites only a file that the session read or wrote, with no change on disk since. As in the engine, the guard is in memory, so after `Open` the model reads a file again before it overwrites it. The tools cannot be one `Options.Tools` list for the runtime.
+- The actor builds `read_tool_result` over itself, so the tool gets its dependencies when it is built.
+- A backend that owns the loop, such as Claude Code, gets none of them and has no retention. It has its own tools.
+- One file-size cap of 20 MiB replaces the read budget of the engine. `read_file`, `edit_file`, and the `write_file` guard read at most that many bytes of a file and fail on a larger one. Tools run one at a time, so the cap bounds the memory of the reads.
+- `read_file` reads an image as one summary line, because the log has no image part. `bash` gets no `shell.env` additions, because the runtime does not dispatch that hook.
+
+### Tool-result retention
+
+`internal/toolresult` holds the retention of the engine and `read_tool_result`, with its limits and text.
+
+- A tool result above 16384 bytes has its secrets masked, goes to a blob, and the history holds a header with a `trh_N` handle and the first 16384 bytes. A result that fits after the mask stays inline. `read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`. Its own result is never retained.
+- The `turn.Source` of an agent turn adds a `turn.Hooks` that retains each result after the plugin hooks, so the blob holds the text that the model would see. The turn records the preview, and the next model call of the turn never carries the whole result. The blob is written outside the actor, and the record is appended only while the turn runs.
+- A `tool_result.retained` record names the blob, and `Sync` carries the blob with the record, as for `backend.state`. The handle numbers count these records, so a replay and the next owner continue the count. The blob key is the handle and the fence seq, so a fenced owner never overwrites the blob of the next owner.
+- A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call.
+- A result that would take the retained total of the session above 4 MiB keeps its preview with a notice and no handle, and nothing is written. A failed write keeps the whole result.
+- Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds.
 
 ### MCP tools
 
@@ -824,7 +846,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; the built-in tools, and large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
@@ -833,7 +855,7 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 
 ## Open questions
 
-None remain.
+- Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
 
 Decided:
 
