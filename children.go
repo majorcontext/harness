@@ -18,7 +18,7 @@ import (
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
 func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string, error) {
-	profiles := prompt.Profiles(r.workDir)
+	profiles := prompt.Profiles(r.agentDirs)
 	p, ok := profiles[agent]
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q; the agents are %s", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))

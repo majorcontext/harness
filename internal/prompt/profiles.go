@@ -47,33 +47,36 @@ var plan = Profile{Name: "plan", Tools: readOnly,
 // profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
 var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
-// Profiles returns the built-in profiles and each valid <workDir>/.agents/*.md
-// in the agent format of Claude Code, by name. A file replaces a built-in
-// profile of its name. A file that is not valid, or that repeats a name, is
-// skipped with a WARN log line.
-func Profiles(workDir string) map[string]Profile {
+// Profiles returns the built-in profiles and each valid *.md file of dirs in
+// the agent format of Claude Code, by name. A file replaces a built-in
+// profile of its name. A file that is not valid, or that repeats the name of
+// an earlier file, is skipped with a WARN log line.
+func Profiles(dirs []string) map[string]Profile {
 	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
-	if workDir == "" {
-		return out
-	}
-	dir := filepath.Join(workDir, ".agents")
-	entries, _ := os.ReadDir(dir)
 	seen := map[string]bool{}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+	read := map[string]bool{}
+	for _, dir := range dirs {
+		if dir = filepath.Clean(dir); read[dir] {
 			continue
 		}
-		path := filepath.Join(dir, e.Name())
-		p, err := profile(path)
-		if err == nil && seen[p.Name] {
-			err = errDuplicate
+		read[dir] = true
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			p, err := profile(path)
+			if err == nil && seen[p.Name] {
+				err = errDuplicate
+			}
+			if err != nil {
+				slog.Warn("prompt: agent profile skipped", "path", path, "err", err)
+				continue
+			}
+			seen[p.Name] = true
+			out[p.Name] = p
 		}
-		if err != nil {
-			slog.Warn("prompt: agent profile skipped", "path", path, "err", err)
-			continue
-		}
-		seen[p.Name] = true
-		out[p.Name] = p
 	}
 	return out
 }

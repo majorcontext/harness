@@ -460,3 +460,46 @@ func TestASpawnOfAnUnsettledChildNeedsNoSlot(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
+	dir := t.TempDir()
+	lead := strings.Replace(readerProfile, "name: reader", "name: lead", 1)
+	for path, body := range map[string]string{".agents/reader.md": readerProfile, "team/lead.md": lead} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, path)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		agent string
+		kids  int
+		want  string
+	}{
+		{"lead", 1, ""},
+		{"reader", 0, `task: unknown agent "reader"; the agents are explore, general-purpose, lead, plan`},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := &family{answer: delegation(tc.agent, 1, done)}
+				r := familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{AgentDefsDirs: []string{"team"}}, dir)
+				submit(t, create(t, r), text("a", "delegate"))
+				kids := children(t, r)
+				switch {
+				case len(kids) != tc.kids:
+					t.Errorf("children %+v, want %d", kids, tc.kids)
+				case tc.want != "":
+					if _, got := f.last("s1", tc.want); got == "" {
+						t.Errorf("no task error %q", tc.want)
+					}
+				default:
+					if req, _ := f.last(kids[0].ID, "child work"); !strings.HasSuffix(req.Instructions, "Only read files.") {
+						t.Errorf("child prompt %q, want the profile of team/lead.md", req.Instructions)
+					}
+				}
+				closeRuntime(t, r)
+			})
+		})
+	}
+}

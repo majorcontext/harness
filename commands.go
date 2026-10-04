@@ -86,14 +86,14 @@ func supported(spec *command.Spec) bool {
 	return spec.Kind == command.KindControl && ok
 }
 
-// commandDirs returns the prompt-command dirs of a WorkDir: commands_dirs,
-// relative to it, or its .agents/commands. No WorkDir has none.
-func commandDirs(workDir string, dirs []string) []string {
+// resolveDirs returns dirs, relative to workDir, or the def dir of workDir
+// when dirs is nil. An empty workDir has none.
+func resolveDirs(workDir string, dirs []string, def string) []string {
 	if workDir == "" {
 		return nil
 	}
 	if dirs == nil {
-		return []string{filepath.Join(workDir, ".agents", "commands")}
+		return []string{filepath.Join(workDir, def)}
 	}
 	out := make([]string, len(dirs))
 	for i, d := range dirs {

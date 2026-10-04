@@ -434,3 +434,29 @@ func TestRuntimeOnABackendValidatesModelsAsProductionDoes(t *testing.T) {
 		t.Errorf("Update to a provider that no backend serves = %v, want %v", err, harness.ErrModelUnavailable)
 	}
 }
+
+func TestNewRejectsAKeyThatTheRuntimeIgnores(t *testing.T) {
+	n := 1
+	for key, cfg := range map[string]config.Config{
+		"instructions_mode":          {InstructionsMode: "full"},
+		"model_tool":                 {ModelTool: new(false)},
+		"event_sink":                 {EventSink: &config.EventSinkSpec{URL: "http://127.0.0.1:1"}},
+		"snapshot_every_records":     {SnapshotEveryRecords: &n},
+		"tool_result_inline_bytes":   {ToolResultInlineBytes: &n},
+		"tool_result_retained_bytes": {ToolResultRetainedBytes: &n},
+	} {
+		t.Run(key, func(t *testing.T) {
+			_, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: cfg})
+			if !errors.Is(err, harness.ErrInvalidRequest) || !strings.Contains(err.Error(), key) {
+				t.Fatalf("New = %v, want ErrInvalidRequest that names %s", err, key)
+			}
+		})
+	}
+	for name, cfg := range map[string]config.Config{"session_dir": {SessionDir: "/x"}, "session_sync": {SessionSync: "volume"}, "agent_defs_dirs": {AgentDefsDirs: []string{"a"}}} {
+		t.Run(name+" is accepted", func(t *testing.T) {
+			if _, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: cfg}); err != nil {
+				t.Fatalf("New = %v", err)
+			}
+		})
+	}
+}

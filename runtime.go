@@ -116,8 +116,10 @@ type Runtime struct {
 	banner string
 	// questions lets a backend ask the user a question.
 	questions bool
-	// commandDirs are the prompt-command dirs; nil without a WorkDir.
+	// commandDirs are the prompt-command dirs, and agentDirs the agent profile
+	// dirs; both are nil without a WorkDir.
 	commandDirs []string
+	agentDirs   []string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
 	keep      int
@@ -145,6 +147,9 @@ func New(opts Options) (*Runtime, error) {
 	if err := opts.Config.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
+	if key := ignoredKey(opts.Config); key != "" {
+		return nil, fmt.Errorf("%w: config key %s is not read by the runtime", ErrInvalidRequest, key)
+	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
 		sessions:  map[string]*entry{},
@@ -156,7 +161,8 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	r.resolve = opts.Config.ResolveModel
-	r.commandDirs = commandDirs(opts.WorkDir, opts.Config.CommandsDirs)
+	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
+	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
 		locks: map[string]*treeLock{}, quiet: map[string]int{}}
@@ -397,7 +403,7 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	case agent == "":
 		return prompt.Profile{}
 	}
-	return prompt.Profiles(r.workDir)[agent]
+	return prompt.Profiles(r.agentDirs)[agent]
 }
 
 // instructions reads the system prompt of a session once and returns the
