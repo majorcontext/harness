@@ -118,6 +118,11 @@ type Options struct {
 	// Empty: no file is read, no process runs, no built-in tool exists,
 	// and the system prompt is append_system_prompt alone.
 	WorkDir string
+	// Version is the build version that the engine banner names. Empty: no banner.
+	Version string
+	// AskUserQuestion lets a backend that owns its loop ask the user a question,
+	// which the embedder answers with Session.Resolve.
+	AskUserQuestion bool
 }
 
 // A Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -136,7 +141,7 @@ func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) // Submit, and whether the input repeats
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
-func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error // before the phase 4 switch
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
@@ -326,7 +331,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Submit(input)` | Append `input.admitted`; start a turn, queue, or steer |
 | `Interrupt(turnID?)` | Cancel the turn; reply when it has stopped |
 | `Cancel()` | Append `input.withdrawn` for each queued input, then cancel the turn, in one step; reply when it has stopped |
-| `Update(settings)` | Check the model; append `settings.changed` |
+| `Update(settings)` | Check the model; append `settings.changed`. A running turn takes the new model and settings at its next model call, unless the new model has another kind of backend: one that owns its loop or one that does not |
 | `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
 | `Compact(keep)` | Run a compaction as the run of the actor; `keep` replaces `compaction_keep_turns` |
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
@@ -334,7 +339,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
 | `Record(command)` | Append `command.recorded`; a repeated input ID returns the newest status |
 | `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
-| `Resolve(requestID, resolution)` | Before the phase 4 switch: append `request.resolved`; resume the turn |
+| `Resolve(requestID, resolution)` | Append `request.resolved`; an answer starts a turn with no input, and a dismissal starts none |
 
 The actor appends with no other goroutine. It checks the batch with `eventlog.Check`, appends it with `Store.Append`, applies each record, and publishes a new view. A command that needs durability replies after `Apply`. The store write is the only wait on disk in the actor.
 
@@ -345,7 +350,7 @@ Lifecycle:
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
 - When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; `OpenView` has no backend and reads the window of the model from `modelmeta`.
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; `OpenView` has no backend and reads the window of the model from `modelmeta`. `Session.View` and `Runtime.List` also fill `Plugins`, the name, state (`not-spawned`, `running`, or `errored`), tools, and hooks of each configured plugin: the plugin host owns that state, and the log does not hold it.
 
 ### Ownership
 
@@ -411,7 +416,7 @@ A turn ends early for one of five causes. A live owner carries the first three w
 | `goal_cleared` | `ClearGoal` during a goal turn | Same as `stopped` |
 | `handoff` | `Session.Release`, `Runtime.Close` | Stop at an item boundary: admit no new tool call, let running tools finish within the budget, append `turn.suspended`. A delegated backend (`OwnsLoop`) cannot stop at an item boundary, so a handoff interrupts it, records every item that it already wrote, gives each open tool call a cut-off result, and appends `turn.suspended`. A suspended turn has no open tool call, so the next owner resumes it automatically. |
 | `provider_exhausted` | A usage limit of the provider: a spent quota, credit balance, or spend cap | Append `turn.ended{failed, provider_exhausted}`; keep the partial; queued inputs wait for the next input |
-| `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then starts the next queued input, or waits for input when none is queued. |
+| `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again; an assistant item, `[harness: this turn was interrupted by a process restart and could not complete]`, closes the turn before `turn.ended`, so the next user message does not join it on the wire. The session then starts the next queued input, or waits for input when none is queued. |
 
 After any other failed turn, the next queued input runs, as after a completed turn. Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule: it starts the next queued input when no turn is open, except after a turn that ended `provider_exhausted`.
 
@@ -454,7 +459,7 @@ Request:
 pending ─► answered | dismissed
 ```
 
-The schema and `Apply` hold requests today. Before the phase 4 switch, a backend can open a request and `Resolve` answers it, which ports the `AskUserQuestion` of Claude Code. The Codex CLI approvals come with phase 5. An input admitted while a request is open dismisses it first.
+A backend opens a request with `Sink.Ask` on an open tool call of its turn, with the call ID as the request ID. The turn then ends `awaiting_input`, keeps the call open, and the session reads `waiting`. `Resolve` closes the request. `request.resolved` is the result of the call: the history holds it as a tool result, and `Sink.Resolution` returns the record. An answer starts a turn with no input; a dismissal starts none. An input admitted while a request is open dismisses it first, and so does a queued input that starts after the turn. Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal. The Codex CLI approvals come with phase 5.
 
 ### Compaction
 
@@ -515,7 +520,7 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with `Resolve`, before the switch. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `POST /sessions/{id}/requests/{request}`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -550,7 +555,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `invalid_request` | 400 |
 | `session_not_found` | 404 |
 | `session_exists` | 409 |
-| `request_not_pending` (before the phase 4 switch) | 409 |
+| `request_not_pending` | 409 |
 | `session_not_owned` | 409 |
 | `input_conflict` | 409 |
 | `turn_mismatch` | 409 |
@@ -680,6 +685,10 @@ Delegating a turn to another agent harness is permanent. Claude Code is built, a
 
 `internal/backend/external` holds what every adapter shares: process supervision, the line-protocol transport, the mirror writer, and the MCP bridge. `internal/backend/claudecode`, and `internal/backend/codexcli` in phase 5, hold only the mapping in the table.
 
+- History bridge. A session may move between a backend that owns its loop and any other backend. A stream-json input cannot seed prior history, so each turn of such a backend has the harness tool `get_conversation_history`, which reads the live history page by page and which no `AllowedTools` list hides. `State.Foreign` reports, from the log alone, a message that another provider recorded after the newest message of this provider before the current turn: each history entry names the provider of the session model when it was recorded. Then the backend adds one line to its single `--append-system-prompt` value that tells the CLI to call the tool before it answers. A turn after a turn of the same provider adds none, and nothing is stored.
+- Subagent frames. Claude Code runs with `--forward-subagent-text`. The text, the tool calls, and the tool results of a subagent become items, and `Message.ParentCallID` names the tool call that started the subagent, so a client nests them. History hands the model the parts alone.
+- Questions. A defer hook parks each `AskUserQuestion` call and the CLI answers its result with `stop_reason: tool_deferred`; the backend opens the request and keeps the call ID in its `backend.state` blob. The next run reads the resolution through `Sink.Resolution`. An answer with no input answers the call over the control channel, with the answers added to the tool input, and the run skips the CLI result of that call, which the log already holds. Any other resolution denies the call with an interrupt in a run of its own, which records nothing, before the prompt runs.
+
 ### Warm-up
 
 Warm-up is planned before the phase 4 switch, as the port of Codex prewarm. `turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn waits for an in-flight warm-up, as the old engine's first prompt does. No warm-up state lives on the session.
@@ -785,7 +794,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. The actor pins that place, so each request is a prefix of the next, and a compaction can only move it earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 
@@ -861,7 +870,7 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 - `harnesstest.NewOpenAI` serves the ChatGPT Codex Responses wire over SSE and websocket from the same `Step` script. It answers a websocket prewarm without consuming a step, rejects a `previous_response_id` that its connection never completed, and can report `x-codex-*` usage headers or a `codex.rate_limits` frame, drop a response mid-turn, or refuse the websocket upgrade. `WireEvents` lists each dial, prewarm, and request. The Codex scenarios record it under `calls.codex_wire`.
 - `scenario.chat` serves the model through `NewChat` and points the config at it as provider `bifrost`.
 - The runtime host is the oracle for the new runtime. With `HARNESS_E2E_RUNTIME=1`, each row also runs on `harness.Runtime` in process, through `Runtime.Handler`, on a `DiskStore`, with the config that serve reads. The runtime mints each session ID. A restart closes the runtime and opens a new one on the same store. A kill copies the store, closes the old runtime on its own directory under an ended context, and opens the new runtime on the copy, so nothing that the old runtime does after the kill reaches the next owner. The driver reads the transcript from the session events, as the model sees it, and maps each old route to its new route. It never calls a route that this spec deletes; the call records `deleted_by_design`. A wait for an idle child also waits until its parent records `child.settled` and is idle, because the report of the child can start a turn of the parent.
-- Each golden has one disposition in `e2e/runtime_rows_test.go`: the same golden; a runtime golden under `e2e/testdata/runtime`; deleted by a cited line of this spec; or pending on the findings, phases, or lines of this spec that it waits for. A runtime golden cites each line of this spec that decides one of its differences, and each finding that owns another. Every break that no decision covers is a line under Open questions, which a row cites like any other line. `F01` to `F24` are the findings of the re-architecture review, and `TestRuntimeRows` accepts no other finding ID. The same and re-golden rows gate the runtime host. A pending row runs in a child test process as an expected failure: the run fails when a pending row matches its serve golden, so it must become a same row. A pending row with a by-design difference never matches serve, so a fix gives it no signal: its owner moves it to a re-golden row in the PR that lands the fix. `TestRuntimeRows` checks that each golden has one disposition and that each citation holds. A same row compares with its serve golden less three suite breaks that wait for their port (see Closed parity questions): the `model` and `session_info` tools, and the engine banner of the first user message, which the Codex wire also counts as one input item. CI runs the runtime host in a step that does not gate until the phase 4 switch.
+- Each golden has one disposition in `e2e/runtime_rows_test.go`: the same golden; a runtime golden under `e2e/testdata/runtime`; deleted by a cited line of this spec; or pending on the findings, phases, or lines of this spec that it waits for. A runtime golden cites each line of this spec that decides one of its differences, and each finding that owns another. Every break that no decision covers is a line under Open questions, which a row cites like any other line. `F01` to `F24` are the findings of the re-architecture review, and `TestRuntimeRows` accepts no other finding ID. The same and re-golden rows gate the runtime host. A pending row runs in a child test process as an expected failure: the run fails when a pending row matches its serve golden, so it must become a same row. A pending row with a by-design difference never matches serve, so a fix gives it no signal: its owner moves it to a re-golden row in the PR that lands the fix. `TestRuntimeRows` checks that each golden has one disposition and that each citation holds. A same row compares with its serve golden less two suite breaks that wait for their port (see Closed parity questions): the `model` and `session_info` tools. CI runs the runtime host in a step that does not gate until the phase 4 switch.
 - `HARNESS_E2E_COVER=1 go test -race ./e2e/ -run TestContract` builds an instrumented binary, runs the contract scenarios, and prints the statement coverage by package from `TestMain`. It appends a Markdown table to `$GITHUB_STEP_SUMMARY` when that variable is set. Test cleanup sends SIGTERM before SIGKILL so a serve process flushes its counters. CI runs the command without gating.
 
 Today ~70% of 127k test lines read unexported state and will not survive the restructure. The target is 40k–50k test lines.
@@ -947,7 +956,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
 | 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; the built-in tools, and large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
-| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal, including the journals in archived boxes, to the event log in the quiesced window, before the new harness starts; see "Old-format migration". Merged before the switch: `Runtime.Handler`, the box routes and slash commands, the MCP tools, the plugins, the processes and the `process` tool, the prompt builder, the workspace route, and `harness/migrate` with `cmd/harness-migrate`. Still to come before the switch: requests with `Resolve`, `Warmer`, and the parity ports in Decided. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
+| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal, including the journals in archived boxes, to the event log in the quiesced window, before the new harness starts; see "Old-format migration". Merged before the switch: `Runtime.Handler`, the box routes and slash commands, the MCP tools, the plugins, the processes and the `process` tool, the prompt builder, the workspace route, and `harness/migrate` with `cmd/harness-migrate`. Also merged before the switch: requests with `Resolve`, the engine banner, the plugin inventory, the crash marker, the MCP connect reason, the history bridge, the frames of a subagent, and the settings change in the middle of a turn. Still to come before the switch: the `session_info` and `model` tools. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli` with its approvals | None |
 | 6 | Delete `engine`, `server`, the migration tool, dead features; move leaves to `internal/` | None |
 
@@ -963,10 +972,10 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 Andy closed these on 2026-10-04: the switch keeps each one, at parity with the engine.
 
 - Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
-- Does the switch keep the engine banner, `[engine: harness <version> · session_sync=… · engine started …]` in `<harness-engine-context>` tags, that serve adds to the first user message of a session? The runtime sends none, so each request golden differs there.
-- Does the switch keep the plugin inventory? The serve session view lists each plugin with its hooks, tools, and state. `protocol.Session` has no such field.
-- Does the switch keep the crash marker? After a crashed turn, serve adds the assistant message `[harness: this turn was interrupted by a process restart and could not complete]`. The runtime adds none, so the next user message joins the crashed one on the wire.
-- Does the switch keep the classified reason of a failed MCP connect? A server that fails the initialize call reads `initialize failed` in serve and `request failed` in the runtime.
+- Does the switch keep the engine banner, `[engine: harness <version> · session_sync=… · engine started …]` in `<harness-engine-context>` tags? Yes, built: see "Prompt".
+- Does the switch keep the plugin inventory? Yes, built: `protocol.Session.Plugins` lists each plugin with its hooks, tools, and state.
+- Does the switch keep the crash marker? Yes, built: a crashed turn ends with the assistant message `[harness: this turn was interrupted by a process restart and could not complete]`.
+- Does the switch keep the classified reason of a failed MCP connect? Yes, built: `connect` names `initialize timed out`, `initialize cancelled`, `connection refused`, `connection failed`, or `initialize failed`.
 
 ## Decided
 
