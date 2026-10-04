@@ -296,7 +296,7 @@ func (s *State) Apply(r Record) error
 
 The runtime reads no old format: not the current journal, index, snapshot, or `events.jsonl`. No session history is lost at the cutover.
 
-A one-time Go migration tool converts each old session journal into `harness.Store` records through `eventlog`. Its inputs are the per-session journal files of the engine on each box disk and the `box_journal_*` mirror tables of boxes. The tool runs in the quiesced window of the cutover, before the new harness starts. Each converted session opens with its full conversation, so the agent keeps its context and the console keeps its transcript.
+A one-time Go migration tool converts each old session journal into `harness.Store` records through `eventlog`. Its inputs are the per-session journal files of the engine on each box disk and the `box_journal_*` mirror tables of boxes. The tool also copies the retained tool-result files of each session into `Store` blobs, so `read_tool_result` reads a converted handle. The tool runs in the quiesced window of the cutover, before the new harness starts. Each converted session opens with its full conversation, so the agent keeps its context and the console keeps its transcript.
 
 - An archived box is converted when it is restored.
 - The tool verifies each session: the message count and the last message of the new log match the old journal.
@@ -905,6 +905,7 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 
 ## Open questions
 
+- An archived box can be restored after phase 6 deletes the migration tool. Are all archived boxes converted before phase 6, or does a converter stay for a late restore?
 - Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
 
 Decided:
