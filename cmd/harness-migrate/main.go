@@ -70,13 +70,17 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	for _, r := range results {
+		var err error
 		switch {
 		case r.Err != nil:
-			fmt.Fprintf(out, "FAILED %s: %v\n", r.Session, r.Err)
+			_, err = fmt.Fprintf(out, "FAILED %s: %v\n", r.Session, r.Err)
 		case r.Skipped:
-			fmt.Fprintf(out, "skipped %s: the store holds it\n", r.Session)
+			_, err = fmt.Fprintf(out, "skipped %s: the store holds it\n", r.Session)
 		default:
-			fmt.Fprintf(out, "converted %s: %d messages\n", r.Session, r.Messages)
+			_, err = fmt.Fprintf(out, "converted %s: %d messages\n", r.Session, r.Messages)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if n := len(migrate.Failed(results)); n > 0 {

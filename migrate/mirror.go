@@ -108,10 +108,10 @@ func Mirror(ctx context.Context, records []json.RawMessage, st harness.Store) ([
 // outcome is the outcome that the runtime settles a child with when its
 // last turn ended as e.
 func outcome(e eventlog.TurnEnded) eventlog.Outcome {
-	switch {
-	case e.StopReason == eventlog.StopFailed:
+	switch e.StopReason {
+	case eventlog.StopFailed:
 		return eventlog.OutcomeFailed
-	case e.StopReason == eventlog.StopInterrupted:
+	case eventlog.StopInterrupted:
 		return eventlog.OutcomeCanceled
 	}
 	return eventlog.OutcomeDone
