@@ -8,6 +8,49 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// Toolset is the tools of one model call.
+type Toolset struct {
+	// Tools are described to the model.
+	Tools []Tool
+	// Deferred are not described, but the model may call them.
+	Deferred []Tool
+	// Prompt follows the system prompt.
+	Prompt string
+}
+
+// Source gives tools that can change between the model calls of a turn.
+type Source interface {
+	// Toolset returns the tools of the next model call. history is the
+	// conversation so far; allowed restricts the tools as AllowedTools does.
+	Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset
+}
+
+// describe sets the tools and prompt of call and returns the tools it may
+// run. all describes every tool, for a backend that owns the loop.
+func describe(ctx context.Context, call *Request, tools []Tool, src Source, all bool) []Tool {
+	ts := Toolset{Tools: tools}
+	if src != nil {
+		more := src.Toolset(ctx, call.History, call.AllowedTools)
+		ts.Tools, ts.Deferred, ts.Prompt = append(slices.Clip(tools), more.Tools...), more.Deferred, more.Prompt
+	}
+	if all {
+		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
+	}
+	call.Tools = nil
+	for _, t := range ts.Tools {
+		call.Tools = append(call.Tools, t.Spec())
+	}
+	switch {
+	case call.Instructions == "":
+		call.Instructions = ts.Prompt
+	case ts.Prompt != "":
+		call.Instructions += "\n\n" + ts.Prompt
+	}
+	runnable := append(slices.Clip(ts.Tools), ts.Deferred...)
+	call.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult { return runTool(ctx, runnable, c) }
+	return runnable
+}
+
 // Restrict returns the tools that names lists, or every tool when names is nil.
 func Restrict(tools []Tool, names []string) []Tool {
 	if names == nil {

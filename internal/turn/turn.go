@@ -161,24 +161,21 @@ const (
 	continuation = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
 )
 
-// Run runs req on b and reports its items and its end to to. Only tools
-// reach the model. When b does not own the loop, Run runs the tool calls of
-// each model call in order, then calls b again, until a call asks for no
-// tool. Model calls run under step and tools under ctx: when only step
-// ends, a running tool finishes and no new tool starts.
-func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, lim Limits) {
-	to.Ended(req.TurnID, run(ctx, step, b, req, tools, to, lim))
+// Run runs req on b and reports its items and its end to to. Only tools,
+// and the tools that src gives each model call, reach the model. When b
+// does not own the loop, Run runs the tool calls of each model call in
+// order, then calls b again, until a call asks for no tool. Model calls run
+// under step and tools under ctx: when only step ends, a running tool
+// finishes and no new tool starts.
+func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Reporter, lim Limits) {
+	to.Ended(req.TurnID, run(ctx, step, b, req, tools, src, to, lim))
 }
 
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context. A response that max_tokens cut off runs
 // none of its tool calls, and the next call asks the model to continue, at
 // most lim.Continuations times.
-func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, lim Limits) error {
-	for _, t := range tools {
-		req.Tools = append(req.Tools, t.Spec())
-	}
-	req.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult { return runTool(ctx, tools, c) }
+func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Reporter, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle = 0
@@ -190,6 +187,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 			return context.Cause(step)
 		}
 		s, call := &sink{turnID: req.TurnID, to: to}, req
+		runnable := describe(step, &call, tools, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
@@ -212,7 +210,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 			}
 			r := protocol.ToolResult{Text: notRun, IsError: true}
 			if !res.MaxTokens {
-				r = runTool(ctx, tools, c)
+				r = runTool(ctx, runnable, c)
 			}
 			if ctx.Err() != nil {
 				return context.Cause(ctx)

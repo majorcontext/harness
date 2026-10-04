@@ -114,7 +114,7 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	}
 	a.run = r
 	tools := turn.Restrict(a.cfg.Tools, a.state.AllowedTools())
-	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a, a.cfg.Limits) })
+	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a.cfg.Source, a, a.cfg.Limits) })
 }
 
 // Item records one completed message of turnID under itemID, or under a new

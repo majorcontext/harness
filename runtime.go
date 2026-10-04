@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -53,13 +54,16 @@ type Options struct {
 	Owner Owner
 	// Sync replicates every record that this Runtime appends. nil: no replication.
 	Sync Sync
-	// Config configures the model providers. A model ref "provider/model"
-	// selects the entry of Config.Providers named provider.
+	// Config configures the model providers and the MCP servers. A model
+	// ref "provider/model" selects the entry of Config.Providers named
+	// provider. Each session gets the tools of Config.MCPServers.
 	Config config.Config
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
-	// Tools are the embedder tools. Each name must be unique.
+	// Tools are the embedder tools. Each name must be unique. With
+	// Config.MCPServers, no name may be mcp, list_mcp_resources,
+	// read_mcp_resource, or start with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
 	// AGENTS.md chain and skills when it starts, and the process tool runs
@@ -84,7 +88,9 @@ type Runtime struct {
 	// prompt reads the system prompt of a session.
 	prompt func() string
 	// procs is nil without a WorkDir.
-	procs   *process.Manager
+	procs *process.Manager
+	// mcp is nil without MCP servers.
+	mcp     *mcpsrc.Source
 	workDir string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
@@ -125,11 +131,12 @@ func New(opts Options) (*Runtime, error) {
 		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
 		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes))
 	}
+	r.mcp = mcpsrc.New(opts.Config)
 	names := map[string]bool{}
 	for _, t := range tools {
 		name := t.Spec().Name
-		if name == "" || names[name] {
-			return nil, fmt.Errorf("%w: tool name %q is empty or repeated", ErrInvalidRequest, name)
+		if name == "" || names[name] || r.mcp != nil && mcpsrc.Reserved(name) {
+			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or an MCP tool name", ErrInvalidRequest, name)
 		}
 		names[name] = true
 		r.tools = append(r.tools, t)
@@ -163,7 +170,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
 	}
 	if r.models != nil {
-		if err := r.models.check(req.Model, req.AllowedTools, r.tools); err != nil {
+		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.tools); err != nil {
 			return nil, err
 		}
 	}
@@ -271,7 +278,12 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Done:      func() { r.forget(id, e) },
 	}
 	if r.models != nil {
-		cfg.Check = func(from, to string, names []string) error { return r.models.change(from, to, names, r.tools) }
+		cfg.Check = func(from, to string, names []string) error {
+			return r.models.change(from, to, r.unowned(names), r.tools)
+		}
+	}
+	if r.mcp != nil {
+		cfg.Source = r.mcp
 	}
 	a, err := start(ctx, cfg)
 	if err != nil {
@@ -374,9 +386,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 		if r.models != nil {
 			r.models.Close()
 		}
-		if r.procs != nil {
-			r.procs.Close(ctx)
-		}
+		r.closeTools(ctx)
 		close(done)
 	}()
 	defer r.cancel()
@@ -385,10 +395,35 @@ func (r *Runtime) Close(ctx context.Context) error {
 		return errors.Join(errs...)
 	case <-ctx.Done():
 		r.cancel()
-		if r.procs != nil {
-			r.procs.Close(ctx)
-		}
+		r.closeTools(ctx)
 		return errors.Join(append(errs, ctx.Err())...)
+	}
+}
+
+// unowned returns the allowed names that the Options.Tools and the backend
+// do not own. The MCP source owns its names, which depend on the servers.
+func (r *Runtime) unowned(names []string) []string {
+	if r.mcp == nil {
+		return names
+	}
+	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
+}
+
+// closeTools stops the processes and the MCP servers, and returns when ctx ends.
+func (r *Runtime) closeTools(ctx context.Context) {
+	if r.procs != nil {
+		r.procs.Close(ctx)
+	}
+	if r.mcp != nil {
+		done := make(chan struct{})
+		go func() {
+			r.mcp.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
 	}
 }
 
