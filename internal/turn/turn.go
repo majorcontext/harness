@@ -4,7 +4,9 @@ package turn
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -13,6 +15,15 @@ import (
 
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
+
+// ErrContextOverflow marks a model call whose request passes the context window.
+var ErrContextOverflow = errors.New("turn: context overflow")
+
+// ErrExhausted marks a usage limit of the provider, such as a spent quota.
+var ErrExhausted = errors.New("turn: provider usage limit reached")
+
+// errStalled ends a model call that reports nothing for Limits.Idle.
+var errStalled = fmt.Errorf("%w: turn: the model stream stalled", ErrRetryable)
 
 // ErrHandoff is the cause of a turn context that a handoff ended. The next
 // owner resumes the turn.
@@ -101,10 +112,25 @@ type Sink interface {
 	Compacted(summary string) error
 }
 
-// Result is the outcome of a turn that returned.
-type Result struct{}
+// Result is the outcome of a Run that returned.
+type Result struct {
+	// MaxTokens reports a response that the output cap cut off.
+	MaxTokens bool
+}
 
-// Reporter takes no ctx: a backend reports items after the turn's ctx ends.
+// Limits bounds how a turn recovers from a failed or cut-off model call.
+type Limits struct {
+	// Retries bounds the new attempts of a model call after an ErrRetryable error.
+	Retries int
+	// Continuations bounds the model calls that continue a response cut off at max_tokens.
+	Continuations int
+	// Idle stops a model call that reports no delta and no item for this
+	// long. Zero or less: no limit.
+	Idle time.Duration
+}
+
+// Reporter takes no ctx, except CompactTurn: a backend reports items after
+// the turn's ctx ends.
 type Reporter interface {
 	// Item records m under itemID, or under a new ID when itemID is empty.
 	Item(turnID, itemID string, m eventlog.Message) error
@@ -117,36 +143,63 @@ type Reporter interface {
 	State(turnID, backend string) ([]byte, error)
 	SaveState(turnID, backend string, blob []byte) error
 	Compacted(turnID, summary string) error
+	// CompactTurn folds the turns before the newest kept turns into a
+	// summary while turnID runs, and returns the new history. ok is false
+	// when no turn can fold.
+	CompactTurn(ctx context.Context, turnID string) (history []eventlog.Message, ok bool, err error)
 	Ended(turnID string, err error)
 }
 
 const retryBackoff = 200 * time.Millisecond
+
+const (
+	// notRun is the result of each tool call of a response that max_tokens cut off.
+	notRun       = "not run: the response was cut off at its output limit"
+	continuation = "[continuation: your previous turn was cut off because it reached the max_tokens output limit (auto-continue %d of %d). Continue exactly where you left off. Produce your output in smaller pieces so this does not happen again.]"
+)
 
 // Run runs req on b and reports its items and its end to to. Only tools
 // reach the model. When b does not own the loop, Run runs the tool calls of
 // each model call in order, then calls b again, until a call asks for no
 // tool. Model calls run under step and tools under ctx: when only step
 // ends, a running tool finishes and no new tool starts.
-func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, retries int) {
-	to.Ended(req.TurnID, run(ctx, step, b, req, tools, to, retries))
+func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, lim Limits) {
+	to.Ended(req.TurnID, run(ctx, step, b, req, tools, to, lim))
 }
 
-func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, retries int) error {
+// run compacts and calls the model again after a context overflow, when b
+// does not own its context. A response that max_tokens cut off runs
+// none of its tool calls, and the next call asks the model to continue, at
+// most lim.Continuations times.
+func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Reporter, lim Limits) error {
 	for _, t := range tools {
 		req.Tools = append(req.Tools, t.Spec())
 	}
 	req.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult { return runTool(ctx, tools, c) }
-	loop := !b.Capabilities(req.Model).OwnsLoop
+	caps := b.Capabilities(req.Model)
+	if caps.OwnsLoop {
+		lim.Idle = 0
+	}
+	continued := 0
+	var nudge []eventlog.Message
 	for {
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		s := &sink{turnID: req.TurnID, to: to}
-		if err := callModel(step, b, req, s, retries); err != nil {
+		s, call := &sink{turnID: req.TurnID, to: to}, req
+		call.History = append(slices.Clip(req.History), nudge...)
+		res, err := callModel(step, b, call, s, lim)
+		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
+			if h, ok, cerr := to.CompactTurn(step, req.TurnID); cerr == nil && ok {
+				req.History = h
+				continue
+			}
+		}
+		if err != nil {
 			return err
 		}
 		calls := toolCalls(s.items)
-		if !loop || len(calls) == 0 {
+		if caps.OwnsLoop || len(calls) == 0 && !res.MaxTokens {
 			return nil
 		}
 		req.History = append(req.History, s.items...)
@@ -154,29 +207,78 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 			if step.Err() != nil {
 				return context.Cause(step)
 			}
-			m := result(c, runTool(ctx, tools, c))
+			r := protocol.ToolResult{Text: notRun, IsError: true}
+			if !res.MaxTokens {
+				r = runTool(ctx, tools, c)
+			}
 			if ctx.Err() != nil {
 				return context.Cause(ctx)
 			}
+			m := result(c, r)
 			if err := to.Item(req.TurnID, "", m); err != nil {
 				return err
 			}
 			req.History = append(req.History, m)
 		}
+		switch {
+		case !res.MaxTokens:
+			nudge = nil
+		case continued < lim.Continuations:
+			continued++
+			nudge = []eventlog.Message{{Role: eventlog.RoleUser,
+				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: fmt.Sprintf(continuation, continued, lim.Continuations)}}}}
+		case lim.Continuations == 0:
+			return nil
+		default:
+			return fmt.Errorf("turn: the response reached max_tokens after %d continuations", continued)
+		}
 	}
 }
 
-// callModel runs one model call. It calls b again, at most retries times,
-// after an ErrRetryable error that came before any item.
-func callModel(ctx context.Context, b Backend, req Request, s *sink, retries int) error {
-	_, err := b.Run(ctx, req, s)
-	for n := 0; n < retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+// callModel runs one model call. It calls b again, at most lim.Retries
+// times, after an ErrRetryable error that came before any item.
+func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
+	res, err := attempt(ctx, b, req, s, lim.Idle)
+	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
 		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
-			_, err = b.Run(ctx, req, s)
+			res, err = attempt(ctx, b, req, s, lim.Idle)
 		}
 	}
-	return err
+	return res, err
+}
+
+// attempt calls b once. With a positive idle, a call that reports no delta
+// and no item for idle ends with errStalled.
+func attempt(ctx context.Context, b Backend, req Request, s *sink, idle time.Duration) (Result, error) {
+	if idle <= 0 {
+		return b.Run(ctx, req, s)
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	t := time.AfterFunc(idle, func() { cancel(errStalled) })
+	defer t.Stop()
+	res, err := b.Run(ctx, req, watched{s, func() { t.Reset(idle) }})
+	if err != nil && errors.Is(context.Cause(ctx), errStalled) {
+		err = errStalled
+	}
+	return res, err
+}
+
+// watched is a Sink that calls alive on each delta and item.
+type watched struct {
+	*sink
+	alive func()
+}
+
+func (w watched) Item(m eventlog.Message) error {
+	w.alive()
+	return w.sink.Item(m)
+}
+
+func (w watched) Delta(itemID string, d Delta) {
+	w.alive()
+	w.sink.Delta(itemID, d)
 }
 
 func (s *sink) wait(ctx context.Context, attempt int) error {

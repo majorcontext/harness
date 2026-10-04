@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 
@@ -52,18 +53,14 @@ func (a *Actor) overThreshold() bool {
 // compact runs a summary of the folded turns as the run of the actor, and
 // reports false when no turn can fold. done receives the outcome.
 func (a *Actor) compact(done func(struct{}, error)) bool {
-	folded, to, ok := a.state.Fold(a.cfg.KeepTurns)
+	id := newID("compaction")
+	req, c, ok := a.fold(id)
 	if !ok {
 		return false
 	}
-	c := eventlog.CompactionApplied{FromSeq: 1, ToSeq: to}
-	if prev, ok := a.state.Compaction(); ok {
-		c.FromSeq = prev.ToSeq + 1
-	}
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	r := &running{id: newID("compaction"), ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
+	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
 	a.run = r
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.state.Model(), Settings: a.state.Settings(), History: folded}
 	a.cfg.Go(func() {
 		summary, err := turn.Summarize(ctx, a.cfg.Backend, req)
 		c.Summary = summary
@@ -73,6 +70,55 @@ func (a *Actor) compact(done func(struct{}, error)) bool {
 		})
 	})
 	return true
+}
+
+// fold returns the summary request of the turns before the newest
+// Config.KeepTurns, and the compaction that records the summary.
+func (a *Actor) fold(id string) (turn.Request, eventlog.CompactionApplied, bool) {
+	folded, to, ok := a.state.Fold(a.cfg.KeepTurns)
+	if !ok {
+		return turn.Request{}, eventlog.CompactionApplied{}, false
+	}
+	c := eventlog.CompactionApplied{FromSeq: 1, ToSeq: to}
+	if prev, ok := a.state.Compaction(); ok {
+		c.FromSeq = prev.ToSeq + 1
+	}
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), History: folded}
+	return req, c, true
+}
+
+// CompactTurn folds the turns before the newest Config.KeepTurns into a
+// summary while turnID runs, and returns the new history. ok is false when
+// no turn can fold. When ctx ends, it appends nothing.
+func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Message, bool, error) {
+	type folding struct {
+		req turn.Request
+		c   eventlog.CompactionApplied
+		ok  bool
+	}
+	f, err := call(ctx, a, func(reply func(folding, error)) {
+		if r := a.run; r == nil || r.id != turnID {
+			reply(folding{}, ErrTurnMismatch)
+			return
+		}
+		req, c, ok := a.fold(turnID)
+		reply(folding{req, c, ok}, nil)
+	})
+	if err != nil || !f.ok {
+		return nil, false, err
+	}
+	if f.c.Summary, err = turn.Summarize(ctx, a.cfg.Backend, f.req); err != nil {
+		return nil, false, err
+	}
+	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
+		if r := a.run; r == nil || r.id != turnID || ctx.Err() != nil {
+			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))
+			return
+		}
+		err := a.append(f.c)
+		reply(a.state.History(), err)
+	})
+	return h, err == nil, err
 }
 
 // compacted appends the summary of run r, then starts the next queued

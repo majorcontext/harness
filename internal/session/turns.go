@@ -114,7 +114,7 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	}
 	a.run = r
 	tools := turn.Restrict(a.cfg.Tools, a.state.AllowedTools())
-	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a, a.cfg.Retries) })
+	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, a, a.cfg.Limits) })
 }
 
 // Item records one completed message of turnID under itemID, or under a new
@@ -215,6 +215,8 @@ func (a *Actor) ended(turnID string, runErr error) {
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
 		next = true
+	case errors.Is(runErr, turn.ErrExhausted):
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage)
 	default:
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage)
 	}

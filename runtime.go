@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -77,8 +79,8 @@ type Runtime struct {
 	backend turn.Backend
 	tools   []turn.Tool
 	// models is nil when Options.backend runs every turn.
-	models  *models
-	retries int
+	models *models
+	limits turn.Limits
 	// prompt reads the system prompt of a session.
 	prompt func() string
 	// procs is nil without a WorkDir.
@@ -113,8 +115,10 @@ func New(opts Options) (*Runtime, error) {
 	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
-		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
+		sessions:  map[string]*entry{},
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
+	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
+		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	tools := opts.Tools
 	if opts.WorkDir != "" {
@@ -259,7 +263,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Tools:     r.tools,
 		Prompt:    r.instructions(),
 		Sync:      r.sync,
-		Retries:   r.retries,
+		Limits:    r.limits,
 		Threshold: r.threshold,
 		KeepTurns: r.keep,
 		Base:      r.base,

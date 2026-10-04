@@ -351,13 +351,14 @@ running ─► completed | interrupted | failed | awaiting_input
 running ─► suspended ─► running   (next owner resumes from the last completed item)
 ```
 
-A turn ends early for one of four causes. A live owner carries the first three with `context.WithCancelCause`; `Open` detects `crashed` in the log:
+A turn ends early for one of five causes. A live owner carries the first three with `context.WithCancelCause`; `Open` detects `crashed` in the log; the turn loop reports `provider_exhausted`:
 
 | Cause | Trigger | Effect |
 | --- | --- | --- |
 | `stopped` | User interrupt | Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs |
 | `goal_cleared` | `ClearGoal` during a goal turn | Same as `stopped` |
 | `handoff` | `Session.Release`, `Runtime.Close` | Stop at an item boundary: admit no new tool call, let running tools finish within the budget, append `turn.suspended`. A delegated backend (`OwnsLoop`) cannot stop at an item boundary, so a handoff interrupts it, records every item that it already wrote, gives each open tool call a cut-off result, and appends `turn.suspended`. A suspended turn has no open tool call, so the next owner resumes it automatically. |
+| `provider_exhausted` | A usage limit of the provider: a spent quota, credit balance, or spend cap | Append `turn.ended{failed, provider_exhausted}`; keep the partial; queued inputs wait for the next input |
 | `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then starts the next queued input, or waits for input when none is queued. |
 
 No tool call is ever re-run after a stop. This matches Codex, Claude Code, opencode, pi, and fx. The log stays strictly append-only, and a client hides output by cause if it wants to.
@@ -408,6 +409,7 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - `Compact()` fails with `session_busy` while a turn runs or inputs wait.
 - Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
+- A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
 - `Open` starts the next queued input when no turn is open. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
 
 ### Children
@@ -527,6 +529,9 @@ type Sink interface {
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
 - `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools` and the embedder tools, and any other name fails `Create`. An embedder tool with the name of a built-in tool also fails `Create`.
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.
+- A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again with backoff, up to `prompt_retries` times, when the call has recorded no item. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
+- The stall watchdog ends a model call that reports no delta and no item for `stream_idle_timeout_s` (default 300, as Codex). The stall is retryable. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
+- `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. The next call ends with a continuation message that the log never holds. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 ends the turn at the first one.
 - Private backend state is one `backend.state` event plus a blob. The Claude Code transcript mirror is that blob. The eight `claudeCode*` fields and their record kinds are deleted.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
 - `Telemetry` carries usage, cost, the context reading, and subscription quota.
@@ -753,7 +758,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn` | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
