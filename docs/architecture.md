@@ -292,9 +292,16 @@ func (s *State) Apply(r Record) error
 - A `turn.ended` follows every `turn.started`, except for a suspended turn.
 - Only a suspended turn resumes. A turn that ended never resumes.
 
-### No old formats
+### Old-format migration
 
-Nothing reads the current journal, index, snapshot, or `events.jsonl`. At cutover, existing sessions start with empty history, and archived boxes are not converted.
+The runtime reads no old format: not the current journal, index, snapshot, or `events.jsonl`. No session history is lost at the cutover.
+
+A one-time Go migration tool converts each old session journal into `harness.Store` records through `eventlog`. Its inputs are the per-session journal files of the engine on each box disk and the `box_journal_*` mirror tables of boxes. The tool also copies the retained tool-result files of each session into `Store` blobs, so `read_tool_result` reads a converted handle. The tool runs in the quiesced window of the cutover, before the new harness starts. Each converted session opens with its full conversation, so the agent keeps its context and the console keeps its transcript.
+
+- An archived box is converted when it is restored.
+- The tool verifies each session: the message count and the last message of the new log match the old journal.
+- The tool reports each session that fails conversion. It never silently gives that session an empty history.
+- The tool is the only code that reads an old format. Phase 6 deletes it, so the runtime never carries an old-format reader.
 
 ## session
 
@@ -875,9 +882,9 @@ Combined sequence:
 | 1 contract suite, gates, `harnesstest` | 0 defect fixes · 1 protocol, contract suite, gates · 2+3 commands and lifecycle · 4 capacity (none need harness) |
 | 2 runtime core | Home chat on `pgstore` and `SessionHost` (meta) |
 | 3 leaves, `harness/config` | 5 `BootConfig` embeds `harness/config` |
-| 4 HTTP cutover | 7 session cutover with the read-only view, same release |
+| 4 HTTP cutover, journal migration | 7 session cutover with the read-only view, same release |
 | 5 backends, `codexcli`, requests | — |
-| 6 delete `engine`, `server` | — |
+| 6 delete `engine`, `server`, the migration tool | — |
 
 Answered boxes requests: `Runtime.Close` and `Session.Release` return only after `Sync` acknowledges every record through the handoff, and `View` reports `SyncedSeq`; `Sync.Deliver` returns `SyncAck{head}` on every reply; the epoch is a monotonic number (`claim_epoch`). The home chat is one per person.
 
@@ -890,14 +897,15 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
 | 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; the built-in tools, and large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
-| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
+| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal to the event log in the quiesced window, before the new harness starts; see "Old-format migration". | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
-| 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
+| 6 | Delete `engine`, `server`, the migration tool, dead features; move leaves to `internal/` | None |
 
-PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route, format, or Go API survives it.
+PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route or Go API survives it, and the runtime reads no old format. Only the migration tool reads the old journals, and phase 6 deletes it.
 
 ## Open questions
 
+- An archived box can be restored after phase 6 deletes the migration tool. Are all archived boxes converted before phase 6, or does a converter stay for a late restore?
 - Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
 
 Decided:
@@ -917,4 +925,5 @@ Decided:
 - One `pgstore` backs home sessions and the box mirror; `OpenView` reads both.
 - Handoff stops at an item boundary and resumes; a crash ends the turn, marks open tool calls cut off, and starts the next queued input or waits for input. No tool call is ever re-run.
 - The scripted model is public as `harness/harnesstest`.
+- No session history is lost at the cutover. A one-time tool converts every old journal to the event log and verifies each session; phase 6 deletes it.
 - There is no comment purge. A history comment leaves when its code is rewritten or deleted; the gates stop new ones.
