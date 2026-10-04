@@ -317,7 +317,7 @@ type sink struct {
 // harness item can join several backend items, such as reasoning and text.
 func (s *sink) Delta(_ string, d Delta) {
 	if s.item == "" {
-		s.item = s.Turn.Started()
+		s.item = s.Started()
 	}
 	s.Turn.Delta(s.item, d)
 }
