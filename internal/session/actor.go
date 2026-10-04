@@ -73,6 +73,9 @@ type Config struct {
 	Source turn.Source
 	// Prompt returns the system prompt of a turn when the turn starts.
 	Prompt func() string
+	// Appended receives the events of each append on the actor goroutine.
+	// It must not block. nil: none.
+	Appended func([]eventlog.Event)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.
@@ -392,6 +395,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 	}
 	if g, _ := a.state.Goal(); g.State != eventlog.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
 		a.stopRetry()
+	}
+	if a.cfg.Appended != nil {
+		a.cfg.Appended(events)
 	}
 	a.publish(false)
 	return nil

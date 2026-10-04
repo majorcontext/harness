@@ -19,6 +19,7 @@ import (
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
+	"github.com/majorcontext/harness/internal/tool/pluginsrc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -91,7 +92,9 @@ type Runtime struct {
 	// procs is nil without a WorkDir.
 	procs *process.Manager
 	// mcp is nil without MCP servers.
-	mcp     *mcpsrc.Source
+	mcp *mcpsrc.Source
+	// plugins is nil without plugins.
+	plugins *pluginsrc.Plugins
 	workDir string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
@@ -136,6 +139,7 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes))
 	}
 	r.mcp = mcpsrc.New(opts.Config)
+	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
 	names := map[string]bool{}
 	for _, t := range tools {
 		name := t.Spec().Name
@@ -173,8 +177,11 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	if req.Model == "" {
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
 	}
+	if err := r.startPlugins(ctx); err != nil {
+		return nil, err
+	}
 	if r.models != nil {
-		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.tools); err != nil {
+		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.named()); err != nil {
 			return nil, err
 		}
 	}
@@ -260,6 +267,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
+	if err := r.startPlugins(ctx); err != nil {
+		return nil, err
+	}
 	own, err := r.owner.Acquire(ctx, id)
 	if err != nil {
 		return nil, err
@@ -284,11 +294,19 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	}
 	if r.models != nil {
 		cfg.Check = func(from, to string, names []string) error {
-			return r.models.change(from, to, r.unowned(names), r.tools)
+			return r.models.change(from, to, r.unowned(names), r.named())
 		}
 	}
+	var srcs turn.Sources
 	if r.mcp != nil {
-		cfg.Source = r.mcp
+		srcs = append(srcs, r.mcp)
+	}
+	if r.plugins != nil {
+		p := r.plugins.Session(id)
+		srcs, cfg.Appended = append(srcs, p), p.Appended
+	}
+	if srcs != nil {
+		cfg.Source = srcs
 	}
 	a, err := start(ctx, cfg)
 	if err != nil {
@@ -414,21 +432,69 @@ func (r *Runtime) unowned(names []string) []string {
 	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
 }
 
-// closeTools stops the processes and the MCP servers, and returns when ctx ends.
+// named returns the Options.Tools and the plugin tools, for their names.
+func (r *Runtime) named() []turn.Tool {
+	if r.plugins == nil {
+		return r.tools
+	}
+	return append(slices.Clip(r.tools), r.plugins.Tools()...)
+}
+
+// startPlugins reads the plugin manifests once for each runtime, as part of
+// the work that Close waits for. A plugin tool may not take the name of
+// another tool.
+func (r *Runtime) startPlugins(ctx context.Context) error {
+	if r.plugins == nil {
+		return nil
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return ErrDraining
+	}
+	r.group.Add(1)
+	r.mu.Unlock()
+	defer r.group.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(r.base, cancel)()
+	return r.plugins.Start(ctx, func(name string) bool {
+		return r.mcp != nil && mcpsrc.Reserved(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
+	})
+}
+
+// history returns the conversation of session id from the store.
+func (r *Runtime) history(ctx context.Context, id string) ([]eventlog.Message, error) {
+	st, err := session.Load(ctx, id, storeLog{r.store, id})
+	if err != nil {
+		return nil, err
+	}
+	return st.History(), nil
+}
+
+// closeTools stops the processes, the plugins, and the MCP servers, and
+// returns when ctx ends.
 func (r *Runtime) closeTools(ctx context.Context) {
 	if r.procs != nil {
 		r.procs.Close(ctx)
 	}
+	if r.plugins != nil {
+		closeBy(ctx, r.plugins.Close)
+	}
 	if r.mcp != nil {
-		done := make(chan struct{})
-		go func() {
-			r.mcp.Close()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
+		closeBy(ctx, r.mcp.Close)
+	}
+}
+
+func closeBy(ctx context.Context, closeFn func()) {
+	done := make(chan struct{})
+	go func() {
+		closeFn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 

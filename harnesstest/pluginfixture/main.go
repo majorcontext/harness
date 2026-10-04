@@ -7,8 +7,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -43,7 +45,7 @@ type toolSpec struct {
 
 const (
 	objectSchema = `{"type":"object","properties":{"text":{"type":"string"}}}`
-	reportSchema = `{"type":"object","properties":{"edits":{"type":"integer"},"process":{"type":"boolean"}}}`
+	reportSchema = `{"type":"object","properties":{"edits":{"type":"integer"},"process":{"type":"boolean"},"events":{"type":"integer"}}}`
 )
 
 var manifest = map[string]any{
@@ -61,8 +63,10 @@ var manifest = map[string]any{
 }
 
 var config struct {
-	Segment string `json:"segment"`
-	Recall  bool   `json:"recall"`
+	Segment   string `json:"segment"`
+	Recall    bool   `json:"recall"`
+	Model     bool   `json:"model"`
+	ExtraTool string `json:"extra_tool"`
 }
 
 var rawConfig json.RawMessage
@@ -80,6 +84,7 @@ var seen struct {
 	systemSession string
 	afterSession  string
 	afterArgs     map[string]json.RawMessage
+	events        []string
 }
 
 func main() {
@@ -129,6 +134,11 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 		_ = json.Unmarshal(params, &init)
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
+		if config.ExtraTool != "" {
+			m := maps.Clone(manifest)
+			m["tools"] = append(slices.Clone(manifest["tools"].([]toolSpec)), toolSpec{config.ExtraTool, "An extra tool.", json.RawMessage(objectSchema)})
+			return m, nil
+		}
 		return manifest, nil
 	case "hook/system.transform":
 		return systemTransform(params), nil
@@ -145,10 +155,14 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 func systemTransform(params json.RawMessage) any {
 	var req struct {
 		SessionID string `json:"session_id"`
+		Model     string `json:"model"`
 	}
 	_ = json.Unmarshal(params, &req)
 	seen.systemSession = req.SessionID
 	var segments []string
+	if config.Model {
+		segments = append(segments, "MODEL: "+req.Model)
+	}
 	if config.Segment != "" {
 		segments = append(segments, config.Segment)
 	}
@@ -220,12 +234,19 @@ func recordEvents(params json.RawMessage) {
 			Type       string `json:"type"`
 			SessionID  string `json:"session_id"`
 			Properties struct {
-				Path string `json:"path"`
+				Path   string `json:"path"`
+				Status string `json:"status"`
+				Tool   string `json:"tool"`
 			} `json:"properties"`
 		} `json:"events"`
 	}
 	_ = json.Unmarshal(params, &batch)
 	for _, ev := range batch.Events {
+		detail := ev.Properties.Status + ev.Properties.Tool
+		if ev.Type == "file.edited" {
+			detail = map[bool]string{true: "absolute", false: "relative"}[filepath.IsAbs(ev.Properties.Path)]
+		}
+		seen.events = append(seen.events, strings.TrimSpace(ev.Type+" "+detail))
 		if ev.Type == "file.edited" {
 			seen.edited = append(seen.edited, filepath.Base(ev.Properties.Path))
 			seen.eventSession = ev.SessionID
@@ -284,11 +305,15 @@ func execute(params json.RawMessage) any {
 			Text    string `json:"text"`
 			Edits   int    `json:"edits"`
 			Process bool   `json:"process"`
+			Events  int    `json:"events"`
 		} `json:"args"`
 	}
 	_ = json.Unmarshal(params, &req)
 	switch req.Tool {
 	case "fixture_report":
+		if req.Args.Events > 0 {
+			return reportEvents(req.Args.Events)
+		}
 		return report(req.SessionID, req.Args.Edits, req.Args.Process)
 	case "fixture_echo":
 		return map[string]any{"output": []part{{Type: "text", Text: "echo: " + req.Args.Text}}}
@@ -307,15 +332,7 @@ func execute(params json.RawMessage) any {
 // reduced to base names and session ids to a match against the call's own.
 // With process set it reports only the working directory and script argument.
 func report(sessionID string, edits int, process bool) any {
-	for len(seen.edited) < edits {
-		line, err := in.ReadBytes('\n')
-		if err != nil {
-			os.Exit(1)
-		}
-		if len(line) > 1 {
-			serve(line)
-		}
-	}
+	serveUntil(func() bool { return len(seen.edited) >= edits })
 	view := map[string]any{
 		"edited":     seen.edited,
 		"after_args": seen.afterArgs,
@@ -331,6 +348,26 @@ func report(sessionID string, edits int, process bool) any {
 	}
 	body, _ := json.Marshal(view)
 	return map[string]any{"output": []part{{Type: "text", Text: string(body)}}}
+}
+
+// reportEvents waits for n events and returns each as its type, then its
+// status or tool.
+func reportEvents(n int) any {
+	serveUntil(func() bool { return len(seen.events) >= n })
+	body, _ := json.Marshal(seen.events)
+	return map[string]any{"output": []part{{Type: "text", Text: string(body)}}}
+}
+
+func serveUntil(done func() bool) {
+	for !done() {
+		line, err := in.ReadBytes('\n')
+		if err != nil {
+			os.Exit(1)
+		}
+		if len(line) > 1 {
+			serve(line)
+		}
+	}
 }
 
 func scriptArgs() []string {

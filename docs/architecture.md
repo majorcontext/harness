@@ -179,7 +179,8 @@ Free to change.
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
 | `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
 | `internal/tool/mcpsrc` | A `turn.Source` that gives MCP tools to each model call |
-| `internal/tool/builtin`, `internal/tool/pluginsrc` | Planned: the built-in tools and the plugin tools |
+| `internal/tool/pluginsrc` | A `turn.Source` and `turn.Hooks` that give the plugin tools, hooks, and events to each session |
+| `internal/tool/builtin` | Planned: the built-in tools |
 | `internal/toolresult` | Planned for phase 3: large-result retention and `read_tool_result`, at parity with the engine |
 | `internal/prompt` | System-prompt segments; agent profiles are planned |
 
@@ -608,19 +609,20 @@ type Tool interface { // the same method set as harness.Tool
 func Restrict(tools []Tool, names []string) []Tool
 
 type Source interface {
-	Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset
+	Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset
 }
 
 type Toolset struct {
 	Tools    []Tool // described to the model
 	Deferred []Tool // not described; the model may call them
 	Prompt   string // follows the system prompt
+	Hooks    Hooks  // run around each tool call; nil: none
 }
 ```
 
 - `New` builds the tool list from `Options.Tools` and, with a `WorkDir`, the `process` tool. An empty or repeated name fails `New`.
 - When a turn starts, `turn.Restrict` applies the session's `AllowedTools`. The `Source` gets the same list for each model call.
-- `internal/tool/mcpsrc` is the one `Source` today. The planned built-in and plugin tools join through the same two seams.
+- `internal/tool/mcpsrc` and `internal/tool/pluginsrc` are the `Source`s today, joined by `turn.Sources`. The planned built-in tools join through the same two seams.
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session.
 
@@ -639,6 +641,19 @@ Agent profiles are planned with children. A profile names a kind of child: `name
 - Results. A result is text. An image, an audio item, or a binary resource becomes one line with its size and media type. An error that is not the server's own RPC error names a reason, never the endpoint URL or a response body.
 - The segment follows the process status line. There is no `status` action, no MCP status segment, and no background retry. Switch oracle: the `mcp_*` rows except `mcp_status_*`. By design, an error has no `engine:` prefix, a call to a tool that is not there reads `no such tool available`, binary content becomes text, and `connect` is the only action of an eager runtime.
 
+### plugins
+
+`internal/tool/pluginsrc` connects `Config.Plugins` to each session. The `plugin` package does not change.
+
+- Start. The first `Create` or `Open` of a runtime reads the manifest of each plugin with one probe, bounded at 30 s. A probe that fails, a manifest whose name is not the config name, or a plugin tool with the name of another tool or of a built-in tool of the model backend fails that call. The next call tries again. The probe is work that `Runtime.Close` waits for, and a call after `Close` returns `ErrDraining` before any probe. A plugin process starts on its first hook or tool call and stays warm. `Runtime.Close` stops it. There is no manifest cache. The phase 4 switch can add the cache of `cmd/harness` when a measurement needs it.
+- Tools. Each manifest tool is a tool that runs through `tool/execute`. `AllowedTools` restricts them, and a backend that owns the loop accepts their names. A plugin needs no `WorkDir`.
+- Hooks. A `turn.Toolset` carries `turn.Hooks`, and `runTool` runs each tool call between `Before` and `After`. This covers every tool: embedder, process, MCP, and plugin tools, and each call that a backend that owns the loop makes through `Request.Call`. `tool.execute.before` rewrites the arguments or denies the call. A denied call does not run, and its deny is the error result. `tool.execute.after` rewrites the result text. The log records the call as the model made it.
+- Prompt. Each model call runs `system.transform` with the model of that call, and adds its segments after the MCP segment.
+- Events. `session.Config.Appended` gives each appended event to the plugins of the session. `turn.started` and `turn.resumed` send `session.status` busy. `turn.suspended` and `turn.ended` send idle, and a failed turn first sends `session.error`. The tool hooks send `tool.execute.start` and `tool.execute.end` around each call that runs, and `file.edited`, with an absolute path, after a `write_file` or `edit_file` call that succeeds. Delivery is best effort, as in the engine.
+- Client API. `client/session.messages` reads the history of the session from the store. `client/mcp.call` and `client/generate` fail.
+- The runtime does not dispatch `chat.params`, `chat.message`, or `shell.env`. No contract row pins them, and no boxes plugin uses them.
+- Switch oracle: the `plugin_*` rows. `serve_url` and `run_token` stay empty until the phase 4 switch.
+
 ### prompt
 
 `internal/prompt.Build(cfg, workDir)` returns the system prompt of a session as segments. The runtime joins them with a blank line. It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call. The log never holds them, so the next `Open` reads the files again. Codex and Claude Code also read the prompt once at session start.
@@ -656,7 +671,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment. See "MCP tools". There is no outline mode, no chain ceiling, and no other ambient segment. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 

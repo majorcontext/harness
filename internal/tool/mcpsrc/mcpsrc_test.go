@@ -146,7 +146,7 @@ func TestToolset(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := source(t, tc.edit)
-			ts := s.Toolset(bg, tc.history, tc.allowed)
+			ts := s.Toolset(bg, tc.history, tc.allowed, "")
 			if got := names(ts.Tools); got != tc.tools {
 				t.Errorf("tools = %q, want %q", got, tc.tools)
 			}
@@ -214,7 +214,7 @@ func TestToolCalls(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, srv := source(t, tc.edit)
-			ts := s.Toolset(bg, tc.history, nil)
+			ts := s.Toolset(bg, tc.history, nil, "")
 			if tc.lose != "" {
 				srv[tc.lose].Close()
 			}
@@ -244,9 +244,9 @@ func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 
 func TestConnectAddsToolsButNotInstructions(t *testing.T) {
 	s, _ := source(t, func(_ *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].FailInitialize(1) })
-	before := s.Toolset(bg, nil, nil)
+	before := s.Toolset(bg, nil, nil, "")
 	got, _ := run(before, call("mcp", `{"action":"connect","server":"weather"}`))
-	after := s.Toolset(bg, nil, nil)
+	after := s.Toolset(bg, nil, nil, "")
 	if want := `{"server":"weather","connected":true,"message":"connected"}`; got != want {
 		t.Errorf("connect = %q, want %q", got, want)
 	}
@@ -260,7 +260,7 @@ func TestSearchScoresEachField(t *testing.T) {
 		{Def: mcp.Tool{Name: "other", Description: "weather forecast"}}, {Def: mcp.Tool{Name: "weather", Description: "x"}}}})
 	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"})
 	t.Cleanup(s.Close)
-	got, _ := run(s.Toolset(bg, nil, nil), call("mcp", `{"action":"search","query":"weather forecast"}`))
+	got, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"search","query":"weather forecast"}`))
 	if first := `{"matches":[{"name":"mcp__weather__weather"`; !strings.HasPrefix(got, first) {
 		t.Errorf("search = %s, want a name and server match (55) above two description matches and a server match (25)", got)
 	}
