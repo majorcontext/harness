@@ -230,3 +230,41 @@ func TestInterruptTreeStopsEveryDescendant(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+func TestTaskStatusReachesADescendantBelowALoweredMaxTaskDepth(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var great string
+		answer := func(p eventlog.Part) []eventlog.Message {
+			switch p.Text {
+			case "act":
+				return []eventlog.Message{calls("task", map[string]any{"action": "status", "session_id": great})}
+			case "grand work":
+				return []eventlog.Message{calls("task", map[string]any{"prompt": "great work"})}
+			case "great work":
+				return done()
+			}
+			return generations(done, nil)(p)
+		}
+		st, dir := harness.NewMemStore(), t.TempDir()
+		r1 := familyRuntime(t, st, &family{answer: answer}, nil, config.Config{}, dir)
+		submit(t, create(t, r1), text("a", "delegate"))
+		kid := children(t, r1)[0].ID
+		grand := descendants(t, r1, kid)[0].ID
+		great = descendants(t, r1, grand)[0].ID
+		closeRuntime(t, r1)
+		f2 := &family{answer: answer}
+		r2 := familyRuntime(t, st, f2, nil, config.Config{MaxTaskDepth: 1}, dir)
+		s, err := r2.Open(bg, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		submit(t, s, text("b", "act"))
+		synctest.Wait()
+		res := f2.results("s1")
+		if want := `{"session_id":"` + great + `","parent_id":"` + grand + `","depth":3`; len(res) == 0 || !strings.HasPrefix(res[len(res)-1], want) {
+			t.Errorf("status of a great-grandchild after max_task_depth drops to 1: %v, want prefix %s", res, want)
+		}
+		closeRuntime(t, r2)
+	})
+}

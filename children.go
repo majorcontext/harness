@@ -99,11 +99,10 @@ func (r *Runtime) lineage(ctx context.Context, id string) (string, int, error) {
 }
 
 // ancestors returns the parents of session id, nearest first. It reads the
-// session.created record of each, and stops past max_task_depth, where no
-// spawn can pass.
+// session.created record of each, up to the root.
 func (r *Runtime) ancestors(ctx context.Context, id string) ([]string, error) {
 	var up []string
-	for len(up) <= r.sup.depth {
+	for {
 		c, err := r.created(ctx, id)
 		if err != nil {
 			return nil, err
