@@ -73,20 +73,9 @@ func readBlob(t *testing.T, st harness.Store, id, key string) string {
 
 type store = harness.Store
 
-// Run checks that the stores keep the harness.Store invariants. For each
-// case, newStore returns an opener of new, empty storage. Each call of the
-// opener returns one more Store instance over that storage, as another
-// process would open it.
-func Run(t *testing.T, newStore func(t *testing.T) func() harness.Store) {
-	for _, c := range []struct {
-		name string
-		fn   func(t *testing.T, open func() store)
-	}{
-		{"StaleInstanceAppendConflicts", testStaleInstanceAppendConflicts},
-		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
-	} {
-		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)) })
-	}
+// Run checks that the stores newStore returns keep the harness.Store
+// invariants.
+func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 	for _, c := range []struct {
 		name string
 		fn   func(t *testing.T, st store)
@@ -103,7 +92,23 @@ func Run(t *testing.T, newStore func(t *testing.T) func() harness.Store) {
 		{"BlobRoundTrip", testBlobRoundTrip},
 		{"StoredRecordsAreCopies", testStoredRecordsAreCopies},
 	} {
-		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)()) })
+		t.Run(c.name, func(t *testing.T) { c.fn(t, newStore(t)) })
+	}
+}
+
+// RunInstances checks the fence across Store instances over one storage, as
+// processes that share it. For each case, newStorage returns an opener of
+// new, empty storage, and each call of the opener returns one more instance
+// over it. A store that is fenced against another process runs it.
+func RunInstances(t *testing.T, newStorage func(t *testing.T) func() harness.Store) {
+	for _, c := range []struct {
+		name string
+		fn   func(t *testing.T, open func() store)
+	}{
+		{"StaleInstanceAppendConflicts", testStaleInstanceAppendConflicts},
+		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
+	} {
+		t.Run(c.name, func(t *testing.T) { c.fn(t, newStorage(t)) })
 	}
 }
 

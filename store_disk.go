@@ -15,7 +15,8 @@ import (
 )
 
 // DiskStore keeps each session under <root>/<session>: records in log.jsonl,
-// one per line, and blobs in blobs/<key>. A line number is the seq.
+// one per line, and blobs in blobs/<key>. A line number is the seq. Where
+// flock does not exist, only the instance fences its appends.
 type DiskStore struct {
 	root string
 
@@ -60,12 +61,30 @@ func (d *DiskStore) lock(session string) (*diskSession, error) {
 	return s, nil
 }
 
-// headLocked returns the head. Another DiskStore, in this process or in
+// headLocked returns the head under a shared lock of the log file, which a
+// writer holds exclusively from its first byte to its fsync or rollback, so
+// the scan never reads bytes that a failed append cuts again. It never
+// writes: a reader may share the directory with a live writer.
+func (d *DiskStore) headLocked(ctx context.Context, session string, s *diskSession) (uint64, error) {
+	f, err := os.Open(d.logPath(session))
+	if errors.Is(err, fs.ErrNotExist) {
+		return d.scanHead(session, s)
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = f.Close() }()
+	if err := lockFile(ctx, f, true); err != nil {
+		return 0, err
+	}
+	return d.scanHead(session, s)
+}
+
+// scanHead returns the head. Another DiskStore, in this process or in
 // another, can append to the file, so it scans the bytes after the whole
 // lines again when the file size differs from the last scan or the last
-// scan ended in torn bytes. It never writes: a reader may share the
-// directory with a live writer.
-func (d *DiskStore) headLocked(session string, s *diskSession) (uint64, error) {
+// scan ended in torn bytes. The caller holds a lock of the file.
+func (d *DiskStore) scanHead(session string, s *diskSession) (uint64, error) {
 	path := d.logPath(session)
 	var total int64
 	fi, err := os.Stat(path)
@@ -138,7 +157,7 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 		return err
 	}
 	defer s.mu.Unlock()
-	head, err := d.headLocked(session, s)
+	head, err := d.headLocked(ctx, session, s)
 	if err != nil {
 		return err
 	}
@@ -148,7 +167,7 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 	if len(records) == 0 {
 		return nil
 	}
-	if err := d.writeLocked(session, s, expectedSeq, records); err != nil {
+	if err := d.writeLocked(ctx, session, s, expectedSeq, records); err != nil {
 		s.loaded = false
 		return err
 	}
@@ -159,9 +178,10 @@ func conflict(session string, head, at uint64) error {
 	return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, head, at)
 }
 
-// writeLocked locks the log file, checks the head, appends, and fsyncs. A
-// failure leaves the log in an unknown state, so the caller scans it again.
-func (d *DiskStore) writeLocked(session string, s *diskSession, expectedSeq uint64, records [][]byte) error {
+// writeLocked locks the log file exclusively, checks the head, appends, and
+// fsyncs. A failure leaves the log in an unknown state, so the caller scans
+// it again. A wait for the lock ends with ctx.
+func (d *DiskStore) writeLocked(ctx context.Context, session string, s *diskSession, expectedSeq uint64, records [][]byte) error {
 	path := d.logPath(session)
 	dir := filepath.Dir(path)
 	if err := d.mkdirSynced(dir); err != nil {
@@ -171,10 +191,10 @@ func (d *DiskStore) writeLocked(session string, s *diskSession, expectedSeq uint
 	if err != nil {
 		return err
 	}
-	err = lockFile(f)
+	err = lockFile(ctx, f, false)
 	var head uint64
 	if err == nil {
-		head, err = d.headLocked(session, s)
+		head, err = d.scanHead(session, s)
 	}
 	if err == nil && head != expectedSeq {
 		err = conflict(session, head, expectedSeq)
@@ -256,7 +276,7 @@ func (d *DiskStore) Head(ctx context.Context, session string) (uint64, error) {
 		return 0, err
 	}
 	defer s.mu.Unlock()
-	return d.headLocked(session, s)
+	return d.headLocked(ctx, session, s)
 }
 
 // Sessions implements Store.
