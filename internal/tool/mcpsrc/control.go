@@ -142,9 +142,9 @@ func (c control) search(query string, limit int) (any, error) {
 			score += 100
 		}
 		for _, t := range tokens {
-			for field, points := range map[string]int{name: 50, desc: 10, server: 5} {
+			for i, field := range []string{name, desc, server} {
 				if strings.Contains(field, t) {
-					score += points
+					score += []int{50, 10, 5}[i]
 				}
 			}
 		}
@@ -242,30 +242,28 @@ func line(d string) string {
 	return d + "..."
 }
 
-// render is the instructions segment: each connected server's own
-// instructions with its tool names, and a line about the resource tools.
-// Must be called with s.mu held.
-func (s *Source) render() string {
+// instructions is the segment of the reached servers: each one's own
+// instructions with its allowed tool names, and a line about the resource tools.
+func (s *Source) instructions(servers map[string]*server, reached []string, ok func(string) bool) string {
 	tag := strings.NewReplacer("<mcp_instructions>", "(mcp_instructions)", "</mcp_instructions>", "(/mcp_instructions)",
 		"<server", "(server", "</server>", "(/server)")
 	attr := func(v string) string { return strings.ReplaceAll(tag.Replace(v), `"`, "'") }
 	var b strings.Builder
-	for _, name := range s.names {
-		sv := s.servers[name]
-		if !sv.up() {
-			continue
-		}
+	for _, name := range reached {
+		sv := servers[name]
 		text := strings.TrimSpace(sv.client.Instructions())
 		if text == "" {
 			continue
 		}
 		var tools []string
 		for _, t := range sv.tools {
-			tools = append(tools, attr(prefix+name+"__"+t.Name))
+			if n := prefix + name + "__" + t.Name; ok(n) {
+				tools = append(tools, attr(n))
+			}
 		}
 		fmt.Fprintf(&b, "\n<server name=\"%s\" tools=\"%s\">\n%s\n</server>", attr(name), strings.Join(tools, ", "), tag.Replace(text))
 	}
-	if slices.ContainsFunc(s.names, func(n string) bool { return s.servers[n].resources() }) {
+	if slices.ContainsFunc(reached, func(n string) bool { return servers[n].resources() }) {
 		return "<mcp_instructions>\n" + resourcesLine + b.String() + "\n</mcp_instructions>"
 	}
 	if b.Len() == 0 {

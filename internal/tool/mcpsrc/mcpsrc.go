@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
-	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -61,9 +61,9 @@ type Source struct {
 	mu      sync.Mutex
 	closed  bool
 	servers map[string]*server
-	// instructions is the prompt segment of the servers that the first
-	// connect reached. It never changes, so each prompt stays stable.
-	instructions string
+	// reached holds the servers that the first connect reached. Only they
+	// give instructions, so each prompt stays stable.
+	reached []string
 }
 
 type server struct {
@@ -128,7 +128,7 @@ func (s *Source) wait(ctx context.Context) bool {
 			}
 			wg.Wait()
 			s.mu.Lock()
-			s.instructions = s.render()
+			s.reached = slices.DeleteFunc(slices.Clone(s.names), func(n string) bool { return !s.servers[n].up() })
 			s.mu.Unlock()
 			close(s.ready)
 		})
@@ -201,7 +201,7 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		return turn.Toolset{}
 	}
 	s.mu.Lock()
-	servers, instructions := maps.Clone(s.servers), s.instructions
+	servers, reached := maps.Clone(s.servers), s.reached
 	s.mu.Unlock()
 	ok := func(name string) bool { return allowed == nil || slices.Contains(allowed, name) }
 	var all []remote
@@ -239,7 +239,7 @@ func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowe
 		head = append(head, slices.DeleteFunc([]turn.Tool{lister{s}, reader{s}}, func(t turn.Tool) bool { return !ok(t.Spec().Name) })...)
 	}
 	ts.Tools = append(head, ts.Tools...)
-	ts.Prompt = strings.Trim(instructions+"\n\n"+catalog(deferred), "\n")
+	ts.Prompt = strings.Trim(s.instructions(servers, reached, ok)+"\n\n"+catalog(deferred), "\n")
 	return ts
 }
 
@@ -287,12 +287,12 @@ func (r remote) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolR
 	return protocol.ToolResult{Text: text(res.Content), IsError: res.IsError}, nil
 }
 
-// hide replaces a transport error, which can name the endpoint URL and a
-// secret in it, with a reason.
+// hide replaces every error but a server's own RPC error with a reason. A
+// transport error can name the endpoint URL, and an HTTP error the response
+// body, and a secret in either.
 func hide(server string, err error) error {
-	var ue *url.Error
-	var oe *net.OpError
-	if !errors.As(err, &ue) && !errors.As(err, &oe) {
+	var rpc *mcp.RPCError
+	if errors.As(err, &rpc) {
 		return err
 	}
 	return fmt.Errorf("mcp: server %q: call failed: %s", server, reason(err))
@@ -309,7 +309,7 @@ func reason(err error) string {
 	case errors.As(err, &oe):
 		return "connection failed"
 	}
-	return "initialize failed"
+	return "request failed"
 }
 
 // text renders content as text. The result carries no binary data, so a
@@ -335,9 +335,9 @@ func text(content []mcp.Content) string {
 
 func binary(what, data, mime string) string {
 	mime = cmp.Or(mime, "application/octet-stream")
-	b, err := base64.StdEncoding.DecodeString(data)
+	n, err := io.Copy(io.Discard, base64.NewDecoder(base64.StdEncoding, strings.NewReader(data)))
 	if err != nil {
 		return fmt.Sprintf("[%s, malformed base64, %s]", what, mime)
 	}
-	return fmt.Sprintf("[%s, %d bytes, %s]", what, len(b), mime)
+	return fmt.Sprintf("[%s, %d bytes, %s]", what, n, mime)
 }

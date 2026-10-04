@@ -135,6 +135,8 @@ func TestToolset(t *testing.T) {
 			}},
 		{name: "allowed tools restrict the tools and the catalog", edit: lazy, allowed: []string{"mcp__weather__alerts"},
 			deferred: "mcp__weather__alerts", lacks: []string{forecastRow}},
+		{name: "allowed tools restrict the tool names of the instructions", allowed: []string{"mcp__weather__alerts"},
+			tools: "mcp__weather__alerts", has: []string{`tools="mcp__weather__alerts">`}, lacks: []string{"mcp__weather__forecast"}},
 		{name: "a server down at start has no tools", tools: "mcp mcp__docs__search", lacks: []string{"list_mcp_resources"},
 			edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) {
 				s["weather"].FailInitialize(1)
@@ -175,6 +177,7 @@ func TestToolCalls(t *testing.T) {
 		want    string
 		isError bool
 		lose    string
+		refuse  string
 	}{
 		{name: "a tool result", call: call("mcp__weather__forecast", `{"city":"Oslo"}`), want: "Oslo: 3C, snow"},
 		{name: "a tool error", call: call("mcp__weather__flaky", `{}`), want: "upstream timeout", isError: true},
@@ -182,6 +185,7 @@ func TestToolCalls(t *testing.T) {
 		{name: "binary content becomes a line", call: call("mcp__weather__mixed", `{}`),
 			want: "plain\n[image content, 5 bytes, image/png]\nresource: doc://x (x)\nembedded"},
 		{name: "a lost server hides its endpoint", lose: "docs", call: call("mcp__docs__search", `{}`), want: `error: mcp: server "docs": call failed: connection refused`},
+		{name: "a refused call hides the response body", refuse: "weather", call: call("mcp__weather__forecast", `{}`), want: `error: mcp: server "weather": call failed: request failed`},
 		{name: "paged resources of every server", call: call("list_mcp_resources", `{}`),
 			want: `{"resources":[{"uri":"doc://guide","name":"guide","mimeType":"text/markdown","server":"docs"},{"uri":"doc://logo","name":"logo","mimeType":"image/png","server":"docs"}]}`},
 		{name: "resources of an unknown server", call: call("list_mcp_resources", `{"server":"nope"}`),
@@ -206,13 +210,16 @@ func TestToolCalls(t *testing.T) {
 		{name: "connect of an unknown server", call: call("mcp", `{"action":"connect","server":"nope"}`), want: `error: mcp: unknown server "nope" (configured: docs, weather)`},
 		{name: "connect of a connected server", call: call("mcp", `{"action":"connect","server":"docs"}`), want: `{"server":"docs","connected":true,"message":"already connected"}`},
 		{name: "connect of a server that refuses", edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].SetAvailable(false) },
-			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: initialize failed`},
+			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: request failed`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, srv := source(t, tc.edit)
 			ts := s.Toolset(bg, tc.history, nil)
 			if tc.lose != "" {
 				srv[tc.lose].Close()
+			}
+			if tc.refuse != "" {
+				srv[tc.refuse].SetAvailable(false)
 			}
 			got, isError := run(ts, tc.call)
 			if got != tc.want || isError != tc.isError {
@@ -245,5 +252,16 @@ func TestConnectAddsToolsButNotInstructions(t *testing.T) {
 	}
 	if names(after.Tools) != all || after.Prompt != before.Prompt || strings.Contains(after.Prompt, "Call forecast first.") {
 		t.Errorf("after connect: tools %q, prompt %q; want every tool and the prompt of the first connect %q", names(after.Tools), after.Prompt, before.Prompt)
+	}
+}
+
+func TestSearchScoresEachField(t *testing.T) {
+	srv := harnesstest.NewMCPServer(t, harnesstest.MCPSpec{Name: "weather", Tools: []harnesstest.MCPTool{
+		{Def: mcp.Tool{Name: "other", Description: "weather forecast"}}, {Def: mcp.Tool{Name: "weather", Description: "x"}}}})
+	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"})
+	t.Cleanup(s.Close)
+	got, _ := run(s.Toolset(bg, nil, nil), call("mcp", `{"action":"search","query":"weather forecast"}`))
+	if first := `{"matches":[{"name":"mcp__weather__weather"`; !strings.HasPrefix(got, first) {
+		t.Errorf("search = %s, want a name and server match (55) above two description matches and a server match (25)", got)
 	}
 }

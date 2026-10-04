@@ -170,7 +170,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, fmt.Errorf("%w: model is empty", ErrInvalidRequest)
 	}
 	if r.models != nil {
-		if err := r.models.check(req.Model, req.AllowedTools, r.tools); err != nil {
+		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.tools); err != nil {
 			return nil, err
 		}
 	}
@@ -278,7 +278,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Done:      func() { r.forget(id, e) },
 	}
 	if r.models != nil {
-		cfg.Check = func(from, to string, names []string) error { return r.models.change(from, to, names, r.tools) }
+		cfg.Check = func(from, to string, names []string) error {
+			return r.models.change(from, to, r.unowned(names), r.tools)
+		}
 	}
 	if r.mcp != nil {
 		cfg.Source = r.mcp
@@ -398,13 +400,30 @@ func (r *Runtime) Close(ctx context.Context) error {
 	}
 }
 
-// closeTools stops the processes and the MCP servers.
+// unowned returns the allowed names that the Options.Tools and the backend
+// do not own. The MCP source owns its names, which depend on the servers.
+func (r *Runtime) unowned(names []string) []string {
+	if r.mcp == nil {
+		return names
+	}
+	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
+}
+
+// closeTools stops the processes and the MCP servers, and returns when ctx ends.
 func (r *Runtime) closeTools(ctx context.Context) {
 	if r.procs != nil {
 		r.procs.Close(ctx)
 	}
 	if r.mcp != nil {
-		r.mcp.Close()
+		done := make(chan struct{})
+		go func() {
+			r.mcp.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
 	}
 }
 
