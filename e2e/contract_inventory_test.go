@@ -97,7 +97,7 @@ var boxesFeatures = []struct {
 	{"config session_sync=fsync", []string{"session_sync_fsync_reports_fsync", "session_sync_default_reports_fsync"}},
 	{"config context_window_required", []string{"context_window_required_refuses_an_unknown_model_at_create", "context_window_required_false_admits_an_unknown_model_without_a_window"}},
 	{"config mcp_tool_loading", []string{"mcp_lazy_search_select_then_call", "mcp_auto_defers_over_threshold", "mcp_per_server_tool_loading_overrides_global"}},
-	{"config mcp_servers", []string{"mcp_eager_lists_namespaced_tools", "mcp_tool_call_result", "mcp_http_sse_reply", "mcp_stdio_server_call"}},
+	{"config mcp_servers", []string{"mcp_eager_lists_namespaced_tools", "mcp_tool_call_result", "mcp_http_sse_reply", "mcp_stdio_server_call", "claudecode_configured_mcp_servers_reach_the_cli"}},
 	{"config event_sink", []string{"event_sink_ships_every_durable_record", "event_sink_retries_a_retryable_failure"}},
 	{"config append_system_prompt", []string{"system_segments_order_append_layers_then_instructions_then_skills"}},
 	{"config plugins", []string{"plugin_tools_listed_and_run", "plugin_boxes_style_command_and_dir", "plugin_before_hook_rewrites_and_blocks"}},

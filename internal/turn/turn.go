@@ -37,8 +37,11 @@ type Backend interface {
 
 // Capabilities says what a backend does for a model.
 type Capabilities struct {
-	OwnsLoop      bool
-	OwnsContext   bool
+	OwnsLoop    bool
+	OwnsContext bool
+	// OwnsMCP reports a backend that connects the configured MCP servers
+	// itself on a turn with no tool restriction.
+	OwnsMCP       bool
 	Steering      bool
 	ContextWindow int
 	// Tools names the built-in tools of a backend that owns the loop. A

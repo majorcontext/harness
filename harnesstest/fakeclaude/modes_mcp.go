@@ -52,12 +52,23 @@ func mcpTurn(f *fake) bool {
 	return true
 }
 
-func mcpURL() (string, error) {
+func mcpConfig() ([]byte, error) {
 	i := slices.Index(os.Args, "--mcp-config")
 	if i < 0 || i+1 >= len(os.Args) {
-		return "", fmt.Errorf("no --mcp-config")
+		return nil, fmt.Errorf("no --mcp-config")
 	}
-	data, err := os.ReadFile(os.Args[i+1])
+	return os.ReadFile(os.Args[i+1])
+}
+
+func logMCPConfig() {
+	path := os.Getenv("FAKE_CLAUDE_MCP_CONFIG_LOG")
+	if data, err := mcpConfig(); path != "" && err == nil {
+		appendFile(path, string(bytes.TrimSpace(data))+"\n")
+	}
+}
+
+func mcpURL() (string, error) {
+	data, err := mcpConfig()
 	if err != nil {
 		return "", err
 	}
