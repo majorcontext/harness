@@ -32,6 +32,9 @@ type runtimeDriver struct {
 	inputs         int
 }
 
+// runtimeVersion is the build version that serve reports in its engine banner.
+const runtimeVersion = "0.1.0-dev"
+
 // runtimeKey gives the in-process runtime the model key that startServeIn
 // gives serve.
 var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
@@ -51,7 +54,7 @@ func newRuntimeDriver(t *testing.T, configPath string) *runtimeDriver {
 
 func (d *runtimeDriver) start(t *testing.T) {
 	t.Helper()
-	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir})
+	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}

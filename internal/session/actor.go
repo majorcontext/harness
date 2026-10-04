@@ -68,6 +68,9 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
+	// Banner is the engine status that each model call of a turn sends as
+	// engine context. Empty: none.
+	Banner string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
 	Tools     []turn.Tool
@@ -139,6 +142,9 @@ type Actor struct {
 	stopped   bool
 	retryStop context.CancelFunc
 	retryAt   time.Time
+	// bannered is set once bannerPin holds the place of the banner.
+	bannered  bool
+	bannerPin int
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {

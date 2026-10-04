@@ -81,6 +81,11 @@ type Request struct {
 	// Steered receives a value when a steer input waits for Sink.Steer. It
 	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
+	// Banner is trusted engine status that every model call of the turn
+	// sends as engine context after History[:BannerAt]. A backend that
+	// owns the loop gets none. Empty: none.
+	Banner   string
+	BannerAt int
 }
 
 // Delta is a piece of an item that is not complete yet.

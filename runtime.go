@@ -78,6 +78,11 @@ type Options struct {
 	// Config.AppendSystemPrompt alone, no file is read, no process runs, no
 	// built-in tool exists, and no session has the task tool.
 	WorkDir string
+	// Version is the build version that the engine banner names. Each model
+	// call of a harness-loop turn sends the banner as engine context, after
+	// the newest message of the session when its first request left. Empty:
+	// no banner.
+	Version string
 
 	backend turn.Backend
 }
@@ -104,6 +109,8 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	// banner is the engine status that a model call sends; empty: none.
+	banner string
 	// commandDirs are the prompt-command dirs; nil without a WorkDir.
 	commandDirs []string
 	// threshold and keep are the compaction settings of each session.
@@ -178,8 +185,21 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
+	r.banner = banner(opts.Version, opts.Config.SessionSync, time.Now())
 	r.base, r.cancel = context.WithCancel(context.Background())
 	return r, nil
+}
+
+// banner renders the engine status line, or "" for an empty version.
+func banner(version, sessionSync string, started time.Time) string {
+	if version == "" {
+		return ""
+	}
+	mode := "fsync"
+	if sessionSync == "volume" {
+		mode = sessionSync
+	}
+	return "[engine: harness " + version + " · session_sync=" + mode + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
 }
 
 // positive returns v, or def when v is not positive.
@@ -333,6 +353,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Ownership: own,
 		Owner:     r.name(),
 		Backend:   r.backend,
+		Banner:    r.banner,
 		Evaluator: r.evaluator,
 		Tools:     r.bind(id),
 		Prompt:    r.instructions(),

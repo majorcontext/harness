@@ -95,6 +95,9 @@ func (a *Actor) start(id string, inputIDs []string) {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
 	}
+	if a.cfg.Banner != "" && !r.ownsLoop {
+		req.Banner, req.BannerAt = a.cfg.Banner, a.bannerAt(len(req.History))
+	}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})

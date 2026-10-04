@@ -171,9 +171,8 @@ func tail(b []byte, n int) []byte {
 }
 
 // suiteBreaks are the differences that every row shows on the runtime. Each
-// waits for a decision under Open questions in docs/architecture.md. A same
-// row compares with its serve golden less these.
-var suiteBreaks = []func(*normRequest){dropTool("model"), dropTool("session_info"), dropEngineBanner}
+// waits for its port. A same row compares with its serve golden less these.
+var suiteBreaks = []func(*normRequest){dropTool("model"), dropTool("session_info")}
 
 func dropTool(name string) func(*normRequest) {
 	return func(r *normRequest) {
@@ -181,19 +180,6 @@ func dropTool(name string) func(*normRequest) {
 			r.Tools = nil
 		}
 	}
-}
-
-var engineBanner = regexp.MustCompile(`^<harness-engine-context>\n\[engine: harness <version> · session_sync=\w+ · engine started <time>\]\n</harness-engine-context>$`)
-
-// dropEngineBanner drops the banner part that serve adds to the first user
-// message, and the message that a chat wire sends it in.
-func dropEngineBanner(r *normRequest) {
-	for i := range r.Messages {
-		r.Messages[i].Parts = slices.DeleteFunc(r.Messages[i].Parts, func(p normReqPart) bool {
-			return p.Kind == "text" && engineBanner.MatchString(p.Text)
-		})
-	}
-	r.Messages = slices.DeleteFunc(r.Messages, func(m normReqMessage) bool { return len(m.Parts) == 0 })
 }
 
 // compareSame compares obs with the serve golden of row name less the suite breaks.
