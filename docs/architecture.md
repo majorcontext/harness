@@ -968,6 +968,7 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 - Does the switch wrap the messages that the engine writes for the model in `<harness-engine-context>` tags? Serve wraps the `[continuation: …]` message of a max_tokens turn, so the model reads it as engine text. The runtime sends it as plain user text.
 - Does `GET /sessions` keep creation order? It lists in ID order, and a minted ID has a random suffix. Serve listed in creation order.
 - Does the answer route keep the serve receipt `202 {seq, status}`? The runtime answers `204`.
+- Does a settings change to a model of another kind of backend take effect in the middle of a turn? Serve fails the turn at its next model call, because Claude Code has no model API. The runtime finishes the turn on its own backend, and the next turn uses the new model.
 
 ## Closed parity questions
 
