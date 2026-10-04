@@ -537,7 +537,7 @@ type Sink interface {
 | The `anthropic` key with no type | `provider/anthropic` (Messages) |
 | `type: claude-code-cli` | `internal/backend/claudecode`, a delegated backend |
 
-`Options.ModelTransport` wraps the HTTP client of each entry, and may supply the credentials of each wire. Each request caps the response at 8192 tokens. `Close` reaches a client that pools connections through an optional `Close` method. Each provider package keeps its own SSE reader and status classifier, and the one retry policy stays in `turn`.
+`Options.ModelTransport` wraps the HTTP client of each entry, and may supply the credentials of each wire. Each request sends a baseline response cap of 8192 tokens. A reasoning request can raise it. `Close` reaches a client that pools connections through an optional `Close` method. Each provider package keeps its own SSE reader and status classifier, and the one retry policy stays in `turn`.
 
 ### Third-party harnesses
 

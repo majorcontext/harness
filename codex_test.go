@@ -277,6 +277,11 @@ func TestCreateChecksTheModel(t *testing.T) {
 			cfg: func(c *config.Config) { c.ContextWindowRequired = new(false) }},
 		{name: "a native anthropic entry with no type", model: "anthropic/claude-opus-5"},
 		{name: "an openai-compat entry", model: "bifrost/fireworks/accounts/fireworks/routers/firerouter"},
+		{name: "an openrouter entry that names only its key", model: "openrouter/vendor/model",
+			cfg: func(c *config.Config) {
+				c.ContextWindowTokens = 1000
+				c.Providers["openrouter"] = config.Provider{APIKeyEnv: "OPENROUTER_TEST_KEY"}
+			}},
 		{name: "a provider entry of an unknown type fails New", model: "codex/gpt-5", want: harness.ErrInvalidRequest,
 			cfg: func(c *config.Config) { c.Providers["bad"] = config.Provider{Type: "bogus"} }},
 	} {

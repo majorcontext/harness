@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -36,7 +37,9 @@ type models struct {
 func newModels(cfg config.Config, transport func(provider string) http.RoundTripper) *models {
 	m := &models{backends: map[string]turn.Backend{},
 		strict: cfg.ContextWindowRequiredValue() && cfg.ContextWindowTokens == 0}
-	for name, p := range cfg.Providers {
+	providers := maps.Clone(cfg.Providers)
+	config.EnsureProviderDefaults(providers)
+	for name, p := range providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			m.backends[name] = claudecode.New(p)
 		} else if c := client(name, p, transport); c != nil {
