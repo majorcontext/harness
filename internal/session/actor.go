@@ -67,6 +67,8 @@ type Config struct {
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
 	Tools []turn.Tool
+	// Source gives more tools to each model call. nil: Tools only.
+	Source turn.Source
 	// Prompt returns the system prompt of a turn when the turn starts.
 	Prompt func() string
 	// Sync receives every durable record. nil: no replication.

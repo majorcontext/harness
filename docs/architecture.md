@@ -176,7 +176,7 @@ Free to change.
 | `internal/backend/external`, `claudecode`, `codexcli` | Third-party harness backends |
 | `internal/message` | Conversation types used inside the runtime |
 | `internal/modelmeta` | Context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models` |
-| `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface and sources |
+| `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface and sources; `mcpsrc` gives MCP tools to each model call through `turn.Source` |
 | `internal/toolresult` | Large-result retention and `read_tool_result` |
 | `internal/prompt` | System-prompt segments and agent profiles |
 | `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is in phase 6 |
@@ -594,6 +594,19 @@ func (r *Registry) Lookup(name string) (Tool, bool)
 
 Agent profiles name a kind of child: `name`, `description`, `tools`, `model`, and a prompt body, in Claude Code's agent frontmatter so one file serves every backend. `internal/prompt` loads them from `<workdir>/.agents`. `Spawn(child{agent})` applies a profile through `Registry.Restrict` and a prompt segment.
 
+### MCP tools
+
+`internal/tool/mcpsrc` gives the tools of `Config.MCPServers` to each model call. The `mcp` package does not change. `turn` declares the one seam: a `Source` returns a `Toolset` of described tools, deferred tools, and a prompt segment. The turn reads it before each model call, so a tool that the model loads in a turn is callable on the next request of that turn. A deferred tool runs when the model calls it. A backend that owns the loop gets every tool described.
+
+- Connection. The first model call of any session connects every configured server, in parallel, once for each runtime. `connect_timeout_s` (default 15) bounds each attempt. A server that fails stays down, with no background retry, until `mcp(action="connect")` makes one more attempt. A connected server is never dialed again. `Runtime.Close` closes every connection and stops each stdio server.
+- Names. Each tool is `mcp__<server>__<tool>`. With `mcp_servers`, an embedder tool named `mcp`, `list_mcp_resources`, `read_mcp_resource`, or `mcp__…` fails `New`. `AllowedTools` restricts these tools and the deferred list. MCP needs no `WorkDir`: the embedder asks for it in its config.
+- Deferral. The mode of a server is its `tool_loading`, else `mcp_tool_loading`, else `eager`. `lazy` defers each tool of the server. `auto` defers when the connected servers have more than `mcp_tool_loading_threshold` tools (default 20). The prompt segment lists each deferred tool with the first line of its description. As with Claude Code's ToolSearch, the model loads a tool with `mcp(action="select")` and finds one with `mcp(action="search")`. When a server can defer, the `mcp` tool has these actions.
+- Replay. A tool is loaded when the history holds a `select` that names it or a call of it. The log holds both, so a replay or the next owner loads the same tools with no new event kind. A compaction that folds the call defers the tool again.
+- Instructions. The segment starts with `<mcp_instructions>`: the instructions of each server that the first connect reached, with its tool names, and one line about the resource tools. It never changes after the first connect, so a server that connects later never joins it.
+- Resources. When a connected server serves resources, `list_mcp_resources` and `read_mcp_resource` are added. A listing stops at 500 resources for each server.
+- Results. A result is text. An image, an audio item, or a binary resource becomes one line with its size and media type. A transport error names a reason and never the endpoint URL.
+- The segment follows the process status line. There is no `status` action, no MCP status segment, and no background retry. Switch oracle: the `mcp_*` rows except `mcp_status_*`. By design, an error has no `engine:` prefix, a call to a tool that is not there reads `no such tool available`, binary content becomes text, and `connect` is the only action of an eager runtime.
+
 ### prompt
 
 `internal/prompt.Build(cfg, workDir)` returns the system prompt of a session as segments. The runtime joins them with a blank line. It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call. The log never holds them, so the next `Open` reads the files again. Codex and Claude Code also read the prompt once at session start.
@@ -611,7 +624,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". There is no outline mode, no chain ceiling, and no other ambient segment. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment. See "MCP tools". There is no outline mode, no chain ceiling, and no other ambient segment. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 

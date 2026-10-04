@@ -2190,7 +2190,7 @@ func appendSystemSegments(cfg *config.Config, extra string) []string {
 }
 
 func systemPrompt(workDir, extra string) []string {
-	system := []string{prompt.Base(workDir)}
+	system := []string{prompt.EngineBase(workDir)}
 	if extra != "" {
 		system = append(system, extra)
 	}
