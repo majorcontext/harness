@@ -298,10 +298,10 @@ The runtime reads no old format: not the current journal, index, snapshot, or `e
 
 A one-time Go migration tool converts each old session journal into `harness.Store` records through `eventlog`. Its inputs are the per-session journal files of the engine on each box disk and the `box_journal_*` mirror tables of boxes. The tool also copies the retained tool-result files of each session into `Store` blobs, so `read_tool_result` reads a converted handle. The tool runs in the quiesced window of the cutover, before the new harness starts. Each converted session opens with its full conversation, so the agent keeps its context and the console keeps its transcript.
 
-- An archived box is converted when it is restored.
+- The tool also converts each archived box in the cutover window. It reads the saved session journals from the `sessions.tar.zst` export in the archive object of the box, and writes the converted event logs back into that archive. A later restore needs no converter.
 - The tool verifies each session: the message count and the last message of the new log match the old journal.
 - The tool reports each session that fails conversion. It never silently gives that session an empty history.
-- The tool is the only code that reads an old format. Phase 6 deletes it, so the runtime never carries an old-format reader.
+- The tool is the only code that reads an old format. Phase 6 deletes it after the cutover, so the runtime never carries an old-format reader. Nothing reads an old format again.
 
 ## session
 
@@ -897,19 +897,19 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
 | 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; the built-in tools, and large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
-| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal to the event log in the quiesced window, before the new harness starts; see "Old-format migration". | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
+| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal, including the journals in archived boxes, to the event log in the quiesced window, before the new harness starts; see "Old-format migration". | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, the migration tool, dead features; move leaves to `internal/` | None |
 
-PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route or Go API survives it, and the runtime reads no old format. Only the migration tool reads the old journals, and phase 6 deletes it.
+PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route or Go API survives it, and the runtime reads no old format. Only the migration tool reads the old journals, and phase 6 deletes it after it has converted live and archived boxes.
 
 ## Open questions
 
-- An archived box can be restored after phase 6 deletes the migration tool. Are all archived boxes converted before phase 6, or does a converter stay for a late restore?
 - Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
 
 Decided:
 
+- The migration tool converts archived boxes in the cutover window, with live boxes. It reads `sessions.tar.zst` from each archive object and writes the converted event logs back into it. A restore after the cutover needs no converter, and phase 6 deletes the tool.
 - Claude Code delegation is permanent, and the Codex CLI follows it through the same seam (see Third-party harnesses).
 - `interrupt` stops the running turn only. The next queued input then starts, and an active goal keeps running, as in Claude Code. `interrupt` replies after the turn has stopped.
 - Workspace inspection stays in harness as `GET /workspace/changes`, in an isolated `internal/workspace` package.
