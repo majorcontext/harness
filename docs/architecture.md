@@ -1,6 +1,8 @@
 # Harness architecture
 
-A proposed re-architecture of harness: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
+The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
+
+Phases 1 and 2 are built. Phase 3 is built except tool-result retention. The new runtime runs beside `engine` and `server` until the phase 4 switch. A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -73,7 +75,7 @@ Three consumers drive one `harness.Runtime`: boxes over HTTP and SSE, the meta h
   ┌─────────────────────────── harness.Runtime ───────────────────────────┐
   │ server    http.Handler over the runtime                               │
   │ session   one goroutine per session; runs only while it owns it       │
-  │ turn      agent loop → Backend (capabilities) · tool.Registry         │
+  │ turn      agent loop → Backend (capabilities) · []Tool · Source       │
   └──────────────┬─────────────────────────────────────┬──────────────────┘
                  │ Append(id, expectedSeq, records…)   │ Acquire(id) → Ownership
            harness.Store                          harness.Owner
@@ -88,7 +90,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `Store`, `Owner`, `Ownership`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `View`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`; imports only the standard library | boxinit `BootConfig` |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated OpenAPI and TS | boxes server, web, boxctl |
 | `harness/storetest` | Conformance suite for a `Store` | boxes `pgstore` |
@@ -102,20 +104,19 @@ package harness
 func New(opts Options) (*Runtime, error) // no I/O; sessions load on Create, Open, or List
 
 type Options struct {
-	Config config.Config // New checks it with Validate
 	Store  Store         // required
-	Owner  Owner  // nil: the local process owns every session
-	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
+	Owner  Owner         // nil: the local process owns every session
+	Sync   Sync          // nil: no replication
+	Config config.Config // New checks it with Validate
+	// ModelTransport returns the HTTP transport for a model provider.
+	// nil, or a nil result: the default transport.
+	ModelTransport func(provider string) http.RoundTripper
+	Tools          []Tool // embedder tools, beside MCP tools and the process tool
 	// WorkDir is the directory of a coding agent. It grants command
 	// execution through the process tool's declare action. Empty: no file
 	// is read, no process runs, and the system prompt is
 	// append_system_prompt alone.
 	WorkDir string
-	// ModelTransport returns the HTTP transport for a model provider.
-	// nil, or a nil result: the default transport.
-	ModelTransport func(provider string) http.RoundTripper
-	Sync           Sync // nil: no replication
-	Logger         *slog.Logger
 }
 
 // A Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -132,7 +133,7 @@ func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) // Submit, and whether the input repeats
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
-func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error // phase 5
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
@@ -144,7 +145,7 @@ func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, re
 func OpenView(ctx context.Context, st Store, id string) (*View, error)
 func (v *View) Session() protocol.Session
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
-func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protocol.Message, error)
+func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protocol.Message, error) // phase 4
 
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
@@ -152,6 +153,9 @@ type Sync interface {
 	// the sender resends from Head+1. ErrStaleEpoch fires Ownership.Lost.
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
+
+// ApplySync appends b to st by the receiver rules of a Sync (see Events).
+func ApplySync(ctx context.Context, st Store, b protocol.SyncBatch) (protocol.SyncAck, error)
 
 type Tool interface {
 	Spec() protocol.ToolSpec
@@ -169,21 +173,21 @@ Free to change.
 | Package | Owns |
 | --- | --- |
 | `internal/server` | HTTP mapping of the Go API |
-| `internal/eventlog` | Event schema, record codec, `Apply`, checkpoints |
-| `internal/session` | Session actor, mailbox, state machines, child tree, views |
-| `internal/turn` | One agent loop; declares `Backend` and `Tools` |
+| `internal/eventlog` | Event schema, record codec, `Apply`, and `Check` |
+| `internal/session` | Session actor, mailbox, state machines, views, replication; the child tree is planned |
+| `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
-| `internal/backend/external`, `claudecode`, `codexcli` | Third-party harness backends |
-| `internal/message` | Conversation types used inside the runtime |
-| `internal/modelmeta` | Context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models` |
-| `internal/tool` with `builtin`, `mcpsrc`, `pluginsrc` | Tool interface and sources; `mcpsrc` gives MCP tools to each model call through `turn.Source` |
-| `internal/toolresult` | Large-result retention and `read_tool_result` |
-| `internal/prompt` | System-prompt segments and agent profiles |
-| `internal/mcp`, `plugin`, `skill`, `command`, `process` | Moved as is in phase 6 |
+| `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
+| `internal/tool/mcpsrc` | A `turn.Source` that gives MCP tools to each model call |
+| `internal/tool/builtin`, `internal/tool/pluginsrc` | Planned: the built-in tools and the plugin tools |
+| `internal/toolresult` | Planned for phase 3: large-result retention and `read_tool_result`, at parity with the engine |
+| `internal/prompt` | System-prompt segments; agent profiles are planned |
 
-`internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
+Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
 
-Deleted: `engine`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer).
+`internal/workspace` is planned for phase 4. It serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
+
+Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer).
 
 ## eventlog
 
@@ -214,18 +218,17 @@ var ErrConflict = errors.New("harness: append conflict")
 
 - `seq` starts at 1 and has no gaps. `Head` returns the last seq, or 0 for an empty session. `expectedSeq` is the last seq the writer has seen, so it equals the record count.
 - A stale writer gets `ErrConflict` and stops.
-- After an ambiguous error (a timeout, a lost connection), the writer reads `Head`. Equal to `expectedSeq`: the write did not land; retry. Equal to `expectedSeq` plus the number of records, and the records read back match: it landed. Anything else: stop, as if fenced.
+- Any other append error also stops the session actor, with no retry. The next `Open` fences and replays from the store, so an append that landed is in the replay, and one that did not land is not.
 - Compare-and-append alone does not fence a lease handoff: an old owner's in-flight append can still hold the current `expectedSeq`. The new owner therefore appends `owner.acquired` before it replays or runs (see Ownership). Any later append from the old owner conflicts. A shared store may also check its lease in the same transaction as the append.
-- `Append` is durable on return. `DiskStore` group-commits one `fsync` per batch. `MemStore` is for tests.
-- Checkpoints are blobs. List summaries come from the checkpoint.
+- `Append` is durable on return. `DiskStore` writes the records of one `Append` with one `fsync`. `MemStore` is for tests.
+- There are no checkpoints. `Open` and `OpenView` replay the whole log. `List` reads the view of a session that this runtime runs, and replays the log of any other session. Add a checkpoint only when a measurement shows that replay costs too much.
 - `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it.
 
 ### Layout on disk
 
 ```
-<root>/<session>/log.jsonl          source of truth
-<root>/<session>/checkpoint.json    State at seq N, with a prefix hash; newest only
-<root>/<session>/blobs/<key>        tool results, backend transcripts
+<root>/<session>/log.jsonl          source of truth; line N holds seq N
+<root>/<session>/blobs/<key>        backend state; retained tool results from phase 3
 ```
 
 The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
@@ -242,7 +245,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 
 | Kind | Payload |
 | --- | --- |
-| `session.created` | `parent_id?`, `model`, `settings`, `origin` |
+| `session.created` | `parent_id?`, `model`, `settings`, `origin`, `allowed_tools?` |
 | `owner.acquired` | `epoch`, `owner` |
 | `settings.changed` | `model?`, `effort?`, `service_tier?` |
 | `input.admitted` | `input_id`, `delivery` (`queue` or `steer`), `source`, `parts` |
@@ -272,14 +275,16 @@ Ephemeral frames go to subscribers and never to the store: `item.started`, `item
 func (s *State) Apply(r Record) error
 ```
 
-`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the log from the checkpoint. There is no other fold. The summary for `GET /sessions` is `State.Summary()`.
+`Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. `State.History` holds the summary of the newest compaction and the messages after it, so the model sees the history from the newest compaction on. There is no other fold. The summary for `GET /sessions` is `State.Summary()`.
 
 ### Invariants enforced at append
 
-- Every tool call item gets exactly one result item, or an open request. `message.ResolveOrphanToolCalls` and its four sibling repair sites are deleted.
+`eventlog.Check` applies a batch to a copy of the `State` before the actor appends it. A batch that breaks an invariant fails with `ErrIllegal` and is not appended.
+
+- Every tool call item gets exactly one result item, or an open request, before its turn ends. The runtime has no repair site for an orphan tool call.
 - `seq` is gap-free per session.
 - A `turn.ended` follows every `turn.started`, except for a suspended turn.
-- A turn stopped with `ErrTurnStopped` never resumes.
+- Only a suspended turn resumes. A turn that ended never resumes.
 
 ### No old formats
 
@@ -289,25 +294,25 @@ Nothing reads the current journal, index, snapshot, or `events.jsonl`. At cutove
 
 ### Actor
 
-Each live session is one goroutine. It holds the `Ownership` and the `State`. Commands arrive through a mailbox; each has an optional reply channel.
+Each live session is one goroutine. It holds the `Ownership` and the `State`. Commands arrive through a mailbox as functions that run on the actor goroutine. The caller waits for the reply.
 
 | Command | Effect |
 | --- | --- |
-| `Admit(input)` | Append `input.admitted`; promote or queue |
-| `Withdraw(id)` | Append `input.withdrawn` if still queued |
+| `Submit(input)` | Append `input.admitted`; start a turn, queue, or steer |
 | `Interrupt(turnID?)` | Cancel the turn; reply when it has stopped |
-| `Resolve(requestID, resolution)` | Append `request.resolved`; resume the turn |
-| `SetSettings(...)` | Validate the model; append `settings.changed` |
+| `Update(settings)` | Check the model; append `settings.changed` |
 | `SetGoal(...)`, `ClearGoal()` | Append goal events |
-| `Compact()` | Run compaction through the turn runner |
-| `Spawn(child)` | Create a child session; append `child.spawned` |
-| `Suspend(cause)` | Stop the turn with a handoff cause; release ownership |
+| `Compact()` | Run a compaction as the run of the actor |
+| `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
+| `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
+| `Resolve(requestID, resolution)` | Phase 5: append `request.resolved`; resume the turn |
+| `Spawn(child)` | Planned: create a child session; append `child.spawned` |
 
-The actor sends appends to one writer goroutine per session, which keeps `expectedSeq` order and group-commits. `Apply` runs after the append returns. A command that needs durability replies after `Apply`. The mailbox never waits on disk.
+The actor appends with no other goroutine. It checks the batch with `eventlog.Check`, appends it with `Store.Append`, applies each record, and publishes a new view. A command that needs durability replies after `Apply`. The store write is the only wait on disk in the actor.
 
-The turn runner is one goroutine per turn. It reads a `State` view, calls the backend and tools, and sends `item.completed` and `turn.ended` to the actor. It touches no session field.
+The turn runner is one goroutine per turn. It gets a `turn.Request` that the actor builds from the `State`, calls the backend and tools, and sends each item and the end of the turn to the actor as commands. It touches no session field.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: status, turn, goal, queue, pending requests, settings, usage, context, head seq.
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, head seq) and whether the actor stopped.
 
 ### Ownership
 
@@ -325,24 +330,27 @@ type Ownership interface {
 }
 ```
 
-Start-up order after `Acquire`:
+`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`.
+
+Start-up order of `Open` after `Acquire`:
 
 1. Read `Head`.
 2. Append `owner.acquired{epoch, owner}` at that head. On `ErrConflict`, read `Head` again and retry. An old owner's append that lands first is ordered before the fence.
 3. Replay through the fence record, then run.
 
-After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The default `Owner` grants every session to the local process. Boxes supplies a lease.
+After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The default `Owner` grants every session to the local process at epoch 1, one grant at a time. Boxes supplies a lease.
 
 ### State machines
 
-Session status derives from the turn and the queue:
+Session status derives from the turn and the open requests:
 
 | Status | Condition |
 | --- | --- |
 | `idle` | No turn is running |
 | `running` | A turn is running |
 | `waiting` | A turn ended `awaiting_input`; a request is open |
-| `retrying` | A turn waits for backoff; carries `attempt` and `next_at` |
+
+`retrying` is not a session status. A turn that waits for backoff sends an ephemeral `status` frame with `retrying`, `attempt`, and `next_at`, and the session stays `running`.
 
 Turn:
 
@@ -399,7 +407,7 @@ Request:
 pending ─► answered | dismissed
 ```
 
-Any backend can open a request. An input admitted while a request is open dismisses it first.
+The schema and `Apply` hold requests today. Phase 5 lets any backend open a request and adds `Resolve`. An input admitted while a request is open dismisses it first.
 
 ### Compaction
 
@@ -417,13 +425,13 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 
 ### Children
 
-A child is a session with `parent_id`. The parent holds a handle, not the child's state. When a child turn ends, the child sends `child.settled` to the parent, and the parent admits the outcome as an input with `source: child`. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
+Children are planned; the schema holds `child.spawned` and `child.settled` today. A child is a session with `parent_id`. The parent holds a handle, not the child's state. When a child turn ends, the child sends `child.settled` to the parent, and the parent admits the outcome as an input with `source: child`. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
 
 Tree limits (depth, concurrency, token budget) live in a per-root supervisor with its own state.
 
 ### Shutdown
 
-One `errgroup` per runtime tracks every actor, turn runner, and writer. `Runtime.Close` suspends each session with a handoff cause and waits.
+One `sync.WaitGroup` per runtime tracks every actor, turn runner, compaction, and `Sync` sender. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers. When its ctx ends first, it stops the remaining sessions without an append and returns; their next `Open` finds a crashed turn.
 
 ## HTTP
 
@@ -454,6 +462,8 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, and `GET /health`. Phase 4 adds the other routes; `requests` comes with phase 5 and `tree` with children. The handler has no authentication; the embedder wraps it.
+
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
 ### Inputs
@@ -462,7 +472,7 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 
 | Case | Response |
 | --- | --- |
-| New id | `201 {input_id, seq, state}` |
+| New id | `201 {input_id, seq}` |
 | Same id, same body | `200` with the original receipt |
 | Same id, other body | `409 input_conflict` |
 
@@ -471,8 +481,8 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 - One per-session `seq` serves paging and SSE resume.
 - Only SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
-- A slow subscriber gets a `gap` frame and a close. It never loses a record silently.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`.
+- A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`. `harness.ApplySync` implements these receiver rules over any `Store`.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
 
 ### Errors
@@ -484,7 +494,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `invalid_request` | 400 |
 | `session_not_found` | 404 |
 | `session_exists` | 409 |
-| `request_not_pending` | 409 |
+| `request_not_pending` (phase 5) | 409 |
 | `session_not_owned` | 409 |
 | `input_conflict` | 409 |
 | `turn_mismatch` | 409 |
@@ -494,11 +504,11 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `draining` | 503 |
 | `internal` | 500 |
 
-Each code except `internal` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal` and `payload_too_large` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 ### Contract source
 
-Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `server` exports. CI regenerates and fails on a diff. A `server` test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted.
+Go types in `protocol` are the source. Generation is planned for phase 4. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `server` exports. CI regenerates and fails on a diff. A `server` test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted.
 
 ## turn and backend
 
@@ -508,7 +518,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 package turn
 
 type Backend interface {
-	Capabilities(model message.ModelRef) Capabilities
+	Capabilities(model string) Capabilities // model is a provider/model ref
 	Run(ctx context.Context, req Request, out Sink) (Result, error)
 }
 
@@ -521,12 +531,18 @@ type Capabilities struct {
 }
 
 type Sink interface {
-	Item(message.Message) error
+	Item(m eventlog.Message) error
 	Delta(itemID string, d Delta)
-	Open(Request) error
-	Telemetry(Telemetry)
+	Alive()
+	Telemetry(t Telemetry)
+	Steer() ([]eventlog.Message, error)
+	State(backend string) ([]byte, error)
+	SaveState(backend string, blob []byte) error
+	Compacted(summary string) error
 }
 ```
+
+Phase 5 adds the `Sink` method that opens a request.
 
 - A model API backend runs one model call per `Run`. The loop runs the tools.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
@@ -535,9 +551,9 @@ type Sink interface {
 - A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again with backoff, up to `prompt_retries` times, when the call has recorded no item. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
 - The stall watchdog ends a model call that reports nothing for `stream_idle_timeout_s` (default 300, as Codex). A delta, an item, and `Sink.Alive` each reset it. `modelapi` calls `Alive` for each provider event with no delta, such as a keep-alive or a tool argument that still streams. The stall is retryable. A compaction summary has the same watchdog and no retry. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
 - `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
-- Private backend state is one `backend.state` event plus a blob. The Claude Code transcript mirror is that blob. The eight `claudeCode*` fields and their record kinds are deleted.
+- Private backend state is one `backend.state` event plus a blob, one blob key for each owner. The Claude Code transcript mirror is that blob. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
-- `Telemetry` carries usage, cost, the context reading, and subscription quota.
+- `Telemetry` carries usage and the context reading. Cost and subscription quota are not built yet.
 
 ### Model API backend
 
@@ -554,7 +570,7 @@ type Sink interface {
 
 ### Third-party harnesses
 
-Delegating a turn to another agent harness is permanent. Claude Code is the first; the Codex CLI is next. Each one is a `Backend` with `OwnsLoop`, `OwnsContext`, and `Steering` set. They share one adapter contract, so adding a harness adds one package and touches nothing else.
+Delegating a turn to another agent harness is permanent. Claude Code is built; phase 5 adds the Codex CLI and the Requests row. Each one is a `Backend` with `OwnsLoop`, `OwnsContext`, and `Steering` set. They share one adapter contract, so adding a harness adds one package and touches nothing else.
 
 | Concern | Contract | Claude Code | Codex CLI |
 | --- | --- | --- | --- |
@@ -564,38 +580,51 @@ Delegating a turn to another agent harness is permanent. Claude Code is the firs
 | Interrupt | Stops the external turn; reports `interrupted` | SIGINT | `turn/interrupt` |
 | Requests | Questions and approvals become `request.opened`; the resolution goes back | `AskUserQuestion` defer | `requestApproval`, `requestUserInput` |
 | State | External session id and transcript mirror are one `backend.state` blob | `--session-mirror` | rollout file |
-| Tools | Harness tools reach the external harness through a harness-hosted MCP endpoint; `Restrict` applies | `--mcp-config` | MCP config |
+| Tools | Harness tools reach the external harness through a harness-hosted MCP endpoint; `AllowedTools` applies | `--mcp-config` | MCP config |
 | Context | The external harness compacts; harness logs `compaction.applied` with `by_backend` | `/compact` | native |
 | Telemetry | Usage, cost, and context window arrive through `Sink.Telemetry` | `result` event | `thread/tokenUsage/updated` |
 
-`internal/backend/external` holds what every adapter shares: process supervision, the line-protocol transport, the mirror writer, and the MCP bridge. `internal/backend/claudecode` and `internal/backend/codexcli` hold only the mapping in the table.
+`internal/backend/external` holds what every adapter shares: process supervision, the line-protocol transport, the mirror writer, and the MCP bridge. `internal/backend/claudecode`, and `internal/backend/codexcli` in phase 5, hold only the mapping in the table.
 
 ### Warm-up
 
-`turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn uses the warm connection if it is ready. No warm-up state lives on the session.
+Warm-up is planned for phase 5. `turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn uses the warm connection if it is ready. No warm-up state lives on the session.
 
 ## tool, prompt, and config
 
 ### tool
 
-```go
-package tool
+There is no tool registry. The tools of a runtime are a `[]turn.Tool`, and a `turn.Source` adds the tools that can change between model calls.
 
-type Tool interface {
-	Spec() Spec
-	Run(ctx context.Context, call Call) (Result, error)
+```go
+package turn
+
+type Tool interface { // the same method set as harness.Tool
+	Spec() protocol.ToolSpec
+	Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolResult, error)
 }
 
-func (r *Registry) Add(src Source) error            // ErrDuplicate on a name clash
-func (r *Registry) Restrict(names []string) *Registry
-func (r *Registry) Lookup(name string) (Tool, bool)
+// Restrict returns the tools that names lists, or every tool when names is nil.
+func Restrict(tools []Tool, names []string) []Tool
+
+type Source interface {
+	Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset
+}
+
+type Toolset struct {
+	Tools    []Tool // described to the model
+	Deferred []Tool // not described; the model may call them
+	Prompt   string // follows the system prompt
+}
 ```
 
-- `Spec.Traits` carries `Serial`, `Key`, `MaxInline`, and `Deferrable` for every source: built-in, MCP, and plugin.
-- `Call.Env` is a narrow interface: work dir, processes, children, goal. No tool receives a session.
-- `Restrict` implements `AllowedTools` and `DisableBuiltinTools`.
+- `New` builds the tool list from `Options.Tools` and, with a `WorkDir`, the `process` tool. An empty or repeated name fails `New`.
+- When a turn starts, `turn.Restrict` applies the session's `AllowedTools`. The `Source` gets the same list for each model call.
+- `internal/tool/mcpsrc` is the one `Source` today. The planned built-in and plugin tools join through the same two seams.
+- The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
+- No tool receives a session.
 
-Agent profiles name a kind of child: `name`, `description`, `tools`, `model`, and a prompt body, in Claude Code's agent frontmatter so one file serves every backend. `internal/prompt` loads them from `<workdir>/.agents`. `Spawn(child{agent})` applies a profile through `Registry.Restrict` and a prompt segment.
+Agent profiles are planned with children. A profile names a kind of child: `name`, `description`, `tools`, `model`, and a prompt body, in Claude Code's agent frontmatter so one file serves every backend. `internal/prompt` loads them from `<workdir>/.agents`. `Spawn(child{agent})` sets the profile's `tools` as the child's `AllowedTools`, which `turn.Restrict` applies, and adds the prompt body as a prompt segment.
 
 ### MCP tools
 
@@ -665,9 +694,9 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Startup prewarm | Move into `modelapi` behind `turn.Warmer` |
 | Agent definitions | Keep as agent profiles applied at `Spawn` |
 | Git changes | Keep as `GET /workspace/changes` in `internal/workspace` |
-| Tool-result retention | Keep; drop the size knobs |
+| Tool-result retention, `read_tool_result` | Keep; drop the size knobs; port in phase 3 |
 | Read budget | Replace with a file-size cap |
-| Snapshots, index | Replace with checkpoint and `Apply` |
+| Snapshots, index | Replace with `Apply` over the log |
 | Box-global `events.jsonl` | Delete |
 | Worktrees, `workdir_isolation`, worktree sweep | Delete |
 | Modal guide and `scripts/modal-e2e.py` | Delete |
@@ -774,7 +803,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session` | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; large-result retention and `read_tool_result` in `internal/toolresult` | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
