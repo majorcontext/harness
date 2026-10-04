@@ -257,7 +257,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
 | `goal.set` | `condition`, `max_turns` |
 | `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
-| `goal.changed` | `state`, `reason?` |
+| `goal.changed` | `state`, `reason?`, `retry_at?` |
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
@@ -380,15 +380,18 @@ active ─► paused ─► active
 any ─► cleared
 ```
 
-Goals follow Claude Code `/goal`. There is no deferred goal.
+Goals follow Claude Code `/goal`. There is no deferred goal and no parked goal.
 
-- `SetGoal` on an idle session with no queued input admits the condition as an input with `source: goal`. That input starts a turn through the normal input events.
-- `SetGoal` on a busy session, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
-- A new `SetGoal` replaces the goal and resets its turn count.
-- After each turn, the evaluator returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `impossible` yields `failed`.
-- A turn that fails on a retryable error or a usage limit yields `paused`. Harness retries with backoff, and any input resumes the goal. An error the user must fix yields `failed`.
+- `SetGoal` on a session with no running turn and no queued input admits the condition as an input with `source: goal`. That input starts a turn through the normal input events.
+- `SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
+- A new `SetGoal` replaces the goal and resets its turn count. `SetGoal` and `ClearGoal` withdraw the queued inputs with `source: goal`.
+- After each turn that completes or is interrupted, the evaluator runs as the run of the actor, as a compaction does. It reads the condition and the history, and returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `met` yields `achieved`, and `impossible` yields `failed`. A reply with no verdict is `not_met`, and the reply is the guidance.
+- The evaluator is `goal_evaluator_model`, resolved through `aliases`. Empty: the session model. Its prompt copies the engine prompt, with a third form for `impossible`.
+- A turn or an evaluation that fails on a retryable error or a usage limit yields `paused` with `retry_at`. The wait starts at 30 s and doubles with each pause before the next verdict, up to 30 min. At `retry_at`, the goal becomes `active` and judges the last turn again after an evaluator error, or admits an input that continues the goal. Any input resumes the goal at once. An error the user must fix yields `failed`.
 - `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`.
-- The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session continues, and a `paused` goal keeps its retry time.
+- `ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends. An interrupt stops only the turn, and the goal judges the partial turn.
+- The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session judges the last turn when the goal has not judged it, and a `paused` goal keeps its retry time.
+- At the switch, the `goal_met_first_turn`, `goal_not_met_then_met`, `goal_exhausts_max_turns`, and `bifrost_goal_*` rows are the oracle. The deferred and parked rows are deleted.
 
 Request:
 
@@ -437,8 +440,8 @@ GET    /sessions/{id}/inputs                  queued inputs
 DELETE /sessions/{id}/inputs/{input}          withdraw
 POST   /sessions/{id}/interrupt               {turn_id?, tree?}
 POST   /sessions/{id}/compact
-PUT    /sessions/{id}/goal                    {condition, max_turns}
-DELETE /sessions/{id}/goal
+PUT    /sessions/{id}/goal                    {condition, max_turns}; 200 with the view
+DELETE /sessions/{id}/goal                    204
 POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}
 GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream
 GET    /sessions/{id}/messages?before=&limit= projection, same seq
@@ -771,7 +774,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn` | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session` | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |

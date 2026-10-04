@@ -115,6 +115,11 @@ type Goal struct {
 	State     GoalState
 	Reason    string
 	Turns     int
+	// Evaluated is the last turn that the goal judged, or the last turn that ended before goal.set.
+	Evaluated string
+	// Pauses counts the pauses since the last verdict.
+	Pauses  int
+	RetryAt time.Time
 }
 
 // OpenToolCall is a tool call item with no result yet.
@@ -171,7 +176,6 @@ type State struct {
 	turn       Turn
 	turnIDs    map[string]bool
 	lastEnded  TurnEnded
-	evaluated  string
 	calls      []OpenToolCall
 	requests   []pendingRequest
 	goal       Goal
@@ -253,6 +257,9 @@ func (s *State) OpenToolCalls() []OpenToolCall { return slices.Clone(s.calls) }
 
 // Goal returns the session goal, if one was set.
 func (s *State) Goal() (Goal, bool) { return s.goal, s.goal.State != "" }
+
+// LastEnded returns the turn.ended record of the newest ended turn.
+func (s *State) LastEnded() TurnEnded { return s.lastEnded }
 
 // Model returns the session model.
 func (s *State) Model() string { return s.model }

@@ -86,7 +86,8 @@ type Runtime struct {
 	models *models
 	limits turn.Limits
 	// prompt reads the system prompt of a session.
-	prompt func() string
+	prompt    func() string
+	evaluator string
 	// procs is nil without a WorkDir.
 	procs *process.Manager
 	// mcp is nil without MCP servers.
@@ -125,6 +126,9 @@ func New(opts Options) (*Runtime, error) {
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
+	if opts.Config.GoalEvaluatorModel != "" {
+		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
+	}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	tools := opts.Tools
 	if opts.WorkDir != "" {
@@ -267,6 +271,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Ownership: own,
 		Owner:     r.name(),
 		Backend:   r.backend,
+		Evaluator: r.evaluator,
 		Tools:     r.tools,
 		Prompt:    r.instructions(),
 		Sync:      r.sync,

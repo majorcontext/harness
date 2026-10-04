@@ -25,6 +25,10 @@ func Describe(id string, s *eventlog.State) protocol.Session {
 	for _, in := range s.Queue() {
 		v.Queued = append(v.Queued, in.InputID)
 	}
+	if g, ok := s.Goal(); ok {
+		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
+			State: string(g.State), Turns: g.Turns, Reason: g.Reason, RetryAt: g.RetryAt}
+	}
 	return v
 }
 

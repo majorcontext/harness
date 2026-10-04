@@ -211,6 +211,24 @@ func TestInterruptOverHTTP(t *testing.T) {
 	}
 }
 
+func TestGoalOverHTTP(t *testing.T) {
+	judge := harnesstest.SystemContains("MET: <one short sentence")
+	_, s1 := serve(t, nil, harnesstest.Step{Name: "work", Match: harnesstest.LastUserText("say done"), Reply: harnesstest.Reply{Text: "done"}},
+		harnesstest.Step{Name: "judge", Match: judge, Reply: harnesstest.Reply{Text: "MET: said done"}})
+	live := subscribe(t, s1+"/events", "")
+	var v protocol.Session
+	want(t, "put status", call(t, "PUT", s1+"/goal", `{"condition":"say done","max_turns":3}`, &v), http.StatusOK)
+	want(t, "put goal", *v.Goal, protocol.GoalView{Goal: protocol.Goal{Condition: "say done", MaxTurns: 3}, State: "active"})
+	live.until(t, "goal.changed")
+	call(t, "GET", s1, "", &v)
+	want(t, "achieved", [2]any{v.Goal.State, v.Goal.Turns}, [2]any{"achieved", 1})
+	want(t, "delete status", call(t, "DELETE", s1+"/goal", "", nil), http.StatusNoContent)
+	call(t, "GET", s1, "", &v)
+	want(t, "cleared", v.Goal.State, "cleared")
+	var bad protocol.ErrorBody
+	want(t, "empty condition", [2]any{call(t, "PUT", s1+"/goal", `{"condition":" "}`, &bad), bad.Error.Code}, [2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
+}
+
 func TestModelsOverHTTP(t *testing.T) {
 	r, s1 := serve(t, nil)
 	var got []protocol.Model
@@ -278,6 +296,8 @@ func (stub) Models() []protocol.Model                            { return nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
 func (stub) Compact(context.Context) error                       { return nil }
+func (stub) SetGoal(context.Context, protocol.Goal) error        { return nil }
+func (stub) ClearGoal(context.Context) error                     { return nil }
 func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session, error) {
 	return s.View(), nil
 }

@@ -78,11 +78,31 @@ type Session struct {
 	Status      string    `json:"status"`
 	TurnID      string    `json:"turn_id,omitempty"`
 	Queued      []string  `json:"queued,omitempty"`
+	Goal        *GoalView `json:"goal,omitempty"`
 	Usage       Usage     `json:"usage"`
 	HeadSeq     uint64    `json:"head_seq"`
 	SyncedSeq   uint64    `json:"synced_seq"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Goal is a condition that the session works toward, turn after turn,
+// until an evaluator judges it met. MaxTurns bounds the goal turns; 0 is
+// unlimited.
+type Goal struct {
+	Condition string `json:"condition"`
+	MaxTurns  int    `json:"max_turns,omitempty"`
+}
+
+// GoalView is the goal of a session. State is active, paused, achieved,
+// failed, exhausted, or cleared. Turns counts the judged turns. A paused
+// goal runs again at RetryAt, or at the next input.
+type GoalView struct {
+	Goal
+	State   string    `json:"state"`
+	Turns   int       `json:"turns"`
+	Reason  string    `json:"reason,omitempty"`
+	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
 // Part is one piece of input content.

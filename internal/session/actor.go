@@ -66,7 +66,9 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
-	Tools []turn.Tool
+	// Evaluator is the model that judges goal turns. Empty: the session model.
+	Evaluator string
+	Tools     []turn.Tool
 	// Source gives more tools to each model call. nil: Tools only.
 	Source turn.Source
 	// Prompt returns the system prompt of a turn when the turn starts.
@@ -186,10 +188,10 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	case ok:
 		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})
 		if err == nil {
-			err = a.next(true)
+			err = a.settle(true)
 		}
 	default:
-		err = a.next(true)
+		err = a.settle(true)
 	}
 	return a, err
 }
@@ -252,6 +254,7 @@ func Load(ctx context.Context, id string, log Log) (*eventlog.State, error) {
 
 func (a *Actor) loop() {
 	defer a.finish()
+	a.retryLater()
 	for !a.stopped {
 		select {
 		case f := <-a.mail:
