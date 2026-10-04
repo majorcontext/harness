@@ -333,7 +333,7 @@ func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, bool, e
 // reader is a stub as a server.Reader.
 type reader struct{ stub }
 
-func (r reader) Session() protocol.Session { return r.stub.View() }
+func (r reader) Session() protocol.Session { return r.View() }
 
 func TestInternalErrorHidesItsCause(t *testing.T) {
 	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, server.Options{}))
