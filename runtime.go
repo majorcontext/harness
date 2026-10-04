@@ -565,13 +565,9 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	if r.plugins == nil {
 		return nil
 	}
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return ErrDraining
+	if err := r.hold(); err != nil {
+		return err
 	}
-	r.group.Add(1)
-	r.mu.Unlock()
 	defer r.group.Done()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

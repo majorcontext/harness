@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/protocol"
@@ -154,7 +155,7 @@ var changeRows = []struct {
 				t.Errorf("truncated %v, patch of %d bytes: want only a.txt, whole", c.Truncated, len(c.Patch))
 			}
 		}},
-	{name: "repository filters and hooks never run", scope: protocol.ScopeUncommitted,
+	{name: "repository filters, hooks, and external diffs never run", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) {
 			write(t, dir, ".gitattributes", "seed.txt filter=x=y\n")
 			write(t, dir, ".githooks/post-index-change", "#!/bin/sh\ntouch "+filepath.Join(dir, "ran")+"\n")
@@ -168,6 +169,7 @@ var changeRows = []struct {
 			}
 			git(t, dir, "config", "filter.x=y.required", "true")
 			git(t, dir, "config", "core.hooksPath", ".githooks")
+			git(t, dir, "config", "diff.external", "touch "+filepath.Join(dir, "ran")+" #")
 			write(t, dir, "seed.txt", "seed\nmore\n")
 			write(t, dir, "new.txt", "n\n")
 		},
@@ -254,6 +256,41 @@ var changeRows = []struct {
 				t.Errorf("shared indexes = %q, want only the one that update-index wrote", shared)
 			}
 		}},
+	{name: "a split index setting gains no shared index", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			past := time.Now().Add(-time.Hour)
+			for _, f := range []string{"seed.txt", "gone.txt"} {
+				if err := os.Chtimes(filepath.Join(dir, f), past, past); err != nil {
+					t.Fatal(err)
+				}
+			}
+			git(t, dir, "update-index", "-q", "--refresh")
+			git(t, dir, "config", "core.splitIndex", "true")
+			write(t, dir, "new.txt", "n\n")
+		},
+		files: "new.txt added +1 -0",
+		check: func(t *testing.T, dir string, _ protocol.WorkspaceChanges) {
+			if shared, _ := filepath.Glob(filepath.Join(dir, ".git", "sharedindex.*")); len(shared) != 0 {
+				t.Errorf("shared indexes = %q, want none", shared)
+			}
+		}},
+	{name: "a nested repository and ignored files are not listed", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			write(t, dir, ".gitignore", "*.log\n")
+			git(t, dir, "add", ".gitignore")
+			git(t, dir, "commit", "-q", "-m", "ignore")
+			git(t, dir, "init", "-q", filepath.Join(dir, "x", "nested"))
+			write(t, dir, "x/run.py", "r\n")
+			write(t, dir, "x/out.log", "l\n")
+		},
+		files: "x/run.py added +1 -0"},
+	{name: "a dirty submodule is not walked", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			git(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "-q", repo(t), "sub")
+			git(t, dir, "commit", "-q", "-m", "sub")
+			write(t, dir, "sub/seed.txt", "seed\ndirty\n")
+		},
+		files: ""},
 	{name: "objects resolve through the alternates of a shared clone", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) {
 			alt := filepath.Join(t.TempDir(), "objects")
@@ -316,6 +353,9 @@ func TestChanges(t *testing.T) {
 			}
 			if got := fileStamp(t, filepath.Join(dir, ".git", "index")); got != index {
 				t.Errorf("index = %s, want unchanged %s", got, index)
+			}
+			if c.Files == nil {
+				t.Error("files = nil, want an empty list")
 			}
 			if got := files(c); got != row.files || c.Scope != row.scope || c.Dir != want {
 				t.Errorf("changes = %q in %s scope %s, want %q in %s", got, c.Dir, c.Scope, row.files, want)
