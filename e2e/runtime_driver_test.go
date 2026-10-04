@@ -30,28 +30,20 @@ type runtimeDriver struct {
 	rt             *harness.Runtime
 	srv            *httptest.Server
 	inputs         int
-	created        int
 }
 
 // runtimeKey gives the in-process runtime the model key that startServeIn
 // gives serve.
 var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
 
-func newRuntimeDriver(t *testing.T, modelURL string, extra map[string]any) *runtimeDriver {
-	t.Helper()
-	cfg := map[string]any{"context_window_tokens": 1_000_000}
-	maps.Copy(cfg, extra)
-	return newRuntimeDriverIn(t, t.TempDir(), writeGoalConfigWith(t, modelURL, cfg))
-}
-
-func newRuntimeDriverIn(t *testing.T, workDir, configPath string) *runtimeDriver {
+func newRuntimeDriver(t *testing.T, configPath string) *runtimeDriver {
 	t.Helper()
 	runtimeKey()
 	c, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c}
+	d := &runtimeDriver{store: t.TempDir(), workDir: t.TempDir(), cfg: *c}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -167,13 +159,10 @@ func (d *runtimeDriver) view(t *testing.T, id string) protocol.Session {
 	return v
 }
 
-// Create mints the session ID in creation order, so GET /sessions, which
-// lists in ID order, lists in creation order as serve did.
 func (d *runtimeDriver) Create(t *testing.T) string {
 	t.Helper()
-	d.created++
 	var v protocol.Session
-	d.expect(t, http.StatusCreated, http.MethodPost, "/sessions", map[string]any{"id": fmt.Sprintf("ses_%04d", d.created)}, &v)
+	d.expect(t, http.StatusCreated, http.MethodPost, "/sessions", map[string]any{}, &v)
 	return v.ID
 }
 
@@ -309,10 +298,11 @@ func (d *runtimeDriver) Bootstrap(t *testing.T, id string, limit int) callResult
 	return d.call(t, http.MethodGet, withQuery("/sessions/"+id+"/messages", "limit", limit), nil)
 }
 
-// JournalPage reads the events from seq from on: the page after from-1.
+// JournalPage reads the page after the cursor from, as serve read the page
+// at its next_cursor.
 func (d *runtimeDriver) JournalPage(t *testing.T, id string, from, limit int) callResult {
 	t.Helper()
-	return d.call(t, http.MethodGet, withQuery("/sessions/"+id+"/events", "after", max(from-1, 0), "limit", limit), nil)
+	return d.call(t, http.MethodGet, withQuery("/sessions/"+id+"/events", "after", from, "limit", limit), nil)
 }
 
 func (d *runtimeDriver) Commands(t *testing.T) callResult {
@@ -441,14 +431,54 @@ func settled(v protocol.Session) bool {
 }
 
 // WaitIdle reads the view again on each frame of the session, from the head
-// that the first view saw, until the session has settled.
+// that the first view saw, until the session has settled. A child has
+// settled when its parent has recorded that and has settled too, as the
+// report of the child can start a turn of the parent.
 func (d *runtimeDriver) WaitIdle(t *testing.T, id string) {
 	t.Helper()
 	v := d.view(t, id)
-	if settled(v) {
-		return
+	if !settled(v) {
+		d.stream(t, id, v.HeadSeq, false, func(string, protocol.Event) bool {
+			v = d.view(t, id)
+			return settled(v)
+		})
 	}
-	d.stream(t, id, v.HeadSeq, false, func(string, protocol.Event) bool { return settled(d.view(t, id)) })
+	if v.ParentID != "" {
+		d.awaitChildSettled(t, v.ParentID, id)
+		d.WaitIdle(t, v.ParentID)
+	}
+}
+
+// awaitChildSettled waits until the newest child.spawned of child in the
+// log of parent has a child.settled after it.
+func (d *runtimeDriver) awaitChildSettled(t *testing.T, parent, child string) {
+	t.Helper()
+	settledLast := func(ev protocol.Event) (mine, done bool) {
+		if ev.Kind != "child.spawned" && ev.Kind != "child.settled" {
+			return false, false
+		}
+		c := decodeEvent[struct {
+			ChildID string `json:"child_id"`
+		}](t, ev)
+		return c.ChildID == child, ev.Kind == "child.settled"
+	}
+	events := d.events(t, parent)
+	for i := len(events) - 1; i >= 0; i-- {
+		if mine, done := settledLast(events[i]); mine {
+			if done {
+				return
+			}
+			break
+		}
+	}
+	var head uint64
+	if len(events) > 0 {
+		head = events[len(events)-1].Seq
+	}
+	d.stream(t, parent, head, false, func(_ string, ev protocol.Event) bool {
+		mine, done := settledLast(ev)
+		return mine && done
+	})
 }
 
 func (d *runtimeDriver) AwaitGoalExhausted(t *testing.T) {

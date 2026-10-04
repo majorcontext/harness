@@ -76,6 +76,8 @@ var waitMargin = 10 * time.Second
 
 type httpDriver struct {
 	sessDir, workDir, config string
+	env                      map[string]string
+	args                     []string
 	p                        *serveProc
 	enqSeq                   map[string]int64
 }
@@ -87,16 +89,30 @@ func newHTTPDriver(t *testing.T, modelURL string) *httpDriver {
 
 func newHTTPDriverWith(t *testing.T, modelURL string, extra map[string]any) *httpDriver {
 	t.Helper()
+	return newHTTPDriverAt(t, writeGoalConfigWith(t, modelURL, scenarioConfig(extra)), nil)
+}
+
+// scenarioConfig is the served config of a scenario: extra over the defaults.
+func scenarioConfig(extra map[string]any) map[string]any {
 	cfg := map[string]any{"context_window_tokens": 1_000_000} // the modelmeta table is bot-refreshed
 	maps.Copy(cfg, extra)
-	d := &httpDriver{
-		sessDir: t.TempDir(),
-		workDir: t.TempDir(),
-		config:  writeGoalConfigWith(t, modelURL, cfg),
-		enqSeq:  map[string]int64{},
-	}
-	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
+	return cfg
+}
+
+// newHTTPDriverAt starts serve on configPath with env added to its
+// environment and args after its flags.
+func newHTTPDriverAt(t *testing.T, configPath string, env map[string]string, args ...string) *httpDriver {
+	t.Helper()
+	d := &httpDriver{sessDir: t.TempDir(), workDir: t.TempDir(), config: configPath, env: env, args: args, enqSeq: map[string]int64{}}
+	d.p = d.serve(t)
 	return d
+}
+
+func (d *httpDriver) serve(t *testing.T) *serveProc {
+	t.Helper()
+	env := map[string]string{"HARNESS_SESSION_DIR": d.sessDir, "HARNESS_CONFIG": d.config, "ANTHROPIC_API_KEY": "e2e-dummy-key"}
+	maps.Copy(env, d.env)
+	return startServeProc(t, freeAddr, d.workDir, env, d.args...)
 }
 
 func (d *httpDriver) expect(t *testing.T, want int, method, path string, body any) []byte {
@@ -254,7 +270,7 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 	} else {
 		d.p.terminate(t)
 	}
-	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
+	d.p = d.serve(t)
 }
 
 func (d *httpDriver) call(t *testing.T, method, path string, body any) callResult {

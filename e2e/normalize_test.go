@@ -191,7 +191,7 @@ func (n *normalizer) value(key string, v any) any {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for _, k := range slices.Sorted(maps.Keys(x)) {
-			out[n.str(k)] = n.value(k, x[k])
+			out[n.key(k)] = n.value(k, x[k])
 		}
 		return out
 	case []any:
@@ -207,6 +207,14 @@ func (n *normalizer) value(key string, v any) any {
 		return n.str(x)
 	}
 	return v
+}
+
+// key normalizes an object key. A key named *_id is a field name, not an id.
+func (n *normalizer) key(k string) string {
+	if strings.HasSuffix(k, "_id") {
+		return k
+	}
+	return n.str(k)
 }
 
 func (n *normalizer) str(s string) string {
@@ -503,6 +511,11 @@ func TestNormalizeCalls(t *testing.T) {
 			name: "id_as_object_key",
 			body: `{"ses_abc":{"state":"idle"}}`,
 			want: `{"status":200,"body":{"ses:a":{"state":"idle"}}}`,
+		},
+		{
+			name: "id_field_name_key_is_kept",
+			body: `{"turn_id":"turn_x","item_id":"item_y"}`,
+			want: `{"status":200,"body":{"item_id":"item#1","turn_id":"turn#1"}}`,
 		},
 		{
 			name: "transcript_ids_numbered_with_the_run",

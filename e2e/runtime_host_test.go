@@ -12,20 +12,42 @@ import (
 )
 
 // host starts what a scenario drives: the serve binary, or harness.Runtime
-// in process.
+// in process. open takes a config file, the environment of a lane, and the
+// serve flags of a lane.
 type host struct {
-	name      string
-	newDriver func(t *testing.T, modelURL string, config map[string]any) driver
+	open func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost
+}
+
+// laneHost is a driver plus the reads that a lane action makes through the
+// API of its host.
+type laneHost interface {
+	driver
+	awaitAssistantText(t *testing.T, id, text string)
+	answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult
+	journalEvents(t *testing.T, id, prefix string) []any
 }
 
 var (
-	serveHost = host{"serve", func(t *testing.T, modelURL string, config map[string]any) driver {
-		return newHTTPDriverWith(t, modelURL, config)
+	serveHost = host{func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
+		return newHTTPDriverAt(t, configPath, env, args...)
 	}}
-	runtimeHost = host{"runtime", func(t *testing.T, modelURL string, config map[string]any) driver {
-		return newRuntimeDriver(t, modelURL, config)
+	// runtimeHost sets env in the process, so a row that passes env runs alone.
+	runtimeHost = host{func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
+		if len(args) > 0 {
+			t.Fatalf("the runtime takes no serve flags: %q", args)
+		}
+		for k, v := range env {
+			t.Setenv(k, v)
+		}
+		return newRuntimeDriver(t, configPath)
 	}}
 )
+
+// newDriver opens h on the served config of a scenario.
+func (h host) newDriver(t *testing.T, modelURL string, extra map[string]any) driver {
+	t.Helper()
+	return h.open(t, writeGoalConfigWith(t, modelURL, scenarioConfig(extra)), nil)
+}
 
 // rowKind is how a contract row maps to the runtime.
 type rowKind int
@@ -33,8 +55,8 @@ type rowKind int
 const (
 	// rowSame: the runtime observation equals the serve golden.
 	rowSame rowKind = iota
-	// rowRegolden: the runtime observation differs by design and has its own
-	// golden under testdata/runtime.
+	// rowRegolden: the runtime observation has its own golden under
+	// testdata/runtime, and the cites account for each difference.
 	rowRegolden
 	// rowDeleted: the spec deletes what the row pins. It does not run.
 	rowDeleted
@@ -42,16 +64,16 @@ const (
 	rowPending
 )
 
-// runtimeRow is the disposition of one row. cite is a line of
-// docs/architecture.md for rowRegolden and rowDeleted, and the finding IDs or
-// phases that a pending row waits for.
+// runtimeRow is the disposition of one row. cites are the lines of
+// docs/architecture.md and the finding IDs, phases, or "unowned" that the
+// disposition rests on.
 type runtimeRow struct {
-	kind rowKind
-	cite string
+	kind  rowKind
+	cites []string
 }
 
 func (r runtimeRow) String() string {
-	return fmt.Sprintf("%s: %s", [...]string{"same", "re-golden by design", "deleted by design", "pending"}[r.kind], r.cite)
+	return fmt.Sprintf("%s: %s", [...]string{"same", "re-golden", "deleted by design", "pending"}[r.kind], strings.Join(r.cites, "; "))
 }
 
 // runtimeEnv enables the runtime host. CI runs it in a step that does not gate.
@@ -137,7 +159,35 @@ func compareSame(t *testing.T, name string, obs observation) {
 	}
 }
 
-var pendingCite = regexp.MustCompile(`^(F\d\d|phase \d|unowned)(, (F\d\d|phase \d|unowned))*$`)
+var pendingCite = regexp.MustCompile(`^(F\d\d|phase \d|unowned)$`)
+
+// citeErrors reports each cite of row that is neither a pending cite nor a
+// line of spec, and a cite list that the kind of row does not allow.
+func citeErrors(row runtimeRow, spec string) []string {
+	var errs []string
+	lines, pending := 0, 0
+	for _, c := range row.cites {
+		switch {
+		case pendingCite.MatchString(c):
+			pending++
+		case strings.Contains(spec, c):
+			lines++
+		default:
+			errs = append(errs, fmt.Sprintf("cites %q, which is not a line of docs/architecture.md or a finding, phase, or unowned", c))
+		}
+	}
+	switch {
+	case row.kind == rowSame && len(row.cites) > 0:
+		errs = append(errs, "a same row cites nothing")
+	case row.kind == rowRegolden && lines == 0:
+		errs = append(errs, "a re-golden row cites at least one line of docs/architecture.md")
+	case row.kind == rowDeleted && (lines != 1 || pending > 0):
+		errs = append(errs, "a deleted row cites one line of docs/architecture.md")
+	case row.kind == rowPending && (lines > 0 || pending == 0):
+		errs = append(errs, "a pending row cites only findings, phases, or unowned")
+	}
+	return errs
+}
 
 func goldenNames(t *testing.T, dir string) []string {
 	t.Helper()
@@ -172,10 +222,9 @@ func TestRuntimeRows(t *testing.T) {
 			t.Errorf("disposition %s names no golden", name)
 		case row.kind == rowRegolden != slices.Contains(runtime, name):
 			t.Errorf("row %s is %s, and a runtime golden exists = %t", name, row, slices.Contains(runtime, name))
-		case row.kind == rowPending && !pendingCite.MatchString(row.cite):
-			t.Errorf("pending row %s cites %q, want finding IDs, phases, or unowned", name, row.cite)
-		case (row.kind == rowRegolden || row.kind == rowDeleted) && !strings.Contains(string(spec), row.cite):
-			t.Errorf("row %s cites %q, which docs/architecture.md does not hold", name, row.cite)
+		}
+		for _, e := range citeErrors(row, string(spec)) {
+			t.Errorf("row %s: %s", name, e)
 		}
 	}
 	for _, name := range runtime {

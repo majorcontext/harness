@@ -67,5 +67,18 @@ func TestContractDurability(t *testing.T) {
 				expectQueued{as: "a", texts: []string{"second"}},
 			},
 		},
+		{
+			// Known defect, pinned: after SIGKILL the queued input never runs.
+			name:  "queued_input_runs_after_kill",
+			model: []harnesstest.Step{slow, {Name: "next", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "done"}, Repeat: true}},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				enqueue{as: "a", text: "second"},
+				restart{kill: true},
+				waitIdle{as: "a"},
+			},
+		},
 	})
 }

@@ -3,7 +3,6 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,29 +40,9 @@ func (l claudeLogs) env(mode string) map[string]string {
 	}
 }
 
-// laneDriver is a driver of a claude lane. The methods that a lane action
-// needs read the API of the host.
-type laneDriver interface {
-	driver
-	logs() claudeLogs
-	awaitAssistantText(t *testing.T, id, text string)
-	answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult
-	historyTool(t *testing.T, id string) callResult
-	messageParents(t *testing.T, id string) callResult
-	journalEvents(t *testing.T, id, prefix string) []any
-}
-
-// claudeDriver is an httpDriver whose serve process delegates to fakeclaude.
+// claudeDriver is the driver of a host that delegates to fakeclaude.
 type claudeDriver struct {
-	*httpDriver
-	lane claudeLane
-	claudeLogs
-}
-
-// claudeRuntimeDriver is a runtimeDriver that delegates to fakeclaude. The
-// fakeclaude settings are process environment, so its row runs alone.
-type claudeRuntimeDriver struct {
-	*runtimeDriver
+	laneHost
 	claudeLogs
 }
 
@@ -82,50 +61,29 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	stateDir := t.TempDir()
 	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"),
 		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
-	config := writeGoalConfigWith(t, modelURL, cfg)
-	if h.name == runtimeHost.name {
-		if l.ask {
-			t.Fatal("the runtime has no --ask-user-question; requests come in phase 5")
-		}
-		for k, v := range logs.env(l.mode) {
-			t.Setenv(k, v)
-		}
-		return &claudeRuntimeDriver{runtimeDriver: newRuntimeDriverIn(t, t.TempDir(), config), claudeLogs: logs}
+	var args []string
+	if l.ask {
+		args = append(args, "--ask-user-question")
 	}
-	d := &claudeDriver{lane: l, claudeLogs: logs}
-	d.httpDriver = &httpDriver{sessDir: t.TempDir(), workDir: t.TempDir(), config: config, enqSeq: map[string]int64{}}
-	d.p = d.serve(t)
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode), args...), claudeLogs: logs}
+}
+
+func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
+	t.Helper()
+	d, ok := r.drv.(*claudeDriver)
+	if !ok {
+		t.Fatalf("scenario action needs a claude lane driver, got %T", r.drv)
+	}
 	return d
 }
 
-func (d *claudeDriver) serve(t *testing.T) *serveProc {
+// serveLaneOf is the serve process of a claude lane, for an action that
+// reads a route that only serve has.
+func serveLaneOf(t *testing.T, r *run) *httpDriver {
 	t.Helper()
-	var args []string
-	if d.lane.ask {
-		args = append(args, "--ask-user-question")
-	}
-	env := d.env(d.lane.mode)
-	maps.Copy(env, map[string]string{"HARNESS_SESSION_DIR": d.sessDir, "HARNESS_CONFIG": d.config, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
-	return startServeProc(t, freeAddr, d.workDir, env, args...)
-}
-
-func (d *claudeDriver) Restart(t *testing.T, kill bool) {
-	t.Helper()
-	if kill {
-		d.p.kill()
-	} else {
-		d.p.terminate(t)
-	}
-	d.p = d.serve(t)
-}
-
-func (l claudeLogs) logs() claudeLogs { return l }
-
-func claudeDriverOf(t *testing.T, r *run) laneDriver {
-	t.Helper()
-	d, ok := r.drv.(laneDriver)
+	d, ok := claudeDriverOf(t, r).laneHost.(*httpDriver)
 	if !ok {
-		t.Fatalf("scenario action needs a claude lane driver, got %T", r.drv)
+		t.Fatalf("scenario action reads a serve route, the host is %T", claudeDriverOf(t, r).laneHost)
 	}
 	return d
 }
@@ -136,7 +94,7 @@ func claudeDriverOf(t *testing.T, r *run) laneDriver {
 type claudeInvocations struct{ as string }
 
 func (a claudeInvocations) run(t *testing.T, r *run) {
-	f, err := os.Open(claudeDriverOf(t, r).logs().argvLog)
+	f, err := os.Open(claudeDriverOf(t, r).argvLog)
 	if err != nil {
 		t.Fatalf("open argv log: %v", err)
 	}
@@ -181,7 +139,7 @@ func argvFacts(argv []string) map[string]any {
 type claudeMCPConfig struct{ as string }
 
 func (a claudeMCPConfig) run(t *testing.T, r *run) {
-	data, err := os.ReadFile(claudeDriverOf(t, r).logs().mcpLog)
+	data, err := os.ReadFile(claudeDriverOf(t, r).mcpLog)
 	if err != nil {
 		t.Fatalf("read mcp config log: %v", err)
 	}
@@ -212,7 +170,7 @@ type claudeInputs struct{ as string }
 
 func (a claudeInputs) run(t *testing.T, r *run) {
 	out := []any{}
-	if f, err := os.Open(claudeDriverOf(t, r).logs().stdinLog); err == nil {
+	if f, err := os.Open(claudeDriverOf(t, r).stdinLog); err == nil {
 		defer func() { _ = f.Close() }()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
@@ -257,7 +215,7 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
 }
 
-func (d *claudeDriver) awaitAssistantText(t *testing.T, id, text string) {
+func (d *httpDriver) awaitAssistantText(t *testing.T, id, text string) {
 	t.Helper()
 	err := d.scan(t, func(raw []byte) bool {
 		var ev struct {
@@ -296,7 +254,7 @@ func (a claudeAnswer) run(t *testing.T, r *run) {
 	r.record(t, "answer_question", a.as, claudeDriverOf(t, r).answerQuestion(t, r.id(t, a.as), a.callID, a.answers))
 }
 
-func (d *claudeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+func (d *httpDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
 	t.Helper()
 	return d.call(t, http.MethodPost, "/session/"+id+"/question/"+callID+"/answer", map[string]any{"answers": answers})
 }
@@ -306,10 +264,10 @@ func (d *claudeDriver) answerQuestion(t *testing.T, id, callID string, answers m
 type claudeHistoryTool struct{ as string }
 
 func (a claudeHistoryTool) run(t *testing.T, r *run) {
-	r.record(t, "history_tool", a.as, claudeDriverOf(t, r).historyTool(t, r.id(t, a.as)))
+	r.record(t, "history_tool", a.as, serveLaneOf(t, r).historyTool(t, r.id(t, a.as)))
 }
 
-func (d *claudeDriver) historyTool(t *testing.T, id string) callResult {
+func (d *httpDriver) historyTool(t *testing.T, id string) callResult {
 	t.Helper()
 	rpc := map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
@@ -337,10 +295,10 @@ func (a claudeSession) run(t *testing.T, r *run) {
 type claudeMessageParents struct{ as string }
 
 func (a claudeMessageParents) run(t *testing.T, r *run) {
-	r.record(t, "message_parents", a.as, claudeDriverOf(t, r).messageParents(t, r.id(t, a.as)))
+	r.record(t, "message_parents", a.as, serveLaneOf(t, r).messageParents(t, r.id(t, a.as)))
 }
 
-func (d *claudeDriver) messageParents(t *testing.T, id string) callResult {
+func (d *httpDriver) messageParents(t *testing.T, id string) callResult {
 	t.Helper()
 	resp, data := d.p.do(http.MethodGet, "/session/"+id+"/message", nil)
 	var msgs []struct {
@@ -366,7 +324,7 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
 }
 
-func (d *claudeDriver) journalEvents(t *testing.T, id, prefix string) []any {
+func (d *httpDriver) journalEvents(t *testing.T, id, prefix string) []any {
 	t.Helper()
 	var tip struct {
 		Seq int64 `json:"seq"`
@@ -401,13 +359,13 @@ func (d *claudeDriver) journalEvents(t *testing.T, id, prefix string) []any {
 }
 
 var (
-	_ laneDriver = (*claudeDriver)(nil)
-	_ laneDriver = (*claudeRuntimeDriver)(nil)
+	_ laneHost = (*httpDriver)(nil)
+	_ laneHost = (*runtimeDriver)(nil)
 )
 
 // awaitAssistantText also takes the streamed text: the CLI can wait for
 // input before its message completes.
-func (d *claudeRuntimeDriver) awaitAssistantText(t *testing.T, id, text string) {
+func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 	t.Helper()
 	var streamed strings.Builder
 	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
@@ -423,26 +381,14 @@ func (d *claudeRuntimeDriver) awaitAssistantText(t *testing.T, id, text string) 
 	})
 }
 
-func (d *claudeRuntimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+func (d *runtimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
 	t.Helper()
 	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, map[string]any{"answer": answers})
 }
 
-func (d *claudeRuntimeDriver) historyTool(t *testing.T, _ string) callResult {
-	t.Helper()
-	t.Fatal("the runtime serves no history tool")
-	return callResult{}
-}
-
-func (d *claudeRuntimeDriver) messageParents(t *testing.T, _ string) callResult {
-	t.Helper()
-	t.Fatal("the runtime log records no parent tool use")
-	return callResult{}
-}
-
 // journalEvents lists the durable events of session id whose kind starts
 // with prefix, with the fields of a compaction.
-func (d *claudeRuntimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
+func (d *runtimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
 	t.Helper()
 	out := []any{}
 	for _, ev := range d.events(t, id) {
