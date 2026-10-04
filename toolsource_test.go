@@ -1,10 +1,12 @@
 package harness_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -13,18 +15,64 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// awaitTurns waits until session s has ended n turns.
-func awaitTurns(t *testing.T, s *harness.Session, n int) {
+// counting is a Store that counts the reads of session records.
+type counting struct {
+	harness.Store
+	reads atomic.Int64
+}
+
+func (c *counting) Read(ctx context.Context, id string, after uint64, limit int) ([]harness.Record, error) {
+	c.reads.Add(1)
+	return c.Store.Read(ctx, id, after, limit)
+}
+
+// pluginTurn starts one turn of a fake backend under the fixture plugin with
+// config cfg, and returns the run of that turn and the reads of the store.
+func pluginTurn(t *testing.T, ownsLoop bool, cfg string) (fakeRun, *counting) {
 	t.Helper()
-	for e, err := range s.Events(bg, 0) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if e.Kind == "turn.ended" {
-			if n--; n == 0 {
-				return
+	st, f := &counting{Store: harness.NewMemStore()}, newFake()
+	f.ownsLoop = ownsLoop
+	r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{Plugins: pluginFixture(t, cfg)}}, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeRuntime(t, r) })
+	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(bg, text("a", "go")); err != nil {
+		t.Fatal(err)
+	}
+	run := <-f.runs
+	t.Cleanup(func() { close(run.items) })
+	return run, st
+}
+
+func TestSystemTransformRunsOnlyForABackendThatReadsThePrompt(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ownsLoop bool
+	}{
+		{"a harness loop sends the segments of the plugin", false},
+		{"a backend that owns the loop gets no segment", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run, _ := pluginTurn(t, tc.ownsLoop, `{"segment":"SEGMENT"}`)
+			if got := strings.Contains(run.req.Instructions, "SEGMENT"); got == tc.ownsLoop {
+				t.Errorf("instructions %q hold the segment = %v, want %v", run.req.Instructions, got, !tc.ownsLoop)
 			}
-		}
+		})
+	}
+}
+
+func TestAPluginReadsTheHistoryOfARunningSessionFromTheActor(t *testing.T) {
+	run, st := pluginTurn(t, false, `{"recall":true}`)
+	if !strings.Contains(run.req.Instructions, "LAST-USER: go") {
+		t.Fatalf("instructions %q do not show that the plugin read the history", run.req.Instructions)
+	}
+	if n := st.reads.Load(); n != 0 {
+		t.Errorf("store reads for the history of a running session = %d, want 0", n)
 	}
 }
 
@@ -38,20 +86,11 @@ func TestAProfileKeepsThePluginToolsOfItsList(t *testing.T) {
 		t.Fatal(err)
 	}
 	task := harnesstest.ToolCall{ID: "call_1", Name: "task", Input: map[string]any{"agent": "mixed", "prompt": "child work"}}
-	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{},
+	r, s := pluginRuntime(t, dir, pluginFixture(t, `{}`), nil,
 		harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{task}}},
 		harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done"}},
 		harnesstest.Step{Name: "waiting", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
 		harnesstest.Step{Name: "report", Match: harnesstest.LastUserText("A background task you started has finished."), Reply: harnesstest.Reply{Text: "ok"}})
-	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: dir, Config: config.Config{
-		Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
-			BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}},
-		Plugins: pluginFixture(t, `{}`)}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { closeRuntime(t, r) })
 	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +98,17 @@ func TestAProfileKeepsThePluginToolsOfItsList(t *testing.T) {
 	if _, err := sess.Submit(bg, text("a", "delegate")); err != nil {
 		t.Fatal(err)
 	}
-	awaitTurns(t, sess, 2)
+	ended := 0
+	for e, err := range sess.Events(bg, 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" {
+			if ended++; ended == 2 {
+				break
+			}
+		}
+	}
 	for _, req := range s.Requests() {
 		if strings.Contains(req.LastUserText(), "child work") {
 			if want := []string{"fixture_echo", "ls"}; !slices.Equal(req.Tools, want) {
@@ -69,39 +118,4 @@ func TestAProfileKeepsThePluginToolsOfItsList(t *testing.T) {
 		}
 	}
 	t.Error("no request of the child")
-}
-
-func TestSystemTransformRunsOnlyForABackendThatReadsThePrompt(t *testing.T) {
-	plugins := pluginFixture(t, `{"segment":"SEGMENT"}`)
-	for _, tc := range []struct {
-		name     string
-		ownsLoop bool
-		want     bool
-	}{
-		{"a harness loop sends the segments of the plugin", false, true},
-		{"a backend that owns the loop gets no segment", true, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFake()
-			f.ownsLoop = tc.ownsLoop
-			r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Config: config.Config{Plugins: plugins}}, f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { closeRuntime(t, r) })
-			sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := sess.Submit(bg, text("a", "hi")); err != nil {
-				t.Fatal(err)
-			}
-			run := <-f.runs
-			close(run.items)
-			awaitTurns(t, sess, 1)
-			if got := strings.Contains(run.req.Instructions, "SEGMENT"); got != tc.want {
-				t.Errorf("instructions %q hold the segment = %v, want %v", run.req.Instructions, got, tc.want)
-			}
-		})
-	}
 }

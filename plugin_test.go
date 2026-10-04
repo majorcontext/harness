@@ -25,11 +25,11 @@ func pluginFixture(t *testing.T, cfg string) []config.PluginSpec {
 	return []config.PluginSpec{{Name: "fixture", Command: []string{bin}, Config: []byte(cfg)}}
 }
 
-func pluginRuntime(t *testing.T, plugins []config.PluginSpec, tools []harness.Tool, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.OpenAI) {
+func pluginRuntime(t *testing.T, dir string, plugins []config.PluginSpec, tools []harness.Tool, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.OpenAI) {
 	t.Helper()
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
 	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: tools, Config: config.Config{
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: tools, WorkDir: dir, Config: config.Config{
 		Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY",
 			BaseURL: s.URL() + "/backend-api/codex", ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}},
 			"claude-code": {Type: config.TypeClaudeCodeCLI}},
@@ -45,7 +45,7 @@ func TestPluginToolsAndHooks(t *testing.T) {
 	call := func(id, name string, in map[string]any) harnesstest.ToolCall {
 		return harnesstest.ToolCall{ID: id, Name: name, Input: in}
 	}
-	r, s := pluginRuntime(t, pluginFixture(t, `{"segment":"SEGMENT","recall":true}`), []harness.Tool{newProbe("bash", false), newProbe("write_file", false)},
+	r, s := pluginRuntime(t, "", pluginFixture(t, `{"segment":"SEGMENT","recall":true}`), []harness.Tool{newProbe("bash", false), newProbe("write_file", false)},
 		harnesstest.Step{Name: "calls", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
 			call("call_1", "bash", map[string]any{"command": "echo rewrite-me"}),
 			call("call_2", "bash", map[string]any{"command": "echo block-me"}),
@@ -102,7 +102,7 @@ func TestPluginToolsAndHooks(t *testing.T) {
 }
 
 func TestPluginSeesTheModelOfEachCall(t *testing.T) {
-	r, s := pluginRuntime(t, pluginFixture(t, `{"model":true}`), nil,
+	r, s := pluginRuntime(t, "", pluginFixture(t, `{"model":true}`), nil,
 		harnesstest.Step{Name: "a", Match: harnesstest.LastUserText("a"), Reply: harnesstest.Reply{Text: "ok"}},
 		harnesstest.Step{Name: "b", Match: harnesstest.LastUserText("b"), Reply: harnesstest.Reply{Text: "ok"}})
 	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
@@ -142,7 +142,7 @@ func TestCreateStartsThePlugins(t *testing.T) {
 		{name: "a backend that owns the loop allows a plugin tool", plugins: fixture, model: "claude-code/opus", allowed: []string{"fixture_echo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, _ := pluginRuntime(t, tc.plugins, tc.tools)
+			r, _ := pluginRuntime(t, "", tc.plugins, tc.tools)
 			_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: cmp.Or(tc.model, "codex/gpt-5"), AllowedTools: tc.allowed})
 			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
 				t.Errorf("Create = %v, want an error that names %q", err, tc.want)
@@ -152,7 +152,7 @@ func TestCreateStartsThePlugins(t *testing.T) {
 }
 
 func TestCreateAfterCloseDoesNotProbeThePlugins(t *testing.T) {
-	r, _ := pluginRuntime(t, []config.PluginSpec{{Name: "gone", Command: []string{"/nonexistent/plugin"}}}, nil)
+	r, _ := pluginRuntime(t, "", []config.PluginSpec{{Name: "gone", Command: []string{"/nonexistent/plugin"}}}, nil)
 	closeRuntime(t, r)
 	if _, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"}); !errors.Is(err, harness.ErrDraining) {
 		t.Errorf("Create after Close = %v, want ErrDraining", err)
@@ -160,7 +160,7 @@ func TestCreateAfterCloseDoesNotProbeThePlugins(t *testing.T) {
 }
 
 func TestViewListsEachPluginWithItsState(t *testing.T) {
-	r, _ := pluginRuntime(t, pluginFixture(t, `{}`), nil,
+	r, _ := pluginRuntime(t, "", pluginFixture(t, `{}`), nil,
 		harnesstest.Step{Name: "echo", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
 			{ID: "call_1", Name: "fixture_echo", Input: map[string]any{"text": "hi"}}}}},
 		harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("fixture_echo"), Reply: harnesstest.Reply{Text: "done"}})
