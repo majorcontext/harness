@@ -17,6 +17,7 @@ import (
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -60,7 +61,8 @@ type Options struct {
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
 	// AGENTS.md chain and skills when it starts, and the process tool runs
-	// Config.Processes in it. Empty: the system prompt is
+	// Config.Processes in it. The tool's declare action runs any argv, so
+	// WorkDir alone grants command execution. Empty: the system prompt is
 	// Config.AppendSystemPrompt alone, no file is read, and no process runs.
 	WorkDir string
 
@@ -283,7 +285,7 @@ func (r *Runtime) instructions() func() string {
 			return p
 		}
 		if s := processStatus(r.procs, r.workDir); s != "" {
-			return strings.Join([]string{p, s}, "\n\n")
+			return strings.Join([]string{p, message.RenderEngineContext(s)}, "\n\n")
 		}
 		return p
 	}
@@ -335,8 +337,8 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 
 // Close hands off every session, waits for every goroutine of the runtime,
 // closes the model connections, and stops the processes. When ctx ends
-// first, it stops the remaining sessions without an append and returns;
-// their next Open finds a crashed turn.
+// first, it stops the remaining sessions without an append, kills the
+// processes, and returns; their next Open finds a crashed turn.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -378,6 +380,10 @@ func (r *Runtime) Close(ctx context.Context) error {
 	case <-done:
 		return errors.Join(errs...)
 	case <-ctx.Done():
+		r.cancel()
+		if r.procs != nil {
+			r.procs.Close(ctx)
+		}
 		return errors.Join(append(errs, ctx.Err())...)
 	}
 }

@@ -106,8 +106,10 @@ type Options struct {
 	Store  Store         // required
 	Owner  Owner  // nil: the local process owns every session
 	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
-	// WorkDir is the directory of a coding agent. Empty: no file is read,
-	// no process runs, and the system prompt is append_system_prompt alone.
+	// WorkDir is the directory of a coding agent. It grants command
+	// execution through the process tool's declare action. Empty: no file
+	// is read, no process runs, and the system prompt is
+	// append_system_prompt alone.
 	WorkDir string
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
@@ -610,11 +612,14 @@ Each turn sends the prompt with one process status line after it, built when the
 
 With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processes` and adds the `process` tool over that manager. Without a `WorkDir`, no process runs and the model sees no `process` tool. With a `WorkDir`, an embedder tool named `process` fails `New`.
 
+`declare` runs any argv that the model names. A `WorkDir` therefore grants command execution equal to `bash`, even when `Options.Tools` has no shell tool. An embedder that wants only AGENTS.md discovery must not set `WorkDir`.
+
 - The tool description names the configured processes only, so it never changes while the runtime runs. `declare` adds a process in memory until the runtime closes.
 - A tool error is the error of the manager, with one `process:` prefix.
 - A result reports no elapsed time. The status line names instants instead.
-- When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
-- `Runtime.Close` stops every process after the sessions end.
+- When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
+- This deviates from the engine, which puts the status at the end of the newest user message. Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
+- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes before it returns.
 - The `/processes` routes come with the phase 4 switch. Switch oracle: `process_tool_from_the_model`. Its two double-prefix rows change by design.
 
 ### config
