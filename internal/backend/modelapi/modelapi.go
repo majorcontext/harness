@@ -85,6 +85,26 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 	}
 }
 
+// CanWarm reports whether the client has a warm-up for its transport. It has
+// no side effect.
+func (b *Backend) CanWarm(string) bool {
+	w, ok := b.client.(provider.StartupPrewarmer)
+	return ok && w.StartupPrewarmEnabled()
+}
+
+// Warm prepares the transport of the client for the first model call of req.
+// It does nothing when CanWarm is false.
+func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
+	if !b.CanWarm(req.Model) {
+		return nil
+	}
+	preq, err := request(req)
+	if err != nil {
+		return err
+	}
+	return b.client.(provider.StartupPrewarmer).Warm(ctx, preq)
+}
+
 // telemetry reports u, and the prompt of the call as the context reading.
 // A call with no prompt tokens reports no reading, so the earlier reading stays.
 func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {

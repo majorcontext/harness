@@ -35,11 +35,14 @@ type wsLineage struct {
 
 // wsPoolEntry holds one session's WebSocket state.
 type wsPoolEntry struct {
-	mu             sync.Mutex
-	conn           *websocket.Conn
-	connectedAt    time.Time
-	lastUsedAt     time.Time
-	busy           bool
+	mu          sync.Mutex
+	conn        *websocket.Conn
+	connectedAt time.Time
+	lastUsedAt  time.Time
+	busy        bool
+	// warming is open while a warm-up runs on the entry. A request waits
+	// for it to close.
+	warming        chan struct{}
 	fallback       bool // permanent: this session never uses ws again
 	streamFailures int
 	generation     uint64
@@ -113,16 +116,15 @@ type wsStreamRequest struct {
 // It returns false when the caller must fall back to HTTP.
 func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stream, bool) {
 	entry := p.entryFor(req.SessionKey)
-
-	entry.mu.Lock()
-	if entry.fallback || entry.busy {
-		// A competing request invalidates lineage before it falls back to HTTP.
-		entry.lineage = nil
-		entry.generation++
-		entry.mu.Unlock()
+	if !p.acquire(ctx, entry, false) {
 		return nil, false
 	}
-	entry.busy = true
+	return p.open(ctx, entry, req)
+}
+
+// open sends req on the connection of entry, which the caller holds busy.
+func (p *wsPool) open(ctx context.Context, entry *wsPoolEntry, req wsStreamRequest) (provider.Stream, bool) {
+	entry.mu.Lock()
 	now := time.Now()
 	live := entry.conn != nil && !entry.connectedAt.IsZero()
 	aged := live && now.Sub(entry.connectedAt) >= p.maxConnectionAge
@@ -375,6 +377,71 @@ func (p *wsPool) stream(ctx context.Context, req wsStreamRequest) (provider.Stre
 		}
 	}
 	return st, true
+}
+
+// acquire marks entry busy for one request. A request waits for a warm-up
+// of the entry, so the first turn uses the warm connection. A warm-up never
+// disturbs a request, and it never replaces the connection or the lineage of
+// an entry that a request has used. It reports false when the caller must
+// fall back to HTTP.
+func (p *wsPool) acquire(ctx context.Context, entry *wsPoolEntry, warm bool) bool {
+	for {
+		entry.mu.Lock()
+		switch {
+		case warm && (entry.fallback || entry.busy || entry.warming != nil || entry.conn != nil || entry.lineage != nil):
+			entry.mu.Unlock()
+			return false
+		case entry.fallback:
+			entry.lineage = nil
+			entry.generation++
+			entry.mu.Unlock()
+			return false
+		case entry.warming != nil:
+			wait := entry.warming
+			entry.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return false
+			}
+		case entry.busy:
+			// A competing request invalidates lineage before it falls back to HTTP.
+			entry.lineage = nil
+			entry.generation++
+			entry.mu.Unlock()
+			return false
+		}
+		entry.busy = true
+		if warm {
+			entry.warming = make(chan struct{})
+		}
+		entry.mu.Unlock()
+		return true
+	}
+}
+
+// endWarm wakes the requests that wait for the warm-up of entry.
+func (p *wsPool) endWarm(entry *wsPoolEntry) {
+	entry.mu.Lock()
+	close(entry.warming)
+	entry.warming = nil
+	entry.mu.Unlock()
+}
+
+// warm runs one warm-up request to the end of its stream, which drain reads.
+func (p *wsPool) warm(ctx context.Context, req wsStreamRequest, drain func(provider.Stream) error) error {
+	entry := p.entryFor(req.SessionKey)
+	if !p.acquire(ctx, entry, true) {
+		return errors.New("openai: websocket warm-up refused")
+	}
+	defer p.endWarm(entry)
+	st, ok := p.open(ctx, entry, req)
+	if !ok {
+		return errors.New("openai: websocket warm-up failed")
+	}
+	defer func() { _ = st.Close() }()
+	return drain(st)
 }
 
 func readFirstFrame(ctx context.Context, conn *websocket.Conn, idleTimeout time.Duration) (string, []byte, error) {

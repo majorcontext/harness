@@ -248,9 +248,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	}, nil
 }
 
-// Prewarm prepares a Codex websocket session without generating assistant
+// Warm prepares a Codex websocket session without generating assistant
 // output. Other families and transports do not have startup state to prepare.
-func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
+func (c *Client) Warm(ctx context.Context, req *provider.Request) error {
 	if c.family() != CodexFamily || !c.UseWebSocketTransport || req.SessionKey == "" {
 		return nil
 	}
@@ -258,7 +258,7 @@ func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
 	if err != nil {
 		return err
 	}
-	st, ok := c.wsPoolFor().stream(ctx, wsStreamRequest{
+	return c.wsPoolFor().warm(ctx, wsStreamRequest{
 		SessionKey: req.SessionKey,
 		URL:        prepared.url,
 		Headers:    prepared.headers,
@@ -267,20 +267,16 @@ func (c *Client) Prewarm(ctx context.Context, req *provider.Request) error {
 		Family:     c.family(),
 		HTTPClient: prepared.client,
 		Prewarm:    true,
+	}, func(st provider.Stream) error {
+		for {
+			if _, err := st.Next(); err != nil {
+				if err == io.EOF {
+					return nil
+				}
+				return err
+			}
+		}
 	})
-	if !ok {
-		return errors.New("openai: websocket prewarm failed")
-	}
-	defer st.Close()
-	for {
-		_, err := st.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
 }
 
 // codexSubscriptionUsage reads h for the x-codex-* subscription-usage

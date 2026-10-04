@@ -54,7 +54,7 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 		Step{Name: "after", Match: LastToolResult("bash"), Reply: Reply{Text: "ok"}},
 	)
 	c := codexClient(s, true)
-	if err := c.Prewarm(context.Background(), codexRequest()); err != nil {
+	if err := c.Warm(context.Background(), codexRequest()); err != nil {
 		t.Fatal(err)
 	}
 	first := codexTurn(t, c, codexRequest(codexUser("run it")))
@@ -73,6 +73,9 @@ func TestOpenAIPrewarmChainsFirstTurnAndResolvesChainedToolNames(t *testing.T) {
 	}
 	if got := s.WireEvents(); !reflect.DeepEqual(got, want) {
 		t.Errorf("wire = %+v\nwant %+v", got, want)
+	}
+	if got := s.PrewarmInstructions(); !reflect.DeepEqual(got, []string{"sys"}) {
+		t.Errorf("prewarm instructions = %q, want the system prompt of the request", got)
 	}
 	reqs := s.Requests()
 	last := reqs[1].Messages[len(reqs[1].Messages)-1].Parts[0]

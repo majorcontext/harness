@@ -146,6 +146,32 @@ func (m *models) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 	return be.Run(ctx, req, out)
 }
 
+// CanWarm reports whether the backend of model has a warm-up to run.
+func (m *models) CanWarm(model string) bool {
+	be, err := m.backend(model)
+	if err != nil {
+		return false
+	}
+	w, ok := be.(turn.Warmer)
+	if !ok {
+		return false
+	}
+	g, gated := w.(turn.WarmGate)
+	return !gated || g.CanWarm(model)
+}
+
+// Warm warms the backend of req.Model, when that backend can warm.
+func (m *models) Warm(ctx context.Context, req turn.Request) error {
+	be, err := m.backend(req.Model)
+	if err != nil {
+		return err
+	}
+	if w, ok := be.(turn.Warmer); ok {
+		return w.Warm(ctx, req)
+	}
+	return nil
+}
+
 // list returns the models that modelmeta knows for each configured provider.
 func (m *models) list() []protocol.Model {
 	out := []protocol.Model{}

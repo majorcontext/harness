@@ -263,13 +263,13 @@ type Stream interface {
 
 // StartupPrewarmer is an optional provider capability that prepares transport-local
 // state before the first model call. StartupPrewarmEnabled must be side-effect free;
-// the engine calls it before startup discovery, hooks, or tool assembly. Prewarm must
+// the engine calls it before startup discovery, hooks, or tool assembly. Warm must
 // not emit provider events and MUST return promptly when ctx is canceled. The engine
 // bounds prompt waiting and session ownership at that deadline, but Go cannot forcibly
 // stop a callback that ignores cancellation.
 type StartupPrewarmer interface {
 	StartupPrewarmEnabled() bool
-	Prewarm(context.Context, *Request) error
+	Warm(context.Context, *Request) error
 }
 
 // Provider is one model API family.

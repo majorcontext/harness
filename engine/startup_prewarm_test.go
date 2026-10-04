@@ -47,7 +47,7 @@ func (p *startupPrewarmProvider) Name() string { return p.name }
 
 func (p *startupPrewarmProvider) StartupPrewarmEnabled() bool { return p.enabled }
 
-func (p *startupPrewarmProvider) Prewarm(ctx context.Context, req *provider.Request) error {
+func (p *startupPrewarmProvider) Warm(ctx context.Context, req *provider.Request) error {
 	p.prewarmRequests <- cloneStartupRequest(req)
 	defer p.returnOnce.Do(func() { close(p.prewarmReturned) })
 	if p.release != nil {
