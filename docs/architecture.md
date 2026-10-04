@@ -346,7 +346,7 @@ type Ownership interface {
 }
 ```
 
-`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`.
+`Create` appends `session.created` and `owner.acquired` to an empty log in one append. A conflict there fails with `ErrSessionExists`. An empty `model` is `Config.Model`, or `config.DefaultModel` when that is empty, after one alias lookup, as in `harness serve`. An explicit model gets no alias lookup.
 
 Start-up order of `Open` after `Acquire`:
 

@@ -253,7 +253,7 @@ func TestErrorsOverHTTP(t *testing.T) {
 		status            int
 		code              string
 	}{
-		{"POST", base, `{"model":""}`, 400, protocol.CodeInvalidRequest},
+		{"POST", base, `{"model":""}`, 409, protocol.CodeModelUnavailable},
 		{"POST", base, `{"model":`, 400, protocol.CodeInvalidRequest},
 		{"POST", base, `{"model":"codex/gpt-6-sol","modle":"x"}`, 400, protocol.CodeInvalidRequest},
 		{"GET", base + "?limit=x", "", 400, protocol.CodeInvalidRequest},
