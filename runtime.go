@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -57,8 +60,10 @@ type Options struct {
 	// Tools are the embedder tools. Each name must be unique.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
-	// AGENTS.md chain and skills when it starts. Empty: the system prompt is
-	// Config.AppendSystemPrompt alone, and no file is read.
+	// AGENTS.md chain and skills when it starts, and the process tool runs
+	// Config.Processes in it. The tool's declare action runs any argv, so
+	// WorkDir alone grants command execution. Empty: the system prompt is
+	// Config.AppendSystemPrompt alone, no file is read, and no process runs.
 	WorkDir string
 
 	backend turn.Backend
@@ -76,6 +81,9 @@ type Runtime struct {
 	retries int
 	// prompt reads the system prompt of a session.
 	prompt func() string
+	// procs is nil without a WorkDir.
+	procs   *process.Manager
+	workDir string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
 	keep      int
@@ -108,8 +116,13 @@ func New(opts Options) (*Runtime, error) {
 		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
+	tools := opts.Tools
+	if opts.WorkDir != "" {
+		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
+		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes))
+	}
 	names := map[string]bool{}
-	for _, t := range opts.Tools {
+	for _, t := range tools {
 		name := t.Spec().Name
 		if name == "" || names[name] {
 			return nil, fmt.Errorf("%w: tool name %q is empty or repeated", ErrInvalidRequest, name)
@@ -244,7 +257,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Owner:     r.name(),
 		Backend:   r.backend,
 		Tools:     r.tools,
-		Prompt:    r.prompt(),
+		Prompt:    r.instructions(),
 		Sync:      r.sync,
 		Retries:   r.retries,
 		Threshold: r.threshold,
@@ -261,6 +274,21 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		return nil, err
 	}
 	return &Session{a: a}, nil
+}
+
+// instructions reads the system prompt of a session once and returns the
+// system prompt of each of its turns: that prompt and the process status.
+func (r *Runtime) instructions() func() string {
+	p := r.prompt()
+	return func() string {
+		if r.procs == nil {
+			return p
+		}
+		if s := processStatus(r.procs, r.workDir); s != "" {
+			return strings.Join([]string{p, message.RenderEngineContext(s)}, "\n\n")
+		}
+		return p
+	}
 }
 
 // List returns a page of sessions in ID order.
@@ -308,9 +336,9 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 }
 
 // Close hands off every session, waits for every goroutine of the runtime,
-// and closes the model connections. When ctx ends first, it stops the
-// remaining sessions without an append and returns; their next Open finds a
-// crashed turn.
+// closes the model connections, and stops the processes. When ctx ends
+// first, it stops the remaining sessions without an append, kills the
+// processes, and returns; their next Open finds a crashed turn.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -342,6 +370,9 @@ func (r *Runtime) Close(ctx context.Context) error {
 		if r.models != nil {
 			r.models.Close()
 		}
+		if r.procs != nil {
+			r.procs.Close(ctx)
+		}
 		close(done)
 	}()
 	defer r.cancel()
@@ -349,6 +380,10 @@ func (r *Runtime) Close(ctx context.Context) error {
 	case <-done:
 		return errors.Join(errs...)
 	case <-ctx.Done():
+		r.cancel()
+		if r.procs != nil {
+			r.procs.Close(ctx)
+		}
 		return errors.Join(append(errs, ctx.Err())...)
 	}
 }
