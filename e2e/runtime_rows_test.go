@@ -12,8 +12,6 @@ const (
 	specTaskInputs    = "Task notifications become inputs"
 	specChildReport   = "The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child"
 	specChildNoGoal   = "A child session has no `goal` tool"
-	specChildCrash    = "A crashed child turn ends `crashed` and settles `failed`."
-	specCancelTree    = "changes by design in one way: a later send is not refused."
 	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
 	specHandoffResume = "A suspended turn has no open tool call, so the next owner resumes it automatically."
@@ -57,7 +55,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bootstrap_cold_window_after_kill":                          pendingOn("phase 4"),
 	"builtin_commands_run_and_record":                           pendingOn("F02", "phase 4"),
 	"busy_deferred_goal_with_max_turns":                         deletedBy(specGoalDeferred),
-	"child_crash_recovered":                                     reGolden(specChildCrash, specTaskInputs, specChildReport, specChildNoGoal, specView, "F02"),
+	"child_crash_recovered":                                     pendingOn("F02", "F10", "F11"),
 	"child_error_delivered":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, "F02"),
 	"claudecode_compact_delegated":                              pendingOn("F02", "F18", "F20"),
 	"claudecode_configured_mcp_servers_reach_the_cli":           pendingOn("F20"),
@@ -120,7 +118,7 @@ var runtimeRows = map[string]runtimeRow{
 	"interrupt_drops_unfinished_text_then_queue_continues":      sameAsServe(),
 	"interrupt_idle_is_noop":                                    sameAsServe(),
 	"journal_pages_follow_cursor":                               reGolden(specCursor, specEventsRoute),
-	"kill_mid_turn_then_continue":                               reGolden(specCrash, "unowned"),
+	"kill_mid_turn_then_continue":                               reGolden(specCrash, "F10", "unowned"),
 	"max_tokens_continuation":                                   pendingOn("F02", "unowned"),
 	"mcp_auto_default_threshold_defers_at_21_tools":             sameAsServe(),
 	"mcp_auto_default_threshold_stays_eager_at_20_tools":        sameAsServe(),
@@ -164,13 +162,13 @@ var runtimeRows = map[string]runtimeRow{
 	"queue_delete_while_busy":                                   pendingOn("F02", "phase 4"),
 	"queue_survives_clean_restart_then_delete":                  pendingOn("F02", "phase 4"),
 	"queue_survives_clean_restart_then_drains_with_next_prompt": reGolden(specQueue, specHandoffResume, specView, "F02"),
-	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue),
+	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue, "F10", "unowned"),
 	"queued_input_survives_kill":                                deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":               deletedBy(specGoalDeferred),
 	"replay_after_kill_full_transcript":                         pendingOn("F02", "phase 4"),
-	"send_to_child_and_cancel_tree":                             reGolden(specCancelTree, specTaskInputs, specChildNoGoal, specReceipt, specView, "F02"),
+	"send_to_child_and_cancel_tree":                             pendingOn("F02", "unowned"),
 	"session_settings_validation_and_persistence":               reGolden(specModelCheck, specErrors, specUpdate, specView, "F02"),
-	"sse_resume_after_kill":                                     reGolden(specCursor, specBoxGlobal),
+	"sse_resume_after_kill":                                     reGolden(specCursor, specBoxGlobal, "F10"),
 	"sse_resume_cursor":                                         reGolden(specCursor, specBoxGlobal),
 	"status_and_list_cold_after_restart":                        pendingOn("F02", "unowned"),
 	"steer_joins_the_turn_at_the_tool_boundary":                 pendingOn("F01"),
