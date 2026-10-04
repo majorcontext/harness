@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -51,13 +52,13 @@ func (*lease) Epoch() uint64           { return 1 }
 func (l *lease) Lost() <-chan struct{} { return l.lost }
 func (l *lease) Release()              { l.released.Store(true) }
 
-func actorConfig(t *testing.T, log Log, own Ownership, b turn.Backend) Config {
+func actorConfig(t *testing.T, log Storage, own Ownership, b turn.Backend) Config {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	return Config{ID: "s1", Log: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func() {},
-		Prompt: func(string) string { return "" }}
+	return Config{ID: "s1", Store: log, Ownership: own, Backend: b, Base: ctx, Go: wg.Go, Done: func() {},
+		Prompt: func() string { return "" }}
 }
 
 func firstInput() *eventlog.InputAdmitted {
@@ -139,4 +140,16 @@ func TestAStoppedActorReleasesAfterItsTurnExits(t *testing.T) {
 			t.Fatal("the ownership was not released after the turn exited")
 		}
 	})
+}
+
+func TestAppendedSeesTheStateThatTheAppendProduced(t *testing.T) {
+	cfg := actorConfig(t, &memLog{}, owned{}, newHeldBackend(false))
+	var heads []uint64
+	cfg.Appended = func(_ []eventlog.Event, st *eventlog.State) { heads = append(heads, st.Head()) }
+	if _, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := []uint64{2}; !slices.Equal(heads, want) {
+		t.Errorf("heads seen by Appended = %v, want %v", heads, want)
+	}
 }

@@ -69,7 +69,7 @@ func (a *Actor) retained() []toolresult.Meta {
 
 // Open opens a blob of the session.
 func (a *Actor) Open(ctx context.Context, key string) (io.ReadCloser, error) {
-	return a.cfg.Blobs.GetBlob(ctx, key)
+	return a.cfg.Store.GetBlob(ctx, key)
 }
 
 // retain keeps a result above the inline limit out of the history: it
@@ -108,7 +108,7 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 		res.Text = toolresult.Refused(tool, masked)
 		return res
 	}
-	if err := a.cfg.Blobs.PutBlob(a.cfg.Base, m.Key, strings.NewReader(masked)); err != nil {
+	if err := a.cfg.Store.PutBlob(a.cfg.Base, m.Key, strings.NewReader(masked)); err != nil {
 		return res
 	}
 	err = a.onRun(run, func() error {
@@ -124,7 +124,7 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 // so that a handle stays reachable after the preview that named it folds.
 func (a *Actor) indexed(summary string, metas []toolresult.Meta) string {
 	index := toolresult.Index(metas, func(m toolresult.Meta) bool {
-		rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, m.Key)
+		rc, err := a.cfg.Store.GetBlob(a.cfg.Base, m.Key)
 		if err == nil {
 			_ = rc.Close()
 		}

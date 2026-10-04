@@ -57,17 +57,6 @@ func (a *Actor) Unsettled(ctx context.Context) ([]string, error) {
 	return call(ctx, a, func(reply func([]string, error)) { reply(a.state.Unsettled(), nil) })
 }
 
-// report sends the outcome of the turn that ended to the parent.
-func (a *Actor) report() {
-	parent := a.state.Summary().ParentID
-	if parent == "" || a.cfg.Report == nil {
-		return
-	}
-	if s, text, ok := Settlement(a.cfg.ID, a.state); ok {
-		a.cfg.Report(parent, s, text)
-	}
-}
-
 // Settlement returns the outcome of the last ended turn of child session
 // id, and the text that reports it to the parent: the last assistant text,
 // as the Task tool of Claude Code returns. ok is false while a turn runs,

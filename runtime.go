@@ -224,14 +224,14 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
 		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
-	return r.create(ctx, id, created, nil)
+	return r.create(ctx, id, launch{created: &created})
 }
 
-func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Session, error) {
-	if err := r.checkModel(c.Model, c.AllowedTools); err != nil {
+func (r *Runtime) create(ctx context.Context, id string, l launch) (*Session, error) {
+	if err := r.checkModel(l.created.Model, l.created.AllowedTools); err != nil {
 		return nil, err
 	}
-	return r.load(ctx, id, launch{create: true, created: c, first: first})
+	return r.load(ctx, id, l)
 }
 
 func newSuffix() string { return strings.ToLower(rand.Text()) }
@@ -247,11 +247,13 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 
 // launch is how a load starts a session that this runtime does not run yet.
 type launch struct {
-	// create starts a new session with created and first. Otherwise the
-	// session opens from its log.
-	create  bool
-	created eventlog.SessionCreated
+	// created and first start a new session. A nil created opens the session
+	// from its log.
+	created *eventlog.SessionCreated
 	first   *eventlog.InputAdmitted
+	// profile is the agent profile of the session, when the caller has read
+	// it.
+	profile *prompt.Profile
 }
 
 func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, error) {
@@ -273,13 +275,13 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			}
 			close(e.ready)
 			if e.err == nil {
-				r.run(id, e.s, l.create)
+				r.run(id, e.s, l.created != nil)
 			}
 			r.group.Done()
 			return e.s, e.err
 		}
 		r.mu.Unlock()
-		if l.create {
+		if l.created != nil {
 			return nil, fmt.Errorf("%w: %s", ErrSessionExists, id)
 		}
 		select {
@@ -335,27 +337,31 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if err != nil {
 		return nil, err
 	}
-	c := l.created
-	if !l.create {
-		if c, err = r.created(ctx, id); err != nil {
-			own.Release()
-			return nil, err
-		}
+	var c eventlog.SessionCreated
+	if l.created != nil {
+		c = *l.created
+	} else if c, err = r.created(ctx, id); err != nil {
+		own.Release()
+		return nil, err
+	}
+	profile := r.profile(c.Agent, l.profile)
+	var plug *pluginsrc.Session
+	if r.plugins != nil {
+		plug = r.plugins.Session(id)
 	}
 	cfg := session.Config{
 		ID:              id,
-		Log:             storeLog{r.store, id},
-		Blobs:           storeLog{r.store, id},
+		Store:           storeLog{r.store, id},
 		Ownership:       own,
 		Owner:           r.name(),
 		Backend:         r.models,
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, c.ParentID != ""),
+		Source:          r.source(id, c.ParentID != "", plug),
 		Retain:          r.workDir != "",
-		Prompt:          r.instructions(),
-		Report:          r.report,
+		Prompt:          r.instructions(c.Agent, profile),
+		Appended:        r.appended(id, plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
 		Threshold:       r.threshold,
@@ -365,11 +371,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Done:            func() { r.forget(id, e) },
 		Check:           r.changeModel,
 	}
-	if r.plugins != nil {
-		cfg.Appended = r.plugins.Session(id).Appended
-	}
 	var a *session.Actor
-	if l.create {
+	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
 	} else {
 		a, err = session.Open(ctx, cfg)
@@ -380,23 +383,51 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
 }
 
+// profile returns the agent profile of a session: read, or read from the
+// WorkDir now. The zero profile is no profile.
+func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
+	switch {
+	case read != nil:
+		return *read
+	case agent == "":
+		return prompt.Profile{}
+	}
+	return prompt.Profiles(r.workDir)[agent]
+}
+
 // instructions reads the system prompt of a session once and returns the
 // system prompt of each of its turns: that prompt, the prompt of its agent
-// profile, and the process status. The actor calls it from one goroutine.
-func (r *Runtime) instructions() func(agent string) string {
-	p, read := r.prompt(), false
-	return func(agent string) string {
-		if !read && agent != "" {
-			p = strings.Trim(p+"\n\n"+prompt.Profiles(r.workDir)[agent].Prompt, "\n")
-		}
-		read = true
+// profile, and the process status.
+func (r *Runtime) instructions(agent string, p prompt.Profile) func() string {
+	base := r.prompt()
+	if agent != "" {
+		base = strings.Trim(base+"\n\n"+p.Prompt, "\n")
+	}
+	return func() string {
 		if r.procs == nil {
-			return p
+			return base
 		}
 		if s := processStatus(r.procs, r.workDir); s != "" {
-			return strings.Join([]string{p, message.RenderEngineContext(s)}, "\n\n")
+			return strings.Join([]string{base, message.RenderEngineContext(s)}, "\n\n")
 		}
-		return p
+		return base
+	}
+}
+
+// appended gives the events of session id to its plugins, and reports the
+// end of a turn of a child to its parent.
+func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]eventlog.Event, *eventlog.State) {
+	return func(events []eventlog.Event, st *eventlog.State) {
+		if plug != nil {
+			plug.Appended(events)
+		}
+		parent := st.Summary().ParentID
+		if parent == "" || !slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.TurnEnded); return ok }) {
+			return
+		}
+		if s, text, ok := session.Settlement(id, st); ok {
+			r.report(parent, s, text)
+		}
 	}
 }
 

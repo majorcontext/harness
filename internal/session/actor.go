@@ -48,6 +48,12 @@ type Blobs interface {
 	GetBlob(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
+// Storage is the log and the blobs of one session.
+type Storage interface {
+	Log
+	Blobs
+}
+
 // Ownership is the grant to run one session.
 type Ownership interface {
 	Epoch() uint64
@@ -59,8 +65,7 @@ type Ownership interface {
 // and also when Create or Open fails.
 type Config struct {
 	ID        string
-	Log       Log
-	Blobs     Blobs
+	Store     Storage
 	Ownership Ownership
 	// Owner names this process in owner.acquired.
 	Owner   string
@@ -82,15 +87,12 @@ type Config struct {
 	// Retain gives a harness-loop turn read_tool_result and keeps each large
 	// result out of the history, after the hooks of Source.
 	Retain bool
-	// Prompt returns the system prompt of a turn of a session with the
-	// agent profile, when the turn starts.
-	Prompt func(agent string) string
-	// Appended receives the events of each append on the actor goroutine.
-	// It must not block. nil: none.
-	Appended func([]eventlog.Event)
-	// Report receives the outcome of each turn of a child session that
-	// ends, for its parent. It must not wait for the actor. nil: no report.
-	Report func(parent string, s eventlog.ChildSettled, text string)
+	// Prompt returns the system prompt of a turn, when the turn starts.
+	Prompt func() string
+	// Appended receives the events of each append, and the state after it,
+	// on the actor goroutine. It must not block, wait for the actor, or keep
+	// the state. nil: none.
+	Appended func([]eventlog.Event, *eventlog.State)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.
@@ -220,7 +222,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 		return nil, err
 	}
 	s := &eventlog.State{}
-	if err := replay(ctx, cfg.Log, s, head); err != nil {
+	if err := replay(ctx, cfg.Store, s, head); err != nil {
 		return nil, err
 	}
 	a := newActor(cfg, s)
@@ -258,7 +260,7 @@ func (a *Actor) waitsForInput() bool {
 // that lands first is ordered before the fence.
 func fence(ctx context.Context, cfg Config) (uint64, error) {
 	for {
-		head, err := cfg.Log.Head(ctx)
+		head, err := cfg.Store.Head(ctx)
 		if err != nil {
 			return 0, err
 		}
@@ -270,7 +272,7 @@ func fence(ctx context.Context, cfg Config) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		err = cfg.Log.Append(ctx, head, data)
+		err = cfg.Store.Append(ctx, head, data)
 		if !errors.Is(err, ErrConflict) {
 			return head + 1, err
 		}
@@ -454,7 +456,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 	if a.lost() {
 		return ErrNotOwned
 	}
-	if err := a.cfg.Log.Append(ctx, head, recs...); err != nil {
+	if err := a.cfg.Store.Append(ctx, head, recs...); err != nil {
 		a.stopped = true
 		if errors.Is(err, ErrConflict) {
 			return fmt.Errorf("%w: %w", ErrNotOwned, err)
@@ -471,7 +473,7 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 		a.stopRetry()
 	}
 	if a.cfg.Appended != nil {
-		a.cfg.Appended(events)
+		a.cfg.Appended(events, a.state)
 	}
 	a.publish(false)
 	return nil

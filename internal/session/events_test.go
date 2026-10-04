@@ -1,7 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"io/fs"
 	"sync"
 	"testing"
 
@@ -10,8 +13,30 @@ import (
 )
 
 type memLog struct {
-	mu   sync.Mutex
-	recs []eventlog.Record
+	mu    sync.Mutex
+	recs  []eventlog.Record
+	blobs map[string][]byte
+}
+
+func (l *memLog) PutBlob(_ context.Context, key string, r io.Reader) error {
+	b, err := io.ReadAll(r)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.blobs == nil {
+		l.blobs = map[string][]byte{}
+	}
+	l.blobs[key] = b
+	return err
+}
+
+func (l *memLog) GetBlob(_ context.Context, key string) (io.ReadCloser, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.blobs[key]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
 func (l *memLog) Head(context.Context) (uint64, error) {
@@ -43,7 +68,7 @@ func (owned) Release()              {}
 
 func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 	const appends = 3000
-	a := newActor(Config{ID: "s1", Log: &memLog{}, Ownership: owned{}, Backend: newHeldBackend(false), Base: t.Context()}, &eventlog.State{})
+	a := newActor(Config{ID: "s1", Store: &memLog{}, Ownership: owned{}, Backend: newHeldBackend(false), Base: t.Context()}, &eventlog.State{})
 	if err := a.appendCtx(t.Context(), eventlog.SessionCreated{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}

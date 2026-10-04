@@ -350,3 +350,50 @@ func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+// rewriting is a Store that runs rewrite once, before the first append to a
+// session other than s1.
+type rewriting struct {
+	harness.Store
+	once    sync.Once
+	rewrite func()
+}
+
+func (s *rewriting) Append(ctx context.Context, id string, expectedSeq uint64, records ...[]byte) error {
+	if id != "s1" {
+		s.once.Do(s.rewrite)
+	}
+	return s.Store.Append(ctx, id, expectedSeq, records...)
+}
+
+func TestAChildReadsItsProfileOnceWhenItStarts(t *testing.T) {
+	profile := func(prompt string) []byte {
+		return []byte("---\nname: reader\ndescription: Reads.\ntools: ls\n---\n\n" + prompt + "\n")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".agents", "reader.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, profile("Version one."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		st := &rewriting{Store: harness.NewMemStore(), rewrite: func() {
+			if err := os.WriteFile(path, profile("Version two."), 0o644); err != nil {
+				t.Error(err)
+			}
+		}}
+		f := &family{answer: delegation("reader", 1, done)}
+		r := familyRuntime(t, st, f, nil, config.Config{}, dir)
+		submit(t, create(t, r), text("a", "delegate"))
+		kids := children(t, r)
+		if len(kids) != 1 {
+			t.Fatalf("children %+v, want 1", kids)
+		}
+		if req, _ := f.last(kids[0].ID, "child work"); !strings.HasSuffix(req.Instructions, "Version one.") {
+			t.Errorf("child prompt %q, want the profile that the spawn read", req.Instructions)
+		}
+		closeRuntime(t, r)
+	})
+}

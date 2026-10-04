@@ -7,6 +7,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
+	"github.com/majorcontext/harness/internal/tool/pluginsrc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
@@ -43,7 +44,7 @@ func (r *Runtime) builtin(name string) bool {
 // tools, then the file, MCP, and plugin tools of the models that take them.
 // A session tool binds to the session or drops out. Each session has its own
 // file tools, because the write_file guard belongs to one session.
-func (r *Runtime) source(id string, child bool) turn.Source {
+func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session) turn.Source {
 	var static []turn.Tool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
@@ -71,13 +72,12 @@ func (r *Runtime) source(id string, child bool) turn.Source {
 			return r.mcp
 		}})
 	}
-	if r.plugins != nil {
-		p := r.plugins.Session(id)
+	if plug != nil {
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
-				return p.Untransformed()
+				return plug.Untransformed()
 			}
-			return p
+			return plug
 		}})
 	}
 	return srcs

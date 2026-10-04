@@ -51,7 +51,7 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 	first := eventlog.InputAdmitted{InputID: "input_" + newSuffix(), Delivery: eventlog.DeliveryQueue, Source: "parent",
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}
 	ctx = context.WithoutCancel(ctx)
-	if _, err := r.create(ctx, id, c, &first); err != nil {
+	if _, err := r.create(ctx, id, launch{created: &c, first: &first, profile: &p}); err != nil {
 		r.sup.done(id)
 		return "", errors.Join(err, ps.a.Settle(ctx, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, ""))
 	}

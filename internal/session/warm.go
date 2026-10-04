@@ -19,7 +19,7 @@ func (a *Actor) warm() {
 	if _, ok := a.cfg.Backend.(turn.Warmer); !ok {
 		return
 	}
-	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
+	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
 		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
 	src := a.source(&running{})
 	warming := make(chan struct{})

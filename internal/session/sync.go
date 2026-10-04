@@ -82,7 +82,7 @@ func (a *Actor) replicate() error {
 }
 
 func (a *Actor) batch(from, head uint64) (*protocol.SyncBatch, error) {
-	recs, err := a.cfg.Log.Read(a.cfg.Base, from-1, int(min(head-from+1, page)))
+	recs, err := a.cfg.Store.Read(a.cfg.Base, from-1, int(min(head-from+1, page)))
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
 	default:
 		return nil
 	}
-	rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, key)
+	rc, err := a.cfg.Store.GetBlob(a.cfg.Base, key)
 	if err != nil {
 		return err
 	}

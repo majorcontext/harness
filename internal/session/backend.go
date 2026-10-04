@@ -25,7 +25,7 @@ func (t *turnRun) State(backend string) ([]byte, error) {
 	if err != nil || key == "" {
 		return nil, err
 	}
-	rc, err := a.cfg.Blobs.GetBlob(a.cfg.Base, key)
+	rc, err := a.cfg.Store.GetBlob(a.cfg.Base, key)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (t *turnRun) SaveState(backend string, blob []byte) error {
 	if err := a.onRun(t.r, func() error { return nil }); err != nil {
 		return err
 	}
-	if err := a.cfg.Blobs.PutBlob(a.cfg.Base, key, bytes.NewReader(blob)); err != nil {
+	if err := a.cfg.Store.PutBlob(a.cfg.Base, key, bytes.NewReader(blob)); err != nil {
 		return err
 	}
 	return a.onRun(t.r, func() error { return a.append(eventlog.BackendState{Backend: backend, BlobKey: key}) })
