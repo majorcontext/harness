@@ -14,6 +14,7 @@ const waitingMarker = "WAITING_FOR_QUEUE"
 // inherited stdio pipes, so a test can check how the driver treats them.
 var stdinModes = map[string]mode{
 	"queue_injection":               queueInjection,
+	"queue_injection_in_tool":       queueInjectionInTool,
 	"compact_queue_injection":       compactQueueInjection,
 	"queue_injection_broken_pipe":   queueInjectionBrokenPipe,
 	"queue_injection_blocked_write": queueInjectionBlockedWrite,
@@ -48,6 +49,17 @@ func queueInjection(f *fake) {
 		}
 	}
 	f.emit(queueResult(text))
+}
+
+// queueInjectionInTool reads the queued message while a tool runs, as the CLI
+// takes it at the next tool result.
+func queueInjectionInTool(f *fake) {
+	f.emit(assistant(textBlock(waitingMarker), toolUse("toolu_q", "Bash", obj{"command": "sleep 1"})))
+	text := "no second message received"
+	if content, ok := awaitQueued(f); ok {
+		text = "received queued: " + content
+	}
+	f.emit(user(toolResult("toolu_q", "slept", false)), say(text), queueResult(text))
 }
 
 // compactQueueInjection waits a bounded time, because a delegated compact

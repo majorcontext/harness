@@ -62,7 +62,7 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 		},
 		{
 			name:   "claudecode_queued_prompt_injected_mid_turn",
-			driver: claudeLaneDriver("queue_injection"),
+			driver: claudeLaneDriver("queue_injection_in_tool"),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "run it"},

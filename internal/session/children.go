@@ -43,7 +43,7 @@ func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, text string
 		case text == "":
 			reply(struct{}{}, a.append(s))
 		default:
-			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliveryQueue, Source: sourceChild,
+			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliverySteer, Source: sourceChild,
 				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 			_, err := a.admit(in, "", append(a.resumed(), s)...)
 			reply(struct{}{}, err)

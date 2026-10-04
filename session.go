@@ -62,9 +62,9 @@ func detach(s protocol.Session) protocol.Session {
 	return s
 }
 
-// Submit admits an input. It starts a turn when none runs and queues the
-// input otherwise. A steer input joins the running turn at its next item
-// boundary, and starts a turn on an idle session. A repeated input ID returns
+// Submit admits an input. It starts a turn when none runs. While a turn runs,
+// a steer input, which is the default, joins it at its next item boundary,
+// and a queue input waits for the next turn. A repeated input ID returns
 // the original receipt with Repeat set; the verdict is atomic with the
 // admission. A typed slash command records command.recorded instead of an
 // input, and the receipt carries its status; see docs/architecture.md.

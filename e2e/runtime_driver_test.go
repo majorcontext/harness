@@ -242,7 +242,7 @@ func (d *runtimeDriver) Attach(t *testing.T, id, text string, atts []attachment)
 
 func (d *runtimeDriver) Enqueue(t *testing.T, id, text string) {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliveryQueue, "")
+	path, body := d.input(id, text, protocol.DeliverySteer, "")
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 

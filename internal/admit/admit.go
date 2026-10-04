@@ -48,7 +48,7 @@ var attachmentTypes = map[string]func(mediaType string, data []byte) error{
 func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
 	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source}
 	if ev.Delivery == "" {
-		ev.Delivery = eventlog.DeliveryQueue
+		ev.Delivery = eventlog.DeliverySteer
 	}
 	if ev.Source == "" {
 		ev.Source = "user"
