@@ -24,6 +24,8 @@ func TestValidate(t *testing.T) {
 		{name: "an unknown session_sync", cfg: Config{SessionSync: "bogus"}, want: "session_sync"},
 		{name: "an unknown mcp_tool_loading", cfg: Config{MCPToolLoading: "bogus"}, want: "mcp_tool_loading"},
 		{name: "a negative event_sink flush_ms", cfg: Config{EventSink: &EventSinkSpec{URL: "https://e.test", FlushMS: -1}}, want: "flush_ms"},
+		{name: "a negative max_task_depth", cfg: Config{MaxTaskDepth: -1}, want: "max_task_depth"},
+		{name: "a negative max_concurrent_tasks", cfg: Config{MaxConcurrentTasks: -1}, want: "max_concurrent_tasks"},
 		{name: "an append prompt that extra_args replaces", cfg: Config{AppendSystemPrompt: []string{"fact"}, Providers: cc}, want: "conflicts with append_system_prompt"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

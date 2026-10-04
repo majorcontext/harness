@@ -37,14 +37,9 @@ type Config struct {
 	// InstructionsPath overrides the auto-discovered AGENTS.md with a specific
 	// file to load instead of walking up from the working directory.
 	InstructionsPath string `json:"instructions_path,omitempty"`
-	// InstructionsMaxBytes sets engine.InstructionsConfig.MaxBytes: how many
-	// bytes of the instruction file reach the system prompt. Zero (omitted,
-	// the default) keeps the engine default of 64 KiB. A positive value sets
-	// the cap. A NEGATIVE value disables the cap, so the whole file is
-	// injected — a project with a large AGENTS.md and a large context window
-	// can pay for the whole file. Truncation is always loud: the model reads
-	// an in-band marker and the operator reads a WARN log line.
-	// HARNESS_INSTRUCTIONS_MAX_KB overrides this key (see cmd/harness).
+	// InstructionsMaxBytes caps the bytes of each instruction file in the
+	// system prompt. Zero: 64 KiB. Negative: no cap. A cut file gets a marker
+	// and a WARN log line. HARNESS_INSTRUCTIONS_MAX_KB overrides it.
 	InstructionsMaxBytes int `json:"instructions_max_bytes,omitempty"`
 	// InstructionsMode selects how an OVERSIZE instruction file is rendered:
 	// "auto" (omitted, the default) splits it into a head plus an outline of
@@ -78,15 +73,10 @@ type Config struct {
 	// cloned repository. Override semantics would let the repository remove a
 	// platform environment fact. Keep this field additive.
 	AppendSystemPrompt []string `json:"append_system_prompt,omitempty"`
-	// SkillsDirs lists directories scanned for Agent Skills (agentskills.io).
-	// A nil (omitted) value leaves the engine default in place: use
-	// <WorkDir>/.agents/skills when it exists. In the project-config merge a
-	// non-empty project value replaces the user value entirely.
+	// SkillsDirs lists the Agent Skills dirs. nil: <WorkDir>/.agents/skills. A
+	// non-empty project value replaces the user value in the merge.
 	SkillsDirs []string `json:"skills_dirs,omitempty"`
-	// AgentDefsDirs lists directories scanned for custom `task`-tool agent
-	// definitions (*.md files). A nil (omitted) value leaves the engine
-	// default in place: use <WorkDir>/.agents. Same merge/override contract
-	// as SkillsDirs in every respect (see that field's own doc comment).
+	// AgentDefsDirs lists the engine's agent definition dirs. nil: <WorkDir>/.agents.
 	AgentDefsDirs []string `json:"agent_defs_dirs,omitempty"`
 	// CommandsDirs lists directories scanned for prompt commands (*.md files).
 	// A nil value uses <WorkDir>/.agents/commands. A non-empty project value
@@ -97,6 +87,10 @@ type Config struct {
 	// Session.SetGoal. There is no default — goal use requires this field to
 	// be set. Resolve it with ResolveModel so aliases apply.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
+	// MaxTaskDepth bounds the nesting of the child sessions of the task tool.
+	MaxTaskDepth int `json:"max_task_depth,omitempty"`
+	// MaxConcurrentTasks bounds the unsettled child sessions of one session tree.
+	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
 	// ModelTool, when set to false, disables the built-in `model` session tool
 	// (status/set — the model swaps its own MAIN model in-process; see package
 	// engine). A nil value (the field omitted) leaves the tool ENABLED — the
@@ -1304,6 +1298,12 @@ func merge(base, over *Config) *Config {
 	}
 	if over.GoalEvaluatorModel != "" {
 		out.GoalEvaluatorModel = over.GoalEvaluatorModel
+	}
+	if over.MaxTaskDepth != 0 {
+		out.MaxTaskDepth = over.MaxTaskDepth
+	}
+	if over.MaxConcurrentTasks != 0 {
+		out.MaxConcurrentTasks = over.MaxConcurrentTasks
 	}
 	if over.ModelTool != nil {
 		out.ModelTool = over.ModelTool

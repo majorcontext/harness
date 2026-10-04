@@ -29,7 +29,7 @@ func runOn(t *testing.T, p provider.Provider, lim turn.Limits) (*Actor, *memLog)
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	log, b := &memLog{}, modelapi.New(p, 0)
 	a, err := Create(ctx, Config{ID: "s1", Log: log, Ownership: owned{}, Backend: b, Limits: lim, Threshold: 0.8, KeepTurns: 1,
-		Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func() string { return "" }}, eventlog.SessionCreated{Model: "anthropic/claude-opus-5"})
+		Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func(string) string { return "" }}, eventlog.SessionCreated{Model: "anthropic/claude-opus-5"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

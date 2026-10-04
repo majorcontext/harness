@@ -246,7 +246,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 
 | Kind | Payload |
 | --- | --- |
-| `session.created` | `parent_id?`, `model`, `settings`, `origin`, `allowed_tools?` |
+| `session.created` | `parent_id?`, `agent?`, `model`, `settings`, `origin`, `allowed_tools?` |
 | `owner.acquired` | `epoch`, `owner` |
 | `settings.changed` | `model?`, `effort?`, `service_tier?` |
 | `input.admitted` | `input_id`, `delivery` (`queue` or `steer`), `source`, `parts` |
@@ -304,10 +304,11 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Update(settings)` | Check the model; append `settings.changed` |
 | `SetGoal(...)`, `ClearGoal()` | Append goal events |
 | `Compact()` | Run a compaction as the run of the actor |
+| `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child |
+| `Settle(outcome, report)` | Append `child.settled` and admit the report as an input with `source: child`; a settled child changes nothing |
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
 | `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
 | `Resolve(requestID, resolution)` | Phase 5: append `request.resolved`; resume the turn |
-| `Spawn(child)` | Planned: create a child session; append `child.spawned` |
 
 The actor appends with no other goroutine. It checks the batch with `eventlog.Check`, appends it with `Store.Append`, applies each record, and publishes a new view. A command that needs durability replies after `Apply`. The store write is the only wait on disk in the actor.
 
@@ -426,9 +427,13 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 
 ### Children
 
-Children are planned; the schema holds `child.spawned` and `child.settled` today. A child is a session with `parent_id`. The parent holds a handle, not the child's state. When a child turn ends, the child sends `child.settled` to the parent, and the parent admits the outcome as an input with `source: child`. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
+A child is a session with `parent_id`. The `task` tool starts it in the background, as the Task tool of Claude Code starts a background subagent. The runtime adds the `task` tool only with a `WorkDir`. The parent holds the child ID, not the child's state. Task notifications become inputs; the separate checkout-and-commit queue is deleted.
 
-Tree limits (depth, concurrency, token budget) live in a per-root supervisor with its own state.
+- Spawn. The tool reads the agent profile (default `general-purpose`) and checks the tree limits. The parent actor appends `child.spawned`. Then the runtime creates the child in one append: `session.created` with `parent_id`, `agent`, the model and settings of the parent, and the allowed tools of the parent narrowed by the profile; the task as an input with `source: parent`; and the `turn.started` of that input. The tool returns the child ID at once. A child that fails to start settles `failed` with no input, and the tool call fails.
+- Settle. When a turn of a child ends, the child reports to its parent: `done` for a completed turn, `failed` for a failed or crashed turn, `canceled` for a stopped turn. The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child, as the Task tool of Claude Code returns. The parent appends `child.settled`, with the child turn ID as `result_ref`, and the report as an input with `source: child`, in one append. An idle parent starts a turn with it; a busy parent queues it. A child settles once, so a later report changes nothing. Each turn end of a child reports, and the runtime opens a parent that it does not run, so a later input to a settled child opens its parent again.
+- Crash and handoff. Each session follows its own rules. A child that a handoff suspended resumes when it opens. A crashed child turn ends `crashed` and settles `failed`. When a parent opens, it settles each unsettled child that has ended, because a crash can come between the `turn.ended` of the child and the `child.settled` of the parent. It settles a child with no log `failed` with no input, and opens each other child, which reports when its turn ends. No tool call runs again.
+- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned. A child that a parent opens after a restart does not count. A spawn past either limit fails the tool call. `HARNESS_MAX_TASK_DEPTH` and `HARNESS_MAX_CONCURRENT_TASKS` set the keys through `ApplyEnv`.
+- A client sends an input to a child, or interrupts it, as it does any session. There is no tree interrupt, no token budget, and no `send`, `status`, `cancel`, or `log` action. At the switch, the `contract_children` rows are the oracle; the cancel-tree row waits for `interrupt {tree}`.
 
 ### Shutdown
 
@@ -626,7 +631,7 @@ type Toolset struct {
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session.
 
-Agent profiles are planned with children. A profile names a kind of child: `name`, `description`, `tools`, `model`, and a prompt body, in Claude Code's agent frontmatter so one file serves every backend. `internal/prompt` loads them from `<workdir>/.agents`. `Spawn(child{agent})` sets the profile's `tools` as the child's `AllowedTools`, which `turn.Restrict` applies, and adds the prompt body as a prompt segment.
+Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `<workdir>/.agents/*.md` at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. Tool names differ by backend, so a spawn keeps only the names of a profile that the child has: a runtime tool or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid, or that repeats a name, is skipped with a WARN log line. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child, which the child reads at its first turn after it opens.
 
 ### MCP tools
 
@@ -818,7 +823,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; large-result retention and `read_tool_result` in `internal/toolresult` | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |

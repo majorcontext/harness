@@ -108,3 +108,56 @@ func TestBuild(t *testing.T) {
 		})
 	}
 }
+
+// readOnly are the read-only file tools of the native and Claude Code backends.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep"}
+
+func TestProfiles(t *testing.T) {
+	agent := func(fm, body string) string { return "---\n" + fm + "\n---\n\n" + body + "\n" }
+	builtins := prompt.Profiles("")
+	gp, explore, plan := builtins[prompt.GeneralPurpose], builtins["explore"], builtins["plan"]
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  []prompt.Profile
+	}{
+		{name: "general-purpose, explore, and plan are built in",
+			want: []prompt.Profile{gp, {Name: "explore", Description: explore.Description, Tools: readOnly, Prompt: explore.Prompt},
+				{Name: "plan", Description: plan.Description, Tools: readOnly, Prompt: plan.Prompt}}},
+		{name: "a Claude Code agent file is a profile",
+			files: map[string]string{".agents/reader.md": agent("name: reader\ndescription: Reads.\ntools: ls, grep\nmodel: inherit\ncolor: blue", "Only read.")},
+			want:  []prompt.Profile{gp, explore, plan, {Name: "reader", Description: "Reads.", Tools: []string{"ls", "grep"}, Prompt: "Only read."}}},
+		{name: "a file with no tools allows every tool and names its model",
+			files: map[string]string{".agents/fast.md": agent("name: fast\ndescription: Quick.\nmodel: test/small", "Hurry.")},
+			want:  []prompt.Profile{{Name: "fast", Description: "Quick.", Model: "test/small", Prompt: "Hurry."}, gp, explore, plan}},
+		{name: "a file can replace general-purpose",
+			files: map[string]string{".agents/gp.md": agent("name: general-purpose\ndescription: Mine.", "Custom.")},
+			want:  []prompt.Profile{{Name: "general-purpose", Description: "Mine.", Prompt: "Custom."}, explore, plan}},
+		{name: "a bad file, a subdirectory, and a file that is not markdown are skipped",
+			files: map[string]string{".agents/x.md": agent("name: x\ndescription: X.\nhooks: y", "B"), ".agents/y.md": agent("description: Y.", "B"),
+				".agents/z.md": "no frontmatter", ".agents/skills/s/SKILL.md": skillFile("s", "S."), ".agents/n.txt": agent("name: n\ndescription: N.", "B")},
+			want: []prompt.Profile{gp, explore, plan}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, body := range tc.files {
+				p := filepath.Join(root, name)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := prompt.Profiles(root)
+			if len(got) != len(tc.want) {
+				t.Fatalf("Profiles = %+v, want %+v", got, tc.want)
+			}
+			for _, w := range tc.want {
+				if g := got[w.Name]; g.Name != w.Name || g.Description != w.Description || g.Model != w.Model || g.Prompt != w.Prompt || !slices.Equal(g.Tools, w.Tools) {
+					t.Errorf("profile %s = %+v, want %+v", w.Name, g, w)
+				}
+			}
+		})
+	}
+}

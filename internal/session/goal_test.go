@@ -70,10 +70,10 @@ func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *ato
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	cfg := Config{ID: "s1", Log: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: func(f func()) { wg.Go(func() { live.Add(1); defer live.Add(-1); f() }) }, Done: func() {}, Prompt: func() string { return "" }}
+	cfg := Config{ID: "s1", Log: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: func(f func()) { wg.Go(func() { live.Add(1); defer live.Add(-1); f() }) }, Done: func() {}, Prompt: func(string) string { return "" }}
 	open := func() (*Actor, error) { return Open(ctx, cfg) }
 	if create {
-		open = func() (*Actor, error) { return Create(ctx, cfg, eventlog.SessionCreated{Model: "m/m"}) }
+		open = func() (*Actor, error) { return Create(ctx, cfg, eventlog.SessionCreated{Model: "m/m"}, nil) }
 	}
 	a, err := open()
 	if err != nil {

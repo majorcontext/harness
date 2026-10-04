@@ -28,6 +28,7 @@ func (c *Config) validateFile() error {
 		validateEventSink(c.EventSink),
 		validateSessionSync(c.SessionSync),
 		validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold),
+		c.validateTaskLimits(),
 	)
 }
 
@@ -83,6 +84,16 @@ func (p ProcessSpec) Validate() error {
 func validatePort(port int) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port %d out of range (1-65535)", port)
+	}
+	return nil
+}
+
+func (c *Config) validateTaskLimits() error {
+	switch {
+	case c.MaxTaskDepth < 0:
+		return fmt.Errorf("max_task_depth must not be negative, got %d", c.MaxTaskDepth)
+	case c.MaxConcurrentTasks < 0:
+		return fmt.Errorf("max_concurrent_tasks must not be negative, got %d", c.MaxConcurrentTasks)
 	}
 	return nil
 }
