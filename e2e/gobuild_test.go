@@ -28,3 +28,13 @@ func goBuild(root, outDir string) error {
 	}
 	return nil
 }
+
+// binaries returns the binaries that the parent of a pending-row run built, or
+// builds them. A child of a pending-row run also takes the shorter wait bound.
+func binaries() (string, func(), error) {
+	if bin := os.Getenv(pendingBinEnv); bin != "" {
+		waitBound = pendingWaitBound
+		return bin, func() {}, nil
+	}
+	return buildHarness()
+}

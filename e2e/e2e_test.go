@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, "e2e: coverage setup:", err)
 			os.Exit(1)
 		}
-		bin, cleanup, err := buildHarness()
+		bin, cleanup, err := binaries()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "e2e: building harness:", err)
 			os.Exit(1)
