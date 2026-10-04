@@ -423,29 +423,27 @@ func (b blocking) Acquire(ctx context.Context, _ string) (harness.Ownership, err
 	return nil, ctx.Err()
 }
 
-func TestCloseEndsAnOpenThatWaitsForOwnership(t *testing.T) {
+func TestCloseEndsAnInputThatWaitsForOwnership(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := blocking{entered: make(chan struct{})}
 		r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: b}, newFake())
 		if err != nil {
 			t.Fatal(err)
 		}
-		opened := make(chan error, 1)
-		go func() { _, err := r.Open(bg, "s1"); opened <- err }()
+		rec, done := httptest.NewRecorder(), make(chan struct{})
+		go func() {
+			r.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)))
+			close(done)
+		}()
 		<-b.entered
 		ctx, cancel := context.WithCancel(bg)
 		cancel()
 		if err := r.Close(ctx); !errors.Is(err, context.Canceled) {
 			t.Fatalf("Close = %v, want context.Canceled", err)
 		}
-		synctest.Wait()
-		select {
-		case err := <-opened:
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("Open = %v, want context.Canceled", err)
-			}
-		default:
-			t.Fatal("Open still waits for ownership after Close returned")
+		<-done
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), protocol.CodeDraining) {
+			t.Fatalf("POST inputs = %d %s, want 503 %s", rec.Code, rec.Body, protocol.CodeDraining)
 		}
 	})
 }

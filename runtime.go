@@ -344,7 +344,13 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		return nil, err
 	}
 	own, err := r.owner.Acquire(ctx, id)
-	if err != nil {
+	switch {
+	case err == nil:
+	case r.base.Err() != nil:
+		return nil, ErrDraining
+	case ctx.Err() != nil:
+		return nil, err
+	default:
 		return nil, fmt.Errorf("%w: %w", ErrSessionNotOwned, err)
 	}
 	var c eventlog.SessionCreated
