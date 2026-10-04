@@ -312,3 +312,10 @@ func TestDirGivesTheFallbackModelToAJournalThatNamesNone(t *testing.T) {
 		t.Errorf("model %q history %q, want %q", s.Model(), newTranscript(s), want)
 	}
 }
+
+func TestConvertMessageKeepsTheSubagentParent(t *testing.T) {
+	m := message.Message{Role: message.RoleAssistant, ParentToolUseID: "toolu_parent", Parts: message.Parts{&message.Text{Text: "inside"}}}
+	if got := convertMessage(m, map[string]string{}); got.ParentCallID != "toolu_parent" {
+		t.Errorf("converted ParentCallID = %q, want toolu_parent", got.ParentCallID)
+	}
+}

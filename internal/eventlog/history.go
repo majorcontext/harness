@@ -45,7 +45,7 @@ func (s *State) History() []Message {
 		out = append(out, Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: c.Summary}}})
 	}
 	for _, e := range s.history {
-		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
+		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
 	}
 	return out
 }

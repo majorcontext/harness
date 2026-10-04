@@ -96,3 +96,11 @@ func TestResolutionOutlivesTheRequest(t *testing.T) {
 		t.Error("Resolution(r2) found a request that never opened")
 	}
 }
+
+func TestHistoryKeepsTheSubagentParent(t *testing.T) {
+	sub := ItemCompleted{ItemID: "i1", TurnID: "t1", Message: Message{Role: RoleAssistant, ParentCallID: "toolu_p", Parts: []Part{{Type: PartText, Text: "inside"}}}}
+	h := replay(t, with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), sub)).History()
+	if len(h) != 2 || h[1].ParentCallID != "toolu_p" {
+		t.Errorf("History = %+v, want the subagent message with its parent", h)
+	}
+}

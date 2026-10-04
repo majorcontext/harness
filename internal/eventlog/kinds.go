@@ -45,7 +45,7 @@ const (
 )
 
 // Message is one completed conversation item. ParentCallID names the tool call
-// that started the subagent that wrote it. Only a client reads it.
+// that started the subagent that wrote it; no provider request carries it.
 type Message struct {
 	Role         string `json:"role"`
 	Parts        []Part `json:"parts"`
