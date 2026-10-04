@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -23,21 +24,20 @@ func NewWithBackends(opts Options, backends map[string]turn.Backend) (*Runtime, 
 		return nil, err
 	}
 	r.models.Close()
-	r.models.backends = backends
-	r.models.strict = false
+	r.models = backend.NewRouter(backends, false)
 	return r, nil
 }
 
 // PanicIn makes the operation of the control command op panic until t ends.
 func PanicIn(t testing.TB, o command.Op) {
 	prior := ops[o]
-	ops[o] = op{prior.method, prior.path, func(context.Context, *Session, map[string]any) (any, error) { panic("test panic") }}
+	ops[o] = func(context.Context, *Session, map[string]any) (any, error) { panic("test panic") }
 	t.Cleanup(func() { ops[o] = prior })
 }
 
 // SpawnChild runs the admission and the child.spawned append of a spawn of
 // child by the session id, which the runtime runs.
 func (r *Runtime) SpawnChild(ctx context.Context, id, child, agent string) error {
-	_, err := r.spawnChild(ctx, r.running(id), child, agent)
+	_, err := r.tree.SpawnChild(ctx, node(r.running(id)), child, agent)
 	return err
 }

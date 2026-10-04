@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/process"
 )
@@ -13,14 +14,14 @@ import (
 // box serves the routes of the box that hosts the runtime: its processes
 // and its work tree.
 func (h *handler[S]) box(mux *http.ServeMux) {
-	mux.HandleFunc("GET /processes", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+	h.handle(mux, "GET /processes", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		list := []process.Info{}
 		if h.procs != nil {
 			list = h.procs.List()
 		}
 		reply(w, http.StatusOK, list)
 		return nil
-	}))
+	}), command.OpProcessList)
 	for action, run := range map[string]func(Processes, context.Context, string) (process.Status, error){
 		"start": Processes.Start, "stop": Processes.Stop, "restart": Processes.Restart,
 	} {

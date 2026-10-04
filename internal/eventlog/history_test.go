@@ -103,3 +103,11 @@ func TestHistoryKeepsTheSubagentParent(t *testing.T) {
 		t.Errorf("History = %+v, want the subagent message with its parent", h)
 	}
 }
+
+func TestSteerMessageKeepsTheBlobPartsOfEachInput(t *testing.T) {
+	blob := Part{Type: PartBlob, MediaType: "image/png", BlobKey: "k", Bytes: 3}
+	m := SteerMessage([][]Part{{{Type: PartText, Text: "look"}, blob}, {blob}})
+	if !reflect.DeepEqual(m.Parts[1:], []Part{blob, blob}) || m.Parts[0].Type != PartText {
+		t.Errorf("SteerMessage parts = %+v, want the text, then each blob in order", m.Parts)
+	}
+}

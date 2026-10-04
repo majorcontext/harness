@@ -89,6 +89,8 @@ type Request struct {
 	// Banner is engine context that each model call sends after History[:BannerAt].
 	Banner   string
 	BannerAt int
+	// Blob reads the bytes of a blob part.
+	Blob func(ctx context.Context, key string) ([]byte, error)
 }
 
 // Delta is a piece of an item that is not complete yet.

@@ -186,3 +186,7 @@ func TestViewListsEachPluginWithItsState(t *testing.T) {
 		t.Errorf("List = %+v, %v; want the session with its plugin", page, err)
 	}
 }
+
+func lastText(req harnesstest.Request) string {
+	return req.Messages[len(req.Messages)-1].Parts[0].Text
+}

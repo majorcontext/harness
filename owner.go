@@ -20,8 +20,7 @@ type Ownership interface {
 	Release()
 }
 
-// ErrBusy reports an Acquire of a session that a grant already holds.
-var ErrBusy = errors.New("harness: session is busy")
+var errHeld = errors.New("harness: session is held")
 
 // localOwner grants every session to this process, one grant at a time.
 type localOwner struct {
@@ -38,7 +37,7 @@ func (o *localOwner) Acquire(ctx context.Context, session string) (Ownership, er
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.held[session] {
-		return nil, ErrBusy
+		return nil, errHeld
 	}
 	o.held[session] = true
 	return &localGrant{owner: o, session: session}, nil

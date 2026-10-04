@@ -35,6 +35,9 @@ type create struct {
 }
 type submit struct{ as, text string }
 type enqueue struct{ as, text string }
+
+// submitAttachments submits text with the PNG and the PDF of rowAttachments.
+type submitAttachments struct{ as, text string }
 type waitIdle struct{ as string }
 type interrupt struct{ as string }
 type setGoal struct {
@@ -104,7 +107,10 @@ func (a create) run(t *testing.T, r *run) {
 	r.aliases = append(r.aliases, a.as)
 	r.noIdle[a.as] = a.staysActive
 }
-func (a submit) run(t *testing.T, r *run)   { r.drv.Submit(t, r.id(t, a.as), a.text) }
+func (a submit) run(t *testing.T, r *run) { r.drv.Submit(t, r.id(t, a.as), a.text) }
+func (a submitAttachments) run(t *testing.T, r *run) {
+	r.drv.Attach(t, r.id(t, a.as), a.text, rowAttachments())
+}
 func (a enqueue) run(t *testing.T, r *run)  { r.drv.Enqueue(t, r.id(t, a.as), a.text) }
 func (a waitIdle) run(t *testing.T, r *run) { r.drv.WaitIdle(t, r.id(t, a.as)) }
 func (a interrupt) run(t *testing.T, r *run) {

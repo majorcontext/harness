@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/message"
@@ -64,61 +65,34 @@ func detach(s protocol.Session) protocol.Session {
 // Submit admits an input. It starts a turn when none runs and queues the
 // input otherwise. A steer input joins the running turn at its next item
 // boundary, and starts a turn on an idle session. A repeated input ID returns
-// the original receipt.
+// the original receipt with Repeat set; the verdict is atomic with the
+// admission. A typed slash command records command.recorded instead of an
+// input, and the receipt carries its status; see docs/architecture.md.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
-	a, _, err := s.Admit(ctx, in)
-	return a, err
-}
-
-// Admit is Submit that also reports whether in repeats an input that the
-// session already admitted. The verdict is atomic with the admission.
-// A typed slash command records command.recorded instead of an input, and
-// the receipt carries its status; see docs/architecture.md.
-func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) {
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
 		if err != nil {
-			return protocol.Admitted{}, false, err
+			return protocol.Admitted{}, err
 		}
 		if p != nil {
 			return s.command(ctx, p)
 		}
 		in = next
 	}
-	ev, err := admission(in)
+	ev, blobs, err := admit.Input(in)
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	for _, b := range blobs {
+		if err := s.r.store.PutBlob(ctx, s.id, b.Key, bytes.NewReader(b.Data)); err != nil {
+			return protocol.Admitted{}, err
+		}
 	}
 	seq, repeat, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, err
 	}
-	return protocol.Admitted{InputID: in.ID, Seq: seq}, repeat, nil
-}
-
-func admission(in protocol.Input) (eventlog.InputAdmitted, error) {
-	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source}
-	if ev.Delivery == "" {
-		ev.Delivery = eventlog.DeliveryQueue
-	}
-	if ev.Source == "" {
-		ev.Source = "user"
-	}
-	switch {
-	case in.ID == "":
-		return ev, fmt.Errorf("%w: input id is empty", ErrInvalidRequest)
-	case len(in.Parts) == 0:
-		return ev, fmt.Errorf("%w: input %s has no parts", ErrInvalidRequest, in.ID)
-	case ev.Delivery != eventlog.DeliveryQueue && ev.Delivery != eventlog.DeliverySteer:
-		return ev, fmt.Errorf("%w: input %s has delivery %q", ErrInvalidRequest, in.ID, in.Delivery)
-	}
-	for _, p := range in.Parts {
-		if p.Type != protocol.PartText {
-			return ev, fmt.Errorf("%w: input %s has part type %q", ErrInvalidRequest, in.ID, p.Type)
-		}
-		ev.Parts = append(ev.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
-	}
-	return ev, nil
+	return protocol.Admitted{InputID: in.ID, Seq: seq, Repeat: repeat}, nil
 }
 
 // Interrupt stops the running turn and returns after it has ended. The
@@ -131,7 +105,7 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 	if !req.Tree {
 		return stop(ctx)
 	}
-	return s.r.interruptTree(ctx, s.id, stop)
+	return s.r.tree.Interrupt(ctx, s.id, stop)
 }
 
 // Resolve answers or dismisses the open request requestID: with res.Answer, the

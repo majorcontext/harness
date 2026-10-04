@@ -29,10 +29,13 @@ const (
 	specChildResend   = "changes by design in one way: a later send is not refused"
 	specWaiting       = "| `waiting` | A turn ended `awaiting_input`; a request is open |"
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
+	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
 	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
+	specOpenGauge         = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
+	specOpenRetry         = "Does a failed Claude Code turn run again?"
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -55,6 +58,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_goal_met_first_turn":                                 reGolden(specItems),
 	"bifrost_goal_not_met_then_met":                               reGolden(specItems),
 	"bifrost_max_tokens_continuation":                             pendingOn(specOpenContinuation),
+	"bifrost_prompt_attachments":                                  reGolden(specItems),
 	"bifrost_reasoning_and_effort":                                reGolden(specItems, specUpdate),
 	"bifrost_text_reply":                                          reGolden(specItems),
 	"bifrost_tool_error_marker":                                   reGolden(specItems),
@@ -66,23 +70,24 @@ var runtimeRows = map[string]runtimeRow{
 	"busy_deferred_goal_with_max_turns":                           deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
-	"claudecode_compact_delegated":                                pendingOn("F20"),
+	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),
-	"claudecode_error_result_fails_turn":                          pendingOn("F20"),
+	"claudecode_error_result_fails_turn":                          reGolden(specView, specOpenRetry, specOpenGauge),
 	"claudecode_history_bridge_after_native_turn":                 reGolden(specUpdate),
-	"claudecode_interrupt_mid_turn":                               pendingOn("F20"),
+	"claudecode_interrupt_mid_turn":                               reGolden(specView),
 	"claudecode_question_dismissed_by_compact":                    reGolden(specWaiting, specView, specCompactResult),
 	"claudecode_question_dismissed_by_next_prompt":                reGolden(specWaiting, specView),
 	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specOpenAnswerReceipt),
 	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specOpenAnswerReceipt),
+	"claudecode_prompt_attachments":                               sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                  deletedBy(specQueue),
 	"claudecode_rate_limit_event_reaches_subscription_usage":      reGolden(specView),
 	"claudecode_resume_across_turns":                              sameAsServe(),
 	"claudecode_resume_survives_restart":                          sameAsServe(),
 	"claudecode_subagent_frames_keep_parent":                      sameAsServe(),
 	"claudecode_thinking_block_is_reasoning":                      reGolden(specExternal, specView),
-	"claudecode_turn_text_and_tool":                               pendingOn("F20"),
+	"claudecode_turn_text_and_tool":                               reGolden(specView, specOpenGauge),
 	"codex_http_mcp_tool_schema_is_sanitized":                     reGolden(specItems),
 	"codex_http_reasoning_replays_on_tool_round_trip":             reGolden(specItems),
 	"codex_http_sse_text_turn":                                    reGolden(specItems),

@@ -107,7 +107,7 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 	if prev, ok := a.state.Compaction(); ok {
 		c.FromSeq = prev.ToSeq + 1
 	}
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), History: folded}
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), History: folded, Blob: a.blob}
 	return req, c, true
 }
 

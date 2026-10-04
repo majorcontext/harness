@@ -22,6 +22,7 @@ const (
 	PartReasoning  = "reasoning"
 	PartToolCall   = "tool_call"
 	PartToolResult = "tool_result"
+	PartBlob       = "blob"
 )
 
 // Part is one piece of message or input content.
@@ -32,6 +33,11 @@ type Part struct {
 	Name      string          `json:"name,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	// MediaType, BlobKey, and Bytes describe a blob part: an attachment
+	// whose bytes the Store holds under BlobKey.
+	MediaType string `json:"media_type,omitempty"`
+	BlobKey   string `json:"blob_key,omitempty"`
+	Bytes     int    `json:"bytes,omitempty"`
 	// ProviderData holds the opaque, provider-tagged payload of a reasoning
 	// part, which the provider replays on the next request.
 	ProviderData map[string]json.RawMessage `json:"provider_data,omitempty"`

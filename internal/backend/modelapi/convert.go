@@ -1,14 +1,19 @@
 package modelapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 )
 
-func toMessage(m eventlog.Message) message.Message {
+// toMessage maps m to the provider message. A blob part reads its bytes through req.Blob.
+func toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (message.Message, error) {
 	out := message.Message{Role: message.Role(m.Role)}
 	for _, p := range m.Parts {
 		switch p.Type {
@@ -21,9 +26,22 @@ func toMessage(m eventlog.Message) message.Message {
 		case eventlog.PartToolResult:
 			out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError,
 				Content: message.Parts{&message.Text{Text: p.Text}}})
+		case eventlog.PartBlob:
+			data, err := readBlob(ctx, req, p.BlobKey)
+			if err != nil {
+				return message.Message{}, fmt.Errorf("modelapi: attachment %s: %w", p.BlobKey, err)
+			}
+			out.Parts = append(out.Parts, &message.Blob{MediaType: p.MediaType, Data: data})
 		}
 	}
-	return out
+	return out, nil
+}
+
+func readBlob(ctx context.Context, req turn.Request, key string) ([]byte, error) {
+	if req.Blob == nil {
+		return nil, errors.New("the request has no blob reader")
+	}
+	return req.Blob(ctx, key)
 }
 
 func fromMessage(m *message.Message) eventlog.Message {

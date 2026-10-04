@@ -114,7 +114,7 @@ var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep
 
 func TestProfiles(t *testing.T) {
 	agent := func(fm, body string) string { return "---\n" + fm + "\n---\n\n" + body + "\n" }
-	builtins := prompt.Profiles("")
+	builtins := prompt.Profiles(nil)
 	gp, explore, plan := builtins[prompt.GeneralPurpose], builtins["explore"], builtins["plan"]
 	for _, tc := range []struct {
 		name  string
@@ -149,7 +149,7 @@ func TestProfiles(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got := prompt.Profiles(root)
+			got := prompt.Profiles([]string{filepath.Join(root, ".agents")})
 			if len(got) != len(tc.want) {
 				t.Fatalf("Profiles = %+v, want %+v", got, tc.want)
 			}

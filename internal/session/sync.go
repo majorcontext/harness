@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -99,35 +98,36 @@ func (a *Actor) batch(from, head uint64) (*protocol.SyncBatch, error) {
 	return b, nil
 }
 
-// attachBlob adds the blob that r points to. A later save under the same
+// attachBlob adds each blob that r points to. A later save under the same
 // key overwrites the blob, so the batch carries its newest content.
 func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
 	env, err := eventlog.Decode(r.Data)
 	if err != nil {
 		return err
 	}
-	var key string
+	var keys []string
 	switch e := env.Event.(type) {
 	case eventlog.BackendState:
-		key = e.BlobKey
+		keys = []string{e.BlobKey}
 	case eventlog.ToolResultRetained:
-		key = e.BlobKey
-	default:
-		return nil
+		keys = []string{e.BlobKey}
+	case eventlog.InputAdmitted:
+		for _, p := range e.Parts {
+			if p.Type == eventlog.PartBlob {
+				keys = append(keys, p.BlobKey)
+			}
+		}
 	}
-	rc, err := a.cfg.Store.GetBlob(a.cfg.Base, key)
-	if err != nil {
-		return err
+	for _, key := range keys {
+		data, err := a.blob(a.cfg.Base, key)
+		if err != nil {
+			return err
+		}
+		if b.Blobs == nil {
+			b.Blobs = map[string][]byte{}
+		}
+		b.Blobs[key] = data
 	}
-	defer func() { _ = rc.Close() }()
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return err
-	}
-	if b.Blobs == nil {
-		b.Blobs = map[string][]byte{}
-	}
-	b.Blobs[key] = data
 	return nil
 }
 

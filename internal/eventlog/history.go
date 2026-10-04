@@ -24,17 +24,21 @@ type entry struct {
 // to address them and then to continue its task.
 func SteerMessage(inputs [][]Part) Message {
 	var b strings.Builder
+	var blobs []Part
 	b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 	for i, parts := range inputs {
 		var text []string
 		for _, p := range parts {
-			if p.Type == PartText {
+			switch p.Type {
+			case PartText:
 				text = append(text, p.Text)
+			case PartBlob:
+				blobs = append(blobs, p)
 			}
 		}
 		fmt.Fprintf(&b, "%d. %s\n", i+1, strings.Join(text, "\n"))
 	}
-	return Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: b.String()}}}
+	return Message{Role: RoleUser, Parts: append([]Part{{Type: PartText, Text: b.String()}}, blobs...)}
 }
 
 // History returns the conversation that the model sees: the summary of the

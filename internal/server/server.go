@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
@@ -21,7 +22,7 @@ import (
 // Session is a session that the Runtime runs.
 type Session interface {
 	View() protocol.Session
-	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
+	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
 	Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
@@ -78,7 +79,9 @@ type Code struct {
 }
 
 const (
-	maxBody      = 8 << 20
+	maxBody = 8 << 20
+	// maxInputBody holds one attachment at its limit, as base64, and its text.
+	maxInputBody = 32 << 20
 	defaultLimit = 100
 	maxLimit     = 1000
 )
@@ -109,25 +112,38 @@ type handler[S Session] struct {
 	codes   []Code
 	workDir string
 	procs   Processes
+	// routes names the route that runs each control command.
+	routes map[command.Op]route
+}
+
+type route struct{ method, path string }
+
+// handle registers f at pattern, "METHOD path", as the route of each op.
+func (h *handler[S]) handle(mux *http.ServeMux, pattern string, f http.HandlerFunc, ops ...command.Op) {
+	mux.HandleFunc(pattern, f)
+	method, path, _ := strings.Cut(pattern, " ")
+	for _, op := range ops {
+		h.routes[op] = route{method, path}
+	}
 }
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
 		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sessions", h.serve(h.create))
 	mux.HandleFunc("GET /sessions", h.serve(h.list))
-	mux.HandleFunc("GET /sessions/{id}", h.serve(h.view))
-	mux.HandleFunc("PATCH /sessions/{id}", h.session(h.update))
+	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
+	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
-	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
-	mux.HandleFunc("POST /sessions/{id}/compact", h.session(h.compact))
+	h.handle(mux, "POST /sessions/{id}/interrupt", h.session(h.interrupt), command.OpAbort)
+	h.handle(mux, "POST /sessions/{id}/compact", h.session(h.compact), command.OpCompact)
 	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
-	mux.HandleFunc("PUT /sessions/{id}/goal", h.session(h.setGoal))
-	mux.HandleFunc("DELETE /sessions/{id}/goal", h.session(h.clearGoal))
+	h.handle(mux, "PUT /sessions/{id}/goal", h.session(h.setGoal), command.OpSetGoal)
+	h.handle(mux, "DELETE /sessions/{id}/goal", h.session(h.clearGoal), command.OpClearGoal)
 	mux.HandleFunc("GET /sessions/{id}/events", h.serve(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
@@ -138,6 +154,10 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 		c, err := rt.Commands()
 		if err != nil {
 			return err
+		}
+		for i, e := range c.Commands {
+			at := h.routes[command.Op(e.Op)]
+			c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
 		}
 		reply(w, http.StatusOK, c)
 		return nil
@@ -237,9 +257,9 @@ func replyRaw(w http.ResponseWriter, v any) {
 	_ = enc.Encode(v)
 }
 
-// decode reads the JSON body into v. An empty body leaves v as is.
-func decode(w http.ResponseWriter, r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+// decode reads the JSON body of at most limit bytes into v. An empty body leaves v as is.
+func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -273,7 +293,7 @@ func limit(r *http.Request) (int, error) {
 
 func (h *handler[S]) create(w http.ResponseWriter, r *http.Request) error {
 	var req protocol.CreateSession
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	s, err := h.rt.Create(r.Context(), req)
@@ -308,7 +328,7 @@ func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
 
 func (h *handler[S]) update(s S, w http.ResponseWriter, r *http.Request) error {
 	var p protocol.SettingsPatch
-	if err := decode(w, r, &p); err != nil {
+	if err := decode(w, r, &p, maxBody); err != nil {
 		return err
 	}
 	v, err := s.Update(r.Context(), p)
@@ -322,14 +342,14 @@ func (h *handler[S]) update(s S, w http.ResponseWriter, r *http.Request) error {
 // submit answers 201 for a new input and 200 for a repeat.
 func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	var in protocol.Input
-	if err := decode(w, r, &in); err != nil {
+	if err := decode(w, r, &in, maxInputBody); err != nil {
 		return err
 	}
-	a, repeat, err := s.Admit(r.Context(), in)
+	a, err := s.Submit(r.Context(), in)
 	if err != nil {
 		return err
 	}
-	if repeat {
+	if a.Repeat {
 		reply(w, http.StatusOK, a)
 		return nil
 	}
@@ -339,7 +359,7 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 
 func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) error {
 	var req protocol.Interrupt
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	if err := s.Interrupt(r.Context(), req); err != nil {
@@ -351,7 +371,7 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 
 func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
 	var req protocol.Compact
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	c, err := s.Compact(r.Context(), req)
@@ -364,7 +384,7 @@ func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error 
 
 func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error {
 	var res protocol.Resolution
-	if err := decode(w, r, &res); err != nil {
+	if err := decode(w, r, &res, maxBody); err != nil {
 		return err
 	}
 	if err := s.Resolve(r.Context(), r.PathValue("request"), res); err != nil {
@@ -376,7 +396,7 @@ func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error 
 
 func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error {
 	var g protocol.Goal
-	if err := decode(w, r, &g); err != nil {
+	if err := decode(w, r, &g, maxBody); err != nil {
 		return err
 	}
 	if err := s.SetGoal(r.Context(), g); err != nil {

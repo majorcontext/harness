@@ -1,0 +1,108 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "This session is being continued from a previous conversation ..."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "run it",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "/compact",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        },
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": "fake-session-1",
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        }
+      ]
+    },
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "by_backend": true,
+        "folded": true
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "compaction_count": 2,
+        "context": {
+          "tokens": 0,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "journal_events.a": {
+      "status": 200,
+      "body": [
+        {
+          "by_backend": true,
+          "type": "compaction.applied"
+        },
+        {
+          "by_backend": true,
+          "type": "compaction.applied"
+        }
+      ]
+    }
+  }
+}

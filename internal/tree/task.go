@@ -1,4 +1,4 @@
-package harness
+package tree
 
 import (
 	"cmp"
@@ -49,9 +49,13 @@ var taskActions = []string{"spawn", "cancel", "status", "send", "log"}
 // taskTool starts and manages the descendants of the session parent. The
 // runtime binds parent when the session starts.
 type taskTool struct {
-	r      *Runtime
+	tree   *Tree
 	parent string
 }
+
+// Tool returns the task tool of the sessions of t. Its Bind method gives the
+// tool to one session, as the runtime asks of a session tool.
+func (t *Tree) Tool() turn.Tool { return taskTool{tree: t} }
 
 type taskArgs struct {
 	Action, Agent, Prompt string
@@ -59,12 +63,15 @@ type taskArgs struct {
 	Tail                  int
 }
 
-func (t taskTool) bind(id string, _ bool) turn.Tool { t.parent = id; return t }
+// Bind returns the tool of session id.
+func (t taskTool) Bind(id string, _ bool) turn.Tool { t.parent = id; return t }
 
+// Spec returns the definition of the task tool.
 func (taskTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "task", Description: taskDescription, InputSchema: json.RawMessage(taskSchema)}
 }
 
+// Run runs one action of the task tool.
 func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in taskArgs
 	if err := json.Unmarshal(c.Arguments, &in); err != nil {
@@ -110,12 +117,9 @@ func (t taskTool) act(ctx context.Context, in taskArgs, up []string) (any, error
 // descendant returns the ancestors of session id, nearest first, when the
 // session of the tool is one of them.
 func (t taskTool) descendant(ctx context.Context, id string) ([]string, error) {
-	if checkName("session", id) != nil {
-		return nil, fmt.Errorf("no such session %q", id)
-	}
-	up, err := t.r.ancestors(ctx, id)
+	up, err := t.tree.ancestors(ctx, id)
 	switch {
-	case errors.Is(err, ErrSessionNotFound):
+	case errors.Is(err, session.ErrNotFound):
 		return nil, fmt.Errorf("no such session %q", id)
 	case err != nil:
 		return nil, err
@@ -130,7 +134,7 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 		return nil, errors.New("prompt is required")
 	}
 	in.Agent = cmp.Or(in.Agent, prompt.GeneralPurpose)
-	id, err := t.r.spawn(ctx, t.parent, in.Agent, in.Prompt)
+	id, err := t.tree.spawn(ctx, t.parent, in.Agent, in.Prompt)
 	return struct {
 		SessionID string `json:"session_id"`
 		Agent     string `json:"agent"`
@@ -141,10 +145,10 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 // cancel stops session id and each of its descendants, and withdraws
 // their queued inputs. The report of session id reaches its parent.
 func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
-	if err := t.r.interruptTree(ctx, id, func(ctx context.Context) error { return t.r.cancelTurn(ctx, id) }); err != nil {
+	if err := t.tree.Interrupt(ctx, id, func(ctx context.Context) error { return t.tree.cancelTurn(ctx, id) }); err != nil {
 		return nil, err
 	}
-	k, err := t.r.child(ctx, id, 0)
+	k, err := t.tree.child(ctx, id, 0)
 	return struct {
 		SessionID string `json:"session_id"`
 		Status    string `json:"status"`
@@ -152,7 +156,7 @@ func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
 }
 
 func (t taskTool) status(ctx context.Context, id string, up []string) (any, error) {
-	k, err := t.r.child(ctx, id, 0)
+	k, err := t.tree.child(ctx, id, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +181,7 @@ func (t taskTool) send(ctx context.Context, in taskArgs, up []string) (any, erro
 	if text == "" {
 		return nil, errors.New(`prompt is required for action "send"`)
 	}
-	queued, err := t.r.send(ctx, up, in.SessionID, text)
+	queued, err := t.tree.send(ctx, up, in.SessionID, text)
 	note := "the descendant was not actively running, so this was dispatched as a fresh turn with your message; " +
 		"check back with task status on this session_id if you want to confirm it actually started"
 	if queued {
@@ -196,7 +200,7 @@ func (t taskTool) log(ctx context.Context, in taskArgs) (any, error) {
 	if in.Tail < 0 {
 		return nil, errors.New(`tail must not be negative for action "log"`)
 	}
-	k, err := t.r.child(ctx, in.SessionID, min(cmp.Or(in.Tail, logTail), logMaxTail))
+	k, err := t.tree.child(ctx, in.SessionID, min(cmp.Or(in.Tail, logTail), logMaxTail))
 	if err != nil {
 		return nil, err
 	}
@@ -227,9 +231,9 @@ type childView struct {
 // child reads session id, with the newest tail messages of its conversation.
 // Its status is running until its last turn ends, then the outcome that it
 // reports to its parent.
-func (r *Runtime) child(ctx context.Context, id string, tail int) (childView, error) {
+func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error) {
 	k := childView{status: "running"}
-	err := r.read(ctx, id, func(st *eventlog.State) {
+	err := t.s.Read(ctx, id, func(st *eventlog.State) {
 		k.usage, k.children, k.agent = st.Usage(), append([]string{}, st.Children()...), st.Agent()
 		if tail > 0 {
 			h := st.History()
@@ -256,96 +260,34 @@ func (r *Runtime) child(ctx context.Context, id string, tail int) (childView, er
 // send admits text to child as an input with source parent. When the
 // parent of child has settled it, the parent spawns it again first, so the
 // child reports the turn that text starts. queued reports a running turn.
-func (r *Runtime) send(ctx context.Context, up []string, child, text string) (bool, error) {
-	c, err := r.Open(ctx, child)
+func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool, error) {
+	c, err := t.s.Open(ctx, child)
 	if err != nil {
 		return false, err
 	}
-	p, err := r.Open(ctx, up[0])
+	p, err := t.s.Open(ctx, up[0])
 	if err != nil {
 		return false, err
 	}
 	select {
-	case <-p.recovered:
+	case <-p.Recovered:
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}
-	rearm := !slices.Contains(p.a.View().Unsettled, child)
+	rearm := !slices.Contains(p.Actor.View().Unsettled, child)
 	if rearm {
-		if _, err := r.spawnChild(ctx, p, child, c.a.View().Agent); err != nil {
+		if _, err := t.SpawnChild(ctx, p, child, c.Actor.View().Agent); err != nil {
 			return false, err
 		}
 	}
-	queued := c.View().TurnID != ""
-	in := eventlog.InputAdmitted{InputID: "input_" + newSuffix(), Delivery: eventlog.DeliverySteer, Source: "parent",
+	queued := c.Actor.View().Session.TurnID != ""
+	in := eventlog.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: eventlog.DeliverySteer, Source: "parent",
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
-	if _, _, err := c.a.Submit(ctx, in, ""); err != nil {
+	if _, _, err := c.Actor.Submit(ctx, in, ""); err != nil {
 		if rearm {
-			err = errors.Join(err, p.a.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, ""))
+			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, ""))
 		}
 		return false, err
 	}
 	return queued, nil
-}
-
-// cancelTurn withdraws the queued inputs of session id and stops its turn,
-// when this runtime runs it.
-func (r *Runtime) cancelTurn(ctx context.Context, id string) error {
-	s := r.loaded(ctx, id)
-	if s == nil {
-		return nil
-	}
-	if err := s.a.Cancel(ctx); !errors.Is(err, ErrSessionNotOwned) {
-		return err
-	}
-	return nil
-}
-
-// interruptTree stops session id by stop, then each descendant that this
-// runtime runs, and withdraws the queued inputs of each descendant. It
-// silences the children of each session before it stops that session, so
-// no parent inside the tree starts a turn on a report. The walk outlives
-// ctx, so a caller that leaves does not stop half of a tree.
-func (r *Runtime) interruptTree(ctx context.Context, id string, stop func(context.Context) error) error {
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancel()
-	defer context.AfterFunc(r.base, cancel)()
-	quiet := map[string]bool{}
-	defer func() {
-		for kid := range quiet {
-			r.sup.silence(kid, -1)
-		}
-	}()
-	return r.stopTree(ctx, id, stop, quiet)
-}
-
-func (r *Runtime) stopTree(ctx context.Context, id string, stop func(context.Context) error, quiet map[string]bool) error {
-	silence := func() ([]string, error) {
-		var kids []string
-		err := r.read(ctx, id, func(st *eventlog.State) { kids = st.Children() })
-		if errors.Is(err, ErrSessionNotFound) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		for _, kid := range kids {
-			if !quiet[kid] {
-				quiet[kid] = true
-				r.sup.silence(kid, 1)
-			}
-		}
-		return kids, nil
-	}
-	if _, err := silence(); err != nil {
-		return err
-	}
-	if err := stop(ctx); err != nil {
-		return err
-	}
-	kids, err := silence()
-	for _, kid := range kids {
-		err = errors.Join(err, r.stopTree(ctx, kid, func(ctx context.Context) error { return r.cancelTurn(ctx, kid) }, quiet))
-	}
-	return err
 }

@@ -12,11 +12,11 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 )
 
-// sessionTool is a runtime tool that belongs to one session. bind returns
+// sessionTool is a runtime tool that belongs to one session. Bind returns
 // the tool for session id, or nil when that session does not get it.
 type sessionTool interface {
 	turn.Tool
-	bind(id string, child bool) turn.Tool
+	Bind(id string, child bool) turn.Tool
 }
 
 // known reports whether a session at model can have a tool named name: a
@@ -48,7 +48,7 @@ func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session) turn.So
 	var static []turn.Tool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
-			if t = b.bind(id, child); t == nil {
+			if t = b.Bind(id, child); t == nil {
 				continue
 			}
 		}

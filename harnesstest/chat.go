@@ -59,8 +59,26 @@ type chatToolCall struct {
 }
 
 type chatContentPart struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL struct {
+		URL string `json:"url"`
+	} `json:"image_url"`
+}
+
+// chatImages is the URL of each image part, in order.
+func chatImages(raw json.RawMessage) []string {
+	var parts []chatContentPart
+	if json.Unmarshal(raw, &parts) != nil {
+		return nil
+	}
+	var urls []string
+	for _, p := range parts {
+		if p.Type == "image_url" {
+			urls = append(urls, p.ImageURL.URL)
+		}
+	}
+	return urls
 }
 
 func chatText(raw json.RawMessage) string {
@@ -112,7 +130,11 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 		case "system":
 			system = append(system, chatText(m.Content))
 		case "user":
-			req.Messages = append(req.Messages, Message{Role: "user", Parts: []Part{{Kind: "text", Text: chatText(m.Content)}}})
+			msg := Message{Role: "user", Parts: []Part{{Kind: "text", Text: chatText(m.Content)}}}
+			for _, url := range chatImages(m.Content) {
+				msg.Parts = append(msg.Parts, Part{Kind: "image", Text: url})
+			}
+			req.Messages = append(req.Messages, msg)
 		case "assistant":
 			msg := Message{Role: "assistant"}
 			if text := chatText(m.Content); text != "" {

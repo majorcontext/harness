@@ -83,7 +83,7 @@ type Message struct {
 
 // Part is one content block of a Message.
 type Part struct {
-	Kind      string // "text" | "tool_use" | "tool_result"
+	Kind      string // "text" | "tool_use" | "tool_result" | "image" (chat wire only; Text is its URL)
 	Text      string
 	ToolName  string
 	ToolInput map[string]any

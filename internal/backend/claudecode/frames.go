@@ -3,6 +3,7 @@ package claudecode
 import (
 	"cmp"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -234,17 +235,53 @@ type input struct {
 }
 
 type inputMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role string `json:"role"`
+	// Content is the text of a message with no attachment, else its content
+	// blocks: the text, then one image or document block for each attachment.
+	Content any `json:"content"`
 }
 
-// userLine is the stdin line of one user message.
-func userLine(m eventlog.Message) input {
+type contentBlock struct {
+	Type   string       `json:"type"`
+	Text   string       `json:"text,omitempty"`
+	Source *blockSource `json:"source,omitempty"`
+}
+
+// blockSource is the inline base64 payload of an attachment block.
+type blockSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
+// userLine is the stdin line of one user message. read returns the bytes of
+// an attachment.
+func userLine(m eventlog.Message, read func(key string) ([]byte, error)) (input, error) {
 	var texts []string
+	var attachments []contentBlock
 	for _, p := range m.Parts {
-		if p.Type == eventlog.PartText {
+		switch p.Type {
+		case eventlog.PartText:
 			texts = append(texts, p.Text)
+		case eventlog.PartBlob:
+			data, err := read(p.BlobKey)
+			if err != nil {
+				return input{}, fmt.Errorf("claudecode: attachment %s: %w", p.BlobKey, err)
+			}
+			kind := "document"
+			if strings.HasPrefix(p.MediaType, "image/") {
+				kind = "image"
+			}
+			attachments = append(attachments, contentBlock{Type: kind, Source: &blockSource{Type: "base64", MediaType: p.MediaType, Data: data}})
 		}
 	}
-	return input{Type: "user", Message: inputMessage{Role: "user", Content: strings.Join(texts, "\n\n")}}
+	text := strings.Join(texts, "\n\n")
+	var content any = text
+	switch {
+	case len(attachments) > 0 && text == "":
+		content = attachments
+	case len(attachments) > 0:
+		content = append([]contentBlock{{Type: "text", Text: text}}, attachments...)
+	}
+	return input{Type: "user", Message: inputMessage{Role: "user", Content: content}}, nil
 }

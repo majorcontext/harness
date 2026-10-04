@@ -20,6 +20,61 @@ linters:
               desc: internal packages never import server
             - pkg: github.com/majorcontext/harness/cmd
               desc: internal packages never import cmd
+        eventlog-leaf:
+          files:
+            - "**/internal/eventlog/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness/internal/eventlog
+            - github.com/majorcontext/harness/protocol
+        turn-seam:
+          files:
+            - "**/internal/turn/**"
+          list-mode: strict
+          allow:
+            - $gostd
+            - github.com/majorcontext/harness/internal/eventlog
+            - github.com/majorcontext/harness/internal/turn
+            - github.com/majorcontext/harness/protocol
+        backend-and-tool-below-session:
+          files:
+            - "**/internal/backend/**"
+            - "**/internal/tool/**"
+          deny:
+            - pkg: github.com/majorcontext/harness/internal/session
+              desc: backends and tools sit below the session actor
+            - pkg: github.com/majorcontext/harness/internal/tree
+              desc: backends and tools sit below the child tree
+            - pkg: github.com/majorcontext/harness/internal/server
+              desc: backends and tools sit below the HTTP mapping
+        internal-new-stack:
+          files:
+            - "**/internal/**"
+          deny:
+            - pkg: github.com/majorcontext/harness/engine
+              desc: internal packages never import the engine
+            - pkg: github.com/majorcontext/harness/provider/claudecode
+              desc: the claudecode backend does not use the engine provider
+        provider-wires:
+          files:
+            - $all
+            - "!**/internal/backend/**"
+            - "!**/provider/**"
+            - "!**/engine/**"
+            - "!**/server/**"
+            - "!**/cmd/**"
+            - "!**/e2e/**"
+            - "!**/harnesstest/**"
+            - "!**/examples/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/majorcontext/harness/provider/anthropic
+              desc: only internal/backend builds a provider wire
+            - pkg: github.com/majorcontext/harness/provider/openai
+              desc: only internal/backend builds a provider wire
+            - pkg: github.com/majorcontext/harness/provider/openaicompat
+              desc: only internal/backend builds a provider wire
         config-leaf:
           files:
             - "**/config/**"

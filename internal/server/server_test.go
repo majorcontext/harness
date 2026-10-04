@@ -267,7 +267,7 @@ func TestErrorsOverHTTP(t *testing.T) {
 		{"PATCH", s1, `{"model":"codex/no-such-model"}`, 409, protocol.CodeModelUnavailable},
 		{"POST", s1 + "/inputs", `{"id":"a","parts":[{"type":"text","text":"other"}]}`, 409, protocol.CodeInputConflict},
 		{"POST", s1 + "/interrupt", `{"turn_id":"turn_x"}`, 409, protocol.CodeTurnMismatch},
-		{"POST", s1 + "/inputs", `{"id":"b","parts":[{"type":"text","text":"` + strings.Repeat("x", 9<<20) + `"}]}`, 413, protocol.CodePayloadTooLarge},
+		{"POST", s1 + "/inputs", `{"id":"b","parts":[{"type":"text","text":"` + strings.Repeat("x", 33<<20) + `"}]}`, 413, protocol.CodePayloadTooLarge},
 		{"CLOSE", base, `{"model":"codex/gpt-6-sol"}`, 503, protocol.CodeDraining},
 	} {
 		if tc.method == "CLOSE" {
@@ -326,8 +326,10 @@ func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session,
 	return s.View(), nil
 }
 func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { return nil }
-func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, bool, error) {
-	return s.receipt, s.repeat, nil
+func (s stub) Submit(context.Context, protocol.Input) (protocol.Admitted, error) {
+	r := s.receipt
+	r.Repeat = s.repeat
+	return r, nil
 }
 
 // reader is a stub as a server.Reader.
@@ -356,6 +358,14 @@ func TestSubmitStatusFollowsTheSessionVerdict(t *testing.T) {
 		want(t, fmt.Sprintf("status with repeat=%v", repeat),
 			call(t, "POST", srv.URL+"/sessions/s1/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil), status)
 	}
+}
+
+func TestAnInputBodyMayHoldAnAttachmentOfTheAdmissionLimit(t *testing.T) {
+	srv := httptest.NewServer(server.New(stub{receipt: protocol.Admitted{InputID: "a", Seq: 5}}, server.Options{}))
+	t.Cleanup(srv.Close)
+	body := `{"id":"a","parts":[{"type":"blob","media_type":"application/pdf","data":"` + strings.Repeat("QUJD", 12<<18) + `"}]}`
+	want(t, "an input of 12 MiB", call(t, "POST", srv.URL+"/sessions/s1/inputs", body, nil), http.StatusCreated)
+	want(t, "another body of 12 MiB", call(t, "PATCH", srv.URL+"/sessions/s1", `{"model":"`+strings.Repeat("x", 12<<20)+`"}`, nil), http.StatusRequestEntityTooLarge)
 }
 
 func TestResolveOverHTTP(t *testing.T) {

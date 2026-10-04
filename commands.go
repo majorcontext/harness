@@ -12,53 +12,50 @@ import (
 
 	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
-// op runs the operation of a control command. method and path name the
-// route of the same operation, or are empty.
-type op struct {
-	method, path string
-	run          func(ctx context.Context, s *Session, args map[string]any) (any, error)
-}
+// op runs the operation of a control command.
+type op func(ctx context.Context, s *Session, args map[string]any) (any, error)
 
-func update(p func(string) protocol.SettingsPatch, key string) func(context.Context, *Session, map[string]any) (any, error) {
+func update(p func(string) protocol.SettingsPatch, key string) op {
 	return func(ctx context.Context, s *Session, args map[string]any) (any, error) {
 		return s.Update(ctx, p(args[key].(string)))
 	}
 }
 
 var ops = map[command.Op]op{
-	command.OpAbort: {"POST", "/sessions/{id}/interrupt", func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
+	command.OpAbort: func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
 		return nil, s.Interrupt(ctx, protocol.Interrupt{})
-	}},
-	command.OpCompact: {"POST", "/sessions/{id}/compact", compact},
-	command.OpSetGoal: {"PUT", "/sessions/{id}/goal", func(ctx context.Context, s *Session, args map[string]any) (any, error) {
+	},
+	command.OpCompact: compact,
+	command.OpSetGoal: func(ctx context.Context, s *Session, args map[string]any) (any, error) {
 		if err := s.SetGoal(ctx, protocol.Goal{Condition: args["condition"].(string)}); err != nil {
 			return nil, err
 		}
 		return s.View(), nil
-	}},
-	command.OpClearGoal: {"DELETE", "/sessions/{id}/goal", func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
+	},
+	command.OpClearGoal: func(ctx context.Context, s *Session, _ map[string]any) (any, error) {
 		return nil, s.ClearGoal(ctx)
-	}},
-	command.OpSetModel:       {"PATCH", "/sessions/{id}", update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Model: &v} }, "model")},
-	command.OpSetThinking:    {"PATCH", "/sessions/{id}", update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Effort: &v} }, "effort")},
-	command.OpSetServiceTier: {"PATCH", "/sessions/{id}", update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier")},
-	command.OpStatus: {"GET", "/sessions/{id}", func(_ context.Context, s *Session, _ map[string]any) (any, error) {
+	},
+	command.OpSetModel:       update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Model: &v} }, "model"),
+	command.OpSetThinking:    update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{Effort: &v} }, "effort"),
+	command.OpSetServiceTier: update(func(v string) protocol.SettingsPatch { return protocol.SettingsPatch{ServiceTier: &v} }, "service_tier"),
+	command.OpStatus: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		return s.View(), nil
-	}},
-	command.OpQueueList: {"", "", func(_ context.Context, s *Session, _ map[string]any) (any, error) {
+	},
+	command.OpQueueList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		return append([]string{}, s.View().Queued...), nil
-	}},
-	command.OpProcessList: {"GET", "/processes", func(_ context.Context, s *Session, _ map[string]any) (any, error) {
+	},
+	command.OpProcessList: func(_ context.Context, s *Session, _ map[string]any) (any, error) {
 		if s.r.procs == nil {
 			return []process.Info{}, nil
 		}
 		return s.r.procs.List(), nil
-	}},
+	},
 }
 
 // errNoFold reports a compaction that appended nothing.
@@ -89,14 +86,14 @@ func supported(spec *command.Spec) bool {
 	return spec.Kind == command.KindControl && ok
 }
 
-// commandDirs returns the prompt-command dirs of a WorkDir: commands_dirs,
-// relative to it, or its .agents/commands. No WorkDir has none.
-func commandDirs(workDir string, dirs []string) []string {
+// resolveDirs returns dirs, relative to workDir, or the def dir of workDir
+// when dirs is nil. An empty workDir has none.
+func resolveDirs(workDir string, dirs []string, def string) []string {
 	if workDir == "" {
 		return nil
 	}
 	if dirs == nil {
-		return []string{filepath.Join(workDir, ".agents", "commands")}
+		return []string{filepath.Join(workDir, def)}
 	}
 	out := make([]string, len(dirs))
 	for i, d := range dirs {
@@ -146,8 +143,7 @@ func commandEntry(spec *command.Spec) protocol.CommandEntry {
 	for _, a := range spec.Args {
 		e.Args = append(e.Args, protocol.CommandArg{Name: a.Name, Type: string(a.Type), Optional: a.Optional})
 	}
-	if o, ok := ops[spec.Op]; ok {
-		e.Method, e.Path = o.method, o.path
+	if _, ok := ops[spec.Op]; ok {
 		e.AvailableDuringTask = &spec.AvailableDuringTask
 	}
 	return e
@@ -225,10 +221,10 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 
 // command records the first status of p. An accepted command joins the
 // work that Runtime.Close waits for before its record, so Close refuses it.
-func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool, error) {
+func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, error) {
 	if p.res != nil {
 		if err := s.r.hold(); err != nil {
-			return protocol.Admitted{}, false, err
+			return protocol.Admitted{}, err
 		}
 	}
 	rec, seq, repeat, err := s.a.Record(ctx, p.rec, p.busy)
@@ -243,9 +239,9 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool
 		s.r.group.Done()
 	}
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, err
 	}
-	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status}, repeat, nil
+	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status, Repeat: repeat}, nil
 }
 
 // dispatch runs the operation of an accepted command and records its
@@ -258,14 +254,10 @@ func (s *Session) dispatch(rec eventlog.CommandRecorded, res command.Resolution)
 			_, _, _, _ = s.a.Record(s.r.base, rec, nil)
 		}
 	}()
-	result, err := ops[res.Spec.Op].run(s.r.base, s, res.Args)
+	result, err := ops[res.Spec.Op](s.r.base, s, res.Args)
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = outcome(session.Typed(rec.Line), res.Spec, result, err)
 	_, _, _, _ = s.a.Record(s.r.base, rec, nil)
 }
-
-// codedErrors are the errors whose text a command record shows; any other
-// error can hold store details.
-var codedErrors = []error{ErrInvalidRequest, ErrSessionNotFound, ErrInputConflict, ErrTurnMismatch, ErrSessionBusy, ErrModelUnavailable}
 
 func outcome(typed string, spec *command.Spec, result any, err error) (status, text string, raw json.RawMessage, truncated bool) {
 	switch {
@@ -285,7 +277,7 @@ func outcome(typed string, spec *command.Spec, result any, err error) (status, t
 		return protocol.CommandRefused, refusal(typed), nil, false
 	case errors.Is(err, ErrDraining), errors.Is(err, ErrSessionNotOwned), errors.Is(err, context.Canceled):
 		return protocol.CommandInterrupted, "harness stopped before /" + typed + " finished; it will not run again", nil, false
-	case slices.ContainsFunc(codedErrors, func(c error) bool { return errors.Is(err, c) }):
+	case slices.ContainsFunc(codes, func(c server.Code) bool { return errors.Is(err, c.Err) }):
 		return protocol.CommandFailed, err.Error(), nil, false
 	}
 	return protocol.CommandFailed, "/" + typed + " failed: internal error", nil, false

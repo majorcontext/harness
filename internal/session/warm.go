@@ -20,7 +20,7 @@ func (a *Actor) warm() {
 		return
 	}
 	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
-		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
+		History: a.state.History(), AllowedTools: a.state.AllowedTools(), Blob: a.blob}
 	src := a.source(&running{})
 	warming := make(chan struct{})
 	a.warming = warming
