@@ -294,7 +294,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a}, nil
+	return &Session{a: a, hasEvaluator: r.evaluator != ""}, nil
 }
 
 // instructions reads the system prompt of a session once and returns the

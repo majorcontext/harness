@@ -67,7 +67,7 @@ func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool) *Actor {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	cfg := Config{ID: "s1", Log: log, Ownership: owned{}, Backend: b, Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func() string { return "" }}
+	cfg := Config{ID: "s1", Log: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func() string { return "" }}
 	open := func() (*Actor, error) { return Open(ctx, cfg) }
 	if create {
 		open = func() (*Actor, error) { return Create(ctx, cfg, eventlog.SessionCreated{Model: "m/m"}) }
@@ -135,6 +135,25 @@ func TestGoal(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, slices.Concat(ran[:3], []string{"goal.changed cleared", "turn.ended interrupted goal_cleared"})},
+		{"an input during a goal turn leaves no goal input after the verdict", &goalBackend{verdicts: []string{"NOT MET: a", "NOT MET: b", "MET: ok"}, gated: true},
+			func(t *testing.T, a *Actor, b *goalBackend) {
+				setGoal(0)(t, a, b)
+				in := eventlog.InputAdmitted{InputID: "hi", Delivery: eventlog.DeliveryQueue, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
+				if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
+					t.Fatal(err)
+				}
+				close(b.gate)
+			}, slices.Concat(ran[:3], []string{"input.admitted", "item.completed assistant re say done", "turn.ended completed", "goal.evaluated not_met", "input.admitted",
+				"turn.started", "item.completed assistant re hi", "turn.ended completed", "input.withdrawn", "goal.evaluated not_met"}, again, achieved)},
+		{"an interrupt during the evaluation leaves the goal running", &goalBackend{verdicts: []string{"MET: ok"}, gated: true, gateJudge: true},
+			func(t *testing.T, a *Actor, b *goalBackend) {
+				setGoal(0)(t, a, b)
+				synctest.Wait()
+				if err := a.Interrupt(context.Background(), ""); err != nil {
+					t.Fatal(err)
+				}
+				close(b.gate)
+			}, slices.Concat(ran, achieved)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -186,5 +205,34 @@ func TestOpenContinuesTheGoal(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestParseVerdict(t *testing.T) {
+	for _, tc := range []struct {
+		answer, why string
+		want        eventlog.Verdict
+	}{
+		{"MET: done", "done", eventlog.VerdictMet},
+		{"not met: more", "more", eventlog.VerdictNotMet},
+		{"**MET**: done", "done", eventlog.VerdictMet},
+		{"`IMPOSSIBLE: no way`", "no way", eventlog.VerdictImpossible},
+		{"## NOT MET: more", "more", eventlog.VerdictNotMet},
+		{"I think so", "I think so", eventlog.VerdictNotMet},
+	} {
+		if v, why := parseVerdict(tc.answer); v != tc.want || why != tc.why {
+			t.Errorf("parseVerdict(%q) = %s, %q, want %s, %q", tc.answer, v, why, tc.want, tc.why)
+		}
+	}
+}
+
+func TestTranscriptKeepsTheNewestMessageOverBudget(t *testing.T) {
+	big := eventlog.Message{Role: eventlog.RoleAssistant}
+	for range transcriptBytes/partBytes + 1 {
+		big.Parts = append(big.Parts, eventlog.Part{Type: eventlog.PartText, Text: strings.Repeat("x", partBytes)})
+	}
+	got := transcript([]eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "old"}}}, big})
+	if !strings.HasPrefix(got, "[earlier conversation omitted]\n\nASSISTANT:\n") || strings.Contains(got, "old") {
+		t.Errorf("transcript starts %q, want the omitted marker, then the newest message", got[:min(len(got), 80)])
 	}
 }

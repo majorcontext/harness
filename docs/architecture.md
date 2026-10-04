@@ -384,12 +384,12 @@ Goals follow Claude Code `/goal`. There is no deferred goal and no parked goal.
 
 - `SetGoal` on a session with no running turn and no queued input admits the condition as an input with `source: goal`. That input starts a turn through the normal input events.
 - `SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
-- A new `SetGoal` replaces the goal and resets its turn count. `SetGoal` and `ClearGoal` withdraw the queued inputs with `source: goal`.
-- After each turn that completes or is interrupted, the evaluator runs as the run of the actor, as a compaction does. It reads the condition and the history, and returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `met` yields `achieved`, and `impossible` yields `failed`. A reply with no verdict is `not_met`, and the reply is the guidance.
-- The evaluator is `goal_evaluator_model`, resolved through `aliases`. Empty: the session model. Its prompt copies the engine prompt, with a third form for `impossible`.
+- A new `SetGoal` replaces the goal and resets its turn count. `SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`.
+- After each turn that completes or is interrupted, the evaluator runs as the run of the actor, as a compaction does. It reads the condition and the history, and returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `met` yields `achieved`, and `impossible` yields `failed`. The evaluator skips leading markdown marks. A reply with no verdict is `not_met`, and the reply is the guidance.
+- The evaluator is `goal_evaluator_model`, resolved through `aliases`. `SetGoal` without it is an invalid request. Its prompt copies the engine prompt, with a third form for `impossible`.
 - A turn or an evaluation that fails on a retryable error or a usage limit yields `paused` with `retry_at`. The wait starts at 30 s and doubles with each pause before the next verdict, up to 30 min. At `retry_at`, the goal becomes `active` and judges the last turn again after an evaluator error, or admits an input that continues the goal. Any input resumes the goal at once. An error the user must fix yields `failed`.
 - `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`.
-- `ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends. An interrupt stops only the turn, and the goal judges the partial turn.
+- `ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends. An interrupt stops only the turn, and the goal judges the partial turn. An interrupt during an evaluation stops nothing.
 - The goal lives in the log. `Open` restores it with its turn count. An `active` goal on an idle session judges the last turn when the goal has not judged it, and a `paused` goal keeps its retry time.
 - At the switch, the `goal_met_first_turn`, `goal_not_met_then_met`, `goal_exhausts_max_turns`, and `bifrost_goal_*` rows are the oracle. The deferred and parked rows are deleted.
 

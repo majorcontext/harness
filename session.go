@@ -15,7 +15,8 @@ import (
 
 // Session is a session that this runtime runs.
 type Session struct {
-	a *session.Actor
+	a            *session.Actor
+	hasEvaluator bool
 }
 
 // View returns the session as of its last durable record.
@@ -94,6 +95,9 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
 	if strings.TrimSpace(g.Condition) == "" || g.MaxTurns < 0 {
 		return fmt.Errorf("%w: a goal needs a condition and max_turns >= 0", ErrInvalidRequest)
+	}
+	if !s.hasEvaluator {
+		return fmt.Errorf("%w: a goal needs goal_evaluator_model", ErrInvalidRequest)
 	}
 	return s.a.SetGoal(ctx, g.Condition, g.MaxTurns)
 }

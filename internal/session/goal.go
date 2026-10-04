@@ -1,7 +1,6 @@
 package session
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -128,7 +127,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 	a.run = r
 	turnID := a.state.LastEnded().TurnID
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History())
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: cmp.Or(a.cfg.Evaluator, a.state.Model()), Instructions: evaluatorPrompt,
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
 	a.cfg.Go(func() {
 		answer, err := turn.Ask(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
@@ -152,7 +151,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	g, _ := a.state.Goal()
 	var aerr error
 	if stopped == nil && len(a.releasing) == 0 && g.State == eventlog.GoalActive && g.Evaluated != turnID {
-		events := verdict(turnID, g, answer)
+		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
 		if err != nil {
 			events = a.goalStop(err)
 		}
@@ -189,23 +188,25 @@ func verdict(turnID string, g eventlog.Goal, answer string) []eventlog.Event {
 		"\n\nEVALUATOR FEEDBACK: " + why + "\n\nKeep working until the goal is fully satisfied, then stop.")}
 }
 
-// parseVerdict reads a verdict prefix in any case. A reply with no verdict
-// is not_met, and the reply is the guidance.
+// parseVerdict reads a verdict prefix in any case, after markdown marks. A
+// reply with no verdict is not_met, and the reply is the guidance.
 func parseVerdict(answer string) (eventlog.Verdict, string) {
-	t := strings.TrimSpace(answer)
+	const marks = "*#` \t\n"
+	t := strings.Trim(answer, marks)
 	for _, f := range []struct {
 		prefix  string
 		verdict eventlog.Verdict
 	}{{"NOT MET", eventlog.VerdictNotMet}, {"IMPOSSIBLE", eventlog.VerdictImpossible}, {"MET", eventlog.VerdictMet}} {
 		if len(t) >= len(f.prefix) && strings.EqualFold(t[:len(f.prefix)], f.prefix) {
-			return f.verdict, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t[len(f.prefix):]), ":"))
+			return f.verdict, strings.Trim(strings.TrimPrefix(strings.TrimLeft(t[len(f.prefix):], marks), ":"), marks)
 		}
 	}
 	return eventlog.VerdictNotMet, t
 }
 
 // transcript renders h for the evaluator: each message under its role, each
-// part cut at partBytes, and the newest messages within transcriptBytes.
+// part cut at partBytes, and the newest messages within transcriptBytes. It
+// keeps the newest message even over the budget.
 func transcript(h []eventlog.Message) string {
 	var blocks []string
 	size := 0
@@ -224,7 +225,7 @@ func transcript(h []eventlog.Message) string {
 				b.WriteString(s + "\n")
 			}
 		}
-		if size += b.Len(); size > transcriptBytes {
+		if size += b.Len(); size > transcriptBytes && len(blocks) > 0 {
 			blocks = append(blocks, "[earlier conversation omitted]\n")
 			break
 		}
@@ -241,11 +242,11 @@ func (a *Actor) goalStop(err error) []eventlog.Event {
 	if g.State != eventlog.GoalActive {
 		return nil
 	}
-	if !errors.Is(err, turn.ErrRetryable) && !errors.Is(err, turn.ErrExhausted) {
-		return []eventlog.Event{eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: err.Error()}}
+	change := eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: err.Error()}
+	if errors.Is(err, turn.ErrRetryable) || errors.Is(err, turn.ErrExhausted) {
+		change.State, change.RetryAt = eventlog.GoalPaused, time.Now().Add(min(goalRetry<<min(g.Pauses, 10), goalRetryMax))
 	}
-	wait := min(goalRetry<<min(g.Pauses, 10), goalRetryMax)
-	return []eventlog.Event{eventlog.GoalChanged{State: eventlog.GoalPaused, Reason: err.Error(), RetryAt: time.Now().Add(wait)}}
+	return append(a.withdrawGoal(), change)
 }
 
 // retryLater resumes a paused goal at its retry time, unless the goal

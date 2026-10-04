@@ -66,7 +66,7 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
-	// Evaluator is the model that judges goal turns. Empty: the session model.
+	// Evaluator is the model that judges goal turns.
 	Evaluator string
 	Tools     []turn.Tool
 	// Source gives more tools to each model call. nil: Tools only.

@@ -293,6 +293,9 @@ func (a *Actor) dismissRequests() []eventlog.Event {
 func (a *Actor) Interrupt(ctx context.Context, turnID string) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		r := a.run
+		if r != nil && r.judge {
+			r = nil
+		}
 		switch {
 		case r == nil && turnID == "":
 			reply(struct{}{}, nil)
