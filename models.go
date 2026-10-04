@@ -34,14 +34,14 @@ type models struct {
 	strict bool
 }
 
-func newModels(cfg config.Config, transport func(provider string) http.RoundTripper) *models {
+func newModels(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper) *models {
 	m := &models{backends: map[string]turn.Backend{},
 		strict: cfg.ContextWindowRequiredValue() && cfg.ContextWindowTokens == 0}
 	providers := maps.Clone(cfg.Providers)
 	config.EnsureProviderDefaults(providers)
 	for name, p := range providers {
 		if p.Type == config.TypeClaudeCodeCLI {
-			m.backends[name] = claudecode.New(p, cfg.AppendSystemPrompt)
+			m.backends[name] = claudecode.New(p, cfg.AppendSystemPrompt, workDir)
 		} else if c := client(name, p, transport); c != nil {
 			m.backends[name] = modelapi.New(c, cfg.ContextWindowTokens)
 		}

@@ -56,14 +56,16 @@ const disallowed = "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList
 
 // Backend is a turn.Backend over one claude-code-cli provider entry.
 type Backend struct {
-	p      config.Provider
-	system string
+	p       config.Provider
+	system  string
+	workDir string
 }
 
 // New returns the Backend of provider entry p. The CLI keeps only the last
-// --append-system-prompt, so the entries of system join into one value.
-func New(p config.Provider, system []string) *Backend {
-	return &Backend{p: p, system: strings.Join(system, "\n\n")}
+// --append-system-prompt, so the entries of system join into one value. The
+// CLI runs in workDir, or in the process directory when workDir is empty.
+func New(p config.Provider, system []string, workDir string) *Backend {
+	return &Backend{p: p, system: strings.Join(system, "\n\n"), workDir: workDir}
 }
 
 // Capabilities reports that the CLI runs the loop with its built-in tools,
@@ -166,6 +168,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 	}
 	cmd := exec.Command(cmp.Or(b.p.BinaryPath, "claude"), append(args, b.p.ExtraArgs...)...) //nolint:gosec // operator config
 	cmd.Env = env
+	cmd.Dir = b.workDir
 	return cmd, nil
 }
 

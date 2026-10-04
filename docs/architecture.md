@@ -602,7 +602,7 @@ With a `WorkDir`, the segments are, in order:
 
 A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a skill that is not valid or repeats a name. The session starts without it. Each skip and each cut writes a WARN log line.
 
-A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value.
+A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
 There is no outline mode, no chain ceiling, and no ambient segment. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 

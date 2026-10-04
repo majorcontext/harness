@@ -14,6 +14,7 @@
 //	FAKE_CLAUDE_DISMISS_DIES   makes a dismissed parked question exit at once
 //	FAKE_CLAUDE_INIT_TOOLS     JSON tool list of the init frame
 //	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
+//	FAKE_CLAUDE_CWD_LOG        receives the working directory
 //	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
@@ -75,6 +76,13 @@ func logArgv() {
 	appendFile(path, string(b)+"\n")
 }
 
+func logCwd() {
+	if path := os.Getenv("FAKE_CLAUDE_CWD_LOG"); path != "" {
+		wd, _ := os.Getwd()
+		appendFile(path, wd+"\n")
+	}
+}
+
 func main() {
 	mode := os.Getenv("FAKE_CLAUDE_MODE")
 	if mode == "bg_leak_child" {
@@ -85,6 +93,7 @@ func main() {
 		_ = os.Stdin.Close()
 	}
 	logArgv()
+	logCwd()
 	logEnv()
 	logInterrupt()
 

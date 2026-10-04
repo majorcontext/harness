@@ -121,7 +121,7 @@ func New(opts Options) (*Runtime, error) {
 		r.owner = newLocalOwner()
 	}
 	if r.backend == nil {
-		r.models = newModels(opts.Config, opts.ModelTransport)
+		r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 		r.backend = r.models
 	}
 	r.name = sync.OnceValue(func() string {
