@@ -211,6 +211,17 @@ type BackendState struct {
 	BlobKey string `json:"blob_key"`
 }
 
+// ToolResultRetained points at the blob that holds a tool result that the
+// history holds only as a preview. Bytes, Lines, and Head describe the blob.
+type ToolResultRetained struct {
+	Handle  string `json:"handle"`
+	Tool    string `json:"tool"`
+	BlobKey string `json:"blob_key"`
+	Bytes   int    `json:"bytes"`
+	Lines   int    `json:"lines"`
+	Head    string `json:"head"`
+}
+
 // Kind returns "session.created".
 func (SessionCreated) Kind() string { return "session.created" }
 
@@ -273,3 +284,6 @@ func (ContextMeasured) Kind() string { return "context.measured" }
 
 // Kind returns "backend.state".
 func (BackendState) Kind() string { return "backend.state" }
+
+// Kind returns "tool_result.retained".
+func (ToolResultRetained) Kind() string { return "tool_result.retained" }

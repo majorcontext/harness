@@ -185,6 +185,7 @@ type State struct {
 	compaction CompactionApplied
 	children   map[string]Outcome
 	backends   map[string]string
+	retained   []ToolResultRetained
 	history    []entry
 }
 
@@ -199,6 +200,7 @@ func (s *State) clone() *State {
 	c.backends = maps.Clone(s.backends)
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
+	c.retained = slices.Clip(s.retained)
 	return &c
 }
 
@@ -301,6 +303,9 @@ func (s *State) Compaction() (CompactionApplied, bool) {
 // BackendState returns the newest state blob key of backend, or "".
 func (s *State) BackendState(backend string) string { return s.backends[backend] }
 
+// Retained returns the retained tool results in the order of their records.
+func (s *State) Retained() []ToolResultRetained { return slices.Clip(s.retained) }
+
 // Summary returns the list entry of the session.
 func (s *State) Summary() Summary {
 	return Summary{
@@ -392,6 +397,8 @@ func (s *State) step(env Envelope) error {
 		return nil
 	case BackendState:
 		return s.applyBackendState(e)
+	case ToolResultRetained:
+		return s.applyRetained(e)
 	}
 	return fmt.Errorf("%w: %T", ErrUnknownKind, env.Event)
 }

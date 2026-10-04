@@ -18,8 +18,10 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -63,17 +65,18 @@ type Options struct {
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process or task. With Config.MCPServers, no
+	// WorkDir, no name may be process, task, or a built-in tool name. With Config.MCPServers, no
 	// name may be mcp, list_mcp_resources, read_mcp_resource, or start
 	// with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
-	// AGENTS.md chain and skills when it starts, the process tool runs
-	// Config.Processes in it, and the task tool starts child sessions with
-	// the agent profiles of its .agents dir. The process tool's declare
-	// action runs any argv, so WorkDir alone grants command execution.
-	// Empty: the system prompt is Config.AppendSystemPrompt alone, no file
-	// is read, no process runs, and no session has the task tool.
+	// AGENTS.md chain and skills when it starts, gets the file, search, and
+	// bash tools, the process tool runs Config.Processes in it, and the task
+	// tool starts child sessions with the agent profiles of its .agents dir.
+	// bash and the process tool run any command, so WorkDir alone grants
+	// command execution. Empty: the system prompt is
+	// Config.AppendSystemPrompt alone, no file is read, no process runs, no
+	// built-in tool exists, and no session has the task tool.
 	WorkDir string
 
 	backend turn.Backend
@@ -151,8 +154,8 @@ func New(opts Options) (*Runtime, error) {
 	names := map[string]bool{}
 	for _, t := range tools {
 		name := t.Spec().Name
-		if name == "" || names[name] || r.mcp != nil && mcpsrc.Reserved(name) {
-			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or an MCP tool name", ErrInvalidRequest, name)
+		if name == "" || names[name] || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) {
+			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
 		}
 		names[name] = true
 		r.tools = append(r.tools, t)
@@ -300,6 +303,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Tools:     r.bind(id),
 		Prompt:    r.instructions(),
 		Report:    r.report,
+		Agent:     r.agent(),
 		Sync:      r.sync,
 		Limits:    r.limits,
 		Threshold: r.threshold,
@@ -522,8 +526,22 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool {
-		return r.mcp != nil && mcpsrc.Reserved(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
+		return r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
 	})
+}
+
+// agent returns the file tools of a new session. Each session gets its own:
+// the read guard of write_file belongs to one session. nil without a WorkDir.
+func (r *Runtime) agent() []turn.Tool {
+	if r.workDir == "" {
+		return nil
+	}
+	return builtin.Tools(r.workDir)
+}
+
+// builtin reports whether name is a built-in tool of the WorkDir.
+func (r *Runtime) builtin(name string) bool {
+	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName)
 }
 
 // history returns the conversation of session id from the store.

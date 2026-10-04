@@ -93,8 +93,7 @@ func done() []eventlog.Message { return []eventlog.Message{say("child done")} }
 
 func familyRuntime(t *testing.T, st harness.Store, f *family, own harness.Owner, cfg config.Config, dir string) *harness.Runtime {
 	t.Helper()
-	r, err := harness.NewWithBackend(harness.Options{Store: st, Owner: own, Config: cfg, WorkDir: dir,
-		Tools: []harness.Tool{newProbe("ls", false)}}, f)
+	r, err := harness.NewWithBackend(harness.Options{Store: st, Owner: own, Config: cfg, WorkDir: dir}, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,8 +175,13 @@ func TestTaskSpawnsAChild(t *testing.T) {
 func readOnly(t *testing.T, f *family, children []protocol.Session) {
 	t.Helper()
 	req, _ := f.last(children[0].ID, "child work")
-	if len(req.Tools) != 1 || req.Tools[0].Name != "ls" || !slices.Equal(req.AllowedTools, []string{"ls"}) {
-		t.Errorf("child request tools %v, allowed %v, want ls", req.Tools, req.AllowedTools)
+	want := []string{"read_file", "glob", "grep", "ls"}
+	var names []string
+	for _, tool := range req.Tools {
+		names = append(names, tool.Name)
+	}
+	if !slices.Equal(names, want) || !slices.Equal(req.AllowedTools, want) {
+		t.Errorf("child request tools %v, allowed %v, want %v", names, req.AllowedTools, want)
 	}
 }
 

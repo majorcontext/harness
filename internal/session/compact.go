@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -58,12 +59,13 @@ func (a *Actor) compact(done func(struct{}, error)) bool {
 	if !ok {
 		return false
 	}
+	metas := a.retained()
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
 	a.run = r
 	a.cfg.Go(func() {
 		summary, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
-		c.Summary = summary
+		c.Summary = a.indexed(summary, metas)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
 			reply(struct{}{}, nil)
@@ -92,9 +94,10 @@ func (a *Actor) fold(id string) (turn.Request, eventlog.CompactionApplied, bool)
 // no turn can fold. When ctx ends, it appends nothing.
 func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Message, bool, error) {
 	type folding struct {
-		req turn.Request
-		c   eventlog.CompactionApplied
-		ok  bool
+		req   turn.Request
+		c     eventlog.CompactionApplied
+		ok    bool
+		metas []toolresult.Meta
 	}
 	f, err := call(ctx, a, func(reply func(folding, error)) {
 		if r := a.run; r == nil || r.id != turnID {
@@ -102,14 +105,16 @@ func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Mess
 			return
 		}
 		req, c, ok := a.fold(turnID)
-		reply(folding{req, c, ok}, nil)
+		reply(folding{req, c, ok, a.retained()}, nil)
 	})
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	if f.c.Summary, err = turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle); err != nil {
+	summary, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
+	if err != nil {
 		return nil, false, err
 	}
+	f.c.Summary = a.indexed(summary, f.metas)
 	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
 		if r := a.run; r == nil || r.id != turnID || ctx.Err() != nil {
 			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))

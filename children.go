@@ -125,7 +125,7 @@ func (r *Runtime) available(model string, names []string) []string {
 	}
 	builtins := r.backend.Capabilities(model).Tools
 	has := func(n string) bool {
-		return slices.Contains(builtins, n) || r.mcp != nil && mcpsrc.Reserved(n) ||
+		return slices.Contains(builtins, n) || r.builtin(n) || r.mcp != nil && mcpsrc.Reserved(n) ||
 			slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == n })
 	}
 	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !has(n) })

@@ -1,6 +1,9 @@
 package eventlog
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 func (s *State) applyCreated(e SessionCreated, t time.Time) error {
 	if s.created {
@@ -70,5 +73,13 @@ func (s *State) applyBackendState(e BackendState) error {
 		return illegal("backend.state needs a backend and a blob key")
 	}
 	s.backends[e.Backend] = e.BlobKey
+	return nil
+}
+
+func (s *State) applyRetained(e ToolResultRetained) error {
+	if e.Handle == "" || e.BlobKey == "" || slices.ContainsFunc(s.retained, func(r ToolResultRetained) bool { return r.Handle == e.Handle }) {
+		return illegal("tool_result.retained needs a new handle and a blob key")
+	}
+	s.retained = append(s.retained, e)
 	return nil
 }

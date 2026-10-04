@@ -69,6 +69,7 @@ func everyKind() []Event {
 		ItemCompleted{ItemID: "i2", TurnID: "t1", Message: Message{Role: RoleAssistant, Parts: []Part{{Type: PartText, Text: "done"}}}},
 		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider"},
 		BackendState{Backend: "codex", BlobKey: "b1"},
+		ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
 		suspend("t1", CauseHandoff), resume("t1", 1),
 		CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
 		end("t1", StopCompleted, ""),
@@ -116,14 +117,14 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: StatusIdle, Goal: GoalAchieved,
-		HeadSeq: 24, CreatedAt: t0, UpdatedAt: t0.Add(23 * time.Second)}
+		HeadSeq: 25, CreatedAt: t0, UpdatedAt: t0.Add(24 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}
 	if got := live.Settings(); got != (Settings{Effort: "high", ServiceTier: "flex"}) {
 		t.Fatalf("Settings = %+v", got)
 	}
-	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || live.BackendState("codex") != "b1" {
-		t.Fatalf("Usage = %+v, Context = %+v, BackendState = %q", live.Usage(), live.Context(), live.BackendState("codex"))
+	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || live.BackendState("codex") != "b1" || len(live.Retained()) != 1 {
+		t.Fatalf("Usage = %+v, Context = %+v, BackendState = %q, Retained = %+v", live.Usage(), live.Context(), live.BackendState("codex"), live.Retained())
 	}
 }
