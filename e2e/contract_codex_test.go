@@ -6,7 +6,6 @@ import (
 	"maps"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/mcp"
@@ -85,32 +84,6 @@ func (recordWire) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
 		t.Fatal(err)
 	}
 	r.record(t, "codex_wire", "", callResult{Status: 200, Body: body})
-}
-
-// awaitWarm waits until the websocket warm-up of a new session has reached
-// the Responses server, as a dial or a refusal. The old engine registers its
-// prewarm at creation and the first prompt waits for it. The runtime warms in
-// a goroutine, and a first turn that wins the race dials cold, which the Warm-up
-// section of the spec allows, so a row that records the warm path waits here.
-type awaitWarm struct{}
-
-func (awaitWarm) run(t *testing.T, _ *run) { t.Fatal("awaitWarm runs only under runCodexScenario") }
-func (awaitWarm) runWire(t *testing.T, _ *run, o *harnesstest.OpenAI) {
-	deadline, tick := time.NewTimer(10*time.Second), time.NewTicker(2*time.Millisecond)
-	defer deadline.Stop()
-	defer tick.Stop()
-	for {
-		for _, e := range o.WireEvents() {
-			if e.Event == "prewarm" || e.Event == "refused" {
-				return
-			}
-		}
-		select {
-		case <-deadline.C:
-			t.Fatal("no websocket warm-up reached the Responses server")
-		case <-tick.C:
-		}
-	}
 }
 
 // getSessionUsage records GET /session/{id} without subscription_usage.captured_at,
@@ -221,10 +194,6 @@ func codexSession(rest ...[]action) []action {
 	return actions
 }
 
-func wsSession(rest ...[]action) []action {
-	return codexSession(append([][]action{{awaitWarm{}}}, rest...)...)
-}
-
 func codexReasoning() harnesstest.OpenAIOptions {
 	return harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan the call", "check the args"}}}}
 }
@@ -253,19 +222,19 @@ func codexWebSocketRows() []codexScenario {
 	}
 	return []codexScenario{
 		{
-			scenario:  scenario{name: "codex_ws_prewarm_warms_first_turn", model: codexHi, actions: wsSession(codexTurn("a", "hello"), wire)},
+			scenario:  scenario{name: "codex_ws_prewarm_warms_first_turn", model: codexHi, actions: codexSession(codexTurn("a", "hello"), wire)},
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_tool_round_trip", model: codexToolSteps, actions: wsSession(codexTurn("a", "run"), wire)},
+			scenario:  scenario{name: "codex_ws_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), wire)},
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_chains_two_turns", model: twoTurns, actions: wsSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_chains_two_turns", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_reasoning_chains_tool_round_trip", model: codexToolSteps, actions: wsSession(codexTurn("a", "run"), wire)},
+			scenario:  scenario{name: "codex_ws_reasoning_chains_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), wire)},
 			websocket: true,
 			opts:      codexReasoning(),
 		},
@@ -273,22 +242,22 @@ func codexWebSocketRows() []codexScenario {
 			scenario: scenario{
 				name:    "codex_ws_effort_sets_reasoning_effort",
 				model:   codexHi,
-				actions: wsSession([]action{setThinking{as: "a", level: "high"}}, codexTurn("a", "hello"), wire),
+				actions: codexSession([]action{setThinking{as: "a", level: "high"}}, codexTurn("a", "hello"), wire),
 			},
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_usage_frame_reaches_session", model: codexHi, actions: wsSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}, recordWire{}})},
+			scenario:  scenario{name: "codex_ws_usage_frame_reaches_session", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{getSessionUsage{as: "a"}, recordWire{}})},
 			websocket: true,
 			opts:      codexUsage(false),
 		},
 		{
-			scenario:  scenario{name: "codex_ws_chain_miss_resends_full_history", model: twoTurns, actions: wsSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
 		},
 		{
-			scenario:  scenario{name: "codex_ws_uncoded_chain_miss_resends_full_history", model: twoTurns, actions: wsSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_uncoded_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{UncodedChainMiss: true, Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
 		},
@@ -300,13 +269,13 @@ func codexWebSocketRows() []codexScenario {
 					{Name: "dropped", Match: harnesstest.LastUserText("two"), Reply: codexText("partial")},
 					{Name: "retry", Match: harnesstest.LastUserText("two"), Reply: codexText("2")},
 				},
-				actions: wsSession(codexTurn("a", "one"), codexTurn("a", "two"), []action{getSession{as: "a"}, recordWire{}}),
+				actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), []action{getSession{as: "a"}, recordWire{}}),
 			},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"dropped": {Drop: true}}},
 		},
 		{
-			scenario:  scenario{name: "codex_ws_refused_falls_back_to_http", model: codexHi, actions: wsSession(codexTurn("a", "hello"), wire)},
+			scenario:  scenario{name: "codex_ws_refused_falls_back_to_http", model: codexHi, actions: codexSession(codexTurn("a", "hello"), wire)},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{RefuseWebSocket: true},
 		},
