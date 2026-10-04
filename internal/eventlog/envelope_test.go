@@ -73,8 +73,8 @@ func everyKind() []Event {
 		GoalSet{Condition: "tests pass", MaxTurns: 3},
 		admit("a"), start("t1", "a"), steer("s"), promote("s", "t1"),
 		ChildSpawned{ChildID: "k", Agent: "explore"},
-		call("t1", "i1", "c1"), ask("r1", "i1"),
-		RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)},
+		call("t1", "i1", "c1"), ask("c1", "i1"),
+		RequestResolved{RequestID: "c1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)}, result("t1", "i3", "c1"),
 		ItemCompleted{ItemID: "i2", TurnID: "t1", Message: Message{Role: RoleAssistant, Parts: []Part{{Type: PartText, Text: "done"}}}},
 		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider", Usage: Usage{InputTokens: 10, OutputTokens: 2},
 			SubscriptionUsage: &SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 5,
@@ -131,7 +131,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: StatusIdle, Goal: GoalAchieved,
-		HeadSeq: 26, CreatedAt: t0, UpdatedAt: t0.Add(25 * time.Second)}
+		HeadSeq: 27, CreatedAt: t0, UpdatedAt: t0.Add(26 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

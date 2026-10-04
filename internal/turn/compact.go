@@ -2,6 +2,7 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -89,3 +90,11 @@ func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
 func (*answer) State(string) ([]byte, error)       { return nil, nil }
 func (*answer) SaveState(string, []byte) error     { return nil }
 func (*answer) Compacted(string) error             { return nil }
+
+func (*answer) Ask(string, string, json.RawMessage) error {
+	return errors.New("turn: a model call with no tools opens no request")
+}
+
+func (*answer) Resolution(string) (eventlog.RequestResolved, bool) {
+	return eventlog.RequestResolved{}, false
+}

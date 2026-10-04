@@ -14,6 +14,9 @@ import (
 const (
 	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
+	// lostToRestart closes the history of a turn that a crash ended, so the
+	// next user message does not join the crashed one on the wire.
+	lostToRestart = "[harness: this turn was interrupted by a process restart and could not complete]"
 )
 
 var errStopTurn = errors.New("harness: turn stopped")
@@ -88,12 +91,16 @@ func sameJSON(x, y any) bool {
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
-		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
+		History: a.state.History(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model())}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
+	}
+	req.Questions = a.questions()
+	if a.cfg.Banner != "" && !r.ownsLoop {
+		req.Banner, req.BannerAt = a.cfg.Banner, a.bannerAt(len(req.History))
 	}
 	for _, in := range inputIDs {
 		ev, _, _ := a.state.Input(in)
@@ -188,7 +195,7 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
-		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
+		err = a.append(append(a.closeOpen(turnID, cutOff, false), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted)
 		next = true
@@ -216,7 +223,7 @@ func (a *Actor) next(check bool) error {
 		return nil
 	}
 	id := newID("turn")
-	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err != nil {
+	if err := a.append(append(a.dismissRequests(), eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}})...); err != nil {
 		return err
 	}
 	a.start(id, []string{q[0].InputID})
@@ -224,7 +231,16 @@ func (a *Actor) next(check bool) error {
 }
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
-	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
+	awaiting := reason == eventlog.StopCompleted && len(a.state.Requests()) > 0
+	events := a.closeOpen(turnID, text, awaiting)
+	if awaiting {
+		reason = eventlog.StopAwaitingInput
+	}
+	if cause == string(eventlog.CauseCrashed) {
+		marker := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: lostToRestart}}}
+		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: marker})
+	}
+	events = append(events, eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
 	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
 		return err
 	}
@@ -232,16 +248,20 @@ func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.Stop
 	return nil
 }
 
-// closeOpen dismisses every open request, which closes its tool call, and
-// gives every other open tool call a result with text.
-func (a *Actor) closeOpen(turnID, text string) []eventlog.Event {
-	events := a.dismissRequests()
+// closeOpen dismisses every open request unless keep is set, which closes its
+// tool call, and gives every other open tool call a result with text. A kept
+// request holds only its own call open.
+func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
+	var events []eventlog.Event
+	if !keep {
+		events = a.dismissRequests()
+	}
 	asked := map[string]bool{}
 	for _, r := range a.state.Requests() {
-		asked[r.ItemID] = true
+		asked[r.RequestID] = true
 	}
 	for _, c := range a.state.OpenToolCalls() {
-		if asked[c.ItemID] {
+		if asked[c.CallID] {
 			continue
 		}
 		part := eventlog.Part{Type: eventlog.PartToolResult, CallID: c.CallID, Name: c.Name, Text: text, IsError: true}

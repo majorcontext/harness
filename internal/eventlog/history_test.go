@@ -19,11 +19,22 @@ func TestHistory(t *testing.T) {
 	calling := Message{Role: RoleAssistant, Parts: []Part{{Type: PartToolCall, CallID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)}}}
 	answered := Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}
 	firstTurn := with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), call("t1", "i1", "c1"), result("t1", "i2", "c1"), end("t1", StopCompleted, ""))
+	parked := with(asking, end("t1", StopAwaitingInput, ""))
+	callMsg := Message{Role: RoleAssistant, Parts: []Part{{Type: PartToolCall, CallID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)}}}
+	resultOf := func(text string, isErr bool) Message {
+		return Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Name: "bash", Text: text, IsError: isErr}}}
+	}
+	choice := RequestResolved{RequestID: "c1", Resolution: ResolutionAnswered, Answer: []byte(`{"Which database?":"SQLite","Which cache?":"none"}`)}
 	for _, tc := range []struct {
 		name   string
 		events []Event
 		want   []Message
 	}{
+		{"an answer leaves its call open for the turn that it starts", with(parked, choice), []Message{userText("hi"), callMsg}},
+		{"the turn that an answer starts records the result of the call", with(parked, choice, start("t2"), result("t2", "i2", "c1")),
+			[]Message{userText("hi"), callMsg, {Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}}},
+		{"a dismissal is an error result", with(parked, dismiss("c1")),
+			[]Message{userText("hi"), callMsg, resultOf("The user dismissed this question without answering.", true)}},
 		{"a queued input is not history until a turn takes it", with(base, says("a", DeliveryQueue, "one")), nil},
 		{"the inputs of a turn lead its items", firstTurn, []Message{userText("one"), calling, answered}},
 		{"a promoted steer input joins at its place as an operator message", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), call("t1", "i1", "c1"), promote("s", "t1")),
@@ -72,5 +83,23 @@ func TestFold(t *testing.T) {
 				t.Fatalf("Fold(%d) = %+v, %d, %v\nwant %+v, %d", tc.keep, got, to, ok, tc.want, tc.to)
 			}
 		})
+	}
+}
+
+func TestResolutionOutlivesTheRequest(t *testing.T) {
+	s := replay(t, with(asking, end("t1", StopAwaitingInput, ""), dismiss("c1")))
+	if got, ok := s.Resolution("c1"); !ok || got.Resolution != ResolutionDismissed {
+		t.Errorf("Resolution(c1) = %+v, %v, want the dismissal", got, ok)
+	}
+	if _, ok := s.Resolution("r2"); ok {
+		t.Error("Resolution(r2) found a request that never opened")
+	}
+}
+
+func TestHistoryKeepsTheSubagentParent(t *testing.T) {
+	sub := ItemCompleted{ItemID: "i1", TurnID: "t1", Message: Message{Role: RoleAssistant, ParentCallID: "toolu_p", Parts: []Part{{Type: PartText, Text: "inside"}}}}
+	h := replay(t, with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), sub)).History()
+	if len(h) != 2 || h[1].ParentCallID != "toolu_p" {
+		t.Errorf("History = %+v, want the subagent message with its parent", h)
 	}
 }

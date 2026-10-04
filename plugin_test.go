@@ -158,3 +158,31 @@ func TestCreateAfterCloseDoesNotProbeThePlugins(t *testing.T) {
 		t.Errorf("Create after Close = %v, want ErrDraining", err)
 	}
 }
+
+func TestViewListsEachPluginWithItsState(t *testing.T) {
+	r, _ := pluginRuntime(t, pluginFixture(t, `{}`), nil,
+		harnesstest.Step{Name: "echo", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "call_1", Name: "fixture_echo", Input: map[string]any{"text": "hi"}}}}},
+		harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult("fixture_echo"), Reply: harnesstest.Reply{Text: "done"}})
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := protocol.Plugin{Name: "fixture", State: "not-spawned",
+		Tools: []string{"fixture_echo", "fixture_fail", "fixture_config", "fixture_crash", "fixture_report"},
+		Hooks: []string{"system.transform", "tool.execute.before", "tool.execute.after", "event"}}
+	check := func(when string, state string) {
+		t.Helper()
+		want.State = state
+		if got := sess.View().Plugins; len(got) != 1 || !slices.Equal(got[0].Tools, want.Tools) || !slices.Equal(got[0].Hooks, want.Hooks) || got[0].Name != want.Name || got[0].State != state {
+			t.Errorf("%s: View().Plugins = %+v, want [%+v]", when, got, want)
+		}
+	}
+	check("before a plugin runs", "not-spawned")
+	converse(t, sess, "go")
+	check("after a plugin tool call", "running")
+	page, err := r.List(bg, protocol.ListSessions{})
+	if err != nil || len(page.Sessions) != 1 || len(page.Sessions[0].Plugins) != 1 {
+		t.Errorf("List = %+v, %v; want the session with its plugin", page, err)
+	}
+}

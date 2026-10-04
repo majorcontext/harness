@@ -290,6 +290,21 @@ type stub struct {
 	head    uint64
 	receipt protocol.Admitted
 	repeat  bool
+	// resolved records the last Resolve; resolveErr is its result.
+	resolved   *resolveCall
+	resolveErr error
+}
+
+type resolveCall struct {
+	id  string
+	res protocol.Resolution
+}
+
+func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) error {
+	if s.resolved != nil {
+		*s.resolved = resolveCall{id, res}
+	}
+	return s.resolveErr
 }
 
 func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }
@@ -335,6 +350,24 @@ func TestSubmitStatusFollowsTheSessionVerdict(t *testing.T) {
 		want(t, fmt.Sprintf("status with repeat=%v", repeat),
 			call(t, "POST", srv.URL+"/sessions/s1/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil), status)
 	}
+}
+
+func TestResolveOverHTTP(t *testing.T) {
+	var got resolveCall
+	pending := errors.New("not pending")
+	srv := httptest.NewServer(server.New(stub{resolved: &got, resolveErr: nil}, server.Options{}))
+	t.Cleanup(srv.Close)
+	url := srv.URL + "/sessions/s1/requests/c1"
+	want(t, "answer status", call(t, "POST", url, `{"answer":{"Which database?":"SQLite"}}`, nil), http.StatusNoContent)
+	want(t, "answer", [2]any{got.id, string(got.res.Answer)}, [2]any{"c1", `{"Which database?":"SQLite"}`})
+	want(t, "dismiss status", call(t, "POST", url, `{"dismiss":true}`, nil), http.StatusNoContent)
+	want(t, "dismiss", got.res, protocol.Resolution{Dismiss: true})
+	var bad protocol.ErrorBody
+	want(t, "unknown field", [2]any{call(t, "POST", url, `{"dismis":true}`, &bad), bad.Error.Code}, [2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
+	closed := httptest.NewServer(server.New(stub{resolveErr: pending}, server.Options{Codes: []server.Code{{Err: pending, Code: protocol.CodeRequestNotPending}}}))
+	t.Cleanup(closed.Close)
+	want(t, "not pending", [2]any{call(t, "POST", closed.URL+"/sessions/s1/requests/c9", `{"dismiss":true}`, &bad), bad.Error.Code},
+		[2]any{http.StatusConflict, protocol.CodeRequestNotPending})
 }
 
 func TestEventsAcceptNegotiation(t *testing.T) {

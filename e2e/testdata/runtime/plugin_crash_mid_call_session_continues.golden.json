@@ -28,6 +28,10 @@
             {
               "kind": "text",
               "text": "crash"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -61,6 +65,10 @@
             {
               "kind": "text",
               "text": "crash"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -116,6 +124,10 @@
             {
               "kind": "text",
               "text": "crash"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -189,6 +201,10 @@
             {
               "kind": "text",
               "text": "crash"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -286,6 +302,10 @@
             {
               "kind": "text",
               "text": "crash"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -517,6 +537,25 @@
         },
         "model": "anthropic/claude-fable-5",
         "origin": "",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "errored",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,

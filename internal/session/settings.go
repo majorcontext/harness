@@ -19,7 +19,11 @@ func (a *Actor) Update(ctx context.Context, ch eventlog.SettingsChanged) error {
 			err = a.cfg.Check(a.state.Model(), *ch.Model, a.state.AllowedTools())
 		}
 		if err == nil && ch != (eventlog.SettingsChanged{}) {
-			err = a.append(ch)
+			var events []eventlog.Event
+			if ch.Model != nil && eventlog.ProviderOf(*ch.Model) != eventlog.ProviderOf(a.state.Model()) {
+				events = a.dismissRequests()
+			}
+			err = a.append(append(events, ch)...)
 		}
 		reply(struct{}{}, err)
 	})

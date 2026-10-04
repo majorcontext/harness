@@ -3,8 +3,10 @@ package session
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 )
@@ -69,4 +71,29 @@ func (a *Actor) onRun(r *running, f func() error) error {
 		reply(struct{}{}, f())
 	})
 	return err
+}
+
+// Ask opens a request on the open tool call callID of the turn.
+func (t *turnRun) Ask(callID, kind string, payload json.RawMessage) error {
+	a := t.a
+	return a.onRun(t.r, func() error {
+		i := slices.IndexFunc(a.state.OpenToolCalls(), func(c eventlog.OpenToolCall) bool { return c.CallID == callID })
+		if i < 0 {
+			return fmt.Errorf("session: tool call %s is not open", callID)
+		}
+		return a.append(eventlog.RequestOpened{RequestID: callID, ItemID: a.state.OpenToolCalls()[i].ItemID, RequestKind: kind, Payload: payload})
+	})
+}
+
+// Resolution returns the record that closed request id, if one did.
+func (t *turnRun) Resolution(id string) (eventlog.RequestResolved, bool) {
+	type found struct {
+		r  eventlog.RequestResolved
+		ok bool
+	}
+	f, _ := call(context.Background(), t.a, func(reply func(found, error)) {
+		r, ok := t.a.state.Resolution(id)
+		reply(found{r, ok}, nil)
+	})
+	return f.r, f.ok
 }

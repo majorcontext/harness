@@ -99,6 +99,20 @@ func (p *Plugins) Session(id string) *Session {
 	return s
 }
 
+// Info returns the state of each started plugin, or nil before Start.
+func (p *Plugins) Info() []protocol.Plugin {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.host == nil {
+		return nil
+	}
+	var out []protocol.Plugin
+	for _, i := range p.host.Plugins() {
+		out = append(out, protocol.Plugin{Name: i.Name, State: i.State, Tools: i.Tools, Hooks: i.Hooks})
+	}
+	return out
+}
+
 // Close stops every plugin process. A second Close does nothing.
 func (p *Plugins) Close() {
 	p.mu.Lock()

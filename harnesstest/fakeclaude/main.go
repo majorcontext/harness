@@ -118,7 +118,8 @@ func main() {
 	f.emit(init)
 	if h, ok := modes[mode]; ok {
 		h(f)
-		return
+	} else {
+		normalTurn(f)
 	}
-	normalTurn(f)
+	callHostedTool(f)
 }

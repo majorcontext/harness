@@ -111,7 +111,8 @@ type SubscriptionOverage struct {
 
 // Session is a view of one session at HeadSeq. Usage sums every model and
 // summary call, but no goal evaluator call. SubscriptionUsage is null until a
-// call carries a snapshot.
+// call carries a snapshot. Plugins lists each configured plugin as the runtime
+// that serves the view knows it; the log does not hold it.
 type Session struct {
 	ID                string             `json:"id"`
 	ParentID          string             `json:"parent_id,omitempty"`
@@ -128,10 +129,19 @@ type Session struct {
 	LastTurn          *LastTurn          `json:"last_turn,omitempty"`
 	CompactionCount   int                `json:"compaction_count,omitempty"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage"`
+	Plugins           []Plugin           `json:"plugins,omitempty"`
 	HeadSeq           uint64             `json:"head_seq"`
 	SyncedSeq         uint64             `json:"synced_seq"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+// Plugin is a configured plugin. State is not-spawned, running, or errored.
+type Plugin struct {
+	Name  string   `json:"name"`
+	State string   `json:"state"`
+	Tools []string `json:"tools"`
+	Hooks []string `json:"hooks"`
 }
 
 // Goal is a condition that the session works toward, turn after turn,
@@ -199,6 +209,13 @@ type Compacted struct {
 	ToSeq     uint64 `json:"to_seq,omitempty"`
 	ByBackend bool   `json:"by_backend,omitempty"`
 	Folded    bool   `json:"folded"`
+}
+
+// Resolution answers an open request with the answer of the user as JSON, or
+// dismisses it. Exactly one is set. A question takes a map of question to choice.
+type Resolution struct {
+	Answer  json.RawMessage `json:"answer,omitempty"`
+	Dismiss bool            `json:"dismiss,omitempty"`
 }
 
 // Event is one durable record of a session log, or an ephemeral frame of a
@@ -274,8 +291,8 @@ type Model struct {
 	ContextWindow int `json:"context_window"`
 }
 
-// SettingsPatch changes each non-nil setting of a session. The next turn
-// uses the new settings; a running turn keeps its own.
+// SettingsPatch changes each non-nil setting of a session. A running turn
+// uses the new settings from its next model call.
 type SettingsPatch struct {
 	Model       *string `json:"model,omitempty"`
 	Effort      *string `json:"effort,omitempty"`
@@ -291,21 +308,22 @@ type EventPage struct {
 
 // Error codes of the HTTP API.
 const (
-	CodeInvalidRequest   = "invalid_request"
-	CodeSessionNotFound  = "session_not_found"
-	CodeSessionExists    = "session_exists"
-	CodeSessionNotOwned  = "session_not_owned"
-	CodeInputConflict    = "input_conflict"
-	CodeTurnMismatch     = "turn_mismatch"
-	CodeSessionBusy      = "session_busy"
-	CodeModelUnavailable = "model_unavailable"
-	CodePayloadTooLarge  = "payload_too_large"
-	CodeDraining         = "draining"
-	CodeInternal         = "internal"
-	CodeNotAGitRepo      = "not_a_git_repo"
-	CodeNoBase           = "no_base"
-	CodeTooManyChanges   = "too_many_changes"
-	CodeProcessNotFound  = "process_not_found"
+	CodeInvalidRequest    = "invalid_request"
+	CodeSessionNotFound   = "session_not_found"
+	CodeSessionExists     = "session_exists"
+	CodeSessionNotOwned   = "session_not_owned"
+	CodeInputConflict     = "input_conflict"
+	CodeTurnMismatch      = "turn_mismatch"
+	CodeSessionBusy       = "session_busy"
+	CodeRequestNotPending = "request_not_pending"
+	CodeModelUnavailable  = "model_unavailable"
+	CodePayloadTooLarge   = "payload_too_large"
+	CodeDraining          = "draining"
+	CodeInternal          = "internal"
+	CodeNotAGitRepo       = "not_a_git_repo"
+	CodeNoBase            = "no_base"
+	CodeTooManyChanges    = "too_many_changes"
+	CodeProcessNotFound   = "process_not_found"
 )
 
 // ErrorBody is the body of every HTTP error response.

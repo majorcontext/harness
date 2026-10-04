@@ -9,6 +9,10 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
+// HistoryTool is the name of the tool that gives a backend that owns its loop
+// the conversation that its own session lacks.
+const HistoryTool = "get_conversation_history"
+
 // Toolset is the tools of one model call.
 type Toolset struct {
 	// Tools are described to the model.

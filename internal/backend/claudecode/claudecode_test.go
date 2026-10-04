@@ -320,10 +320,10 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 		offered []string
 		args    []string
 	}{
-		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden"},
+		{name: "a tool call through MCP runs the embedder tool and hides the operator MCP servers", offered: []string{"echo", "hidden", hist},
 			args: []string{"--strict-mcp-config", "--allowedTools", "mcp__harness"}},
 		{name: "a restricted tool is not offered", allowed: []string{"Read", "echo"}, env: []string{toolsInit, `["Read"]`},
-			offered: []string{"echo"}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
+			offered: []string{"echo", hist}, args: []string{"--tools", "Read", "--strict-mcp-config"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
@@ -664,7 +664,7 @@ func TestClaudeCodeCrashWaitsForInput(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_MODE", "thinking")
 	turnOf(t, s2, text("b", "again"))
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant Working on it.",
-		"owner.acquired 1", "turn.ended interrupted crashed",
+		"owner.acquired 1", "item.completed assistant [harness: this turn was interrupted by a process restart and could not complete]", "turn.ended interrupted crashed",
 		"input.admitted b", "turn.started b", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed")
 	if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[1], "--resume", "fake-session-1") {
 		t.Errorf("argv after the crash = %q, want --resume fake-session-1", argv[1])

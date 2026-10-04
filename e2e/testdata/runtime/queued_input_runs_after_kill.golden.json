@@ -23,6 +23,10 @@
             {
               "kind": "text",
               "text": "first"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -51,10 +55,28 @@
             {
               "kind": "text",
               "text": "first"
-            },
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
             {
               "kind": "text",
               "text": "second"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -75,6 +97,16 @@
       },
       {
         "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
         "role": "user",
         "parts": [
           {
@@ -84,7 +116,7 @@
         ]
       },
       {
-        "id": "msg#3",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {

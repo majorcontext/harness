@@ -3,6 +3,7 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -81,6 +82,13 @@ type Request struct {
 	// Steered receives a value when a steer input waits for Sink.Steer. It
 	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
+	// Questions reports that the backend may ask the user a question.
+	Questions bool
+	// Foreign reports History messages that another provider recorded.
+	Foreign bool
+	// Banner is engine context that each model call sends after History[:BannerAt].
+	Banner   string
+	BannerAt int
 }
 
 // Delta is a piece of an item that is not complete yet.
@@ -119,6 +127,9 @@ type Sink interface {
 	SaveState(backend string, blob []byte) error
 	// Compacted records that the backend compacted its own context.
 	Compacted(summary string) error
+	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
+	Ask(callID, kind string, payload json.RawMessage) error
+	Resolution(id string) (eventlog.RequestResolved, bool)
 }
 
 // Result is the outcome of a Run that returned.
@@ -146,6 +157,8 @@ type Turn interface {
 	Sink
 	Started() string
 	Status(f protocol.StatusFrame)
+	// Settings returns the model and settings of the session now, or "".
+	Settings() (string, eventlog.Settings)
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
@@ -187,13 +200,16 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
+		if m, set := to.Settings(); m != "" && b.Capabilities(m).OwnsLoop == caps.OwnsLoop {
+			req.Model, req.Settings = m, set
+		}
 		s, call := &sink{Turn: to}, req
 		runTool := describe(step, &call, tools, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
-				req.History = h
+				req.History, req.BannerAt = h, min(req.BannerAt, len(h))
 				continue
 			}
 		}

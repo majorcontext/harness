@@ -96,8 +96,11 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 	}
 }
 
+// crashMarker is the assistant item that closes a crashed turn.
+const crashMarker = "[harness: this turn was interrupted by a process restart and could not complete]"
+
 func TestOpenEndsACrashedTurn(t *testing.T) {
-	crashed := []string{"item.completed assistant c1", "owner.acquired 1", "item.completed tool c1 " + cutOff, "turn.ended interrupted crashed"}
+	crashed := []string{"item.completed assistant c1", "owner.acquired 1", "item.completed tool c1 " + cutOff, "item.completed assistant " + crashMarker, "turn.ended interrupted crashed"}
 	for _, tc := range []struct {
 		name    string
 		queued  []protocol.Input

@@ -73,7 +73,7 @@ func readJournal(dir, id string, model message.ModelRef) (old, error) {
 		return old{}, err
 	}
 	if cli != "" {
-		blob, err := external.Mirror{SessionID: cli}.Encode()
+		blob, err := external.Mirror{SessionID: cli, Parked: s.PendingQuestion()}.Encode()
 		if err != nil {
 			return old{}, err
 		}

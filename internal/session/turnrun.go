@@ -60,6 +60,23 @@ func (t *turnRun) Steer() ([]eventlog.Message, error) {
 	return call(context.Background(), t.a, func(reply func([]eventlog.Message, error)) { reply(t.a.steer(t.r)) })
 }
 
+// Settings returns the model and the settings of the session while the turn
+// runs, so that a change takes effect at the next model call of the turn.
+func (t *turnRun) Settings() (string, eventlog.Settings) {
+	type held struct {
+		model string
+		set   eventlog.Settings
+	}
+	h, _ := call(context.Background(), t.a, func(reply func(held, error)) {
+		if t.a.run == t.r {
+			reply(held{t.a.state.Model(), t.a.state.Settings()}, nil)
+			return
+		}
+		reply(held{}, nil)
+	})
+	return h.model, h.set
+}
+
 // Ended ends the turn by the cause of its stop.
 func (t *turnRun) Ended(runErr error) {
 	_, _ = call(context.Background(), t.a, func(reply func(struct{}, error)) {
@@ -108,7 +125,11 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 			return
 		}
 		err := a.append(f.c)
-		reply(a.state.History(), err)
+		h := a.state.History()
+		if a.bannered {
+			a.bannerPin = min(a.bannerPin, len(h))
+		}
+		reply(h, err)
 	})
 	return h, err == nil, err
 }

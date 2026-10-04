@@ -1,6 +1,9 @@
 package eventlog
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 func (s *State) runningTurn(id string) error {
 	if s.turn.ID != id || s.turn.Suspended || id == "" {
@@ -17,8 +20,11 @@ func (s *State) applyStarted(e TurnStarted) error {
 		return illegal("turn.started has an empty turn_id")
 	case s.turnIDs[e.TurnID]:
 		return illegal("turn %s was used", e.TurnID)
-	case len(s.calls) > 0:
-		return illegal("turn %s starts with open tool call %s", e.TurnID, s.calls[0].CallID)
+	}
+	for _, c := range s.calls {
+		if !c.answered {
+			return illegal("turn %s starts with open tool call %s", e.TurnID, c.CallID)
+		}
 	}
 	for _, id := range e.InputIDs {
 		if err := s.inputIs(id, inputAdmitted); err != nil {
@@ -29,6 +35,8 @@ func (s *State) applyStarted(e TurnStarted) error {
 		s.takeInput(id, inputPromoted)
 	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
+	s.turnAt, s.turnBy, s.turnItems = len(s.history), ProviderOf(s.model), 0
+	s.turnN++
 	s.turnIDs[e.TurnID] = true
 	return nil
 }
@@ -61,19 +69,13 @@ func (s *State) applyItem(e ItemCompleted) error {
 		}
 	}
 	s.calls = calls
+	s.turnItems++
 	return nil
 }
 
 func (s *State) unanswered() error {
 	for _, c := range s.calls {
-		open := 0
-		for _, o := range s.calls {
-			if o.ItemID == c.ItemID {
-				open++
-			}
-		}
-		asked := slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.ItemID == c.ItemID })
-		if !asked || open > 1 {
+		if s.openRequest(c.CallID) < 0 {
 			return illegal("tool call %s has no result", c.CallID)
 		}
 	}
@@ -129,6 +131,13 @@ func (s *State) applyEnded(e TurnEnded) error {
 	if err := s.unanswered(); err != nil {
 		return err
 	}
+	own := s.turnItems
+	if Cause(e.Error) == CauseCrashed {
+		own--
+	}
+	if own <= 0 {
+		s.unran = append(s.unran, s.turnN)
+	}
 	s.turn = Turn{}
 	s.lastEnded = e
 	return nil
@@ -141,11 +150,14 @@ func (s *State) applyRequestOpened(e RequestOpened) error {
 	if e.RequestID == "" || e.ItemID == "" || s.openRequest(e.RequestID) >= 0 {
 		return illegal("request %q on item %q is already open or unnamed", e.RequestID, e.ItemID)
 	}
+	if !slices.ContainsFunc(s.calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID && c.ItemID == e.ItemID }) {
+		return illegal("no open tool call %s on item %s", e.RequestID, e.ItemID)
+	}
 	s.requests = append(s.requests, pendingRequest{e, s.turn.ID})
 	return nil
 }
 
-func (s *State) applyRequestResolved(e RequestResolved) error {
+func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 	i := s.openRequest(e.RequestID)
 	if i < 0 {
 		return illegal("request %s is not open", e.RequestID)
@@ -153,14 +165,22 @@ func (s *State) applyRequestResolved(e RequestResolved) error {
 	if e.Resolution != ResolutionAnswered && e.Resolution != ResolutionDismissed {
 		return illegal("request %s has resolution %q", e.RequestID, e.Resolution)
 	}
-	item := s.requests[i].ItemID
-	open := func(c OpenToolCall) bool { return c.ItemID == item }
-	calls := slices.DeleteFunc(slices.Clone(s.calls), open)
-	if n := len(s.calls) - len(calls); n > 1 {
-		return illegal("request %s has %d open tool calls", e.RequestID, n)
+	calls := slices.Clone(s.calls)
+	if k := slices.IndexFunc(calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID }); k >= 0 {
+		if e.Resolution == ResolutionAnswered {
+			calls[k].answered = true
+		} else {
+			s.say(seq, dismissal(calls[k]))
+			calls = slices.Delete(calls, k, k+1)
+		}
 	}
 	s.calls = calls
 	s.requests = slices.Delete(s.requests, i, i+1)
+	s.resolved = maps.Clone(s.resolved)
+	if s.resolved == nil {
+		s.resolved = map[string]RequestResolved{}
+	}
+	s.resolved[e.RequestID] = e
 	return nil
 }
 

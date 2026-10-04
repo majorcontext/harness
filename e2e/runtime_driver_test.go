@@ -26,24 +26,28 @@ import (
 // a DiskStore, with the config that serve would read.
 type runtimeDriver struct {
 	store, workDir string
+	ask            bool
 	cfg            config.Config
 	rt             *harness.Runtime
 	srv            *httptest.Server
 	inputs         int
 }
 
+// runtimeVersion is the build version that serve reports in its engine banner.
+const runtimeVersion = "0.1.0-dev"
+
 // runtimeKey gives the in-process runtime the model key that startServeIn
 // gives serve.
 var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
 
-func newRuntimeDriver(t *testing.T, configPath string) *runtimeDriver {
+func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver {
 	t.Helper()
 	runtimeKey()
 	c, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: t.TempDir(), cfg: *c}
+	d := &runtimeDriver{store: t.TempDir(), workDir: t.TempDir(), cfg: *c, ask: ask}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -51,7 +55,7 @@ func newRuntimeDriver(t *testing.T, configPath string) *runtimeDriver {
 
 func (d *runtimeDriver) start(t *testing.T) {
 	t.Helper()
-	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir})
+	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
@@ -437,9 +441,10 @@ func (d *runtimeDriver) stream(t *testing.T, id string, after uint64, header boo
 	}
 }
 
-// settled reports whether a session runs nothing and has nothing to run.
+// settled reports whether a session runs nothing and has nothing to run. A
+// session that waits for an answer runs nothing.
 func settled(v protocol.Session) bool {
-	return v.Status == protocol.StatusIdle && len(v.Queued) == 0 && (v.Goal == nil || v.Goal.State != "active")
+	return (v.Status == protocol.StatusIdle || v.Status == protocol.StatusWaiting) && len(v.Queued) == 0 && (v.Goal == nil || v.Goal.State != "active")
 }
 
 // WaitIdle reads the view again on each frame of the session, from the head

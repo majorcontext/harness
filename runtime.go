@@ -43,6 +43,8 @@ var (
 	ErrTurnMismatch = session.ErrTurnMismatch
 	// ErrSessionBusy reports a Compact while a turn runs or inputs wait.
 	ErrSessionBusy = session.ErrBusy
+	// ErrRequestNotPending reports a Resolve of a request that is not open.
+	ErrRequestNotPending = session.ErrRequestNotPending
 	// ErrDraining reports a call after Runtime.Close started.
 	ErrDraining = errors.New("harness: runtime is draining")
 )
@@ -78,6 +80,17 @@ type Options struct {
 	// Config.AppendSystemPrompt alone, no file is read, no process runs, no
 	// built-in tool exists, and no session has the task tool.
 	WorkDir string
+	// AskUserQuestion declares that the embedder renders a question of a
+	// backend that owns its loop, such as AskUserQuestion of Claude Code, and
+	// answers it with Session.Resolve. A question that nothing answers parks
+	// the session, so without it no turn may ask. A child session and a
+	// session with an active goal never ask.
+	AskUserQuestion bool
+	// Version is the build version that the engine banner names. Each model
+	// call of a harness-loop turn sends the banner as engine context, after
+	// the newest message of the session when its first request left. Empty:
+	// no banner.
+	Version string
 
 	backend turn.Backend
 }
@@ -104,6 +117,10 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	// banner is the engine status that a model call sends; empty: none.
+	banner string
+	// questions lets a backend ask the user a question.
+	questions bool
 	// commandDirs are the prompt-command dirs; nil without a WorkDir.
 	commandDirs []string
 	// threshold and keep are the compaction settings of each session.
@@ -161,7 +178,7 @@ func New(opts Options) (*Runtime, error) {
 	names := map[string]bool{}
 	for _, t := range tools {
 		name := t.Spec().Name
-		if name == "" || names[name] || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) {
+		if name == "" || names[name] || r.taken(name) {
 			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
 		}
 		names[name] = true
@@ -178,8 +195,21 @@ func New(opts Options) (*Runtime, error) {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
 	})
+	r.banner, r.questions = banner(opts.Version, opts.Config.SessionSync, time.Now()), opts.AskUserQuestion
 	r.base, r.cancel = context.WithCancel(context.Background())
 	return r, nil
+}
+
+// banner renders the engine status line, or "" for an empty version.
+func banner(version, sessionSync string, started time.Time) string {
+	if version == "" {
+		return ""
+	}
+	mode := "fsync"
+	if sessionSync == "volume" {
+		mode = sessionSync
+	}
+	return "[engine: harness " + version + " · session_sync=" + mode + " · engine started " + started.UTC().Format(time.RFC3339) + "]"
 }
 
 // positive returns v, or def when v is not positive.
@@ -327,24 +357,26 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		return nil, err
 	}
 	cfg := session.Config{
-		ID:        id,
-		Log:       storeLog{r.store, id},
-		Blobs:     storeLog{r.store, id},
-		Ownership: own,
-		Owner:     r.name(),
-		Backend:   r.backend,
-		Evaluator: r.evaluator,
-		Tools:     r.bind(id),
-		Prompt:    r.instructions(),
-		Report:    r.report,
-		Agent:     r.agent(),
-		Sync:      r.sync,
-		Limits:    r.limits,
-		Threshold: r.threshold,
-		KeepTurns: r.keep,
-		Base:      r.base,
-		Go:        r.group.Go,
-		Done:      func() { r.forget(id, e) },
+		ID:              id,
+		Log:             storeLog{r.store, id},
+		Blobs:           storeLog{r.store, id},
+		Ownership:       own,
+		Owner:           r.name(),
+		Backend:         r.backend,
+		Banner:          r.banner,
+		AskUserQuestion: r.questions,
+		Evaluator:       r.evaluator,
+		Tools:           r.bind(id),
+		Prompt:          r.instructions(),
+		Report:          r.report,
+		Agent:           r.agent(),
+		Sync:            r.sync,
+		Limits:          r.limits,
+		Threshold:       r.threshold,
+		KeepTurns:       r.keep,
+		Base:            r.base,
+		Go:              r.group.Go,
+		Done:            func() { r.forget(id, e) },
 	}
 	if r.models != nil {
 		cfg.Check = func(from, to string, names []string) error {
@@ -471,6 +503,14 @@ func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.S
 	return page, nil
 }
 
+// pluginInfo returns the state of each plugin, or nil without plugins.
+func (r *Runtime) pluginInfo() []protocol.Plugin {
+	if r.plugins == nil {
+		return nil
+	}
+	return r.plugins.Info()
+}
+
 func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, error) {
 	r.mu.Lock()
 	e := r.sessions[id]
@@ -488,7 +528,9 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	return v.Session(), nil
+	out := v.Session()
+	out.Plugins = r.pluginInfo()
+	return out, nil
 }
 
 // Close hands off every session, waits for every goroutine of the runtime,
@@ -587,7 +629,7 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool {
-		return r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
+		return r.taken(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
 	})
 }
 
@@ -598,6 +640,11 @@ func (r *Runtime) agent() []turn.Tool {
 		return nil
 	}
 	return builtin.Tools(r.workDir)
+}
+
+// taken reports whether name belongs to a tool that the runtime provides.
+func (r *Runtime) taken(name string) bool {
+	return name == turn.HistoryTool || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name)
 }
 
 // builtin reports whether name is a built-in tool of the WorkDir.

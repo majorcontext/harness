@@ -22,6 +22,7 @@ func (r *Runtime) Handler() http.Handler {
 		{Err: ErrInputConflict, Code: protocol.CodeInputConflict},
 		{Err: ErrTurnMismatch, Code: protocol.CodeTurnMismatch},
 		{Err: ErrSessionBusy, Code: protocol.CodeSessionBusy},
+		{Err: ErrRequestNotPending, Code: protocol.CodeRequestNotPending},
 		{Err: ErrModelUnavailable, Code: protocol.CodeModelUnavailable},
 		{Err: ErrDraining, Code: protocol.CodeDraining},
 	}})

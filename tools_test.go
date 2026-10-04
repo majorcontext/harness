@@ -227,3 +227,10 @@ func TestSteerInputJoinsANativeTurnAtTheNextItemBoundary(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {
+	_, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("get_conversation_history", false)}})
+	if !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("New = %v, want ErrInvalidRequest", err)
+	}
+}

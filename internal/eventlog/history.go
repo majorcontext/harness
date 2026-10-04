@@ -9,6 +9,10 @@ import (
 type entry struct {
 	seq uint64
 	msg Message
+	// by is the provider that ran the turn of the message, and turn counts
+	// the turns that started before it.
+	by   string
+	turn int
 	// promoted holds the inputs that one append promoted into a running turn
 	// as this message, and last the seq of the newest of them.
 	promoted [][]Part
@@ -41,7 +45,7 @@ func (s *State) History() []Message {
 		out = append(out, Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: c.Summary}}})
 	}
 	for _, e := range s.history {
-		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts)})
+		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
 	}
 	return out
 }
@@ -62,7 +66,7 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), promoted: [][]Part{parts}, last: env.Seq})
+		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq})
 	case ItemCompleted:
 		s.say(env.Seq, e.Message)
 	case CompactionApplied:
@@ -71,11 +75,39 @@ func (s *State) remember(env Envelope) {
 			i = len(s.history)
 		}
 		s.history = slices.Clone(s.history[i:])
+		s.turnAt = max(0, s.turnAt-i)
 	}
 }
 
 func (s *State) say(seq uint64, m Message) {
-	s.history = append(s.history, entry{seq: seq, msg: m})
+	s.history = append(s.history, entry{seq: seq, msg: m, by: s.turnBy, turn: s.turnN})
+}
+
+// ProviderOf returns the provider of a model reference.
+func ProviderOf(model string) string {
+	p, _, _ := strings.Cut(model, "/")
+	return p
+}
+
+// Foreign reports whether the history holds a message that another provider
+// recorded after the newest message that the provider of model recorded
+// before the current turn. A turn belongs to the provider of the model at its
+// start, whatever a settings change does while it runs. A turn that recorded
+// no item of its own, as one whose backend never started, did not show its
+// backend anything, so it counts as foreign to every provider. A backend that
+// keeps its own session has not seen such a message. The current turn is left
+// out, as it brings its own input.
+func (s *State) Foreign(model string) bool {
+	by, end := ProviderOf(model), len(s.history)
+	if s.turn.ID != "" {
+		end = s.turnAt
+	}
+	foreign := func(e entry) bool { return e.by != by || slices.Contains(s.unran, e.turn) }
+	last := end - 1
+	for last >= 0 && foreign(s.history[last]) {
+		last--
+	}
+	return last < end-1
 }
 
 func cloneParts(parts []Part) []Part {
@@ -106,4 +138,11 @@ func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 		return nil, 0, false
 	}
 	return h[:end], s.history[end-lead].seq - 1, true
+}
+
+// dismissal is the result of the tool call that a dismissed request held
+// open: what the model reads in the history.
+func dismissal(c OpenToolCall) Message {
+	return Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: c.CallID, Name: c.Name,
+		Text: "The user dismissed this question without answering.", IsError: true}}}
 }

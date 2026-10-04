@@ -2,6 +2,7 @@ package turn_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -43,6 +44,11 @@ func (r *recorder) Steer() ([]eventlog.Message, error) {
 	in := r.steer[0]
 	r.steer = r.steer[1:]
 	return in, nil
+}
+func (*recorder) Settings() (string, eventlog.Settings)     { return "", eventlog.Settings{} }
+func (*recorder) Ask(string, string, json.RawMessage) error { return nil }
+func (*recorder) Resolution(string) (eventlog.RequestResolved, bool) {
+	return eventlog.RequestResolved{}, false
 }
 func (*recorder) State(string) ([]byte, error)   { return nil, nil }
 func (*recorder) SaveState(string, []byte) error { return nil }

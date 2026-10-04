@@ -29,6 +29,14 @@ type envelope struct {
 	FilePath        string                `json:"filePath,omitempty"`
 	Entries         []json.RawMessage     `json:"entries,omitempty"`
 	RateLimitInfo   *rateLimitInfo        `json:"rate_limit_info,omitempty"`
+	StopReason      string                `json:"stop_reason,omitempty"`
+	RequestID       string                `json:"request_id,omitempty"`
+	Request         *controlRequest       `json:"request,omitempty"`
+}
+
+type controlRequest struct {
+	Subtype   string `json:"subtype"`
+	ToolUseID string `json:"tool_use_id"`
 }
 
 // rateLimitInfo is the subscription limit signal of a rate_limit_event frame.

@@ -44,10 +44,11 @@ const (
 	RoleTool      = "tool"
 )
 
-// Message is one completed conversation item.
+// Message is one completed conversation item. ParentCallID names its subagent call.
 type Message struct {
-	Role  string `json:"role"`
-	Parts []Part `json:"parts"`
+	Role         string `json:"role"`
+	Parts        []Part `json:"parts"`
+	ParentCallID string `json:"parent_call_id,omitempty"`
 }
 
 // Usage counts the tokens of one turn.
@@ -141,6 +142,9 @@ type TurnEnded struct {
 	Error      string     `json:"error,omitempty"`
 }
 
+// RequestQuestion is the kind of a request that asks the user to choose.
+const RequestQuestion = "question"
+
 // RequestOpened asks the client for an answer about an item.
 type RequestOpened struct {
 	RequestID   string          `json:"request_id"`
@@ -149,7 +153,7 @@ type RequestOpened struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
-// RequestResolved closes an open request. It is the result of the tool call of the request item.
+// RequestResolved closes an open request; an answer leaves its tool call open.
 type RequestResolved struct {
 	RequestID  string          `json:"request_id"`
 	Resolution Resolution      `json:"resolution"`

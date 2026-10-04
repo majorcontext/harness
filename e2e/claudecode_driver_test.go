@@ -23,21 +23,28 @@ type claudeLane struct {
 	mode string
 	ask  bool           // pass --ask-user-question to serve
 	mcp  map[string]any // config mcp_servers
+	// historyTool makes each turn of the CLI call get_conversation_history on
+	// the hosted MCP server after the result, for a host with no route to it.
+	historyTool bool
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
 type claudeLogs struct {
-	argvLog, stdinLog, mcpLog, stateDir string
+	argvLog, stdinLog, mcpLog, toolLog, stateDir string
 }
 
-func (l claudeLogs) env(mode string) map[string]string {
-	return map[string]string{
+func (l claudeLogs) env(mode string, historyTool bool) map[string]string {
+	env := map[string]string{
 		"FAKE_CLAUDE_MODE":           mode,
 		"FAKE_CLAUDE_LOG":            l.argvLog,
 		"FAKE_CLAUDE_STDIN_LOG":      l.stdinLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG": l.mcpLog,
 		"FAKE_CLAUDE_STATE":          filepath.Join(l.stateDir, "parked"),
 	}
+	if historyTool {
+		env["FAKE_CLAUDE_CALL_TOOL"], env["FAKE_CLAUDE_TOOL_LOG"] = "get_conversation_history", l.toolLog
+	}
+	return env
 }
 
 // claudeDriver is the driver of a host that delegates to fakeclaude.
@@ -59,13 +66,13 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 		cfg["mcp_servers"] = l.mcp
 	}
 	stateDir := t.TempDir()
-	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"),
+	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"), toolLog: filepath.Join(stateDir, "tool.jsonl"),
 		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
 	var args []string
 	if l.ask {
 		args = append(args, "--ask-user-question")
 	}
-	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode), args...), claudeLogs: logs}
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode, l.historyTool), args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
@@ -264,7 +271,25 @@ func (d *httpDriver) answerQuestion(t *testing.T, id, callID string, answers map
 type claudeHistoryTool struct{ as string }
 
 func (a claudeHistoryTool) run(t *testing.T, r *run) {
-	r.record(t, "history_tool", a.as, serveLaneOf(t, r).historyTool(t, r.id(t, a.as)))
+	d := claudeDriverOf(t, r)
+	if serve, ok := d.laneHost.(*httpDriver); ok {
+		r.record(t, "history_tool", a.as, serve.historyTool(t, r.id(t, a.as)))
+		return
+	}
+	r.record(t, "history_tool", a.as, d.lastToolCall(t))
+}
+
+// lastToolCall is the response that the CLI of the newest run got from the
+// history tool, which a run reads after its result, once harness has recorded
+// every item of the turn.
+func (d *claudeDriver) lastToolCall(t *testing.T) callResult {
+	t.Helper()
+	data, err := os.ReadFile(d.toolLog)
+	if err != nil {
+		t.Fatalf("read tool log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	return callResult{Status: http.StatusOK, Body: decodeBody(t, "tool call", []byte(lines[len(lines)-1]))}
 }
 
 func (d *httpDriver) historyTool(t *testing.T, id string) callResult {
@@ -295,7 +320,7 @@ func (a claudeSession) run(t *testing.T, r *run) {
 type claudeMessageParents struct{ as string }
 
 func (a claudeMessageParents) run(t *testing.T, r *run) {
-	r.record(t, "message_parents", a.as, serveLaneOf(t, r).messageParents(t, r.id(t, a.as)))
+	r.record(t, "message_parents", a.as, claudeDriverOf(t, r).messageParents(t, r.id(t, a.as)))
 }
 
 func (d *httpDriver) messageParents(t *testing.T, id string) callResult {
@@ -383,7 +408,7 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 
 func (d *runtimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
 	t.Helper()
-	return notServed(t, "POST /sessions/{id}/requests/{request}", "phase 5")
+	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, map[string]any{"answer": answers})
 }
 
 // journalEvents lists the durable events of session id whose kind starts
@@ -400,4 +425,35 @@ func (d *runtimeDriver) journalEvents(t *testing.T, id, prefix string) []any {
 		}
 	}
 	return out
+}
+
+// messageParents lists the role and the parent tool call of each message of
+// session id, in transcript order: an input and an item.
+func (d *runtimeDriver) messageParents(t *testing.T, id string) callResult {
+	t.Helper()
+	var out []any
+	add := func(role, parent string) {
+		out = append(out, map[string]any{"role": role, "parent_tool_use_id": parent})
+	}
+	for _, ev := range d.events(t, id) {
+		switch ev.Kind {
+		case "turn.started":
+			for range decodeEvent[struct {
+				InputIDs []string `json:"input_ids"`
+			}](t, ev).InputIDs {
+				add("user", "")
+			}
+		case "input.promoted":
+			add("user", "")
+		case "item.completed":
+			it := decodeEvent[struct {
+				Message struct {
+					Role   string `json:"role"`
+					Parent string `json:"parent_call_id"`
+				} `json:"message"`
+			}](t, ev)
+			add(it.Message.Role, it.Message.Parent)
+		}
+	}
+	return callResult{Status: http.StatusOK, Body: out}
 }

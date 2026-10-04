@@ -209,7 +209,7 @@ func summaryText(m message.Message) string {
 // request-only and is dropped. An attachment becomes a note, because a log
 // message holds text only.
 func convertMessage(m message.Message, names map[string]string) eventlog.Message {
-	out := eventlog.Message{Role: string(m.Role), Parts: []eventlog.Part{}}
+	out := eventlog.Message{Role: string(m.Role), Parts: []eventlog.Part{}, ParentCallID: m.ParentToolUseID}
 	for _, p := range m.Parts {
 		switch p := p.(type) {
 		case *message.Text:

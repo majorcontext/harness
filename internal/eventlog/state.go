@@ -127,6 +127,9 @@ type OpenToolCall struct {
 	CallID string
 	ItemID string
 	Name   string
+	// answered is set when the user answered its request: the turn that the
+	// answer starts records the result.
+	answered bool
 }
 
 // Summary is the list entry of a session.
@@ -179,6 +182,7 @@ type State struct {
 	lastEnded  TurnEnded
 	calls      []OpenToolCall
 	requests   []pendingRequest
+	resolved   map[string]RequestResolved
 	goal       Goal
 	usage      Usage
 	context    ContextMeasured
@@ -190,6 +194,15 @@ type State struct {
 	retained   []ToolResultRetained
 	commands   map[string]command
 	history    []entry
+	// turnAt is the length of history when the current turn started.
+	turnAt int
+	// turnBy is the provider of the model when the newest turn started, turnN
+	// counts the turns that started, and turnItems counts the items of the
+	// current turn. unran lists the turns that ended with no item of their own.
+	turnBy    string
+	turnN     int
+	turnItems int
+	unran     []int
 }
 
 func (s *State) clone() *State {
@@ -205,6 +218,7 @@ func (s *State) clone() *State {
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
 	c.retained = slices.Clip(s.retained)
+	c.unran = slices.Clip(s.unran)
 	return &c
 }
 
@@ -257,6 +271,13 @@ func (s *State) Requests() []RequestOpened {
 		out[i].Payload = slices.Clone(r.Payload)
 	}
 	return out
+}
+
+// Resolution returns the record that closed request id, if it ever opened and closed.
+func (s *State) Resolution(id string) (RequestResolved, bool) {
+	r, ok := s.resolved[id]
+	r.Answer = slices.Clone(r.Answer)
+	return r, ok
 }
 
 // OpenToolCalls returns the tool calls with no result, oldest first.
@@ -393,7 +414,7 @@ func (s *State) step(env Envelope) error {
 	case RequestOpened:
 		return s.applyRequestOpened(e)
 	case RequestResolved:
-		return s.applyRequestResolved(e)
+		return s.applyRequestResolved(e, env.Seq)
 	case GoalSet:
 		return s.applyGoalSet(e)
 	case GoalEvaluated:

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
@@ -153,6 +154,10 @@ func request(req turn.Request) (*provider.Request, error) {
 	msgs := make([]message.Message, len(req.History))
 	for i, m := range req.History {
 		msgs[i] = toMessage(m)
+	}
+	if req.Banner != "" {
+		banner := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: req.Banner}}}
+		msgs = slices.Insert(msgs, min(req.BannerAt, len(msgs)), banner)
 	}
 	tools := make([]provider.ToolDef, len(req.Tools))
 	for i, t := range req.Tools {

@@ -1,7 +1,9 @@
 package harness
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -29,6 +31,7 @@ func (s *Session) View() protocol.Session {
 	synced := s.a.Synced()
 	v := detach(s.a.View().Session)
 	v.SyncedSeq = synced
+	v.Plugins = s.r.pluginInfo()
 	return v
 }
 
@@ -127,6 +130,33 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 	return s.r.interruptTree(ctx, s.id, stop)
 }
 
+// Resolve answers or dismisses the open request requestID: with res.Answer, the
+// answer of the user, or with res.Dismiss. An answer runs a turn with no input,
+// which hands the answer to the backend that asked. A request that is not open
+// fails with ErrRequestNotPending. For a question of Claude Code the request
+// ID is the call ID of the AskUserQuestion item, and the answer maps each
+// question to the chosen label or free text.
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error {
+	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !hasAnswer(res.Answer) || len(res.Answer) > 0 && !json.Valid(res.Answer) {
+		return fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
+	}
+	err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
+	if errors.Is(err, session.ErrBadAnswer) {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return err
+}
+
+// hasAnswer reports whether answer is a JSON value other than null, an empty
+// object, or an empty string, whatever whitespace surrounds it.
+func hasAnswer(answer json.RawMessage) bool {
+	var b bytes.Buffer
+	if json.Compact(&b, answer) != nil {
+		return len(answer) > 0
+	}
+	return !slices.Contains([]string{"", "null", "{}", `""`}, b.String())
+}
+
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An
 // evaluator judges each turn, and its guidance is the input of the next one.
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
@@ -207,11 +237,12 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
 }
 
-// Update changes the settings of the session and returns its view. The next
-// turn uses them; a running turn keeps its own until a handoff resumes it.
+// Update changes the settings of the session and returns its view. A running
+// turn that owns no loop uses them from its next model call; a backend that
+// owns its loop uses them from its next run.
 // A model that no configured provider serves fails with ErrModelUnavailable.
-// A move to another provider fails with ErrInvalidRequest when either
-// backend owns its context.
+// A backend that owns its loop reads the history of another provider through
+// the get_conversation_history tool, so any two models may follow each other.
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error) {
 	if p.Effort != nil {
 		if _, err := message.ParseEffort(*p.Effort); err != nil {

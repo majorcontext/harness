@@ -72,7 +72,7 @@ var (
 	base      = []Event{created()}
 	running   = with(base, admit("a"), start("t1", "a"))
 	calling   = with(running, call("t1", "i1", "c1"))
-	asking    = with(calling, ask("r1", "i1"))
+	asking    = with(calling, ask("c1", "i1"))
 	suspended = with(calling, result("t1", "i2", "c1"), suspend("t1", CauseHandoff))
 	evaluated = with(base, setGoal, admit("a"), start("t1", "a"), end("t1", StopCompleted, ""), verdict("t1"))
 )
@@ -155,17 +155,22 @@ var applyRows = []struct {
 	{"a tool call gets one result", with(calling, result("t1", "i2", "c1"), result("t1", "i3", "c1")), "no open tool call c1", view{}},
 	{"a tool call id is open once", with(calling, call("t1", "i2", "c1")), "tool call c1 is open", view{}},
 	{"a turn does not end with an unanswered tool call", with(calling, end("t1", StopCompleted, "")), "tool call c1 has no result", view{}},
-	{"a request holds a tool call open past the turn", with(asking, end("t1", StopAwaitingInput, "")), "", view{Status: StatusWaiting, Requests: []string{"r1"}, Calls: []string{"c1"}}},
-	{"a request holds open only the one call of its item", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), end("t1", StopAwaitingInput, "")), "tool call c1 has no result", view{}},
+	{"a request holds a tool call open past the turn", with(asking, end("t1", StopAwaitingInput, "")), "", view{Status: StatusWaiting, Requests: []string{"c1"}, Calls: []string{"c1"}}},
+	{"a request holds open only the call that it names", with(running, call("t1", "i1", "c1", "c2"), ask("c1", "i1"), end("t1", StopAwaitingInput, "")), "tool call c2 has no result", view{}},
 	{"awaiting_input needs an open request", with(running, end("t1", StopAwaitingInput, "")), "no open request", view{}},
 	{"awaiting_input needs a request from its own turn", with(asking, result("t1", "i2", "c1"), end("t1", StopCompleted, ""), start("t2"), end("t2", StopAwaitingInput, "")), "turn t2 awaits input with no open request from this turn", view{}},
 	{"a turn does not start while a tool call is open", with(asking, end("t1", StopAwaitingInput, ""), start("t2")), "turn t2 starts with open tool call c1", view{}},
-	{"an input is not admitted while a request is open", with(asking, admit("b")), "request r1 is open", view{}},
-	{"a dismissed request lets an input start a turn", with(asking, end("t1", StopAwaitingInput, ""), dismiss("r1"), admit("b"), start("t2", "b")), "", view{Status: StatusRunning, Turn: "t2"}},
-	{"an answer is the result of the request's tool call", with(asking, end("t1", StopAwaitingInput, ""), resolve("r1")), "", view{Status: StatusIdle}},
-	{"a request answers only an item with one open tool call", with(running, call("t1", "i1", "c1", "c2"), ask("r1", "i1"), resolve("r1")), "request r1 has 2 open tool calls", view{}},
-	{"a request resolves once", with(asking, resolve("r1"), resolve("r1")), "request r1 is not open", view{}},
-	{"a request opens only in a running turn", with(base, ask("r1", "i1")), "no running turn", view{}},
+	{"an input is not admitted while a request is open", with(asking, admit("b")), "request c1 is open", view{}},
+	{"a dismissed request lets an input start a turn", with(asking, end("t1", StopAwaitingInput, ""), dismiss("c1"), admit("b"), start("t2", "b")), "", view{Status: StatusRunning, Turn: "t2"}},
+	{"an answer leaves the tool call open for the turn that it starts", with(asking, end("t1", StopAwaitingInput, ""), resolve("c1")), "", view{Status: StatusIdle, Calls: []string{"c1"}}},
+	{"a turn starts while the call of an answer is open", with(asking, end("t1", StopAwaitingInput, ""), resolve("c1"), start("t2")), "", view{Status: StatusRunning, Turn: "t2", Calls: []string{"c1"}}},
+	{"a result closes the call of an answer", with(asking, end("t1", StopAwaitingInput, ""), resolve("c1"), start("t2"), result("t2", "i2", "c1"), end("t2", StopCompleted, "")), "", view{Status: StatusIdle}},
+	{"a turn does not end with the call of an answer unresulted", with(asking, end("t1", StopAwaitingInput, ""), resolve("c1"), start("t2"), end("t2", StopCompleted, "")), "tool call c1 has no result", view{}},
+	{"a dismissal closes the tool call of its request", with(asking, end("t1", StopAwaitingInput, ""), dismiss("c1")), "", view{Status: StatusIdle}},
+	{"a dismissal closes only the call that it names", with(running, call("t1", "i1", "c1", "c2"), ask("c1", "i1"), dismiss("c1")), "", view{Status: StatusRunning, Turn: "t1", Calls: []string{"c2"}}},
+	{"a request opens on an open tool call named by its id", with(running, call("t1", "i1", "c1"), ask("c9", "i1")), "no open tool call c9", view{}},
+	{"a request resolves once", with(asking, resolve("c1"), resolve("c1")), "request c1 is not open", view{}},
+	{"a request opens only in a running turn", with(base, ask("c1", "i1")), "no running turn", view{}},
 	{"a handoff suspends the turn", suspended, "", view{Status: StatusIdle, Turn: "t1 suspended"}},
 	{"a suspended turn resumes", with(suspended, resume("t1", 1)), "", view{Status: StatusRunning, Turn: "t1"}},
 	{"only a handoff suspends a turn", with(running, suspend("t1", CauseStopped)), "cause stopped", view{}},
@@ -256,7 +261,7 @@ func TestCheckMatchesAppend(t *testing.T) {
 var errAny = errors.New("any error")
 
 func TestAccessorsDoNotAliasState(t *testing.T) {
-	events := with(base, admit("a"), start("t1", "a"), admit("b"), call("t1", "i1", "c1"), ask("r1", "i1"))
+	events := with(base, admit("a"), start("t1", "a"), admit("b"), call("t1", "i1", "c1"), ask("c1", "i1"))
 	s := replay(t, events)
 	turn, _ := s.Turn()
 	turn.InputIDs[0] = "x"

@@ -108,7 +108,7 @@ func (c control) connect(ctx context.Context, name string) (any, error) {
 		return connected{name, true, "already connected"}, nil
 	}
 	if err := c.s.connect(ctx, name); err != nil {
-		return nil, fmt.Errorf("mcp: connect for %q failed: %s", name, reason(err))
+		return nil, fmt.Errorf("mcp: connect for %q failed: %s", name, connectReason(err))
 	}
 	return connected{name, true, "connected"}, nil
 }

@@ -194,10 +194,10 @@ var journalCases = []struct {
 			t.Errorf("last ended %+v", e)
 		}
 	}},
-	{"delegated session resumes its CLI session", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
+	{"delegated session resumes its CLI session and denies its parked question", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
 		key := s.BackendState(claudeCodeState)
 		m, err := external.LoadMirror([]byte(readBlob(t, st, "ses_000000000000000f", key)))
-		if err != nil || m.SessionID != "cli-123" {
+		if err != nil || m.SessionID != "cli-123" || m.Parked != "toolu_q1" {
 			t.Errorf("mirror %+v %v", m, err)
 		}
 	}},
@@ -310,5 +310,12 @@ func TestDirGivesTheFallbackModelToAJournalThatNamesNone(t *testing.T) {
 	s := replay(t, st, "ses_0000000000000014")
 	if want := oldTranscript(t, dir, "ses_0000000000000014"); s.Model() != "openai/gpt-5" || !slices.Equal(newTranscript(s), want) {
 		t.Errorf("model %q history %q, want %q", s.Model(), newTranscript(s), want)
+	}
+}
+
+func TestConvertMessageKeepsTheSubagentParent(t *testing.T) {
+	m := message.Message{Role: message.RoleAssistant, ParentToolUseID: "toolu_parent", Parts: message.Parts{&message.Text{Text: "inside"}}}
+	if got := convertMessage(m, map[string]string{}); got.ParentCallID != "toolu_parent" {
+		t.Errorf("converted ParentCallID = %q, want toolu_parent", got.ParentCallID)
 	}
 }
