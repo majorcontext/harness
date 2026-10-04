@@ -34,7 +34,6 @@ func (s *State) applyGoalEvaluated(e GoalEvaluated) error {
 	}
 	s.goal.Turns++
 	s.goal.Evaluated, s.goal.Pauses = e.TurnID, 0
-	s.usage = s.usage.Add(e.Usage)
 	return nil
 }
 

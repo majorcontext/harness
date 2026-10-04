@@ -110,7 +110,7 @@ type SubscriptionOverage struct {
 }
 
 // Session is a view of one session at HeadSeq. Usage sums every model call
-// of the session, the summary and goal evaluator calls included.
+// of the session, the summary calls included.
 // SubscriptionUsage is null until a call carries a snapshot.
 type Session struct {
 	ID                string             `json:"id"`

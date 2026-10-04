@@ -217,7 +217,7 @@ func TestSteerInputJoinsANativeTurnAtTheNextItemBoundary(t *testing.T) {
 		submit(t, s, steer)
 		close(bash.release)
 		next := <-f.runs
-		if h := next.req.History; len(h) < 2 || h[len(h)-2].Parts[0].CallID != "c1" || h[len(h)-1].Role != "user" || h[len(h)-1].Parts[0].Text != "now" {
+		if h := next.req.History; len(h) < 2 || h[len(h)-2].Parts[0].CallID != "c1" || h[len(h)-1].Role != "user" || h[len(h)-1].Parts[0].Text != "OPERATOR MESSAGES (address these, then continue the task):\n1. now\n" {
 			t.Fatalf("history of the next model call = %+v, want the result of c1, then the steer input", h)
 		}
 		next.emit(say("done"))

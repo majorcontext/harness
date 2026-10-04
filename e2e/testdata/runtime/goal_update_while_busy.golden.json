@@ -125,8 +125,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 5,
+          "output_tokens": 3
         }
       }
     },

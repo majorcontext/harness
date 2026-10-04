@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -38,6 +39,9 @@ type logItem struct {
 type logEntry struct {
 	seq uint64
 	msg transcriptMessage
+	// promoted holds the inputs that one append promoted as this message.
+	promoted [][]logPart
+	last     uint64
 }
 
 // transcriptOfLog projects a session log as the model sees it: the summary
@@ -51,7 +55,17 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 	var entries []logEntry
 	var summary *transcriptMessage
 	say := func(seq uint64, id, role string, parts []logPart) {
-		entries = append(entries, logEntry{seq, transcriptMessage{ID: id, Role: role, Parts: transcriptParts(parts)}})
+		entries = append(entries, logEntry{seq: seq, msg: transcriptMessage{ID: id, Role: role, Parts: transcriptParts(parts)}})
+	}
+	promote := func(seq uint64, id string, parts []logPart) {
+		if n := len(entries); n > 0 && entries[n-1].promoted != nil && entries[n-1].last+1 == seq {
+			e := &entries[n-1]
+			e.promoted, e.last = append(e.promoted, parts), seq
+			e.msg.Parts = steerParts(e.promoted)
+			return
+		}
+		entries = append(entries, logEntry{seq: seq, msg: transcriptMessage{ID: "msg_" + id, Role: "user", Parts: steerParts([][]logPart{parts})},
+			promoted: [][]logPart{parts}, last: seq})
 	}
 	for _, ev := range evs {
 		switch ev.Kind {
@@ -66,7 +80,7 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 			}
 		case "input.promoted":
 			id := decodeEvent[logInput](t, ev).InputID
-			say(ev.Seq, "msg_"+id, "user", inputs[id])
+			promote(ev.Seq, id, inputs[id])
 		case "item.completed":
 			it := decodeEvent[logItem](t, ev)
 			say(ev.Seq, "msg_"+it.ItemID, it.Message.Role, it.Message.Parts)
@@ -88,6 +102,20 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 		out = append(out, e.msg)
 	}
 	return out
+}
+
+// steerParts renders inputs that join a running turn as the model reads them.
+func steerParts(inputs [][]logPart) []transcriptPart {
+	var in [][]eventlog.Part
+	for _, parts := range inputs {
+		var ps []eventlog.Part
+		for _, p := range parts {
+			ps = append(ps, eventlog.Part{Type: p.Type, Text: p.Text})
+		}
+		in = append(in, ps)
+	}
+	m := eventlog.SteerMessage(in)
+	return []transcriptPart{{Type: m.Parts[0].Type, Text: m.Parts[0].Text}}
 }
 
 func transcriptParts(parts []logPart) []transcriptPart {

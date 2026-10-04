@@ -163,13 +163,11 @@ type GoalSet struct {
 	Turns     int    `json:"turns,omitempty"`
 }
 
-// GoalEvaluated records the verdict on the goal after a turn. Usage is the
-// usage of the evaluator call.
+// GoalEvaluated records the verdict on the goal after a turn.
 type GoalEvaluated struct {
 	TurnID   string  `json:"turn_id"`
 	Verdict  Verdict `json:"verdict"`
 	Guidance string  `json:"guidance,omitempty"`
-	Usage    Usage   `json:"usage,omitzero"`
 }
 
 // GoalChanged moves the goal to another state. A paused goal resumes at RetryAt.

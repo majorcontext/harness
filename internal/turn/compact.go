@@ -41,7 +41,7 @@ func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) 
 	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
-	text, usage, err := Ask(ctx, b, req, idle)
+	text, usage, err := ask(ctx, b, req, idle)
 	if err != nil {
 		return "", usage, err
 	}
@@ -51,9 +51,13 @@ func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) 
 	return SummaryBanner + text, usage, nil
 }
 
-// Ask makes one model call of req with no tools and returns its text and
-// the usage of the call.
-func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
+// Ask makes one model call of req with no tools and returns its text.
+func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
+	text, _, err := ask(ctx, b, req, idle)
+	return text, err
+}
+
+func ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	var a answer
 	if _, err := watch(ctx, b, req, &a, idle); err != nil {
@@ -62,7 +66,7 @@ func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (strin
 	return a.text.String(), a.usage, nil
 }
 
-// answer is the Sink of Ask. It keeps the text and the usage.
+// answer is the Sink of ask. It keeps the text and the usage.
 type answer struct {
 	text  strings.Builder
 	usage eventlog.Usage

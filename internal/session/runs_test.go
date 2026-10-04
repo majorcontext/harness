@@ -31,11 +31,17 @@ type kindBackend struct {
 	// reports for every model.
 	tokens int64
 	window int
-	calls  []runKind
-	reqs   map[runKind]turn.Request
+	// windows gives a model its own window, in the capabilities and in the
+	// reading of each of its calls.
+	windows map[string]int
+	calls   []runKind
+	reqs    map[runKind]turn.Request
 }
 
-func (b *kindBackend) Capabilities(string) turn.Capabilities {
+func (b *kindBackend) Capabilities(model string) turn.Capabilities {
+	if w, ok := b.windows[model]; ok {
+		return turn.Capabilities{ContextWindow: w}
+	}
 	return turn.Capabilities{ContextWindow: b.window}
 }
 
@@ -78,7 +84,7 @@ func (b *kindBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 	}
 	t := turn.Telemetry{Usage: eventlog.Usage{InputTokens: b.usage[kind]}}
 	if kind == kindTurn && b.tokens > 0 {
-		t.Context = eventlog.ContextMeasured{Tokens: b.tokens, Source: "m"}
+		t.Context = eventlog.ContextMeasured{Tokens: b.tokens, Window: int64(b.windows[req.Model]), Source: "m"}
 	}
 	out.Telemetry(t)
 	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
@@ -249,7 +255,7 @@ func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
 	}
 }
 
-func TestEveryModelCallCountsInTheUsageOfTheSession(t *testing.T) {
+func TestEveryModelCallExceptAnEvaluationCountsInTheUsageOfTheSession(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{}),
 			usage: map[runKind]int64{kindTurn: 1, kindCompaction: 20, kindJudge: 300}}
@@ -268,8 +274,8 @@ func TestEveryModelCallCountsInTheUsageOfTheSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		settled(a)
-		if got, want := a.View().Session.Usage.InputTokens, int64(1+1+20+1+300); got != want {
-			t.Errorf("input tokens = %d, want %d: two turns, a summary, a goal turn, and an evaluation", got, want)
+		if got, want := a.View().Session.Usage.InputTokens, int64(1+1+20+1); got != want {
+			t.Errorf("input tokens = %d, want %d: two turns, a summary, and a goal turn, but not the evaluation", got, want)
 		}
 	})
 }
@@ -285,7 +291,7 @@ func TestTheViewShowsTheGaugeTheLastTurnCompactionsAndSubscriptionUsage(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := Describe("s1", s)
+	v := Describe("s1", s, 0)
 	if v.Context != (protocol.Context{Tokens: 700, Window: 1000}) {
 		t.Errorf("Context = %+v", v.Context)
 	}
@@ -347,4 +353,55 @@ func TestTheWindowOfTheModelBacksUpAReadingWithNone(t *testing.T) {
 			t.Errorf("model calls = %v, want %v: a reading of 900 tokens in a window of 1000 compacts before the third turn", got, want)
 		}
 	})
+}
+
+func TestTheWindowOfTheNewModelReplacesThatOfAnOlderReading(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{}), tokens: 900,
+			windows: map[string]int{"big/m": 2000, "small/m": 1000}}
+		cfg := actorConfig(t, &memLog{}, owned{}, b)
+		cfg.KeepTurns, cfg.Threshold = 1, 0.8
+		a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "big/m"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		converse(t, a, "one", "two")
+		small := "small/m"
+		if err := a.Update(context.Background(), eventlog.SettingsChanged{Model: &small}); err != nil {
+			t.Fatal(err)
+		}
+		converse(t, a, "three")
+		synctest.Wait()
+		if got, want := b.called(), []runKind{kindTurn, kindTurn, kindCompaction, kindTurn}; !slices.Equal(got, want) {
+			t.Errorf("model calls = %v, want %v: 900 tokens pass 0.8 of the 1000 tokens of the new model, not of the 2000 of the older reading", got, want)
+		}
+	})
+}
+
+func TestTheViewTakesTheWindowOfTheModelBeforeThatOfTheReading(t *testing.T) {
+	read := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1}, *firstInput(),
+		eventlog.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}},
+		eventlog.ContextMeasured{Tokens: 700, Window: 2000, Source: "m"})
+	unread := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1})
+	for _, tc := range []struct {
+		name   string
+		log    *memLog
+		window int
+		want   protocol.Context
+	}{
+		{"a model window replaces that of an older reading", read, 1000, protocol.Context{Tokens: 700, Window: 1000}},
+		{"a reading window serves a model with none", read, 0, protocol.Context{Tokens: 700, Window: 2000}},
+		{"a model window shows before any reading", unread, 1000, protocol.Context{Window: 1000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Load(context.Background(), "s1", tc.log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := Describe("s1", s, tc.window).Context; got != tc.want {
+				t.Errorf("Context = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
 }

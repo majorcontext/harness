@@ -324,7 +324,7 @@ func TestSteerInput(t *testing.T) {
 		want           []string
 	}{
 		{"a steering backend folds the input in at the next item", true, false,
-			[]string{"input.promoted s", "item.completed assistant steered: now", "turn.ended completed"}},
+			[]string{"input.promoted s", "item.completed assistant steered: OPERATOR MESSAGES (address these, then continue the task):\n1. now", "turn.ended completed"}},
 		{"another backend runs the input as the next turn", false, false,
 			[]string{"turn.ended completed", "turn.started s", "turn.ended completed"}},
 		{"a steering backend that ends without taking the input runs it as the next turn", true, true,

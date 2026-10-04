@@ -153,11 +153,11 @@ func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
 		return nil, nil
 	}
 	var events []eventlog.Event
-	var steered []eventlog.Message
+	var steered [][]eventlog.Part
 	for _, in := range a.state.Queue() {
 		if in.Delivery == eventlog.DeliverySteer {
 			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id})
-			steered = append(steered, eventlog.Message{Role: eventlog.RoleUser, Parts: in.Parts})
+			steered = append(steered, in.Parts)
 		}
 	}
 	if len(events) == 0 {
@@ -166,7 +166,7 @@ func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
 	if err := a.append(events...); err != nil {
 		return nil, err
 	}
-	return steered, nil
+	return []eventlog.Message{eventlog.SteerMessage(steered)}, nil
 }
 
 func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }

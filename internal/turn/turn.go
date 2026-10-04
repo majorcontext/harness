@@ -138,12 +138,13 @@ type Limits struct {
 	Idle time.Duration
 }
 
-// Turn is what a running turn reports through. It is bound to its turn, so
-// no method takes a turn ID. A retrying Status abandons the item that the
-// failed attempt streamed. CompactTurn returns ok false when no turn can
-// fold. Only CompactTurn takes a ctx: a backend reports after the turn ends.
+// Turn is what a running turn reports through, bound to its turn. Started
+// announces an item and returns the ID that its Delta calls name and its Item
+// records; it replaces an item that a failed call streamed. CompactTurn
+// returns ok false when no turn can fold. Only CompactTurn takes a ctx.
 type Turn interface {
 	Sink
+	Started() string
 	Status(f protocol.StatusFrame)
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
@@ -164,9 +165,9 @@ const (
 // Run runs req on b and reports its items and its end to to. Only tools,
 // and the tools that src gives each model call, reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
-// order, then takes the steer inputs and calls b again, until a call asks
-// for no tool. Model calls run under step and tools under ctx: when only
-// step ends, a running tool finishes and no new tool starts.
+// order, takes the steer inputs, and calls b again until a call asks for no
+// tool. Model calls run under step and tools under ctx: when only step ends,
+// a running tool finishes and no new tool starts.
 func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) {
 	to.Ended(run(ctx, step, b, req, tools, src, to, lim))
 }
@@ -221,11 +222,6 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 			}
 			req.History = append(req.History, m)
 		}
-		in, err := to.Steer()
-		if err != nil {
-			return err
-		}
-		req.History = append(req.History, in...)
 		switch {
 		case !res.MaxTokens:
 			nudge = nil
@@ -238,6 +234,11 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		default:
 			return fmt.Errorf("turn: the response reached max_tokens after %d continuations", continued)
 		}
+		in, err := to.Steer()
+		if err != nil {
+			return err
+		}
+		req.History = append(req.History, in...)
 	}
 }
 
@@ -246,6 +247,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
 	res, err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
 			res, err = watch(ctx, b, req, s, lim.Idle)
 		}
@@ -303,14 +305,25 @@ func (s *sink) wait(ctx context.Context, attempt int) error {
 	}
 }
 
-// sink collects the items of one model call in order, steer inputs
-// included, and reports the rest to its Turn.
+// sink collects the items of one model call and reports the rest to its Turn.
 type sink struct {
 	Turn
 	items []eventlog.Message
+	// item is the item that the deltas since the last Item build, or "".
+	item string
+}
+
+// Delta streams d into the next item. The backend item ID is not used: one
+// harness item can join several backend items, such as reasoning and text.
+func (s *sink) Delta(_ string, d Delta) {
+	if s.item == "" {
+		s.item = s.Turn.Started()
+	}
+	s.Turn.Delta(s.item, d)
 }
 
 func (s *sink) Item(m eventlog.Message) error {
+	s.item = ""
 	if err := s.Turn.Item(m); err != nil {
 		return err
 	}

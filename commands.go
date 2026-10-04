@@ -64,14 +64,6 @@ var ops = map[command.Op]op{
 // errNoFold reports a compaction that appended nothing.
 var errNoFold = errors.New("/compact did nothing: the session does not have enough turns yet to fold")
 
-// compactResult is the result of /compact: the folded seq range, or
-// by_backend. The summary stays in compaction.applied.
-type compactResult struct {
-	FromSeq   uint64 `json:"from_seq,omitempty"`
-	ToSeq     uint64 `json:"to_seq,omitempty"`
-	ByBackend bool   `json:"by_backend,omitempty"`
-}
-
 func compact(ctx context.Context, s *Session, args map[string]any) (any, error) {
 	var req protocol.Compact
 	if n, ok := args["keep_turns"].(int); ok {
@@ -84,7 +76,7 @@ func compact(ctx context.Context, s *Session, args map[string]any) (any, error) 
 	case !c.Folded:
 		return nil, errNoFold
 	}
-	return compactResult{c.FromSeq, c.ToSeq, c.ByBackend}, nil
+	return c, nil
 }
 
 const (

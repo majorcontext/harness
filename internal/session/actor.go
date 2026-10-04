@@ -382,10 +382,8 @@ func (a *Actor) Done() <-chan struct{} { return a.done }
 func (a *Actor) View() *View { return a.view.Load() }
 
 func (a *Actor) publish(stopped bool) {
-	next := &View{Session: Describe(a.cfg.ID, a.state), Stopped: stopped, changed: make(chan struct{})}
-	if next.Session.Context.Window == 0 {
-		next.Session.Context.Window = int64(a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow)
-	}
+	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
+	next := &View{Session: Describe(a.cfg.ID, a.state, window), Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,8 +11,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// Describe returns the protocol view of state.
-func Describe(id string, s *eventlog.State) protocol.Session {
+// contextWindow is the window of the session model, or the window of the
+// reading c when the model reports none. A model switch thus replaces the
+// window of an older reading.
+func contextWindow(model int, c eventlog.ContextMeasured) int64 {
+	return cmp.Or(int64(model), c.Window)
+}
+
+// Describe returns the protocol view of state. window is the context window
+// of the session model, or 0 when it is not known.
+func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	sum, set, u := s.Summary(), s.Settings(), s.Usage()
 	v := protocol.Session{
 		ID: id, ParentID: sum.ParentID, Origin: sum.Origin, Model: sum.Model,
@@ -25,9 +34,11 @@ func Describe(id string, s *eventlog.State) protocol.Session {
 	for _, in := range s.Queue() {
 		v.Queued = append(v.Queued, in.InputID)
 	}
-	if c := s.Context(); c.Tokens > 0 {
-		v.Context = protocol.Context{Tokens: c.Tokens, Window: c.Window}
+	c := s.Context()
+	if c.Tokens == 0 {
+		c = eventlog.ContextMeasured{}
 	}
+	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c)}
 	if last := s.LastEnded(); last.TurnID != "" {
 		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Error: last.Error}
 	}

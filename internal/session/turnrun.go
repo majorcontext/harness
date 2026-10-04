@@ -16,12 +16,12 @@ import (
 type turnRun struct {
 	a *Actor
 	r *running
-	// item is the ID of the item that the deltas since the last Item
-	// build. Only the turn goroutine reads it.
+	// item is the ID that Started minted for the next Item. Only the turn
+	// goroutine reads it.
 	item string
 }
 
-// Item records m under the ID that its deltas announced, or a new ID.
+// Item records m under the ID that Started minted for it, or a new ID.
 func (t *turnRun) Item(m eventlog.Message) error {
 	id := t.item
 	t.item = ""
@@ -29,25 +29,23 @@ func (t *turnRun) Item(m eventlog.Message) error {
 	return err
 }
 
-// Delta streams d into the next item. The backend item ID is not used: one
-// harness item can join several backend items, such as reasoning and text.
-func (t *turnRun) Delta(_ string, d turn.Delta) {
-	if t.item == "" {
-		t.item = newID("item")
-		t.a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: t.item, TurnID: t.r.id})
-	}
-	t.a.frame(protocol.KindItemDelta, protocol.ItemFrame{ItemID: t.item, TurnID: t.r.id, Type: d.Type, Text: d.Text})
+// Started announces a new item and makes it the item of the next Item.
+func (t *turnRun) Started() string {
+	t.item = newID("item")
+	t.a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: t.item, TurnID: t.r.id})
+	return t.item
+}
+
+// Delta streams d into the item itemID.
+func (t *turnRun) Delta(itemID string, d turn.Delta) {
+	t.a.frame(protocol.KindItemDelta, protocol.ItemFrame{ItemID: itemID, TurnID: t.r.id, Type: d.Type, Text: d.Text})
 }
 
 // Alive has nothing to report: the stall watchdog is in the turn loop.
 func (*turnRun) Alive() {}
 
-// Status sends f. A retrying frame abandons the item that the failed
-// attempt streamed.
+// Status sends f.
 func (t *turnRun) Status(f protocol.StatusFrame) {
-	if f.Status == protocol.StatusRetrying {
-		t.item = ""
-	}
 	f.TurnID = t.r.id
 	t.a.frame(protocol.KindStatus, f)
 }

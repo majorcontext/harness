@@ -1,10 +1,36 @@
 package eventlog
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 type entry struct {
 	seq uint64
 	msg Message
+	// promoted holds the inputs that one append promoted into a running turn
+	// as this message, and last the seq of the newest of them.
+	promoted [][]Part
+	last     uint64
+}
+
+// SteerMessage is the message that the model reads for inputs that join a
+// running turn at an item boundary: one numbered block that tells the model
+// to address them and then to continue its task.
+func SteerMessage(inputs [][]Part) Message {
+	var b strings.Builder
+	b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
+	for i, parts := range inputs {
+		var text []string
+		for _, p := range parts {
+			if p.Type == PartText {
+				text = append(text, p.Text)
+			}
+		}
+		fmt.Fprintf(&b, "%d. %s\n", i+1, strings.Join(text, "\n"))
+	}
+	return Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: b.String()}}}
 }
 
 // History returns the conversation that the model sees: the summary of the
@@ -28,7 +54,15 @@ func (s *State) remember(env Envelope) {
 			s.say(env.Seq, Message{Role: RoleUser, Parts: s.inputs[id].event.Parts})
 		}
 	case InputPromoted:
-		s.say(env.Seq, Message{Role: RoleUser, Parts: s.inputs[e.InputID].event.Parts})
+		parts := s.inputs[e.InputID].event.Parts
+		if n := len(s.history); n > 0 && s.history[n-1].promoted != nil && s.history[n-1].last+1 == env.Seq {
+			h := s.history[n-1]
+			h.promoted, h.last = append(slices.Clip(h.promoted), parts), env.Seq
+			h.msg = SteerMessage(h.promoted)
+			s.history = append(s.history[:n-1:n-1], h)
+			break
+		}
+		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), promoted: [][]Part{parts}, last: env.Seq})
 	case ItemCompleted:
 		s.say(env.Seq, e.Message)
 	case CompactionApplied:
@@ -41,7 +75,7 @@ func (s *State) remember(env Envelope) {
 }
 
 func (s *State) say(seq uint64, m Message) {
-	s.history = append(s.history, entry{seq, m})
+	s.history = append(s.history, entry{seq: seq, msg: m})
 }
 
 func cloneParts(parts []Part) []Part {

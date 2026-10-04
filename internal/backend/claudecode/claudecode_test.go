@@ -404,9 +404,9 @@ func TestClaudeCodeSteerReachesStdin(t *testing.T) {
 	}
 	await(t, s, seq, "turn.ended")
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_s",
-		"input.admitted b", "input.promoted b", "item.completed tool toolu_s slept", "item.completed assistant steered: left", "context.measured", "turn.ended completed")
+		"input.admitted b", "input.promoted b", "item.completed tool toolu_s slept", "item.completed assistant steered: OPERATOR MESSAGES (address these, then continue the task):\n1. left", "context.measured", "turn.ended completed")
 	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
-	if len(stdin) != 2 || stdin[1].Message.Content != "left" {
+	if len(stdin) != 2 || stdin[1].Message.Content != "OPERATOR MESSAGES (address these, then continue the task):\n1. left\n" {
 		t.Errorf("stdin lines = %+v, want the prompt, then the steer input", stdin)
 	}
 }

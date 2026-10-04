@@ -266,7 +266,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
 | `goal.set` | `condition`, `max_turns`, `turns?` |
-| `goal.evaluated` | `turn_id`, `verdict`, `guidance?`, `usage?` |
+| `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
 | `goal.changed` | `state`, `reason?`, `retry_at?` |
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend`, `usage?` |
 | `child.spawned` | `child_id`, `agent?` |
@@ -286,7 +286,7 @@ func (s *State) Apply(r Record) error
 
 `Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. `State.History` holds the summary of the newest compaction and the messages after it, so the model sees the history from the newest compaction on. There is no other fold. The summary for `GET /sessions` is `State.Summary()`.
 
-Usage is part of the fold. Each model call that measures anything appends one `context.measured` record with its `usage`, its context reading, and the `subscription_usage` that the provider reported with it. A summary call and a goal evaluator call add their `usage` to the `compaction.applied` or `goal.evaluated` record that they produce. `State.Usage()` sums all three, so a handoff, a crash, and a restart keep it. A record with no prompt tokens changes no context reading, and the newest `subscription_usage` is the one that the view shows. A backend that reports usage once for a turn, as Claude Code does in its `result` frame, records it once. The actor stamps `captured_at` of a snapshot that has none.
+Usage is part of the fold. Each model call that measures anything appends one `context.measured` record with its `usage`, its context reading, and the `subscription_usage` that the provider reported with it. A summary call adds its `usage` to the `compaction.applied` record that it produces. A goal evaluator call adds none, as in the engine. `State.Usage()` sums both, so a handoff, a crash, and a restart keep it. A record with no prompt tokens changes no context reading, and the newest `subscription_usage` is the one that the view shows. A backend that reports usage once for a turn, as Claude Code does in its `result` frame, records it once. The actor stamps `captured_at` of a snapshot that has none.
 
 ### Invariants enforced at append
 
@@ -345,7 +345,7 @@ Lifecycle:
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
 - When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped.
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; `OpenView` has no backend and reads the window of the model from `modelmeta`.
 
 ### Ownership
 
@@ -424,7 +424,7 @@ admitted ─► promoted   (queue: next turn; steer: next item boundary)
 admitted ─► withdrawn
 ```
 
-A `queue` input joins no running turn: the engine injected a queued prompt at a tool boundary, and the runtime does so only for a `steer` input, which the console sends for a message that it writes while a turn runs. A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
+A `steer` input that joins a running turn reaches the model as one user message, as the engine writes queued prompts that it injects after a tool call: `OPERATOR MESSAGES (address these, then continue the task):` and a numbered list of the inputs that join together. A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
 
 Goal:
 
@@ -464,8 +464,8 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - `to_seq` is the seq before the first kept message. The `input.admitted` record of a kept or queued input can have a lower seq, so a reader that hides `from_seq` through `to_seq` keeps each `input.admitted` record.
 - A backend without `OwnsContext` summarizes the folded messages with the session model and the engine compaction prompt. The actor appends `compaction.applied` with `by_backend: false`.
 - A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`.
-- `Compact()` returns `protocol.Compacted`: the `from_seq` and `to_seq` of the new `compaction.applied`, `by_backend` for a backend with `OwnsContext`, and `folded`, which is false when the session has too few turns to fold and nothing else is set. It fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. The engine `model` override of one compaction is dropped: the summary uses the session model. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
-- Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window, or of the window of the session model when that is larger. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
+- `Compact()` returns `protocol.Compacted`: the `from_seq` and `to_seq` of the new `compaction.applied`, `by_backend` for a backend with `OwnsContext`, and `folded`, which is false when the session has too few turns to fold and nothing else is set. It fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
+- Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of the window of the session model, or of the window of the reading when the model reports none. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
 - A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
 - `Open` starts the next queued input when no turn is open, unless the last turn ended `provider_exhausted`. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
@@ -576,7 +576,7 @@ Each code except `internal` and `payload_too_large` is a sentinel error and a `p
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
 - Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
-- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `from_seq` and `to_seq` of the new `compaction.applied`, or `by_backend: true` for a backend with `OwnsContext`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
 - `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.
@@ -627,7 +627,8 @@ The turn loop reports through one `Turn`, which the actor binds to the turn. No 
 ```go
 type Turn interface {
 	Sink
-	Status(f protocol.StatusFrame) // ephemeral frame; a retrying frame abandons the item that the failed attempt streamed
+	Started() string               // announces an item and returns its ID; the next Item records under it
+	Status(f protocol.StatusFrame) // ephemeral frame
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
@@ -635,9 +636,9 @@ type Turn interface {
 func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits)
 ```
 
-`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The `Turn` gives the item that the first delta starts a harness ID, and `Item` records the next message under it.
+`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The first delta of each model call calls `Started`, which gives the item a harness ID; the next `Item` records the message under it. An item that a failed call streamed gets no `Item`, and the next `Started` replaces it.
 
-- A model API backend runs one model call per `Run`. The loop runs the tools, then takes the queued steer inputs through `Sink.Steer`, appends them to the history, and calls the backend again. This item boundary comes after the tool results of each response and before a `max_tokens` continuation. A queued input joins no running turn. Every model API backend steers, because the loop does it, not the backend.
+- A model API backend runs one model call per `Run`. The loop runs the tools, then takes the queued steer inputs through `Sink.Steer`, appends them to the history, and calls the backend again. This item boundary comes after the tool results of each response, on a path that calls the backend again. A response that ends the turn at its `max_tokens` stop, or fails it, takes no steer input: that input waits and runs as the next turn. A queued input joins no running turn. Every model API backend steers, because the loop does it, not the backend.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
 - `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools` and the embedder tools, and any other name fails `Create`. An embedder tool with the name of a built-in tool also fails `Create`.
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.

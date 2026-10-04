@@ -11,6 +11,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -37,13 +38,26 @@ func detach(s protocol.Session) protocol.Session {
 		g := *s.Goal
 		s.Goal = &g
 	}
+	if s.LastTurn != nil {
+		l := *s.LastTurn
+		s.LastTurn = &l
+	}
+	if s.SubscriptionUsage != nil {
+		u := *s.SubscriptionUsage
+		u.Windows = slices.Clone(u.Windows)
+		if u.Overage != nil {
+			o := *u.Overage
+			u.Overage = &o
+		}
+		s.SubscriptionUsage = &u
+	}
 	return s
 }
 
 // Submit admits an input. It starts a turn when none runs and queues the
 // input otherwise. A steer input joins the running turn at its next item
-// when the backend accepts steering. A repeated input ID returns the
-// original receipt.
+// boundary, and starts a turn on an idle session. A repeated input ID returns
+// the original receipt.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
 	a, _, err := s.Admit(ctx, in)
 	return a, err
@@ -178,7 +192,11 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &View{st: st, id: id, state: session.Describe(id, s)}, nil
+	window := 0
+	if ref, err := message.ParseModelRef(s.Model()); err == nil {
+		window, _ = modelmeta.ContextWindow(ref)
+	}
+	return &View{st: st, id: id, state: session.Describe(id, s, window)}, nil
 }
 
 // Session returns the session as of OpenView.

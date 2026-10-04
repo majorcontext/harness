@@ -289,9 +289,9 @@ func TestRecordedUsageFoldsIntoTheState(t *testing.T) {
 		ContextMeasured{Usage: Usage{OutputTokens: 1}},
 		end("t1", StopFailed, "boom"),
 		CompactionApplied{FromSeq: 1, ToSeq: 3, Summary: "s", Usage: Usage{InputTokens: 7, OutputTokens: 3}},
-		GoalEvaluated{TurnID: "t1", Verdict: VerdictNotMet, Usage: Usage{InputTokens: 20, OutputTokens: 4}}))
-	if got, want := s.Usage(), (Usage{InputTokens: 42, OutputTokens: 11}); got != want {
-		t.Errorf("Usage = %+v, want %+v: every measured call, compaction, and evaluation counts", got, want)
+		GoalEvaluated{TurnID: "t1", Verdict: VerdictNotMet}))
+	if got, want := s.Usage(), (Usage{InputTokens: 22, OutputTokens: 7}); got != want {
+		t.Errorf("Usage = %+v, want %+v: every measured call and compaction counts, an evaluation does not", got, want)
 	}
 	if got, want := s.Context(), (ContextMeasured{Tokens: 100, Window: 1000, Source: "m"}); got != want {
 		t.Errorf("Context = %+v, want %+v: a record with no prompt tokens keeps the reading", got, want)

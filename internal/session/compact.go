@@ -61,11 +61,12 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(a.cfg.KeepTurns, nil) }
 
 // overThreshold reports whether the newest context reading passes
-// Config.Threshold of its window, or of the window of the model when that is
-// larger, for a backend that does not own its context.
+// Config.Threshold of the window of the session model, or of the window of
+// the reading when the model reports none, for a backend that does not own
+// its context.
 func (a *Actor) overThreshold() bool {
 	c, caps := a.state.Context(), a.cfg.Backend.Capabilities(a.state.Model())
-	window := max(c.Window, int64(caps.ContextWindow))
+	window := contextWindow(caps.ContextWindow, c)
 	return window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(window) && !caps.OwnsContext
 }
 

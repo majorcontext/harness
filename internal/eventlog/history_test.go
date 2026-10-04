@@ -13,6 +13,8 @@ func userText(text string) Message {
 	return Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: text}}}
 }
 
+const operator = "OPERATOR MESSAGES (address these, then continue the task):\n"
+
 func TestHistory(t *testing.T) {
 	calling := Message{Role: RoleAssistant, Parts: []Part{{Type: PartToolCall, CallID: "c1", Name: "bash", Arguments: []byte(`{"cmd":"ls"}`)}}}
 	answered := Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}
@@ -24,8 +26,12 @@ func TestHistory(t *testing.T) {
 	}{
 		{"a queued input is not history until a turn takes it", with(base, says("a", DeliveryQueue, "one")), nil},
 		{"the inputs of a turn lead its items", firstTurn, []Message{userText("one"), calling, answered}},
-		{"a promoted steer input joins at its place", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), call("t1", "i1", "c1"), promote("s", "t1")),
-			[]Message{userText("one"), calling, userText("two")}},
+		{"a promoted steer input joins at its place as an operator message", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), call("t1", "i1", "c1"), promote("s", "t1")),
+			[]Message{userText("one"), calling, userText(operator + "1. two\n")}},
+		{"steer inputs promoted together share one operator message", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), says("u", DeliverySteer, "three"), call("t1", "i1", "c1"), promote("s", "t1"), promote("u", "t1")),
+			[]Message{userText("one"), calling, userText(operator + "1. two\n2. three\n")}},
+		{"steer inputs promoted at two boundaries keep two operator messages", with(base, says("a", DeliveryQueue, "one"), start("t1", "a"), says("s", DeliverySteer, "two"), says("u", DeliverySteer, "three"), call("t1", "i1", "c1"), promote("s", "t1"), result("t1", "i2", "c1"), promote("u", "t1")),
+			[]Message{userText("one"), calling, userText(operator + "1. two\n"), answered, userText(operator + "1. three\n")}},
 		{"a withdrawn input never joins", with(base, says("a", DeliveryQueue, "one"), says("b", DeliveryQueue, "two"), withdraw("b"), start("t1", "a")), []Message{userText("one")}},
 		{"a compaction summary leads the items after it", with(firstTurn, says("b", DeliveryQueue, "two"), start("t2", "b"), CompactionApplied{FromSeq: 1, ToSeq: 7, Summary: "sum"}),
 			[]Message{userText("sum"), userText("two")}},

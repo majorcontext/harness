@@ -206,13 +206,13 @@ func TestTypedCompactKeepsKeepTurnsAndReportsTheRange(t *testing.T) {
 			_ = json.Unmarshal(rec.Data, &env)
 			switch {
 			case env.K == "compaction.applied":
-				applied = fmt.Sprintf(`{"from_seq":%d,"to_seq":%d}`, env.D.From, env.D.To)
+				applied = fmt.Sprintf(`{"from_seq":%d,"to_seq":%d,"folded":true}`, env.D.From, env.D.To)
 			case env.K == "command.recorded" && env.D.Status == protocol.CommandSucceeded:
 				result = string(env.D.Result)
 			}
 		}
 		if applied == "" || result != applied {
-			t.Errorf("/compact result = %s, want the range of compaction.applied %s", result, applied)
+			t.Errorf("/compact result = %s, want the protocol.Compacted of compaction.applied %s", result, applied)
 		}
 		closeRuntime(t, r)
 	})

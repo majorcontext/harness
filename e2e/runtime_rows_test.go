@@ -26,15 +26,12 @@ const (
 	specModelCheck    = "An unknown model fails with `model_unavailable` at create and at a settings change."
 	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
 	specCompactResult = "`Compact()` returns `protocol.Compacted`"
-	specUsageFold     = "A summary call and a goal evaluator call add their `usage` to the `compaction.applied` or `goal.evaluated` record that they produce."
-	specQueueJoins    = "A `queue` input joins no running turn"
 	specChildResend   = "changes by design in one way: a later send is not refused"
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
 	specOpenPlugins      = "Does the switch keep the plugin inventory?"
-	specOpenSteerWrap    = "Does the switch wrap an input that joins a running turn at an item boundary?"
 	specOpenCrashMarker  = "Does the switch keep the crash marker?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 	specOpenBanner       = "Does the switch keep the engine banner"
@@ -81,7 +78,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_question_dismissed_by_next_prompt":              pendingOn("phase 5"),
 	"claudecode_question_parks_then_answer_resumes":             pendingOn("phase 5"),
 	"claudecode_question_unknown_call_id_conflicts":             pendingOn("phase 5"),
-	"claudecode_queued_prompt_injected_mid_turn":                deletedBy(specQueueJoins),
+	"claudecode_queued_prompt_injected_mid_turn":                deletedBy(specQueue),
 	"claudecode_rate_limit_event_reaches_subscription_usage":    reGolden(specView),
 	"claudecode_resume_across_turns":                            pendingOn("F20"),
 	"claudecode_resume_survives_restart":                        pendingOn("F20"),
@@ -122,7 +119,7 @@ var runtimeRows = map[string]runtimeRow{
 	"file_tools_write_edit_guards":                              sameAsServe(),
 	"goal_busy_send_is_queued":                                  reGolden(specView),
 	"goal_cleared_before_first_turn":                            deletedBy(specGoalDeferred),
-	"goal_exhausts_max_turns":                                   reGolden(specView, specUsageFold),
+	"goal_exhausts_max_turns":                                   reGolden(specView),
 	"goal_met_first_turn":                                       sameAsServe(),
 	"goal_not_met_then_met":                                     sameAsServe(),
 	"goal_provider_exhausted_parks":                             deletedBy(specGoalDeferred),
@@ -185,7 +182,7 @@ var runtimeRows = map[string]runtimeRow{
 	"sse_resume_after_kill":                                     reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                         reGolden(specCursor, specBoxGlobal),
 	"status_and_list_cold_after_restart":                        pendingOn(specOpenListOrder),
-	"steer_joins_the_turn_at_the_tool_boundary":                 reGolden(specQueue, specOpenSteerWrap),
+	"steer_joins_the_turn_at_the_tool_boundary":                 sameAsServe(),
 	"stream_stall":                                              reGolden(specView),
 	"task_child_result_reaches_parent":                          reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"text_reply":                                                sameAsServe(),
