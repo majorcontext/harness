@@ -194,10 +194,10 @@ var journalCases = []struct {
 			t.Errorf("last ended %+v", e)
 		}
 	}},
-	{"delegated session resumes its CLI session", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
+	{"delegated session resumes its CLI session and denies its parked question", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
 		key := s.BackendState(claudeCodeState)
 		m, err := external.LoadMirror([]byte(readBlob(t, st, "ses_000000000000000f", key)))
-		if err != nil || m.SessionID != "cli-123" {
+		if err != nil || m.SessionID != "cli-123" || m.Parked != "toolu_q1" {
 			t.Errorf("mirror %+v %v", m, err)
 		}
 	}},
