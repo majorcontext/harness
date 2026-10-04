@@ -1,4 +1,4 @@
-package openai_test
+package modelapi_test
 
 import (
 	"context"

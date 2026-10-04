@@ -1,21 +1,27 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/claudecode"
-	"github.com/majorcontext/harness/internal/backend/openai"
+	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/protocol"
+	"github.com/majorcontext/harness/provider"
+	"github.com/majorcontext/harness/provider/anthropic"
 	responses "github.com/majorcontext/harness/provider/openai"
+	"github.com/majorcontext/harness/provider/openaicompat"
 )
 
 // ErrModelUnavailable reports a model that no configured provider serves.
@@ -31,22 +37,41 @@ type models struct {
 func newModels(cfg config.Config, transport func(provider string) http.RoundTripper) *models {
 	m := &models{backends: map[string]turn.Backend{},
 		strict: cfg.ContextWindowRequiredValue() && cfg.ContextWindowTokens == 0}
-	for name, p := range cfg.Providers {
+	providers := maps.Clone(cfg.Providers)
+	config.EnsureProviderDefaults(providers)
+	for name, p := range providers {
 		if p.Type == config.TypeClaudeCodeCLI {
 			m.backends[name] = claudecode.New(p)
-			continue
+		} else if c := client(name, p, transport); c != nil {
+			m.backends[name] = modelapi.New(c, cfg.ContextWindowTokens)
 		}
-		// The entry keyed by the native family may leave Type empty.
-		if p.Type != config.TypeOpenAI && (p.Type != "" || name != responses.Family) {
-			continue
-		}
-		var rt http.RoundTripper
-		if transport != nil {
-			rt = transport(name)
-		}
-		m.backends[name] = openai.New(name, p, rt, cfg.ContextWindowTokens)
 	}
 	return m
+}
+
+// client returns the model API client of entry name, or nil for an entry
+// that names no model API. An entry keyed by a native family may leave Type
+// empty. A transport may supply the credentials, so the key variable may be unset.
+func client(name string, p config.Provider, transport func(provider string) http.RoundTripper) provider.Provider {
+	var hc *http.Client
+	if transport != nil {
+		if rt := transport(name); rt != nil {
+			hc = &http.Client{Transport: rt}
+		}
+	}
+	switch {
+	case p.Type == config.TypeOpenAI, p.Type == "" && name == responses.Family:
+		return &responses.Client{Family: name, APIKey: os.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")), BaseURL: p.BaseURL,
+			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, ResponsesPath: p.ResponsesPath, OmitResponseParams: p.OmitResponseParams,
+			SanitizeToolSchemas: p.SanitizeToolSchemas, UseWebSocketTransport: p.UseWebSocketTransport}
+	case p.Type == config.TypeOpenAICompat:
+		return &openaicompat.Client{Family: cmp.Or(p.Family, name), APIKey: os.Getenv(p.APIKeyEnv), BaseURL: p.BaseURL,
+			HTTPClient: hc, ExtraHeaders: p.ExtraHeaders, NoPromptCacheKey: p.NoPromptCacheKey}
+	case p.Type == "" && name == anthropic.Family:
+		return &anthropic.Client{APIKey: os.Getenv(cmp.Or(p.APIKeyEnv, "ANTHROPIC_API_KEY")), BaseURL: p.BaseURL,
+			HTTPClient: hc, CacheTTL: p.CacheTTL, ExtraHeaders: p.ExtraHeaders}
+	}
+	return nil
 }
 
 // check reports why model cannot start a session that allows the names. A

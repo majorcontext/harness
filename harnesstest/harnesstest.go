@@ -61,6 +61,7 @@ type Usage struct{ Input, Output int }
 type Request struct {
 	System         string
 	Model          string
+	MaxTokens      int // the response cap; 0 when the request sends none
 	ThinkingType   string
 	ThinkingBudget int
 	ServiceTier    string

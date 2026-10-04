@@ -36,6 +36,7 @@ type Client struct {
 	// Ollama, vLLM, and others — all speak this same wire under their own
 	// family name.
 	Family string
+	// APIKey may be empty when HTTPClient sets the credentials.
 	APIKey string
 	// BaseURL is the API root; the client POSTs to BaseURL+"/chat/completions".
 	BaseURL string
@@ -64,7 +65,7 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	if c.Family == "" {
 		return nil, fmt.Errorf("openaicompat: no Family configured")
 	}
-	if c.APIKey == "" {
+	if c.APIKey == "" && c.HTTPClient == nil {
 		return nil, fmt.Errorf("openaicompat(%s): no API key configured", c.Family)
 	}
 	wire, err := transcodeRequestOpts(req, c.Family, c.transcodeOptions())
@@ -82,7 +83,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 	for k, v := range c.ExtraHeaders {
 		httpReq.Header.Set(k, v)
 	}

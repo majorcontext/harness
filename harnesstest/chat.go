@@ -29,6 +29,7 @@ var chatCodec = codec{
 
 type chatWireRequest struct {
 	Model           string `json:"model"`
+	MaxTokens       int    `json:"max_tokens"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	User            string `json:"user"`
 	PromptCacheKey  string `json:"prompt_cache_key"`
@@ -93,7 +94,7 @@ func decodeChatRequest(body []byte, h http.Header) (Request, error) {
 		return Request{}, errors.New("stream_options.include_usage is not true")
 	}
 	req := Request{
-		Model: w.Model, ReasoningEffort: w.ReasoningEffort, User: w.User,
+		Model: w.Model, MaxTokens: w.MaxTokens, ReasoningEffort: w.ReasoningEffort, User: w.User,
 		PromptCacheKey: w.PromptCacheKey, Header: h.Clone(),
 	}
 	for _, t := range w.Tools {

@@ -1,4 +1,4 @@
-package openai
+package modelapi
 
 import (
 	"slices"

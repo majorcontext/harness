@@ -141,7 +141,7 @@ var codexTurns = []struct {
 	{name: "a response with no output fails the turn as retryable",
 		steps:  []harnesstest.Step{{Name: "empty", Match: harnesstest.LastUserText("hi")}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: modelapi: the response has no output"},
 		calls:  []string{codexPost}},
 	{name: "the reasoning item of a tool call turn is replayed",
 		opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"call": {Reasoning: []string{"plan"}}}},
@@ -163,7 +163,7 @@ var codexTurns = []struct {
 		opts:   harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"empty": {Reasoning: []string{"plan"}}}},
 		steps:  []harnesstest.Step{{Name: "empty", Match: harnesstest.LastUserText("hi")}},
 		inputs: []string{"hi"},
-		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: openai: the response has no output"},
+		want:   []string{"input.admitted a", "turn.started a", "context.measured", "turn.ended failed turn: retryable backend error: modelapi: the response has no output"},
 		calls:  []string{codexPost}},
 	{name: "the ModelTransport alone can supply the credentials", injected: true,
 		opts:   harnesstest.OpenAIOptions{APIKey: "k"},
@@ -212,6 +212,53 @@ func TestCodexTurn(t *testing.T) {
 	}
 }
 
+// TestEachWireRunsATurn runs a turn on each wire with the key in the
+// environment, and with the key only in the ModelTransport.
+func TestEachWireRunsATurn(t *testing.T) {
+	hi := harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}}
+	for _, tc := range []struct {
+		model, path string
+		serve       func(testing.TB, ...harnesstest.Step) *harnesstest.Server
+		p           config.Provider
+	}{
+		{"anthropic/claude-opus-5", "", harnesstest.New, config.Provider{APIKeyEnv: "HARNESS_TEST_KEY"}},
+		{"bifrost/fireworks/accounts/fireworks/routers/firerouter", "/v1", harnesstest.NewChat,
+			config.Provider{Type: config.TypeOpenAICompat, APIKeyEnv: "HARNESS_TEST_KEY"}},
+	} {
+		for _, injected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s injected=%t", tc.model, injected), func(t *testing.T) {
+				envKey, key := "k", ""
+				if injected {
+					envKey, key = "", "k"
+				}
+				t.Setenv("HARNESS_TEST_KEY", envKey)
+				s := tc.serve(t, hi)
+				tc.p.BaseURL = s.URL() + tc.path
+				name, model, _ := strings.Cut(tc.model, "/")
+				st, rec := harness.NewMemStore(), &transport{}
+				r, err := harness.New(harness.Options{Store: st, Config: config.Config{Providers: map[string]config.Provider{name: tc.p}},
+					ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { closeRuntime(t, r) })
+				sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: tc.model})
+				if err != nil {
+					t.Fatal(err)
+				}
+				converse(t, sess, "hi")
+				wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant hello", "turn.ended completed")
+				if got := s.Requests()[0]; got.Model != model || got.MaxTokens < 1 {
+					t.Errorf("request model, max tokens = %q, %d, want %q and a cap", got.Model, got.MaxTokens, model)
+				}
+				if got := rec.Calls(); len(got) != 1 || !strings.HasPrefix(got[0], name+" POST ") {
+					t.Errorf("transport calls = %q, want one %s POST", got, name)
+				}
+			})
+		}
+	}
+}
+
 func TestCreateChecksTheModel(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -228,11 +275,19 @@ func TestCreateChecksTheModel(t *testing.T) {
 			cfg: func(c *config.Config) { c.ContextWindowTokens = 1000 }},
 		{name: "an unknown model when the context window is not required", model: "codex/no-such-model",
 			cfg: func(c *config.Config) { c.ContextWindowRequired = new(false) }},
+		{name: "a native anthropic entry with no type", model: "anthropic/claude-opus-5"},
+		{name: "an openai-compat entry", model: "bifrost/fireworks/accounts/fireworks/routers/firerouter"},
+		{name: "an openrouter entry that names only its key", model: "openrouter/vendor/model",
+			cfg: func(c *config.Config) {
+				c.ContextWindowTokens = 1000
+				c.Providers["openrouter"] = config.Provider{APIKeyEnv: "OPENROUTER_TEST_KEY"}
+			}},
 		{name: "a provider entry of an unknown type fails New", model: "codex/gpt-5", want: harness.ErrInvalidRequest,
 			cfg: func(c *config.Config) { c.Providers["bad"] = config.Provider{Type: "bogus"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Config{Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, BaseURL: "https://codex.test"}, "openai": {}}}
+			cfg := config.Config{Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, BaseURL: "https://codex.test"}, "openai": {},
+				"anthropic": {}, "bifrost": {Type: config.TypeOpenAICompat, BaseURL: "https://bifrost.test"}}}
 			if tc.cfg != nil {
 				tc.cfg(&cfg)
 			}

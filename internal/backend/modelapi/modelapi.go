@@ -1,50 +1,33 @@
-// Package openai runs turns on the OpenAI Responses API, the ChatGPT Codex
-// lane included. It makes one model call per Run; the turn loop runs tools.
-package openai
+// Package modelapi runs turns on a model API through one provider client
+// per wire. It makes one model call per Run; the turn loop runs tools.
+package modelapi
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"os"
 
-	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
-	responses "github.com/majorcontext/harness/provider/openai"
 )
 
-// Backend is a turn.Backend over one configured Responses provider.
+// maxTokens caps each response. The Anthropic API rejects a request without a cap.
+const maxTokens = 8192
+
+// Backend is a turn.Backend over one provider client.
 type Backend struct {
-	client *responses.Client
+	client provider.Provider
 	// window overrides the modelmeta context window when positive.
 	window int
 }
 
-// New returns the Backend of provider name. A nil rt uses the default
-// transport for HTTP requests and the websocket dial alike. A non-nil rt may
-// supply the credentials, so the key variable may be unset. A positive
-// window replaces the modelmeta context window of every model.
-func New(name string, p config.Provider, rt http.RoundTripper, window int) *Backend {
-	c := &responses.Client{
-		Family:                name,
-		APIKey:                os.Getenv(cmp.Or(p.APIKeyEnv, "OPENAI_API_KEY")),
-		BaseURL:               p.BaseURL,
-		ExtraHeaders:          p.ExtraHeaders,
-		ResponsesPath:         p.ResponsesPath,
-		OmitResponseParams:    p.OmitResponseParams,
-		SanitizeToolSchemas:   p.SanitizeToolSchemas,
-		UseWebSocketTransport: p.UseWebSocketTransport,
-	}
-	if rt != nil {
-		c.HTTPClient = &http.Client{Transport: rt}
-	}
-	return &Backend{client: c, window: window}
+// New returns the Backend of client p. A positive window replaces the
+// modelmeta context window of every model.
+func New(p provider.Provider, window int) *Backend {
+	return &Backend{client: p, window: window}
 }
 
 // Capabilities reports the context window of model when it is known or overridden.
@@ -89,7 +72,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			out.Telemetry(b.telemetry(req.Model, ev.Usage))
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
-				return turn.Result{}, fmt.Errorf("%w: openai: the response has no output", turn.ErrRetryable)
+				return turn.Result{}, fmt.Errorf("%w: modelapi: the response has no output", turn.ErrRetryable)
 			}
 			if err := out.Item(m); err != nil {
 				return turn.Result{}, err
@@ -105,14 +88,18 @@ func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
 	t := turn.Telemetry{Usage: usage}
 	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
-		t.Context = eventlog.ContextMeasured{Source: b.client.Family, Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
+		t.Context = eventlog.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
 	}
 	return t
 }
 
-// Close closes the pooled websocket connections. Call it when no Run is
-// active. A later Run dials again.
-func (b *Backend) Close() { b.client.Close() }
+// Close closes the pooled connections of a client that pools them. Call it
+// when no Run is active. A later Run dials again.
+func (b *Backend) Close() {
+	if c, ok := b.client.(interface{ Close() }); ok {
+		c.Close()
+	}
+}
 
 func request(req turn.Request) (*provider.Request, error) {
 	ref, err := message.ParseModelRef(req.Model)
@@ -131,7 +118,7 @@ func request(req turn.Request) (*provider.Request, error) {
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, Effort: effort, ServiceTier: req.Settings.ServiceTier,
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: maxTokens, Effort: effort, ServiceTier: req.Settings.ServiceTier,
 		SessionKey: req.SessionID}
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}

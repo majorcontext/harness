@@ -23,6 +23,7 @@ type openAIBody struct {
 	Instructions       string            `json:"instructions"`
 	Input              []json.RawMessage `json:"input"`
 	ServiceTier        string            `json:"service_tier"`
+	MaxOutputTokens    int               `json:"max_output_tokens"`
 	PreviousResponseID string            `json:"previous_response_id"`
 	Generate           *bool             `json:"generate"`
 	Include            []string          `json:"include"`
@@ -154,7 +155,7 @@ type wireItem struct {
 // request adapts a Responses body to a Request. Consecutive items of one role
 // become one Message, as Anthropic's alternating turns do.
 func (o *OpenAI) request(b openAIBody) Request {
-	req := Request{System: b.Instructions, Model: b.Model, ServiceTier: b.ServiceTier}
+	req := Request{System: b.Instructions, Model: b.Model, MaxTokens: b.MaxOutputTokens, ServiceTier: b.ServiceTier}
 	for _, t := range b.Tools {
 		req.Tools = append(req.Tools, t.Name)
 	}

@@ -9,8 +9,9 @@ import (
 )
 
 type wireRequest struct {
-	Model    string `json:"model"`
-	Thinking struct {
+	Model     string `json:"model"`
+	MaxTokens int    `json:"max_tokens"`
+	Thinking  struct {
 		Type         string `json:"type"`
 		BudgetTokens int    `json:"budget_tokens"`
 	} `json:"thinking"`
@@ -42,7 +43,7 @@ func decodeRequest(body []byte) (Request, error) {
 		return Request{}, err
 	}
 	req := Request{
-		System: joinText(w.System), Model: w.Model, ServiceTier: w.ServiceTier,
+		System: joinText(w.System), Model: w.Model, MaxTokens: w.MaxTokens, ServiceTier: w.ServiceTier,
 		ThinkingType: w.Thinking.Type, ThinkingBudget: w.Thinking.BudgetTokens,
 	}
 	for _, t := range w.Tools {

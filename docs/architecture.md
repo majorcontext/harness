@@ -526,9 +526,18 @@ type Sink interface {
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
 - `Telemetry` carries usage, cost, the context reading, and subscription quota.
 
-### Shared provider plumbing
+### Model API backend
 
-`internal/backend/httpx` holds the SSE reader, `ClassifyResponse`, the retry `Policy`, and usage normalization. The three copies in the provider packages are deleted. The Codex websocket transport moves into `openai` as a `Transport`.
+`internal/backend/modelapi` is the one backend for every model API. It holds one `provider.Provider` client, and only the client differs between wires. `harness` builds the client from the provider entry. One function maps an entry with no type by its key.
+
+| Entry | Client |
+| --- | --- |
+| `type: openai`, or the `openai` key with no type | `provider/openai` (Responses, the Codex lane included) |
+| `type: openai-compat` | `provider/openaicompat` (chat completions, such as Bifrost) |
+| The `anthropic` key with no type | `provider/anthropic` (Messages) |
+| `type: claude-code-cli` | `internal/backend/claudecode`, a delegated backend |
+
+`Options.ModelTransport` wraps the HTTP client of each entry, and may supply the credentials of each wire. Each request sends a baseline response cap of 8192 tokens. A reasoning request can raise it. `Close` reaches a client that pools connections through an optional `Close` method. Each provider package keeps its own SSE reader and status classifier, and the one retry policy stays in `turn`.
 
 ### Third-party harnesses
 
@@ -550,7 +559,7 @@ Delegating a turn to another agent harness is permanent. Claude Code is the firs
 
 ### Warm-up
 
-`turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/openai` implements it, for the Codex websocket transport. The first turn uses the warm connection if it is ready. No warm-up state lives on the session.
+`turn` declares an optional `Warmer` interface: `Warm(ctx context.Context, req Request) error`. The session calls it once on create and on wake, fire-and-forget under the session context. Only `internal/backend/modelapi` implements it, through an optional `Warm` method of the client, for the Codex websocket transport. The first turn uses the warm connection if it is ready. No warm-up state lives on the session.
 
 ## tool, prompt, and config
 
@@ -607,8 +616,8 @@ The package imports only the standard library. The `config-leaf` depguard rule e
 | Structured questions (#317) | Generalize to requests |
 | Claude Code delegated backend | Keep; first third-party harness |
 | Codex CLI | Add through the third-party harness seam |
-| Codex lane, websocket transport | Keep inside `openai` |
-| Startup prewarm | Move into `openai` behind `turn.Warmer` |
+| Codex lane, websocket transport | Keep inside `provider/openai` |
+| Startup prewarm | Move into `modelapi` behind `turn.Warmer` |
 | Agent definitions | Keep as agent profiles applied at `Spawn` |
 | Git changes | Keep as `GET /workspace/changes` in `internal/workspace` |
 | Tool-result retention | Keep; drop the size knobs |
@@ -720,9 +729,9 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | --- | --- | --- |
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
-| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only | Boxes `BootConfig` |
+| 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire | Boxes `BootConfig` |
 | 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
-| 5 | Remaining backends on capabilities, as one `modelapi` backend; `codexcli`; requests; `Warmer` | None |
+| 5 | Remaining backends on capabilities; `codexcli`; requests; `Warmer` | None |
 | 6 | Delete `engine`, `server`, old formats, dead features; move leaves to `internal/` | None |
 
 PR #359 closes unmerged; its design is in this doc. The meta home chat has no old data or routes, so it proves the new runtime before boxes switches. Phase 4 is a cutover, not an adapter: no old route, format, or Go API survives it.
@@ -738,7 +747,7 @@ Decided:
 - Workspace inspection stays in harness as `GET /workspace/changes`, in an isolated `internal/workspace` package.
 - Worktrees are deleted.
 - Agent definitions stay as agent profiles in Claude Code's format.
-- Startup prewarm moves into `internal/backend/openai` behind `turn.Warmer`.
+- Startup prewarm moves into `internal/backend/modelapi` behind `turn.Warmer`.
 - The Modal guide and script are deleted.
 - PR #359 is folded into phase 2; the meta home chat is the first consumer of the new runtime.
 - The boxes console adopts the harness API shapes; boxes routes forward.
