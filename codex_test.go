@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -47,9 +48,10 @@ func (t *transport) Calls() []string {
 }
 
 // codexRuntime runs turns on s, as provider codex and as provider openai,
-// with no retries, and also configures provider claude-code. The key is in the
+// with no retries, and also configures provider claude-code. workDir is
+// Options.WorkDir. The key is in the
 // environment, or, with injected set, only in the ModelTransport.
-func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool, tools ...harness.Tool) (*harness.Runtime, harness.Store, *transport) {
+func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool, workDir string, tools ...harness.Tool) (*harness.Runtime, harness.Store, *transport) {
 	t.Helper()
 	envKey, key := "k", ""
 	if injected {
@@ -64,6 +66,7 @@ func codexRuntime(t *testing.T, s *harnesstest.OpenAI, websocket, injected bool,
 	}
 	r, err := harness.New(harness.Options{
 		Store:          st,
+		WorkDir:        workDir,
 		Config:         config.Config{PromptRetries: &retries, Providers: map[string]config.Provider{"codex": p, "openai": p, "claude-code": {Type: config.TypeClaudeCodeCLI}}},
 		ModelTransport: func(provider string) http.RoundTripper { return tagged{rec, provider, key} },
 		Tools:          tools,
@@ -192,7 +195,7 @@ func TestCodexTurn(t *testing.T) {
 	for _, tc := range codexTurns {
 		t.Run(tc.name, func(t *testing.T) {
 			s := harnesstest.NewOpenAI(t, tc.opts, tc.steps...)
-			r, st, rec := codexRuntime(t, s, tc.websocket, tc.injected)
+			r, st, rec := codexRuntime(t, s, tc.websocket, tc.injected, "")
 			sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5", Effort: tc.effort, ServiceTier: tc.tier})
 			if err != nil {
 				t.Fatal(err)
@@ -324,5 +327,32 @@ func TestModelsListsTheConfiguredProviders(t *testing.T) {
 		"claude-code/sonnet claude-code 0", "codex/gpt-6-astra codex 1050000", "codex/gpt-6-luna codex 1050000", "codex/gpt-6-sol codex 1050000"}
 	if !slices.Equal(got, want) {
 		t.Errorf("Models =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestTheSystemPromptIsReadWhenTheSessionStarts(t *testing.T) {
+	wd := t.TempDir()
+	rules := func(body string) {
+		if err := os.WriteFile(wd+"/AGENTS.md", []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, harnesstest.Step{Name: "any", Repeat: true, Reply: harnesstest.Reply{Text: "ok"}})
+	r, _, _ := codexRuntime(t, srv, false, false, wd)
+	for _, id := range []string{"s1", "s2"} {
+		rules(id)
+		sess, err := r.Create(bg, protocol.CreateSession{ID: id, Model: "codex/gpt-5"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rules("late")
+		converse(t, sess, "a", "b")
+	}
+	got := ""
+	for _, req := range srv.Requests() {
+		got += req.System[strings.LastIndex(req.System, "\n")+1:] + ","
+	}
+	if got != "s1,s1,s2,s2," {
+		t.Errorf("last line of the system prompt per request = %q, want the file as it was at session start", got)
 	}
 }
