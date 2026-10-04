@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/internal/tool/mcpsrc"
+	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -29,6 +32,7 @@ const taskSchema = `{
 const taskDescription = "Start a child agent that does a task in the background, in a session of its own. " +
 	"The call returns at once with the session id of the child. The final report of the child arrives later as a new message: " +
 	"do not poll or wait for it. agent selects the profile of the child: general-purpose has every tool, " +
+	"explore finds code with read-only tools, plan returns an implementation plan with read-only tools, " +
 	"and each .agents/*.md file of the project adds a profile. A call with an unknown agent lists the profiles."
 
 // taskTool starts a child of the session parent. The runtime binds parent
@@ -88,7 +92,7 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 	if p.Model != "" {
 		c.Model = r.resolve(p.Model)
 	}
-	c.Origin, c.AllowedTools = "task", narrow(p.Tools, c.AllowedTools)
+	c.Origin, c.AllowedTools = "task", r.available(c.Model, narrow(p.Tools, c.AllowedTools))
 	first := eventlog.InputAdmitted{InputID: "input_" + newSuffix(), Delivery: eventlog.DeliveryQueue, Source: "parent",
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}
 	ctx = context.WithoutCancel(ctx)
@@ -108,6 +112,24 @@ func narrow(profile, parent []string) []string {
 		return profile
 	}
 	return slices.DeleteFunc(slices.Clone(profile), func(n string) bool { return !slices.Contains(parent, n) })
+}
+
+// available drops each name that neither a tool of r nor a built-in tool
+// of model has, because a profile can name the tools of every backend.
+func (r *Runtime) available(model string, names []string) []string {
+	if names == nil {
+		return nil
+	}
+	builtins := r.backend.Capabilities(model).Tools
+	has := func(n string) bool {
+		return slices.Contains(builtins, n) || r.mcp != nil && mcpsrc.Reserved(n) ||
+			slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == n })
+	}
+	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !has(n) })
+	if len(out) == 0 && len(names) > 0 {
+		slog.Warn("harness: the child has no tool of its profile", "model", model, "tools", names)
+	}
+	return out
 }
 
 // lineage returns the root of the tree of session id and the depth of id
@@ -135,7 +157,8 @@ func (r *Runtime) lineage(ctx context.Context, id string) (string, int, error) {
 }
 
 // report delivers the outcome of a child to its parent, which it opens
-// when this runtime does not run it. It never waits for the child.
+// when this runtime does not run it, even when the child has settled. It
+// never waits for the child.
 func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
 	r.group.Go(func() {
 		r.sup.done(s.ChildID)

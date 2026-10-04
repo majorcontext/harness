@@ -31,15 +31,28 @@ var generalPurpose = Profile{Name: GeneralPurpose,
 		"Do the whole task with your tools. Your final message is the only thing the parent reads, " +
 		"so make it a complete, concise report of what you found or changed."}
 
+// readOnly names the read-only file tools of the native and Claude Code
+// backends. A spawn keeps the names that the child has.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep"}
+
+var explore = Profile{Name: "explore", Tools: readOnly,
+	Description: "A fast, read-only agent that finds code and answers where-is questions. It cannot edit files or run commands.",
+	Prompt:      generalPurpose.Prompt}
+
+var plan = Profile{Name: "plan", Tools: readOnly,
+	Description: "A read-only agent that investigates the code and returns an implementation plan. It makes no edits.",
+	Prompt: generalPurpose.Prompt + "\n\nInvestigate with your read-only tools, then give a clear, concrete implementation plan as your final message. " +
+		"You have no tool that edits a file or runs a command, so make no change."}
+
 // profileKeys are the agent frontmatter keys of Claude Code that a profile reads or ignores.
 var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
-// Profiles returns the built-in profile and each valid <workDir>/.agents/*.md
+// Profiles returns the built-in profiles and each valid <workDir>/.agents/*.md
 // in the agent format of Claude Code, by name. A file replaces a built-in
 // profile of its name. A file that is not valid, or that repeats a name, is
 // skipped with a WARN log line.
 func Profiles(workDir string) map[string]Profile {
-	out := map[string]Profile{GeneralPurpose: generalPurpose}
+	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
 	if workDir == "" {
 		return out
 	}

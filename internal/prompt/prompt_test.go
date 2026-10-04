@@ -109,27 +109,34 @@ func TestBuild(t *testing.T) {
 	}
 }
 
+// readOnly are the read-only file tools of the native and Claude Code backends.
+var readOnly = []string{"read_file", "glob", "grep", "ls", "Read", "Glob", "Grep"}
+
 func TestProfiles(t *testing.T) {
 	agent := func(fm, body string) string { return "---\n" + fm + "\n---\n\n" + body + "\n" }
-	gp := prompt.Profiles("")[prompt.GeneralPurpose]
+	builtins := prompt.Profiles("")
+	gp, explore, plan := builtins[prompt.GeneralPurpose], builtins["explore"], builtins["plan"]
 	for _, tc := range []struct {
 		name  string
 		files map[string]string
 		want  []prompt.Profile
 	}{
+		{name: "general-purpose, explore, and plan are built in",
+			want: []prompt.Profile{gp, {Name: "explore", Description: explore.Description, Tools: readOnly, Prompt: explore.Prompt},
+				{Name: "plan", Description: plan.Description, Tools: readOnly, Prompt: plan.Prompt}}},
 		{name: "a Claude Code agent file is a profile",
 			files: map[string]string{".agents/reader.md": agent("name: reader\ndescription: Reads.\ntools: ls, grep\nmodel: inherit\ncolor: blue", "Only read.")},
-			want:  []prompt.Profile{gp, {Name: "reader", Description: "Reads.", Tools: []string{"ls", "grep"}, Prompt: "Only read."}}},
+			want:  []prompt.Profile{gp, explore, plan, {Name: "reader", Description: "Reads.", Tools: []string{"ls", "grep"}, Prompt: "Only read."}}},
 		{name: "a file with no tools allows every tool and names its model",
 			files: map[string]string{".agents/fast.md": agent("name: fast\ndescription: Quick.\nmodel: test/small", "Hurry.")},
-			want:  []prompt.Profile{{Name: "fast", Description: "Quick.", Model: "test/small", Prompt: "Hurry."}, gp}},
+			want:  []prompt.Profile{{Name: "fast", Description: "Quick.", Model: "test/small", Prompt: "Hurry."}, gp, explore, plan}},
 		{name: "a file can replace general-purpose",
 			files: map[string]string{".agents/gp.md": agent("name: general-purpose\ndescription: Mine.", "Custom.")},
-			want:  []prompt.Profile{{Name: "general-purpose", Description: "Mine.", Prompt: "Custom."}}},
+			want:  []prompt.Profile{{Name: "general-purpose", Description: "Mine.", Prompt: "Custom."}, explore, plan}},
 		{name: "a bad file, a subdirectory, and a file that is not markdown are skipped",
 			files: map[string]string{".agents/x.md": agent("name: x\ndescription: X.\nhooks: y", "B"), ".agents/y.md": agent("description: Y.", "B"),
 				".agents/z.md": "no frontmatter", ".agents/skills/s/SKILL.md": skillFile("s", "S."), ".agents/n.txt": agent("name: n\ndescription: N.", "B")},
-			want: []prompt.Profile{gp}},
+			want: []prompt.Profile{gp, explore, plan}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
