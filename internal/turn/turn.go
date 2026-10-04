@@ -99,6 +99,9 @@ type Sink interface {
 	Item(m eventlog.Message) error
 	// Delta streams a piece of the item that the backend calls itemID.
 	Delta(itemID string, d Delta)
+	// Alive reports model output that is not a delta yet, such as tool
+	// arguments that still stream.
+	Alive()
 	// Telemetry adds a measurement to the turn.
 	Telemetry(t Telemetry)
 	// Steer takes the queued steer inputs into the turn. A backend with
@@ -124,7 +127,7 @@ type Limits struct {
 	Retries int
 	// Continuations bounds the model calls that continue a response cut off at max_tokens.
 	Continuations int
-	// Idle stops a model call that reports no delta and no item for this
+	// Idle stops a model call that reports nothing to its Sink for this
 	// long. Zero or less: no limit.
 	Idle time.Duration
 }
@@ -227,7 +230,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 			continued++
 			nudge = []eventlog.Message{{Role: eventlog.RoleUser,
 				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: fmt.Sprintf(continuation, continued, lim.Continuations)}}}}
-		case lim.Continuations == 0:
+		case lim.Continuations <= 0:
 			return nil
 		default:
 			return fmt.Errorf("turn: the response reached max_tokens after %d continuations", continued)
@@ -238,19 +241,19 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, to Rep
 // callModel runs one model call. It calls b again, at most lim.Retries
 // times, after an ErrRetryable error that came before any item.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
-	res, err := attempt(ctx, b, req, s, lim.Idle)
+	res, err := watch(ctx, b, req, s, lim.Idle)
 	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
 		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
-			res, err = attempt(ctx, b, req, s, lim.Idle)
+			res, err = watch(ctx, b, req, s, lim.Idle)
 		}
 	}
 	return res, err
 }
 
-// attempt calls b once. With a positive idle, a call that reports no delta
-// and no item for idle ends with errStalled.
-func attempt(ctx context.Context, b Backend, req Request, s *sink, idle time.Duration) (Result, error) {
+// watch calls b once. With a positive idle, a call that reports nothing to
+// s for idle ends with errStalled.
+func watch(ctx context.Context, b Backend, req Request, s Sink, idle time.Duration) (Result, error) {
 	if idle <= 0 {
 		return b.Run(ctx, req, s)
 	}
@@ -265,21 +268,23 @@ func attempt(ctx context.Context, b Backend, req Request, s *sink, idle time.Dur
 	return res, err
 }
 
-// watched is a Sink that calls alive on each delta and item.
+// watched is a Sink that calls alive on each delta, item, and Alive.
 type watched struct {
-	*sink
+	Sink
 	alive func()
 }
 
 func (w watched) Item(m eventlog.Message) error {
 	w.alive()
-	return w.sink.Item(m)
+	return w.Sink.Item(m)
 }
 
 func (w watched) Delta(itemID string, d Delta) {
 	w.alive()
-	w.sink.Delta(itemID, d)
+	w.Sink.Delta(itemID, d)
 }
+
+func (w watched) Alive() { w.alive() }
 
 func (s *sink) wait(ctx context.Context, attempt int) error {
 	d := retryBackoff << attempt
@@ -323,6 +328,8 @@ func (s *sink) Delta(_ string, d Delta) {
 	}
 	s.to.Delta(s.turnID, s.item, d)
 }
+
+func (*sink) Alive() {}
 
 func (s *sink) Telemetry(t Telemetry) { s.to.Telemetry(s.turnID, t) }
 

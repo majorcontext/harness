@@ -1,6 +1,7 @@
 package modelapi
 
 import (
+	"encoding/json"
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -39,7 +40,12 @@ func fromMessage(m *message.Message) eventlog.Message {
 				out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartReasoning, Text: p.Text, ProviderData: p.ProviderData})
 			}
 		case *message.ToolCall:
-			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
+			args := p.Arguments
+			// The output cap can cut the arguments mid-value. The wire sends nil as {}.
+			if !json.Valid(args) {
+				args = nil
+			}
+			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: p.CallID, Name: p.Name, Arguments: args})
 		}
 	}
 	return out

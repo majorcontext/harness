@@ -79,6 +79,8 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 			if err := out.Item(m); err != nil {
 				return turn.Result{}, err
 			}
+		default:
+			out.Alive()
 		}
 	}
 }

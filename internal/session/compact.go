@@ -62,7 +62,7 @@ func (a *Actor) compact(done func(struct{}, error)) bool {
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
 	a.run = r
 	a.cfg.Go(func() {
-		summary, err := turn.Summarize(ctx, a.cfg.Backend, req)
+		summary, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		c.Summary = summary
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
@@ -107,7 +107,7 @@ func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Mess
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	if f.c.Summary, err = turn.Summarize(ctx, a.cfg.Backend, f.req); err != nil {
+	if f.c.Summary, err = turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle); err != nil {
 		return nil, false, err
 	}
 	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
