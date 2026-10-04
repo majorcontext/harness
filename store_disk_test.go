@@ -12,7 +12,10 @@ import (
 )
 
 func TestDiskStore(t *testing.T) {
-	storetest.Run(t, func(t *testing.T) harness.Store { return harness.NewDiskStore(t.TempDir()) })
+	storetest.Run(t, func(t *testing.T) func() harness.Store {
+		root := t.TempDir()
+		return func() harness.Store { return harness.NewDiskStore(root) }
+	})
 }
 
 func TestDiskStoreRepairsTornTail(t *testing.T) {

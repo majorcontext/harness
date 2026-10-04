@@ -223,12 +223,13 @@ var ErrConflict = errors.New("harness: append conflict")
 ```
 
 - `seq` starts at 1 and has no gaps. `Head` returns the last seq, or 0 for an empty session. `expectedSeq` is the last seq the writer has seen, so it equals the record count.
-- A stale writer gets `ErrConflict` and stops.
+- A stale writer gets `ErrConflict` and stops. This holds across `Store` instances on one storage, in one process or in many: the fence is in the storage, not in an instance.
 - Any other append error also stops the session actor, with no retry. The next `Open` fences and replays from the store, so an append that landed is in the replay, and one that did not land is not.
 - Compare-and-append alone does not fence a lease handoff: an old owner's in-flight append can still hold the current `expectedSeq`. The new owner therefore appends `owner.acquired` before it replays or runs (see Ownership). Any later append from the old owner conflicts. A shared store may also check its lease in the same transaction as the append.
 - `Append` is durable on return. `DiskStore` writes the records of one `Append` with one `fsync`. `MemStore` is for tests.
+- `DiskStore` takes an exclusive `flock` of the session log for each append and compares `expectedSeq` with the head read under that lock. Each `Head` and `Read` scans again the bytes that another instance appended since the last scan, which a change of the file size shows. Where `flock` does not exist, only the instance fences its appends.
 - There are no checkpoints. `Open` and `OpenView` replay the whole log. `List` reads the view of a session that this runtime runs, and replays the log of any other session. Add a checkpoint only when a measurement shows that replay costs too much.
-- `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it.
+- `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it. For each case, `newStore` returns an opener of new storage, and each call of the opener returns one more instance over that storage, so the suite checks the fence across instances.
 
 ### Layout on disk
 
