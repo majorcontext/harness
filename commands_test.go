@@ -162,9 +162,12 @@ func TestTypedCommandRepeats(t *testing.T) {
 		r := runtime(t, st, f)
 		s := create(t, r)
 		first := submit(t, s, typed("a", "/thinking high"))
-		again, repeat, err := s.Admit(bg, typed("a", "/thinking high"))
-		if err != nil || !repeat || again.Seq != first.Seq || again.Command != protocol.CommandSucceeded {
-			t.Errorf("repeat = %+v %v %v, want seq %d, a repeat, and the terminal status", again, repeat, err, first.Seq)
+		again, err := s.Submit(bg, typed("a", "/thinking high"))
+		if err != nil || !again.Repeat || again.Seq != first.Seq || again.Command != protocol.CommandSucceeded {
+			t.Errorf("repeat = %+v %v, want seq %d, a repeat, and the terminal status", again, err, first.Seq)
+		}
+		if first.Repeat {
+			t.Errorf("first receipt = %+v, want no repeat", first)
 		}
 		for _, in := range []protocol.Input{typed("a", "/thinking low"), text("a", "hi")} {
 			if _, err := s.Submit(bg, in); !errors.Is(err, harness.ErrInputConflict) {

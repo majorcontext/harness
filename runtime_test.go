@@ -304,8 +304,9 @@ func TestSubmitIsIdempotent(t *testing.T) {
 		s := create(t, r)
 		first := submit(t, s, text("a", "hi"))
 		run := <-f.runs
-		if again := submit(t, s, text("a", "hi")); again != first {
-			t.Fatalf("repeated Submit = %+v, want %+v", again, first)
+		again := submit(t, s, text("a", "hi"))
+		if want := (protocol.Admitted{InputID: first.InputID, Seq: first.Seq, Repeat: true}); again != want {
+			t.Fatalf("repeated Submit = %+v, want %+v", again, want)
 		}
 		if _, err := s.Submit(bg, text("a", "other")); !errors.Is(err, harness.ErrInputConflict) {
 			t.Fatalf("Submit with another body = %v, want ErrInputConflict", err)

@@ -138,8 +138,7 @@ func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command men
 func (r *Runtime) Close(ctx context.Context) error
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
-func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
-func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) // Submit, and whether the input repeats
+func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -583,14 +582,14 @@ Each code except `internal` and `payload_too_large` is a sentinel error and a `p
 
 ### Slash commands
 
-`Session.Admit` resolves an input with `source: typed` and one text part through the `command` package, with the dispatch rules of the engine server. Any other input is never a command.
+`Session.Submit` resolves an input with `source: typed` and one text part through the `command` package, with the dispatch rules of the engine server. Any other input is never a command.
 
 - Not a command: the input is admitted as is. `//x` is admitted as the text `/x`.
 - An unknown name: the prompt command of that name under `commands_dirs` (default `<WorkDir>/.agents/commands`) is admitted as its expanded text with `source: command`. With no such file, or no `WorkDir`, the line is admitted as text.
 - Bad arguments: one `command.recorded` with `failed` and the error of `Resolve`. Nothing runs.
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
-- Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
+- Any other control command records `accepted`, runs after `Submit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
 - The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is the process list of `GET /processes`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.

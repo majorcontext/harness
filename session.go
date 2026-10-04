@@ -65,21 +65,14 @@ func detach(s protocol.Session) protocol.Session {
 // Submit admits an input. It starts a turn when none runs and queues the
 // input otherwise. A steer input joins the running turn at its next item
 // boundary, and starts a turn on an idle session. A repeated input ID returns
-// the original receipt.
+// the original receipt with Repeat set; the verdict is atomic with the
+// admission. A typed slash command records command.recorded instead of an
+// input, and the receipt carries its status; see docs/architecture.md.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
-	a, _, err := s.Admit(ctx, in)
-	return a, err
-}
-
-// Admit is Submit that also reports whether in repeats an input that the
-// session already admitted. The verdict is atomic with the admission.
-// A typed slash command records command.recorded instead of an input, and
-// the receipt carries its status; see docs/architecture.md.
-func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) {
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
 		if err != nil {
-			return protocol.Admitted{}, false, err
+			return protocol.Admitted{}, err
 		}
 		if p != nil {
 			return s.command(ctx, p)
@@ -88,18 +81,18 @@ func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitt
 	}
 	ev, blobs, err := admit.Input(in)
 	if err != nil {
-		return protocol.Admitted{}, false, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return protocol.Admitted{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	for _, b := range blobs {
 		if err := s.r.store.PutBlob(ctx, s.id, b.Key, bytes.NewReader(b.Data)); err != nil {
-			return protocol.Admitted{}, false, err
+			return protocol.Admitted{}, err
 		}
 	}
 	seq, repeat, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, err
 	}
-	return protocol.Admitted{InputID: in.ID, Seq: seq}, repeat, nil
+	return protocol.Admitted{InputID: in.ID, Seq: seq, Repeat: repeat}, nil
 }
 
 // Interrupt stops the running turn and returns after it has ended. The

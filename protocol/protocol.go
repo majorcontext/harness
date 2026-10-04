@@ -186,11 +186,14 @@ type Input struct {
 
 // Admitted is the receipt of an input: the seq of its input.admitted
 // record. A typed slash command has no input.admitted record: Seq is its
-// first command.recorded record, and Command is its newest status.
+// first command.recorded record, and Command is its newest status. Repeat
+// is true when the session had already admitted the input; it is not part of
+// the wire body.
 type Admitted struct {
 	InputID string `json:"input_id"`
 	Seq     uint64 `json:"seq"`
 	Command string `json:"command,omitempty"`
+	Repeat  bool   `json:"-"`
 }
 
 // Interrupt stops the running turn, or only the named turn when TurnID is

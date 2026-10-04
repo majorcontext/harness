@@ -221,10 +221,10 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 
 // command records the first status of p. An accepted command joins the
 // work that Runtime.Close waits for before its record, so Close refuses it.
-func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool, error) {
+func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, error) {
 	if p.res != nil {
 		if err := s.r.hold(); err != nil {
-			return protocol.Admitted{}, false, err
+			return protocol.Admitted{}, err
 		}
 	}
 	rec, seq, repeat, err := s.a.Record(ctx, p.rec, p.busy)
@@ -239,9 +239,9 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool
 		s.r.group.Done()
 	}
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, err
 	}
-	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status}, repeat, nil
+	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status, Repeat: repeat}, nil
 }
 
 // dispatch runs the operation of an accepted command and records its
