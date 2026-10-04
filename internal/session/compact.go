@@ -79,7 +79,7 @@ func (a *Actor) compact(keep int, done func(struct{}, error)) bool {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
 	a.run = r
-	a.cfg.Go(func() {
+	a.spawn(func() {
 		summary, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		c.Summary = a.indexed(summary, metas)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {

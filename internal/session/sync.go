@@ -57,7 +57,7 @@ func (a *Actor) replicate() error {
 			ack, err = a.cfg.Sync.Deliver(ctx, *b)
 		}
 		if errors.Is(err, ErrStaleEpoch) {
-			close(a.stale)
+			close(a.rejected)
 			return ErrNotOwned
 		}
 		if err != nil {
@@ -129,7 +129,7 @@ func await[T any](a *Actor, ch <-chan T) {
 	case <-ch:
 	case <-a.cfg.Ownership.Lost():
 	case <-a.cfg.Base.Done():
-	case <-a.stale:
+	case <-a.rejected:
 	}
 }
 

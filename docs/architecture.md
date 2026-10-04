@@ -336,6 +336,11 @@ The actor appends with no other goroutine. It checks the batch with `eventlog.Ch
 
 The turn runner is one goroutine per turn. It gets a `turn.Request` that the actor builds from the `State`, calls the backend and tools, and sends each item and the end of the turn to the actor as commands. It touches no session field.
 
+Lifecycle:
+
+- `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
+- When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
+
 Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, head seq) and whether the actor stopped.
 
 ### Ownership

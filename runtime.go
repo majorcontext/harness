@@ -259,19 +259,14 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.group.Add(1)
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, start)
-			switch {
-			case e.err != nil:
+			if e.err != nil {
 				r.forget(id, e)
-			case create:
-				close(e.s.recovered)
-			default:
-				r.group.Go(func() {
-					r.recoverChildren(id, e.s.a)
-					close(e.s.recovered)
-				})
+			}
+			close(e.ready)
+			if e.err == nil {
+				r.run(id, e.s, create)
 			}
 			r.group.Done()
-			close(e.ready)
 			return e.s, e.err
 		}
 		r.mu.Unlock()
@@ -296,6 +291,20 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 		}
 		r.forget(id, e)
 	}
+}
+
+// run runs session s after load publishes it, so a tool of its first run
+// finds it. An opened session then settles or opens its unsettled children.
+func (r *Runtime) run(id string, s *Session, create bool) {
+	s.a.Run()
+	if create {
+		close(s.recovered)
+		return
+	}
+	r.group.Go(func() {
+		r.recoverChildren(id, s.a)
+		close(s.recovered)
+	})
 }
 
 func (r *Runtime) forget(id string, e *entry) {

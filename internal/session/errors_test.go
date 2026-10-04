@@ -33,6 +33,7 @@ func runOn(t *testing.T, p provider.Provider, lim turn.Limits) (*Actor, *memLog)
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.Run()
 	return a, log
 }
 

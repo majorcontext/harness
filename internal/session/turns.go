@@ -120,7 +120,7 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	}
 	a.run = r
 	tools, src := a.turnTools(id, r.ownsLoop)
-	a.cfg.Go(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, src, a, a.cfg.Limits) })
+	a.spawn(func() { turn.Run(ctx, step, a.cfg.Backend, req, tools, src, a, a.cfg.Limits) })
 }
 
 // Item records one completed message of turnID under itemID, or under a new
