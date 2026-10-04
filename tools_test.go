@@ -157,7 +157,7 @@ func TestHandoffLetsARunningToolFinish(t *testing.T) {
 		}
 		f1, f2 := newFake(), newFake()
 		r1 := start(f1)
-		s, err := r1.Create(bg, protocol.CreateSession{ID: "s1", Model: "test/model", AllowedTools: []string{"bash"}})
+		s, err := r1.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model", AllowedTools: []string{"bash"}})
 		if err != nil {
 			t.Fatal(err)
 		}

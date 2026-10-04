@@ -61,7 +61,7 @@ func (p *parker) Run(_ context.Context, req turn.Request, out turn.Sink) (turn.R
 
 func questionRuntime(t *testing.T, st harness.Store, p *parker, ask bool) *harness.Runtime {
 	t.Helper()
-	r, err := harness.NewWithBackend(harness.Options{Store: st, AskUserQuestion: ask}, p)
+	r, err := harness.NewWithBackends(harness.Options{Store: st, AskUserQuestion: ask}, map[string]turn.Backend{"fake": p, "elsewhere": p})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestAModelOfAnotherProviderDismissesAnOpenQuestion(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		st, p := harness.NewMemStore(), newParker()
 		r, s := parked(t, st, p)
-		same := "test/other"
+		same := "fake/other"
 		if _, err := s.Update(bg, protocol.SettingsPatch{Model: &same}); err != nil {
 			t.Fatal(err)
 		}

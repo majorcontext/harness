@@ -123,9 +123,9 @@ func TestUpdateAppliesToTheNextTurn(t *testing.T) {
 		s := create(t, r)
 		submit(t, s, text("a", "one"))
 		run := <-f.runs
-		p := protocol.SettingsPatch{Model: new("test/other"), Effort: new("high")}
+		p := protocol.SettingsPatch{Model: new("fake/other"), Effort: new("high")}
 		v, err := s.Update(bg, p)
-		if err != nil || v.Model != "test/other" || v.Effort != "high" || v.Status != protocol.StatusRunning {
+		if err != nil || v.Model != "fake/other" || v.Effort != "high" || v.Status != protocol.StatusRunning {
 			t.Fatalf("Update = %+v, %v", v, err)
 		}
 		if again, err := s.Update(bg, p); err != nil || again.HeadSeq != v.HeadSeq {
@@ -135,8 +135,8 @@ func TestUpdateAppliesToTheNextTurn(t *testing.T) {
 		run.end()
 		next := <-f.runs
 		next.end()
-		if run.req.Model != "test/model" || next.req.Model != "test/other" || next.req.Settings.Effort != "high" {
-			t.Fatalf("models = %s then %s %+v, want test/model then test/other high", run.req.Model, next.req.Model, next.req.Settings)
+		if run.req.Model != "fake/model" || next.req.Model != "fake/other" || next.req.Settings.Effort != "high" {
+			t.Fatalf("models = %s then %s %+v, want fake/model then fake/other high", run.req.Model, next.req.Model, next.req.Settings)
 		}
 		wantLog(t, st, 4, "settings.changed", "input.admitted b", "turn.ended completed", "turn.started b", "turn.ended completed")
 		closeRuntime(t, r)

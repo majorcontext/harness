@@ -77,7 +77,7 @@ func (r *Runtime) available(model string, names []string) []string {
 	if names == nil {
 		return nil
 	}
-	caps := r.backend.Capabilities(model)
+	caps := r.models.Capabilities(model)
 	has := func(n string) bool {
 		return slices.Contains(caps.Tools, n) || !caps.OwnsLoop && r.builtin(n) || r.mcp != nil && mcpsrc.Reserved(n) ||
 			slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == n })

@@ -109,7 +109,7 @@ func familyRuntime(t *testing.T, st harness.Store, f *family, own harness.Owner,
 const report = "A background task you started has finished."
 
 func TestTaskSpawnsAChild(t *testing.T) {
-	reader := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: test/small\ncolor: blue\n---\n\nOnly read files.\n"
+	reader := "---\nname: reader\ndescription: Reads.\ntools: ls\nmodel: fake/small\ncolor: blue\n---\n\nOnly read files.\n"
 	for _, tc := range []struct {
 		name   string
 		agent  string
@@ -129,7 +129,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		{name: "a profile sets the tools, model, and prompt of the child", agent: "reader", child: done, kids: 1,
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				req, _ := f.last(children[0].ID, "child work")
-				if len(req.Tools) != 1 || req.Tools[0].Name != "ls" || req.Model != "test/small" || !strings.HasSuffix(req.Instructions, "Only read files.") {
+				if len(req.Tools) != 1 || req.Tools[0].Name != "ls" || req.Model != "fake/small" || !strings.HasSuffix(req.Instructions, "Only read files.") {
 					t.Errorf("child request tools %v, model %s, prompt %q", req.Tools, req.Model, req.Instructions)
 				}
 			}},
@@ -153,7 +153,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},
-		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "test/small", child: done, kids: 1,
+		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "fake/small", child: done, kids: 1,
 			check: func(t *testing.T, f *family, children []protocol.Session) {
 				if req, _ := f.last(children[0].ID, "child work"); slices.Contains(req.AllowedTools, "ls") {
 					t.Errorf("child allowed tools %v, want no ls", req.AllowedTools)

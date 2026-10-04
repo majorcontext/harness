@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"cmp"
 	"context"
 	"testing"
 
@@ -8,10 +9,23 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 )
 
-// NewWithBackend returns a Runtime that runs every turn on b.
+// NewWithBackend returns a Runtime whose provider fake runs every turn on b.
+// An empty Config.Model is fake/model.
 func NewWithBackend(opts Options, b turn.Backend) (*Runtime, error) {
-	opts.backend = b
-	return New(opts)
+	return NewWithBackends(opts, map[string]turn.Backend{"fake": b})
+}
+
+// NewWithBackends is NewWithBackend with one backend per provider name.
+func NewWithBackends(opts Options, backends map[string]turn.Backend) (*Runtime, error) {
+	opts.Config.Model = cmp.Or(opts.Config.Model, "fake/model")
+	r, err := New(opts)
+	if err != nil {
+		return nil, err
+	}
+	r.models.Close()
+	r.models.backends = backends
+	r.models.strict = false
+	return r, nil
 }
 
 // PanicIn makes the operation of the control command op panic until t ends.

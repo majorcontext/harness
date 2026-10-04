@@ -173,7 +173,7 @@ func TestLostStopsTheActorBeforeItsNextAppend(t *testing.T) {
 func TestCreateReturnsTheStoreError(t *testing.T) {
 	boom := errors.New("disk full")
 	r := runtime(t, &held{Store: harness.NewMemStore(), err: boom}, newFake())
-	_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "test/model"})
+	_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model"})
 	if !errors.Is(err, boom) || errors.Is(err, harness.ErrSessionNotOwned) {
 		t.Fatalf("Create = %v, want the store error only", err)
 	}
@@ -231,7 +231,7 @@ func TestFenceStopsTheStaleOwner(t *testing.T) {
 		if again := open(t, r1); again != stale {
 			t.Fatal("Open of a running session returned another Session")
 		}
-		if _, err := r1.Create(bg, protocol.CreateSession{ID: "s1", Model: "test/model"}); !errors.Is(err, harness.ErrSessionExists) {
+		if _, err := r1.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model"}); !errors.Is(err, harness.ErrSessionExists) {
 			t.Fatalf("Create of an existing session = %v, want ErrSessionExists", err)
 		}
 		open(t, r2)

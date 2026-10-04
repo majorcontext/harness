@@ -91,18 +91,15 @@ type Options struct {
 	// the newest message of the session when its first request left. Empty:
 	// no banner.
 	Version string
-
-	backend turn.Backend
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
 type Runtime struct {
-	store   Store
-	owner   Owner
-	sync    Sync
-	backend turn.Backend
-	tools   []turn.Tool
-	// models is nil when Options.backend runs every turn.
+	store Store
+	owner Owner
+	sync  Sync
+	tools []turn.Tool
+	// models routes each turn to the backend of its model.
 	models *models
 	limits turn.Limits
 	// prompt reads the system prompt of a session.
@@ -151,7 +148,7 @@ func New(opts Options) (*Runtime, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
 		sessions:  map[string]*entry{},
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
@@ -187,10 +184,7 @@ func New(opts Options) (*Runtime, error) {
 	if r.owner == nil {
 		r.owner = newLocalOwner()
 	}
-	if r.backend == nil {
-		r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
-		r.backend = r.models
-	}
+	r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
@@ -239,10 +233,8 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 }
 
 func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Session, error) {
-	if r.models != nil {
-		if err := r.models.check(c.Model, r.unowned(c.AllowedTools), r.named()); err != nil {
-			return nil, err
-		}
+	if err := r.models.check(c.Model, r.unowned(c.AllowedTools), r.named()); err != nil {
+		return nil, err
 	}
 	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
 		cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
@@ -362,7 +354,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Blobs:           storeLog{r.store, id},
 		Ownership:       own,
 		Owner:           r.name(),
-		Backend:         r.backend,
+		Backend:         r.models,
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
@@ -378,14 +370,12 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Go:              r.group.Go,
 		Done:            func() { r.forget(id, e) },
 	}
-	if r.models != nil {
-		cfg.Check = func(from, to string, names []string) error {
-			return r.models.change(from, to, r.unowned(names), r.named())
-		}
+	cfg.Check = func(from, to string, names []string) error {
+		return r.models.change(from, to, r.unowned(names), r.named())
 	}
 	var srcs turn.Sources
 	if r.mcp != nil {
-		srcs = append(srcs, mcpTools{r.mcp, r.backend})
+		srcs = append(srcs, mcpTools{r.mcp, r.models})
 	}
 	if r.plugins != nil {
 		p := r.plugins.Session(id)
@@ -579,9 +569,7 @@ func (r *Runtime) Close(ctx context.Context) error {
 		<-stopped
 	}
 	r.cancel()
-	if r.models != nil {
-		r.models.Close()
-	}
+	r.models.Close()
 	r.closeTools(ctx)
 	return errors.Join(errs...)
 }
@@ -717,9 +705,4 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
-func (r *Runtime) Models() []protocol.Model {
-	if r.models == nil {
-		return []protocol.Model{}
-	}
-	return r.models.list()
-}
+func (r *Runtime) Models() []protocol.Model { return r.models.list() }
