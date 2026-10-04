@@ -280,3 +280,20 @@ func TestWriteGuardBelongsToOneSession(t *testing.T) {
 		t.Fatalf("write_file in another session = %q, want %q", got, want)
 	}
 }
+
+func TestGrepMarksTruncationOnlyWhenAMatchIsDropped(t *testing.T) {
+	var all []string
+	for i := 1; i <= 500; i++ {
+		all = append(all, fmt.Sprintf("f.txt:%d:x", i))
+	}
+	exact := strings.Join(all, "\n")
+	over := strings.ReplaceAll(exact, "f.txt", "g.txt") + "\n[truncated: showing 500 matches]"
+	calls := []call{
+		c("bash", "", "command", "mkdir proj && (yes x | head -500; echo y) > proj/f.txt && (yes x | head -501) > proj/g.txt"),
+		c("grep", exact, "pattern", "^x$", "path", "proj/f.txt"),
+		c("grep", over, "pattern", "^x$", "path", "proj/g.txt"),
+	}
+	dir := t.TempDir()
+	got, _ := chain(t, dir, config.Config{}, calls)
+	check(t, dir, calls, got)
+}

@@ -304,7 +304,7 @@ func (s *State) Compaction() (CompactionApplied, bool) {
 func (s *State) BackendState(backend string) string { return s.backends[backend] }
 
 // Retained returns the retained tool results in the order of their records.
-func (s *State) Retained() []ToolResultRetained { return slices.Clip(s.retained) }
+func (s *State) Retained() []ToolResultRetained { return slices.Clone(s.retained) }
 
 // Summary returns the list entry of the session.
 func (s *State) Summary() Summary {

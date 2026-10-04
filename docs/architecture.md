@@ -652,6 +652,7 @@ With a `WorkDir`, each session of the harness loop gets the built-in tools of th
 - A tool result above 16384 bytes has its secrets masked, goes to a blob, and the history holds a header with a `trh_N` handle and the first 16384 bytes. A result that fits after the mask stays inline. `read_tool_result` reads the blob back by line window or literal search, bounded by `max_bytes`. Its own result is never retained.
 - The `turn.Source` of an agent turn adds a `turn.Hooks` that retains each result after the plugin hooks, so the blob holds the text that the model would see. The turn records the preview, and the next model call of the turn never carries the whole result. The blob is written outside the actor, and the record is appended only while the turn runs.
 - A `tool_result.retained` record names the blob, and `Sync` carries the blob with the record, as for `backend.state`. The handle numbers count these records, so a replay and the next owner continue the count. The blob key is the handle and the fence seq, so a fenced owner never overwrites the blob of the next owner.
+- A turn whose allowed tools omit `read_tool_result` retains nothing, so a preview never names a tool that the model cannot call.
 - A result that would take the retained total of the session above 4 MiB keeps its preview with a notice and no handle, and nothing is written. A failed write keeps the whole result.
 - Each compaction summary ends with an index of the newest 32 retained results, so a handle stays reachable after its preview folds.
 

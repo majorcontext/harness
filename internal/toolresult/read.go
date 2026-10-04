@@ -99,15 +99,15 @@ func (t Tool) Run(ctx context.Context, call protocol.ToolCall) (protocol.ToolRes
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
-	if floor := floor(m, in); in.MaxBytes > 0 && in.MaxBytes < floor {
+	maxBytes := clamp(in.MaxBytes, defaultMaxBytes, maxMaxBytes)
+	if floor := floor(m, in); maxBytes < floor {
 		return protocol.ToolResult{}, fmt.Errorf("%s: max_bytes %d is below the minimum %d for this result (handle=%s tool=%q)",
-			ToolName, in.MaxBytes, floor, m.Handle, m.Tool)
+			ToolName, maxBytes, floor, m.Handle, m.Tool)
 	}
 	data, err := t.read(ctx, m)
 	if err != nil {
 		return protocol.ToolResult{}, err
 	}
-	maxBytes := clamp(in.MaxBytes, defaultMaxBytes, maxMaxBytes)
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), len(data)+1)
 	if in.Search != "" {

@@ -14,15 +14,18 @@ import (
 )
 
 // turnTools returns the tools and the source of turn id. A harness-loop
-// turn of an agent gets the agent tools, and its source retains each result
-// after the hooks.
+// turn of an agent gets the agent tools. Its source retains each result
+// after the hooks, unless the profile removes read_tool_result.
 func (a *Actor) turnTools(id string, ownsLoop bool) ([]turn.Tool, turn.Source) {
-	tools, src := a.cfg.Tools, a.cfg.Source
-	if !ownsLoop && a.cfg.Agent != nil {
-		tools = slices.Concat(tools, a.cfg.Agent, []turn.Tool{toolresult.NewTool(a)})
+	src := a.cfg.Source
+	if ownsLoop || a.cfg.Agent == nil {
+		return turn.Restrict(a.cfg.Tools, a.state.AllowedTools()), src
+	}
+	tools := turn.Restrict(slices.Concat(a.cfg.Tools, a.cfg.Agent, []turn.Tool{toolresult.NewTool(a)}), a.state.AllowedTools())
+	if slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == toolresult.ToolName }) {
 		src = agentSource{src: src, a: a, turnID: id}
 	}
-	return turn.Restrict(tools, a.state.AllowedTools()), src
+	return tools, src
 }
 
 // agentSource wraps the source of an agent turn.

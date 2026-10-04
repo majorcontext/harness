@@ -25,11 +25,14 @@ import (
 // history and records each request. A nil answer blocks until the call ends.
 type family struct {
 	answer func(last eventlog.Part) []eventlog.Message
+	owns   string
 	mu     sync.Mutex
 	reqs   []turn.Request
 }
 
-func (f *family) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
+func (f *family) Capabilities(model string) turn.Capabilities {
+	return turn.Capabilities{OwnsLoop: model == f.owns}
+}
 
 func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
 	f.mu.Lock()
@@ -108,6 +111,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		name   string
 		agent  string
 		spawns int
+		owns   string
 		cfg    config.Config
 		child  func() []eventlog.Message
 		kids   int
@@ -146,6 +150,12 @@ func TestTaskSpawnsAChild(t *testing.T) {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},
+		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "test/small", child: done, kids: 1,
+			check: func(t *testing.T, f *family, children []protocol.Session) {
+				if req, _ := f.last(children[0].ID, "child work"); slices.Contains(req.AllowedTools, "ls") {
+					t.Errorf("child allowed tools %v, want no ls", req.AllowedTools)
+				}
+			}},
 		{name: "an explore child gets only the read-only tools that the runtime has", agent: "explore", child: done, kids: 1, check: readOnly},
 		{name: "a plan child gets only the read-only tools that the runtime has", agent: "plan", child: done, kids: 1, check: readOnly},
 	} {
@@ -158,7 +168,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			synctest.Test(t, func(t *testing.T) {
-				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child)}
+				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child), owns: tc.owns}
 				r := familyRuntime(t, harness.NewMemStore(), f, nil, tc.cfg, dir)
 				submit(t, create(t, r), text("a", "delegate"))
 				if kids := children(t, r); len(kids) != tc.kids {

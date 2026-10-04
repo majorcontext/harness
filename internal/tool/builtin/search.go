@@ -235,13 +235,14 @@ func (g *grepper) file(path, rel string) error {
 		return nil
 	}
 	for i, line := range strings.Split(string(data), "\n") {
+		if !g.re.MatchString(line) {
+			continue
+		}
 		if len(g.results) >= maxResults {
 			g.truncated = true
 			return errStop
 		}
-		if g.re.MatchString(line) {
-			g.results = append(g.results, fmt.Sprintf("%s:%d:%s", rel, i+1, cutLine(line)))
-		}
+		g.results = append(g.results, fmt.Sprintf("%s:%d:%s", rel, i+1, cutLine(line)))
 	}
 	return nil
 }

@@ -41,6 +41,12 @@ func TestMask(t *testing.T) {
 // order, and returns the tool result texts.
 func turn(t *testing.T, cfg config.Config, calls ...map[string]any) []string {
 	t.Helper()
+	return allowedTurn(t, nil, cfg, calls...)
+}
+
+// allowedTurn is turn in a session that allows only the tools named.
+func allowedTurn(t *testing.T, allowed []string, cfg config.Config, calls ...map[string]any) []string {
+	t.Helper()
 	var steps []harnesstest.Step
 	for i, in := range calls {
 		name := "bash"
@@ -63,7 +69,7 @@ func turn(t *testing.T, cfg config.Config, calls ...map[string]any) []string {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close(bg) }()
-	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5", AllowedTools: allowed})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,5 +251,19 @@ func TestRetentionKeepsTheHookedResult(t *testing.T) {
 	want := `[tool result retained: handle=trh_1 tool=bash bytes=23909 lines=5000 preview_bytes=16384 — read the rest with read_tool_result(handle="trh_1")]` + "\nafter-hook saw: 1\n2\n"
 	if len(got) != 1 || !strings.HasPrefix(got[0], want) {
 		t.Fatalf("results = %.200q, want the retained text of the after hook %q", got, want)
+	}
+}
+
+func TestReadBoundsTheDefaultBudget(t *testing.T) {
+	got := turn(t, config.Config{}, bash(seq), read("handle", "trh_1", "search", strings.Repeat("a", 20000)))
+	if len(got) != 2 || !strings.HasPrefix(got[1], "ERR read_tool_result: max_bytes 16384 is below the minimum ") {
+		t.Errorf("result = %.200q, want a max_bytes error", got)
+	}
+}
+
+func TestNoRetentionWithoutTheReader(t *testing.T) {
+	got := allowedTurn(t, []string{"bash"}, config.Config{}, bash(seq))
+	if len(got) != 1 || got[0] != lines(1, 5000) {
+		t.Errorf("result = %.200q, want the whole result inline", got)
 	}
 }
