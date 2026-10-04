@@ -25,6 +25,9 @@ Do not add any other text, headings, markdown, or code fences.`
 
 const (
 	sourceGoal = "goal"
+	// The evaluator is a classifier: it never reasons, and it answers in one line.
+	evaluatorEffort    = "off"
+	evaluatorMaxTokens = 256
 	// goalRetry is the first wait of a paused goal. Each later pause before
 	// a verdict doubles it, up to goalRetryMax.
 	goalRetry    = 30 * time.Second
@@ -183,6 +186,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 	turnID := a.state.LastEnded().TurnID
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History())
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
+		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
 	a.spawn(func() {
 		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
@@ -283,7 +287,7 @@ func transcript(h []eventlog.Message) string {
 		blocks = append(blocks, b.String())
 	}
 	slices.Reverse(blocks)
-	return strings.Join(blocks, "\n")
+	return strings.TrimSuffix(strings.Join(blocks, "\n"), "\n")
 }
 
 // goalStop returns the goal change after err ended a goal turn or its

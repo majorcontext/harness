@@ -144,6 +144,16 @@ type Compact struct {
 	KeepTurns *int `json:"keep_turns,omitempty"`
 }
 
+// Compacted is the result of a compaction. Folded is false when the session
+// had too few turns to fold, and then nothing else is set. A compaction by
+// the backend of the session has only ByBackend and Folded.
+type Compacted struct {
+	FromSeq   uint64 `json:"from_seq,omitempty"`
+	ToSeq     uint64 `json:"to_seq,omitempty"`
+	ByBackend bool   `json:"by_backend,omitempty"`
+	Folded    bool   `json:"folded"`
+}
+
 // Event is one durable record of a session log, or an ephemeral frame of a
 // live subscription. An ephemeral frame is never stored; its Seq is the last
 // durable seq when it was sent.

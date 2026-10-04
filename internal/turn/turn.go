@@ -73,6 +73,8 @@ type Request struct {
 	Tools []protocol.ToolSpec
 	// Call runs a call to one of Tools. A backend that owns the loop calls it.
 	Call func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult
+	// MaxTokens caps the response of a call. Zero: the backend default.
+	MaxTokens int
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
@@ -135,20 +137,21 @@ type Limits struct {
 }
 
 // Turn is what a running turn reports through. It is bound to its turn, so
-// no method takes a turn ID. Only CompactTurn takes a ctx: a backend reports
-// items after the ctx of the turn ends.
+// no method takes a turn ID. A retrying Status abandons the item that the
+// failed attempt streamed. CompactTurn returns ok false when no turn can
+// fold. Only CompactTurn takes a ctx: a backend reports after the turn ends.
 type Turn interface {
 	Sink
-	// Status sends a status frame. A retrying frame abandons the item that
-	// the failed attempt streamed.
 	Status(f protocol.StatusFrame)
-	// CompactTurn folds the turns before the newest kept turns into a
-	// summary, and returns the new history. ok is false when no turn can fold.
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
 
-const retryBackoff = 200 * time.Millisecond
+// A wait before a new attempt starts at retryBackoff and doubles up to retryBackoffMax.
+const (
+	retryBackoff    = time.Second
+	retryBackoffMax = 8 * time.Second
+)
 
 const (
 	// notRun is the result of each tool call of a response that max_tokens cut off.
@@ -160,9 +163,8 @@ const (
 // and the tools that src gives each model call, reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
 // order, then takes the steer inputs and calls b again, until a call asks
-// for no tool. Model calls run
-// under step and tools under ctx: when only step ends, a running tool
-// finishes and no new tool starts.
+// for no tool. Model calls run under step and tools under ctx: when only
+// step ends, a running tool finishes and no new tool starts.
 func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) {
 	to.Ended(run(ctx, step, b, req, tools, src, to, lim))
 }
@@ -285,7 +287,7 @@ func (w watched) Delta(itemID string, d Delta) {
 func (w watched) Alive() { w.alive() }
 
 func (s *sink) wait(ctx context.Context, attempt int) error {
-	d := retryBackoff << attempt
+	d := min(retryBackoff<<min(attempt, 3), retryBackoffMax)
 	d += rand.N(d/5) - d/10
 	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
 	t := time.NewTimer(d)

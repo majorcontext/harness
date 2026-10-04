@@ -205,7 +205,9 @@ func TestInterruptOverHTTP(t *testing.T) {
 	var bad protocol.ErrorBody
 	want(t, "compact with keep_turns 0", [2]any{call(t, "POST", s1+"/compact", `{"keep_turns":0}`, &bad), bad.Error.Code},
 		[2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
-	want(t, "compact status", call(t, "POST", s1+"/compact", `{"keep_turns":1}`, nil), http.StatusNoContent)
+	var compacted protocol.Compacted
+	want(t, "compact with nothing to fold", [2]any{call(t, "POST", s1+"/compact", `{"keep_turns":1}`, &compacted), compacted},
+		[2]any{http.StatusOK, protocol.Compacted{}})
 	var page protocol.EventPage
 	call(t, "GET", s1+"/events?after=6", "", &page)
 	want(t, "events after the interrupt", len(page.Events), 2)
@@ -299,9 +301,11 @@ func (stub) Models() []protocol.Model                            { return nil }
 func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
-func (stub) Compact(context.Context, protocol.Compact) error     { return nil }
-func (stub) SetGoal(context.Context, protocol.Goal) error        { return nil }
-func (stub) ClearGoal(context.Context) error                     { return nil }
+func (stub) Compact(context.Context, protocol.Compact) (protocol.Compacted, error) {
+	return protocol.Compacted{}, nil
+}
+func (stub) SetGoal(context.Context, protocol.Goal) error { return nil }
+func (stub) ClearGoal(context.Context) error              { return nil }
 func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session, error) {
 	return s.View(), nil
 }

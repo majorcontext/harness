@@ -61,11 +61,12 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(a.cfg.KeepTurns, nil) }
 
 // overThreshold reports whether the newest context reading passes
-// Config.Threshold of its window, for a backend that does not own its context.
+// Config.Threshold of its window, or of the window of the model when that is
+// larger, for a backend that does not own its context.
 func (a *Actor) overThreshold() bool {
-	c := a.state.Context()
-	over := c.Window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(c.Window)
-	return over && !a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
+	c, caps := a.state.Context(), a.cfg.Backend.Capabilities(a.state.Model())
+	window := max(c.Window, int64(caps.ContextWindow))
+	return window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(window) && !caps.OwnsContext
 }
 
 // compact runs a summary of the turns before the newest keep as the run of

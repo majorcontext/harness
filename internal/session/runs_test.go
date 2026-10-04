@@ -22,9 +22,24 @@ type kindBackend struct {
 	held    map[runKind]bool
 	started chan runKind
 	gate    chan struct{}
+	// tokens is the prompt size that each turn reports as a context
+	// reading with no window, and window is the window that the backend
+	// reports for every model.
+	tokens int64
+	window int
+	calls  []runKind
+	reqs   map[runKind]turn.Request
 }
 
-func (*kindBackend) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
+func (b *kindBackend) Capabilities(string) turn.Capabilities {
+	return turn.Capabilities{ContextWindow: b.window}
+}
+
+func (b *kindBackend) called() []runKind {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.calls)
+}
 
 func (b *kindBackend) hold(k runKind) {
 	b.mu.Lock()
@@ -43,6 +58,11 @@ func (b *kindBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 	}
 	b.mu.Lock()
 	held := b.held[kind]
+	b.calls = append(b.calls, kind)
+	if b.reqs == nil {
+		b.reqs = map[runKind]turn.Request{}
+	}
+	b.reqs[kind] = req
 	b.mu.Unlock()
 	if held {
 		b.started <- kind
@@ -51,6 +71,9 @@ func (b *kindBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 		case <-ctx.Done():
 			return turn.Result{}, context.Cause(ctx)
 		}
+	}
+	if kind == kindTurn && b.tokens > 0 {
+		out.Telemetry(turn.Telemetry{Context: eventlog.ContextMeasured{Tokens: b.tokens, Source: "m"}})
 	}
 	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
@@ -218,4 +241,52 @@ func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestSideCallsKeepTheParametersOfTheEngine(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{})}
+		cfg := actorConfig(t, &memLog{}, owned{}, b)
+		cfg.Evaluator, cfg.KeepTurns, cfg.Threshold = "m/eval", 1, 0.8
+		a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m", Settings: eventlog.Settings{Effort: "high"}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		converse(t, a, "one", "two")
+		if _, _, err := a.Compact(context.Background(), 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
+			t.Fatal(err)
+		}
+		settled(a)
+		if r := b.reqs[kindJudge]; r.MaxTokens != 256 || r.Settings.Effort != "off" {
+			t.Errorf("evaluator request: MaxTokens %d, effort %q, want 256 and off", r.MaxTokens, r.Settings.Effort)
+		}
+		if r := b.reqs[kindCompaction]; r.MaxTokens != 1024 || r.Settings.Effort != "high" {
+			t.Errorf("summary request: MaxTokens %d, effort %q, want 1024 and the session effort", r.MaxTokens, r.Settings.Effort)
+		}
+		if r := b.reqs[kindTurn]; r.MaxTokens != 0 {
+			t.Errorf("turn request MaxTokens = %d, want the backend default (0)", r.MaxTokens)
+		}
+	})
+}
+
+func TestTheWindowOfTheModelBacksUpAReadingWithNone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{}), tokens: 900, window: 1000}
+		cfg := actorConfig(t, &memLog{}, owned{}, b)
+		cfg.KeepTurns, cfg.Threshold = 1, 0.8
+		a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		converse(t, a, "one", "two", "three")
+		synctest.Wait()
+		if got, want := b.called(), []runKind{kindTurn, kindTurn, kindCompaction, kindTurn}; !slices.Equal(got, want) {
+			t.Errorf("model calls = %v, want %v: a reading of 900 tokens in a window of 1000 compacts before the third turn", got, want)
+		}
+	})
 }

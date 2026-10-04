@@ -3,6 +3,7 @@
 package modelapi
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -14,7 +15,7 @@ import (
 	"github.com/majorcontext/harness/provider"
 )
 
-// maxTokens caps each response. The Anthropic API rejects a request without a cap.
+// maxTokens caps a response that sets no cap. The Anthropic API rejects a request without a cap.
 const maxTokens = 8192
 
 // Backend is a turn.Backend over one provider client.
@@ -142,7 +143,7 @@ func request(req turn.Request) (*provider.Request, error) {
 	for i, t := range req.Tools {
 		tools[i] = provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 	}
-	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: maxTokens, Effort: effort, ServiceTier: req.Settings.ServiceTier,
+	preq := &provider.Request{Model: ref, Messages: msgs, Tools: tools, MaxTokens: cmp.Or(req.MaxTokens, maxTokens), Effort: effort, ServiceTier: req.Settings.ServiceTier,
 		SessionKey: req.SessionID}
 	if req.Instructions != "" {
 		preq.System = []string{req.Instructions}

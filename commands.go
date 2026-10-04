@@ -77,11 +77,11 @@ func compact(ctx context.Context, s *Session, args map[string]any) (any, error) 
 	if n, ok := args["keep_turns"].(int); ok {
 		req.KeepTurns = &n
 	}
-	c, ran, err := s.compact(ctx, req)
+	c, err := s.Compact(ctx, req)
 	switch {
 	case err != nil:
 		return nil, err
-	case !ran:
+	case !c.Folded:
 		return nil, errNoFold
 	}
 	return compactResult{c.FromSeq, c.ToSeq, c.ByBackend}, nil

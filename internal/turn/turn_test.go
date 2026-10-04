@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
@@ -15,6 +17,7 @@ import (
 type recorder struct {
 	items    []eventlog.Message
 	statuses []string
+	waits    []time.Duration
 	ended    []error
 	steer    [][]eventlog.Message
 }
@@ -36,6 +39,9 @@ func (*recorder) SaveState(string, []byte) error { return nil }
 func (*recorder) Compacted(string) error         { return nil }
 func (r *recorder) Status(f protocol.StatusFrame) {
 	r.statuses = append(r.statuses, string(f.Status))
+	if f.Status == protocol.StatusRetrying {
+		r.waits = append(r.waits, time.Until(f.NextAt))
+	}
 }
 func (*recorder) CompactTurn(context.Context) ([]eventlog.Message, bool, error) {
 	return nil, false, nil
@@ -84,4 +90,27 @@ func TestRunReportsAFailureToEnded(t *testing.T) {
 	if len(r.ended) != 1 || !errors.Is(r.ended[0], boom) {
 		t.Fatalf("Ended calls = %v, want boom", r.ended)
 	}
+}
+
+func TestRetryBackoffDoublesFromOneSecondToAnEightSecondCap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const calls = 6
+		m := &model{replies: make([]eventlog.Message, calls+1), errs: make([]error, calls)}
+		for i := range m.errs {
+			m.errs[i] = turn.ErrRetryable
+		}
+		m.replies[calls] = say("ok")
+		r := &recorder{}
+		ctx := context.Background()
+		turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{Retries: calls})
+		want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
+		if len(r.waits) != len(want) {
+			t.Fatalf("waits = %v, want %v", r.waits, want)
+		}
+		for i := range want {
+			if lo, hi := want[i]*9/10, want[i]*11/10; r.waits[i] < lo || r.waits[i] > hi {
+				t.Errorf("wait %d = %v, want %v within the jitter", i+1, r.waits[i], want[i])
+			}
+		}
+	})
 }

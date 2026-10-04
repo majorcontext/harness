@@ -27,13 +27,17 @@ Do not transcribe tool-call arguments or outputs verbatim; describe what happene
 // refuse a conversation that ends with an assistant message.
 const summaryInstruction = "Summarize the conversation above, following the system prompt's instructions."
 
+// summaryMaxTokens caps the response of a summary call: a concise summary,
+// not another turn.
+const summaryMaxTokens = 1024
+
 var errEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
 // req.History, and returns the summary after SummaryBanner. A positive idle
 // bounds the silence of the call, as Limits.Idle does.
 func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
-	req.Instructions = summaryPrompt
+	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
 	text, err := Ask(ctx, b, req, idle)
