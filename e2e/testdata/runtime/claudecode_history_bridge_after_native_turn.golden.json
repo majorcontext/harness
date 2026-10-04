@@ -259,12 +259,21 @@
     "set_model.a": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
+        "head_seq": 12,
         "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
         "model": "anthropic/claude-fable-5",
         "origin": "",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -278,12 +287,21 @@
     "set_model.a#2": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 17,
+        "head_seq": 18,
         "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

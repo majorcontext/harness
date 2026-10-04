@@ -3,8 +3,10 @@ package claudecode_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
@@ -80,5 +82,57 @@ func TestClaudeCodeReadsTheHistoryOfAnotherModel(t *testing.T) {
 	}
 	if got := calls[1].Result.Content[0].Text; got != priorHistory {
 		t.Errorf("history after the second run =\n%s\nwant\n%s", got, priorHistory)
+	}
+}
+
+func TestClaudeCodeReadsTheHistoryOfANativeTurnThatChangedModelInTheMiddle(t *testing.T) {
+	native := harnesstest.New(t,
+		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "checking", Block: true,
+			ToolCalls: []harnesstest.ToolCall{{ID: "toolu_n", Name: "echo", Input: map[string]any{}}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("echo"), Reply: harnesstest.Reply{Text: "native reply"}})
+	argvLog := fakeClaude(t, "")
+	r := bridgeRuntime(t, native)
+	s := createClaude(t, r, nil)
+	turnOf(t, s, text("a", "run it"))
+	switchTo(t, s, "anthropic/claude-fable-5")
+	after := s.View().HeadSeq
+	if _, err := s.Submit(bg, text("b", "native")); err != nil {
+		t.Fatal(err)
+	}
+	if !native.AwaitRequests(1, 10*time.Second) {
+		t.Fatal("the native turn sent no request")
+	}
+	switchTo(t, s, "claude-code/sonnet")
+	native.Release("call")
+	await(t, s, after, "turn.ended")
+	turnOf(t, s, text("c", "back"))
+	argv := jsonLines[[]string](t, argvLog)
+	if len(argv) != 2 {
+		t.Fatalf("CLI runs = %d, want 2", len(argv))
+	}
+	if !slices.ContainsFunc(argv[1], func(a string) bool { return strings.Contains(a, "get_conversation_history") }) {
+		t.Errorf("argv of the run after the native turn = %q, want the history directive", argv[1])
+	}
+}
+
+func TestClaudeCodeReadsTheHistoryAfterATurnWhoseCLINeverStarted(t *testing.T) {
+	native := harnesstest.New(t, harnesstest.Step{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}})
+	argvLog := fakeClaude(t, "")
+	r := bridgeRuntime(t, native)
+	s := createClaude(t, r, nil)
+	turnOf(t, s, text("a", "run it"))
+	switchTo(t, s, "anthropic/claude-fable-5")
+	turnOf(t, s, text("b", "native"))
+	switchTo(t, s, "claude-code/sonnet")
+	t.Setenv("FAKE_CLAUDE_MODE", "crash_before_init")
+	turnOf(t, s, text("c", "back"))
+	t.Setenv("FAKE_CLAUDE_MODE", "")
+	turnOf(t, s, text("d", "again"))
+	argv := jsonLines[[]string](t, argvLog)
+	if len(argv) != 3 {
+		t.Fatalf("CLI runs = %d, want 3", len(argv))
+	}
+	if !slices.ContainsFunc(argv[2], func(a string) bool { return strings.Contains(a, "get_conversation_history") }) {
+		t.Errorf("argv of the run after the failed start = %q, want the history directive", argv[2])
 	}
 }

@@ -186,6 +186,22 @@ func TestContractSessionOpsSettings(t *testing.T) {
 			},
 		},
 		{
+			name: "settings_model_change_reaches_the_next_model_call_of_a_turn",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{Text: "checking", Block: true, ToolCalls: []harnesstest.ToolCall{{
+					ID: "toolu_1", Name: "bash", Input: map[string]any{"command": "echo hi"}}}}},
+				{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"},
+				awaitRequests{n: 1},
+				setModel{as: "a", model: "anthropic/claude-haiku-4-5"},
+				release{step: "call"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
 			name:  "builtin_commands_run_and_record",
 			model: []harnesstest.Step{agentStep("rest", "ok", true)},
 			actions: []action{

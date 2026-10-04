@@ -2,9 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "fireworks/accounts/fireworks/routers/firerouter",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
+      "model": "claude-fable-5",
       "tools": [
         "bash",
         "edit_file",
@@ -12,9 +10,11 @@
         "goal",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -24,13 +24,8 @@
           "parts": [
             {
               "kind": "text",
-              "text": "say done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
+              "text": "go"
+            },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
@@ -40,29 +35,8 @@
       ]
     },
     {
-      "system_has_goal_evaluator": true,
-      "model": "vendor/eval-model",
-      "reasoning_effort": "off",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ntry"
-            }
-          ]
-        }
-      ]
-    },
-    {
       "system_has_goal_evaluator": false,
-      "model": "fireworks/accounts/fireworks/routers/firerouter",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
+      "model": "claude-haiku-4-5",
       "tools": [
         "bash",
         "edit_file",
@@ -70,9 +44,11 @@
         "goal",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -82,13 +58,8 @@
           "parts": [
             {
               "kind": "text",
-              "text": "say done"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
+              "text": "go"
+            },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
@@ -100,7 +71,15 @@
           "parts": [
             {
               "kind": "text",
-              "text": "try"
+              "text": "checking"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -108,27 +87,10 @@
           "role": "user",
           "parts": [
             {
-              "kind": "text",
-              "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: say done\n\nKeep working until the goal is fully satisfied, then stop."
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": true,
-      "model": "vendor/eval-model",
-      "reasoning_effort": "off",
-      "user": "ses:a",
-      "prompt_cache_key": "ses:a",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ntry\n\nUSER:\nThe goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: say done\n\nKeep working until the goal is fully satisfied, then stop.\n\nASSISTANT:\ndone"
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
             }
           ]
         }
@@ -143,7 +105,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "say done"
+            "text": "go"
           }
         ]
       },
@@ -153,17 +115,26 @@
         "parts": [
           {
             "type": "text",
-            "text": "try"
+            "text": "checking"
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: say done\n\nKeep working until the goal is fully satisfied, then stop."
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
           }
         ]
       },
@@ -178,5 +149,13 @@
         ]
       }
     ]
+  },
+  "calls": {
+    "set_model.a": {
+      "status": 200,
+      "body": {
+        "model": "anthropic/claude-haiku-4-5"
+      }
+    }
   }
 }

@@ -44,8 +44,7 @@ const (
 	RoleTool      = "tool"
 )
 
-// Message is one completed conversation item. ParentCallID names the tool call
-// that started the subagent that wrote it; no provider request carries it.
+// Message is one completed conversation item. ParentCallID names its subagent call.
 type Message struct {
 	Role         string `json:"role"`
 	Parts        []Part `json:"parts"`

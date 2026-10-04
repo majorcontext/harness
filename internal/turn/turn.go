@@ -84,11 +84,9 @@ type Request struct {
 	Steered <-chan struct{}
 	// Questions reports that the backend may ask the user a question.
 	Questions bool
-	// Foreign reports History messages that another provider recorded since
-	// the last turn of this one.
+	// Foreign reports History messages that another provider recorded.
 	Foreign bool
-	// Banner is engine context that each model call sends after
-	// History[:BannerAt]. Empty: none.
+	// Banner is engine context that each model call sends after History[:BannerAt].
 	Banner   string
 	BannerAt int
 }
@@ -129,9 +127,8 @@ type Sink interface {
 	SaveState(backend string, blob []byte) error
 	// Compacted records that the backend compacted its own context.
 	Compacted(summary string) error
-	// Ask opens a request on the open tool call callID, which is its ID.
+	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.
 	Ask(callID, kind string, payload json.RawMessage) error
-	// Resolution returns the record that closed request id.
 	Resolution(id string) (eventlog.RequestResolved, bool)
 }
 
@@ -160,8 +157,7 @@ type Turn interface {
 	Sink
 	Started() string
 	Status(f protocol.StatusFrame)
-	// Settings returns the model and the settings that the session holds
-	// now, or "" when the turn does not run.
+	// Settings returns the model and settings of the session now, or "".
 	Settings() (string, eventlog.Settings)
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
