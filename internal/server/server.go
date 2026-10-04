@@ -31,10 +31,21 @@ type Session interface {
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 }
 
-// Runtime hosts the sessions.
+// Reader is a session for reads: its state and its events, with no owner.
+type Reader interface {
+	Session() protocol.Session
+	// Events yields the events after seq, and ends at the head when the
+	// session is not running.
+	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+}
+
+// Runtime hosts the sessions. A route that only reads a session calls Read,
+// which owns nothing. A route that changes a session, or tails its events as
+// they happen, calls Open.
 type Runtime[S Session] interface {
 	Create(ctx context.Context, req protocol.CreateSession) (S, error)
 	Open(ctx context.Context, id string) (S, error)
+	Read(ctx context.Context, id string) (Reader, error)
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	Models() []protocol.Model
 	Commands() (protocol.Commands, error)
@@ -109,7 +120,7 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sessions", h.serve(h.create))
 	mux.HandleFunc("GET /sessions", h.serve(h.list))
-	mux.HandleFunc("GET /sessions/{id}", h.session(h.view))
+	mux.HandleFunc("GET /sessions/{id}", h.serve(h.view))
 	mux.HandleFunc("PATCH /sessions/{id}", h.session(h.update))
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
 	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
@@ -117,7 +128,7 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
 	mux.HandleFunc("PUT /sessions/{id}/goal", h.session(h.setGoal))
 	mux.HandleFunc("DELETE /sessions/{id}/goal", h.session(h.clearGoal))
-	mux.HandleFunc("GET /sessions/{id}/events", h.session(h.events))
+	mux.HandleFunc("GET /sessions/{id}/events", h.serve(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
 		return nil
@@ -177,7 +188,8 @@ func (h *handler[S]) serve(f func(http.ResponseWriter, *http.Request) error) htt
 }
 
 // session opens the session of the path through the Runtime, which returns
-// a session that it already runs as is.
+// a session that it already runs as is. Only a route that changes the
+// session opens it.
 func (h *handler[S]) session(f func(S, http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return h.serve(func(w http.ResponseWriter, r *http.Request) error {
 		s, err := h.rt.Open(r.Context(), r.PathValue("id"))
@@ -285,8 +297,12 @@ func (h *handler[S]) list(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func (h *handler[S]) view(s S, w http.ResponseWriter, _ *http.Request) error {
-	reply(w, http.StatusOK, s.View())
+func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
+	rd, err := h.rt.Read(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, rd.Session())
 	return nil
 }
 
@@ -393,16 +409,23 @@ func acceptsStream(accept string) bool {
 	return false
 }
 
-func (h *handler[S]) events(s S, w http.ResponseWriter, r *http.Request) error {
+// events serves a page of events from a reader, and a stream of them from
+// the opened session, which tails the events as they happen.
+func (h *handler[S]) events(w http.ResponseWriter, r *http.Request) error {
 	after, err := number(r, "after")
 	if err != nil {
 		return err
 	}
+	id := r.PathValue("id")
 	if acceptsStream(r.Header.Get("Accept")) {
-		if id := r.Header.Get("Last-Event-ID"); id != "" {
-			if after, err = strconv.ParseUint(id, 10, 64); err != nil {
+		if last := r.Header.Get("Last-Event-ID"); last != "" {
+			if after, err = strconv.ParseUint(last, 10, 64); err != nil {
 				return fmt.Errorf("%w: Last-Event-ID: %w", errInvalid, err)
 			}
+		}
+		s, err := h.rt.Open(r.Context(), id)
+		if err != nil {
+			return err
 		}
 		h.stream(s, w, r, after)
 		return nil
@@ -411,10 +434,14 @@ func (h *handler[S]) events(s S, w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	head := s.View().HeadSeq
+	rd, err := h.rt.Read(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	head := rd.Session().HeadSeq
 	page := protocol.EventPage{Events: []protocol.Event{}}
 	if after < head {
-		for e, err := range s.Events(r.Context(), after) {
+		for e, err := range rd.Events(r.Context(), after) {
 			if err != nil {
 				return err
 			}

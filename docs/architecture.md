@@ -520,6 +520,8 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
+A route that only reads a session, `GET /sessions/{id}` and the page form of `GET /sessions/{id}/events`, answers from the view of a session that this runtime runs, and replays the log of any other session as `OpenView` does. It never opens a session, so it appends nothing and starts no turn. `Runtime.Open` runs for each route that changes a session and for the SSE stream of its events, which tails them as they happen. A restart opens no session by itself: the embedder opens each session that has work to resume, `cmd/harness` when it starts and boxes when it wakes the box.
+
 `Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `POST /sessions/{id}/requests/{request}`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
