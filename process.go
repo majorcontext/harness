@@ -124,6 +124,9 @@ func (t processTool) Run(ctx context.Context, call protocol.ToolCall) (protocol.
 		return protocol.ToolResult{}, fmt.Errorf("process: unknown action %q", in.Action)
 	}
 	if err != nil {
+		if !strings.HasPrefix(err.Error(), "process:") {
+			err = fmt.Errorf("process: %w", err)
+		}
 		return protocol.ToolResult{}, err
 	}
 	if out == nil {

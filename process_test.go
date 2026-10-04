@@ -116,3 +116,16 @@ func TestCloseStopsProcessesWhenItsContextEnds(t *testing.T) {
 	}
 	wantGone(t, lastText(s.Requests()[1]))
 }
+
+func TestProcessToolErrorsCarryTheProcessPrefix(t *testing.T) {
+	r, sess, s, _ := processRuntime(t, true, nil,
+		harnesstest.Step{Name: "declare", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+			{ID: "call_1", Name: "process", Input: map[string]any{"action": "declare", "name": "web"}}}}},
+		harnesstest.Step{Name: "failed", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{Text: "ok"}})
+	converse(t, sess, "run")
+	got := lastText(s.Requests()[1])
+	closeRuntime(t, r)
+	if want := "[tool error] process: command is required (non-empty argv)"; got != want {
+		t.Errorf("declare without a command = %q, want %q", got, want)
+	}
+}
