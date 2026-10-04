@@ -92,11 +92,11 @@ func (t *turnRun) CompactTurn(ctx context.Context) ([]eventlog.Message, bool, er
 	if err != nil || !f.ok {
 		return nil, false, err
 	}
-	summary, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
+	summary, usage, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
 	if err != nil {
 		return nil, false, err
 	}
-	f.c.Summary = a.indexed(summary, f.metas)
+	f.c.Summary, f.c.Usage = a.indexed(summary, f.metas), usage
 	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
 		if a.run != r || ctx.Err() != nil {
 			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))

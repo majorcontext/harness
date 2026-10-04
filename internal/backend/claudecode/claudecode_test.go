@@ -151,34 +151,34 @@ func TestClaudeCodeTurn(t *testing.T) {
 		system  []string
 	}{
 		{name: "a text turn records the assistant items", mode: "thinking",
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"}},
+			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"}},
 		{name: "a tool use inside Claude Code appears as items", mode: "",
 			want: []string{"backend.state", "item.completed assistant Let me check that.", "item.completed assistant toolu_1",
-				"item.completed tool toolu_1 hi", "item.completed assistant Done — it printed hi.", "turn.ended completed"}},
+				"item.completed tool toolu_1 hi", "item.completed assistant Done — it printed hi.", "context.measured", "turn.ended completed"}},
 		{name: "append_system_prompt reaches the CLI as one value", mode: "thinking",
-			want:   []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"},
+			want:   []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
 			system: []string{"one", "two"}, args: []string{"--append-system-prompt", "one\n\ntwo"}},
 		{name: "a placeholder result of a queued notification does not end the turn", mode: "queued_empty_result",
-			want: []string{"backend.state", "item.completed assistant second", "turn.ended completed"}},
+			want: []string{"backend.state", "item.completed assistant second", "context.measured", "turn.ended completed"}},
 		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
 			want: []string{"backend.state", "compaction.applied", "turn.ended completed"}},
 		{name: "a failed result fails the turn", mode: "error",
-			want: []string{"backend.state", "backend.state", "turn.ended failed turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure"}},
+			want: []string{"backend.state", "context.measured", "backend.state", "turn.ended failed turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure"}},
 		{name: "a compaction by Claude Code is logged", mode: "compact_boundary",
-			want: []string{"backend.state", "compaction.applied", "item.completed assistant Continuing after compaction.", "turn.ended completed"}},
+			want: []string{"backend.state", "compaction.applied", "item.completed assistant Continuing after compaction.", "context.measured", "turn.ended completed"}},
 		{name: "the context reading is logged", mode: "per_call_usage",
 			want: []string{"backend.state", "item.completed assistant toolu_1", "item.completed tool toolu_1 ok", "item.completed assistant toolu_2",
 				"item.completed tool toolu_2 ok", "item.completed assistant done", "context.measured", "turn.ended completed"}},
 		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["Bash","Read"]`}, allowed: []string{"Read", "Bash"},
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"},
+			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
 			args: []string{"--tools", "Bash,Read", "--strict-mcp-config"}},
 		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"},
+			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
 			args: []string{"--tools", "", "--strict-mcp-config"}},
 		{name: "a restricted CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"Bash"},
-			want: []string{"turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
+			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
 		{name: "a CLI that ignores the restriction fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash","Write"]`}, allowed: []string{"Bash"},
-			want: []string{"turn.ended failed claudecode: the CLI did not apply the tool restriction: Write"}},
+			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: Write"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			argvLog := fakeClaude(t, tc.mode, tc.env...)
@@ -333,7 +333,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
 			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
-				`item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "turn.ended completed")
+				`item.completed tool toolu_m echo {"q":"hi"}`, "item.completed assistant done", "context.measured", "turn.ended completed")
 			runs := jsonLines[mcpRun](t, mcpLog)
 			if len(runs) != 1 || !slices.Equal(runs[0].Tools, tc.offered) {
 				t.Fatalf("MCP runs = %+v, want one that offers %q", runs, tc.offered)
@@ -381,7 +381,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	}
 	<-ended
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
-		"item.completed tool toolu_m "+interrupted, "turn.ended interrupted stopped")
+		"context.measured", "item.completed tool toolu_m "+interrupted, "turn.ended interrupted stopped")
 	if c := endedCall(t, block, jsonLines[mcpRun](t, mcpLog)[0], jsonLines[[]string](t, argvLog)[0]); c.ID != "toolu_m" {
 		t.Errorf("call = %+v, want ID toolu_m", c)
 	}
@@ -404,7 +404,7 @@ func TestClaudeCodeSteerReachesStdin(t *testing.T) {
 	}
 	await(t, s, seq, "turn.ended")
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_s",
-		"input.admitted b", "input.promoted b", "item.completed tool toolu_s slept", "item.completed assistant steered: left", "turn.ended completed")
+		"input.admitted b", "input.promoted b", "item.completed tool toolu_s slept", "item.completed assistant steered: left", "context.measured", "turn.ended completed")
 	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
 	if len(stdin) != 2 || stdin[1].Message.Content != "left" {
 		t.Errorf("stdin lines = %+v, want the prompt, then the steer input", stdin)
@@ -418,12 +418,12 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 		want     []string
 		noResult bool
 	}{
-		{"hang_after_text", []string{"item.completed assistant Working on it.", stopped}, false},
-		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "item.completed tool toolu_h " + interrupted, stopped}, false},
-		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i " + interrupted, stopped}, false},
-		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", stopped}, false},
-		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "turn.ended completed"}, false},
-		{"placeholder_on_interrupt", []string{stopped}, false},
+		{"hang_after_text", []string{"item.completed assistant Working on it.", "context.measured", stopped}, false},
+		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "context.measured", "item.completed tool toolu_h " + interrupted, stopped}, false},
+		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "context.measured", "item.completed tool toolu_i " + interrupted, stopped}, false},
+		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", "context.measured", stopped}, false},
+		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "context.measured", "turn.ended completed"}, false},
+		{"placeholder_on_interrupt", []string{"context.measured", stopped}, false},
 		{"exit_on_interrupt", []string{stopped}, true},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -449,7 +449,7 @@ func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
 			if tc.noResult {
 				wantUsage = eventlog.Usage{}
 			}
-			if u := endedUsage(t, st); u.InputTokens != wantUsage.InputTokens || u.OutputTokens != wantUsage.OutputTokens {
+			if u := recordedUsage(t, st); u.InputTokens != wantUsage.InputTokens || u.OutputTokens != wantUsage.OutputTokens {
 				t.Errorf("turn usage = %+v, want %+v from the result after the SIGINT", u, wantUsage)
 			}
 		})
@@ -469,7 +469,7 @@ func TestClaudeCodeHandoffInterruptsTheCLI(t *testing.T) {
 	st := harness.NewMemStore()
 	handOff(t, claudeRuntime(t, st, nil, false), "backend.state")
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_i",
-		"backend.state", "item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
+		"context.measured", "backend.state", "item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
 	if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
 		t.Errorf("signals = %q, want one SIGINT", got)
 	}
@@ -524,24 +524,24 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 	}
 }
 
-// endedUsage returns the usage of the last turn.ended record of session s1.
-func endedUsage(t *testing.T, st harness.Store) eventlog.Usage {
+// recordedUsage returns the usage that the context.measured records of session s1 hold.
+func recordedUsage(t *testing.T, st harness.Store) eventlog.Usage {
 	t.Helper()
 	recs, err := st.Read(bg, "s1", 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ended eventlog.TurnEnded
+	var total eventlog.Usage
 	for _, r := range recs {
 		var env struct {
 			K string
-			D json.RawMessage
+			D eventlog.ContextMeasured
 		}
-		if json.Unmarshal(r.Data, &env) == nil && env.K == "turn.ended" {
-			_ = json.Unmarshal(env.D, &ended)
+		if json.Unmarshal(r.Data, &env) == nil && env.K == "context.measured" {
+			total = total.Add(env.D.Usage)
 		}
 	}
-	return ended.Usage
+	return total
 }
 
 // mirrorSeen is what the mirror mode found in its config dir at start.
@@ -665,7 +665,7 @@ func TestClaudeCodeCrashWaitsForInput(t *testing.T) {
 	turnOf(t, s2, text("b", "again"))
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant Working on it.",
 		"owner.acquired 1", "turn.ended interrupted crashed",
-		"input.admitted b", "turn.started b", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed")
+		"input.admitted b", "turn.started b", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed")
 	if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[1], "--resume", "fake-session-1") {
 		t.Errorf("argv after the crash = %q, want --resume fake-session-1", argv[1])
 	}
@@ -793,7 +793,7 @@ func TestClaudeCodeStreamsDeltas(t *testing.T) {
 	}
 	want := []string{"2 owner.acquired", "3 input.admitted", "4 turn.started", "5 backend.state",
 		"5 item.started i1", "5 item.delta i1 reasoning Reasoning under a reserved id.",
-		"5 item.delta i1 text Answer under the same reserved id.", "6 item.completed i1", "7 turn.ended"}
+		"5 item.delta i1 text Answer under the same reserved id.", "6 item.completed i1", "7 context.measured", "8 turn.ended"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}

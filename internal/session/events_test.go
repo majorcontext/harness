@@ -43,7 +43,7 @@ func (owned) Release()              {}
 
 func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 	const appends = 3000
-	a := newActor(Config{ID: "s1", Log: &memLog{}, Ownership: owned{}, Base: t.Context()}, &eventlog.State{})
+	a := newActor(Config{ID: "s1", Log: &memLog{}, Ownership: owned{}, Backend: newHeldBackend(false), Base: t.Context()}, &eventlog.State{})
 	if err := a.appendCtx(t.Context(), eventlog.SessionCreated{Model: "m"}); err != nil {
 		t.Fatal(err)
 	}

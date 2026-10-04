@@ -22,7 +22,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "one"
             }
           ]
         }
@@ -50,7 +50,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "delegate"
+              "text": "one"
             }
           ]
         },
@@ -58,13 +58,8 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "tool_use",
-              "tool_name": "task",
-              "tool_input": {
-                "agent": "general-purpose",
-                "prompt": "child work"
-              },
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "1"
             }
           ]
         },
@@ -72,10 +67,42 @@
           "role": "user",
           "parts": [
             {
-              "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
-              "tool_name": "task",
-              "tool_use_id": "toolu#1"
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
             }
           ]
         }
@@ -88,6 +115,7 @@
         "bash",
         "edit_file",
         "glob",
+        "goal",
         "grep",
         "ls",
         "process",
@@ -102,38 +130,97 @@
           "parts": [
             {
               "kind": "text",
-              "text": "child work"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "grep",
-        "ls",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
+              "text": "[compacted summary of earlier conversation]\n\ngist"
             },
             {
               "kind": "text",
-              "text": "again"
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            },
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "four"
             }
           ]
         }
@@ -143,12 +230,22 @@
   "sessions": {
     "a": [
       {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[compacted summary of earlier conversation]\n\ngist"
+          }
+        ]
+      },
+      {
         "id": "msg#1",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "delegate"
+            "text": "two"
           }
         ]
       },
@@ -157,24 +254,18 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "tool_call",
-            "call_id": "toolu#1",
-            "name": "task",
-            "arguments": {
-              "agent": "general-purpose",
-              "prompt": "child work"
-            }
+            "type": "text",
+            "text": "2"
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "tool",
+        "role": "user",
         "parts": [
           {
-            "type": "tool_result",
-            "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "type": "text",
+            "text": "three"
           }
         ]
       },
@@ -184,57 +275,69 @@
         "parts": [
           {
             "type": "text",
-            "text": "waiting"
+            "text": "3"
           }
         ]
-      }
-    ],
-    "kid": [
+      },
       {
         "id": "msg#5",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "child work"
+            "text": "four"
           }
         ]
       },
       {
         "id": "msg#6",
-        "role": "user",
-        "parts": [
-          {
-            "type": "text",
-            "text": "again"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "rest"
+            "text": "4"
           }
         ]
       }
     ]
   },
   "calls": {
-    "cancel_tree.a": {
-      "status": 204
-    },
     "get_session.a": {
       "status": 200,
       "body": {
         "context": {
-          "tokens": 5,
-          "window": 1000000
+          "tokens": 900,
+          "window": 1000
         },
         "created_at": "\u003ctime\u003e",
         "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 905,
+          "output_tokens": 4
+        }
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "compaction_count": 1,
+        "context": {
+          "tokens": 5,
+          "window": 1000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 18,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -247,78 +350,36 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 10,
-          "output_tokens": 6
+          "input_tokens": 915,
+          "output_tokens": 10
         }
       }
     },
-    "get_session.kid": {
+    "get_session.a#3": {
       "status": 200,
       "body": {
-        "context": {
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
-        "id": "ses:kid",
-        "last_turn": {
-          "error": "stopped",
-          "stop_reason": "interrupted",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        }
-      }
-    },
-    "get_session.kid#2": {
-      "status": 200,
-      "body": {
+        "compaction_count": 1,
         "context": {
           "tokens": 5,
-          "window": 1000000
+          "window": 1000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 12,
-        "id": "ses:kid",
+        "head_seq": 23,
+        "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
           "turn_id": "turn#3"
         },
         "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
+        "origin": "",
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
+          "input_tokens": 920,
+          "output_tokens": 13
         }
-      }
-    },
-    "send.kid": {
-      "status": 201,
-      "body": {
-        "input_id": "in2",
-        "seq": 5
-      }
-    },
-    "send.kid#2": {
-      "status": 201,
-      "body": {
-        "input_id": "in3",
-        "seq": 8
       }
     }
   }

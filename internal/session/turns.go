@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
@@ -123,16 +124,23 @@ func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
 	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: r.id, Message: m})
 }
 
-// telemetry adds the usage in t to r and records its context reading.
+// telemetry records what a model call of r measured. A call that measured
+// nothing records nothing.
 func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
 	if a.run != r {
 		return nil
 	}
-	r.usage = r.usage.Add(t.Usage)
-	if t.Context != (eventlog.ContextMeasured{}) {
-		return a.append(t.Context)
+	m := t.Context
+	m.Usage, m.SubscriptionUsage = t.Usage, t.SubscriptionUsage
+	if sub := m.SubscriptionUsage; sub != nil && sub.CapturedAt == 0 {
+		stamped := *sub
+		stamped.CapturedAt = time.Now().Unix()
+		m.SubscriptionUsage = &stamped
 	}
-	return nil
+	if m == (eventlog.ContextMeasured{}) {
+		return nil
+	}
+	return a.append(m)
 }
 
 // steer promotes the queued steer inputs into r and returns them. A turn
@@ -177,20 +185,20 @@ func (a *Actor) ended(r *running, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted)
 		next = true
 	case errors.Is(cause, errGoalCleared):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted)
 		next = true
 	case errors.Is(runErr, turn.ErrExhausted):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, a.goalStop(runErr)...)
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, a.goalStop(runErr)...)
 		next = true
 	}
 	var after func() error
@@ -215,8 +223,8 @@ func (a *Actor) next(check bool) error {
 	return nil
 }
 
-func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage, after ...eventlog.Event) error {
-	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause, Usage: u})
+func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
+	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
 	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
 		return err
 	}

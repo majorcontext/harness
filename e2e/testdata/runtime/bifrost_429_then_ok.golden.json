@@ -89,12 +89,21 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 7,
         "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
         "model": "bifrost/fireworks/accounts/fireworks/routers/firerouter",
         "origin": "",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

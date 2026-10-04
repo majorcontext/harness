@@ -90,11 +90,13 @@ type Delta struct {
 	Text string
 }
 
-// Telemetry is what a backend measured during a turn.
+// Telemetry is what a backend measured during one model call.
 type Telemetry struct {
 	Usage eventlog.Usage
 	// Context is a context reading; the zero value is none.
 	Context eventlog.ContextMeasured
+	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
+	SubscriptionUsage *eventlog.SubscriptionUsage
 }
 
 // Sink receives the items of a running turn.

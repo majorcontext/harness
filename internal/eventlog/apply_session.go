@@ -43,7 +43,19 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
 	s.compaction = e
+	s.compacted++
+	s.usage = s.usage.Add(e.Usage)
 	return nil
+}
+
+func (s *State) applyMeasured(e ContextMeasured) {
+	s.usage = s.usage.Add(e.Usage)
+	if e.Tokens > 0 {
+		s.context = ContextMeasured{Tokens: e.Tokens, Window: e.Window, Source: e.Source}
+	}
+	if e.SubscriptionUsage != nil {
+		s.subscribed = e.SubscriptionUsage
+	}
 }
 
 func (s *State) applyChildSpawned(e ChildSpawned) error {

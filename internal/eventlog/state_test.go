@@ -40,7 +40,7 @@ func result(turn, item, id string) Event {
 }
 
 func end(turn string, r StopReason, cause Cause) Event {
-	return TurnEnded{TurnID: turn, StopReason: r, Error: string(cause), Usage: Usage{InputTokens: 10, OutputTokens: 2}}
+	return TurnEnded{TurnID: turn, StopReason: r, Error: string(cause)}
 }
 
 func ask(req, item string) Event {
@@ -277,5 +277,29 @@ func TestRetainedIsACopy(t *testing.T) {
 	s.Retained()[0].Handle = "x"
 	if got := s.Retained()[0].Handle; got != "trh_1" {
 		t.Errorf("handle after a caller write = %q, want trh_1", got)
+	}
+}
+
+func TestRecordedUsageFoldsIntoTheState(t *testing.T) {
+	first := &SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 1, Windows: []SubscriptionUsageWindow{{Key: "primary", UsedPercent: 12}}}
+	second := &SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 2, Windows: []SubscriptionUsageWindow{{Key: "primary", UsedPercent: 15}}}
+	s := replay(t, with(base, setGoal, admit("a"), start("t1", "a"),
+		ContextMeasured{Tokens: 100, Window: 1000, Source: "m", Usage: Usage{InputTokens: 10, OutputTokens: 2}, SubscriptionUsage: first},
+		ContextMeasured{Usage: Usage{InputTokens: 5, OutputTokens: 1}, SubscriptionUsage: second},
+		ContextMeasured{Usage: Usage{OutputTokens: 1}},
+		end("t1", StopFailed, "boom"),
+		CompactionApplied{FromSeq: 1, ToSeq: 3, Summary: "s", Usage: Usage{InputTokens: 7, OutputTokens: 3}},
+		GoalEvaluated{TurnID: "t1", Verdict: VerdictNotMet, Usage: Usage{InputTokens: 20, OutputTokens: 4}}))
+	if got, want := s.Usage(), (Usage{InputTokens: 42, OutputTokens: 11}); got != want {
+		t.Errorf("Usage = %+v, want %+v: every measured call, compaction, and evaluation counts", got, want)
+	}
+	if got, want := s.Context(), (ContextMeasured{Tokens: 100, Window: 1000, Source: "m"}); got != want {
+		t.Errorf("Context = %+v, want %+v: a record with no prompt tokens keeps the reading", got, want)
+	}
+	if got := s.SubscriptionUsage(); !reflect.DeepEqual(got, second) {
+		t.Errorf("SubscriptionUsage = %+v, want the newest snapshot %+v", got, second)
+	}
+	if got := s.CompactionCount(); got != 1 {
+		t.Errorf("CompactionCount = %d, want 1", got)
 	}
 }

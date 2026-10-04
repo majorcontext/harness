@@ -139,7 +139,6 @@ type TurnEnded struct {
 	TurnID     string     `json:"turn_id"`
 	StopReason StopReason `json:"stop_reason"`
 	Error      string     `json:"error,omitempty"`
-	Usage      Usage      `json:"usage"`
 }
 
 // RequestOpened asks the client for an answer about an item.
@@ -164,11 +163,13 @@ type GoalSet struct {
 	Turns     int    `json:"turns,omitempty"`
 }
 
-// GoalEvaluated records the verdict on the goal after a turn.
+// GoalEvaluated records the verdict on the goal after a turn. Usage is the
+// usage of the evaluator call.
 type GoalEvaluated struct {
 	TurnID   string  `json:"turn_id"`
 	Verdict  Verdict `json:"verdict"`
 	Guidance string  `json:"guidance,omitempty"`
+	Usage    Usage   `json:"usage,omitzero"`
 }
 
 // GoalChanged moves the goal to another state. A paused goal resumes at RetryAt.
@@ -179,11 +180,13 @@ type GoalChanged struct {
 }
 
 // CompactionApplied replaces the records from FromSeq to ToSeq with Summary.
+// Usage is the usage of the summary call.
 type CompactionApplied struct {
 	FromSeq   uint64 `json:"from_seq"`
 	ToSeq     uint64 `json:"to_seq"`
 	Summary   string `json:"summary"`
 	ByBackend bool   `json:"by_backend"`
+	Usage     Usage  `json:"usage,omitzero"`
 }
 
 // ChildSpawned records a child session, or rearms a settled one to report again.
@@ -213,11 +216,40 @@ type CommandRecorded struct {
 	ResultTruncated bool            `json:"result_truncated,omitempty"`
 }
 
-// ContextMeasured records the context size of the session.
+// ContextMeasured records what one model call measured: the context size,
+// the usage of the call, and a subscription snapshot. A call with no prompt
+// tokens records no context size.
 type ContextMeasured struct {
-	Tokens int64  `json:"tokens"`
-	Window int64  `json:"window"`
-	Source string `json:"source"`
+	Tokens            int64              `json:"tokens"`
+	Window            int64              `json:"window"`
+	Source            string             `json:"source"`
+	Usage             Usage              `json:"usage,omitzero"`
+	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage,omitempty"`
+}
+
+// SubscriptionUsage is the subscription limit snapshot of a provider. Provider
+// is claude or codex, and CapturedAt is in Unix seconds.
+type SubscriptionUsage struct {
+	Provider   string                    `json:"provider"`
+	Plan       string                    `json:"plan"`
+	Windows    []SubscriptionUsageWindow `json:"windows"`
+	Overage    *SubscriptionOverage      `json:"overage,omitempty"`
+	CapturedAt int64                     `json:"captured_at"`
+}
+
+// SubscriptionUsageWindow is one rate-limit window of a snapshot.
+type SubscriptionUsageWindow struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label"`
+	UsedPercent float64 `json:"used_percent"`
+	ResetsAt    int64   `json:"resets_at"`
+}
+
+// SubscriptionOverage is the pay-as-you-go state of a subscription.
+type SubscriptionOverage struct {
+	InUse    bool   `json:"in_use"`
+	Status   string `json:"status"`
+	ResetsAt int64  `json:"resets_at"`
 }
 
 // BackendState points at the newest state blob of a backend.

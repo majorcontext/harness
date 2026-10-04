@@ -71,7 +71,7 @@ func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (tur
 		case provider.EventReasoningDelta:
 			out.Delta(ev.ID, turn.Delta{Type: eventlog.PartReasoning, Text: ev.Text})
 		case provider.EventDone:
-			out.Telemetry(b.telemetry(req.Model, ev.Usage))
+			out.Telemetry(b.telemetry(req.Model, ev.Usage, ev.SubscriptionUsage))
 			res.MaxTokens = ev.StopReason == provider.StopMaxTokens
 			m := fromMessage(ev.Message)
 			if !hasOutput(m) {
@@ -108,14 +108,29 @@ func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
 
 // telemetry reports u, and the prompt of the call as the context reading.
 // A call with no prompt tokens reports no reading, so the earlier reading stays.
-func (b *Backend) telemetry(model string, u provider.Usage) turn.Telemetry {
+func (b *Backend) telemetry(model string, u provider.Usage, sub *message.SubscriptionUsage) turn.Telemetry {
 	usage := eventlog.Usage{InputTokens: int64(u.InputTokens), OutputTokens: int64(u.OutputTokens),
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
-	t := turn.Telemetry{Usage: usage}
+	t := turn.Telemetry{Usage: usage, SubscriptionUsage: subscription(sub)}
 	if tokens := usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens; tokens > 0 {
 		t.Context = eventlog.ContextMeasured{Source: b.client.Name(), Tokens: tokens, Window: int64(b.Capabilities(model).ContextWindow)}
 	}
 	return t
+}
+
+// subscription maps the snapshot of a provider. The actor stamps the capture time.
+func subscription(s *message.SubscriptionUsage) *eventlog.SubscriptionUsage {
+	if s == nil {
+		return nil
+	}
+	u := &eventlog.SubscriptionUsage{Provider: s.Provider, Plan: s.Plan, Windows: make([]eventlog.SubscriptionUsageWindow, len(s.Windows))}
+	for i, w := range s.Windows {
+		u.Windows[i] = eventlog.SubscriptionUsageWindow(w)
+	}
+	if o := s.Overage; o != nil {
+		u.Overage = &eventlog.SubscriptionOverage{InUse: o.InUse, Status: o.Status, ResetsAt: o.ResetsAt}
+	}
+	return u
 }
 
 // Close closes the pooled connections of a client that pools them. Call it

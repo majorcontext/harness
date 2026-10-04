@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // kindBackend answers each model call at once, except a call of a held
@@ -22,7 +24,9 @@ type kindBackend struct {
 	held    map[runKind]bool
 	started chan runKind
 	gate    chan struct{}
-	// tokens is the prompt size that each turn reports as a context
+	// usage is the input tokens that a call of each kind reports.
+	usage map[runKind]int64
+	// tokens is the prompt size that each call reports as a context
 	// reading with no window, and window is the window that the backend
 	// reports for every model.
 	tokens int64
@@ -72,9 +76,11 @@ func (b *kindBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 			return turn.Result{}, context.Cause(ctx)
 		}
 	}
+	t := turn.Telemetry{Usage: eventlog.Usage{InputTokens: b.usage[kind]}}
 	if kind == kindTurn && b.tokens > 0 {
-		out.Telemetry(turn.Telemetry{Context: eventlog.ContextMeasured{Tokens: b.tokens, Source: "m"}})
+		t.Context = eventlog.ContextMeasured{Tokens: b.tokens, Source: "m"}
 	}
+	out.Telemetry(t)
 	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
 
@@ -240,6 +246,58 @@ func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+func TestEveryModelCallCountsInTheUsageOfTheSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := &kindBackend{held: map[runKind]bool{}, started: make(chan runKind, 1), gate: make(chan struct{}),
+			usage: map[runKind]int64{kindTurn: 1, kindCompaction: 20, kindJudge: 300}}
+		cfg := actorConfig(t, &memLog{}, owned{}, b)
+		cfg.Evaluator, cfg.KeepTurns, cfg.Threshold = "m/eval", 1, 0.8
+		a, err := Create(context.Background(), cfg, eventlog.SessionCreated{Model: "m/m"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		converse(t, a, "one", "two")
+		if _, _, err := a.Compact(context.Background(), 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
+			t.Fatal(err)
+		}
+		settled(a)
+		if got, want := a.View().Session.Usage.InputTokens, int64(1+1+20+1+300); got != want {
+			t.Errorf("input tokens = %d, want %d: two turns, a summary, a goal turn, and an evaluation", got, want)
+		}
+	})
+}
+
+func TestTheViewShowsTheGaugeTheLastTurnCompactionsAndSubscriptionUsage(t *testing.T) {
+	sub := &eventlog.SubscriptionUsage{Provider: "claude", CapturedAt: 7, Windows: []eventlog.SubscriptionUsageWindow{{Key: "five_hour", Label: "5-hour", UsedPercent: 40, ResetsAt: 9}}}
+	log := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1}, *firstInput(),
+		eventlog.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}},
+		eventlog.ContextMeasured{Tokens: 700, Window: 1000, Source: "m", SubscriptionUsage: sub},
+		eventlog.TurnEnded{TurnID: "turn_1", StopReason: eventlog.StopFailed, Error: "boom"},
+		eventlog.CompactionApplied{FromSeq: 1, ToSeq: 3, Summary: "s"})
+	s, err := Load(context.Background(), "s1", log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Describe("s1", s)
+	if v.Context != (protocol.Context{Tokens: 700, Window: 1000}) {
+		t.Errorf("Context = %+v", v.Context)
+	}
+	if v.LastTurn == nil || *v.LastTurn != (protocol.LastTurn{TurnID: "turn_1", StopReason: "failed", Error: "boom"}) {
+		t.Errorf("LastTurn = %+v", v.LastTurn)
+	}
+	if v.CompactionCount != 1 {
+		t.Errorf("CompactionCount = %d", v.CompactionCount)
+	}
+	want := &protocol.SubscriptionUsage{Provider: "claude", CapturedAt: 7, Windows: []protocol.SubscriptionUsageWindow{{Key: "five_hour", Label: "5-hour", UsedPercent: 40, ResetsAt: 9}}}
+	if !reflect.DeepEqual(v.SubscriptionUsage, want) {
+		t.Errorf("SubscriptionUsage = %+v, want %+v", v.SubscriptionUsage, want)
 	}
 }
 

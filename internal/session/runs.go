@@ -1,10 +1,6 @@
 package session
 
-import (
-	"context"
-
-	"github.com/majorcontext/harness/internal/eventlog"
-)
+import "context"
 
 // runKind names what the actor runs: a turn, a compaction, or a goal
 // evaluation. The actor runs one at a time.
@@ -30,7 +26,6 @@ type running struct {
 	steering bool
 	ownsLoop bool
 	steered  chan struct{}
-	usage    eventlog.Usage
 	// waiters receive the outcome of the run: the error of the run, and the
 	// error of the append that records its end.
 	waiters []func(runErr, appendErr error)

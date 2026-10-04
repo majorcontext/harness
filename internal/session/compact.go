@@ -85,8 +85,8 @@ func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	}
 	a.run = r
 	a.spawn(func() {
-		summary, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
-		c.Summary = a.indexed(summary, metas)
+		summary, usage, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		c.Summary, c.Usage = a.indexed(summary, metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
 			reply(struct{}{}, nil)

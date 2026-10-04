@@ -22,7 +22,23 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "say done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ntry"
             }
           ]
         }
@@ -50,7 +66,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "one"
+              "text": "say done"
             }
           ]
         },
@@ -59,7 +75,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "1"
+              "text": "try"
             }
           ]
         },
@@ -68,7 +84,23 @@
           "parts": [
             {
               "kind": "text",
-              "text": "two"
+              "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: keep going\n\nKeep working until the goal is fully satisfied, then stop."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\ntry\n\nUSER:\nThe goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: keep going\n\nKeep working until the goal is fully satisfied, then stop.\n\nASSISTANT:\ntry"
             }
           ]
         }
@@ -83,7 +115,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "one"
+            "text": "say done"
           }
         ]
       },
@@ -93,7 +125,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "1"
+            "text": "try"
           }
         ]
       },
@@ -103,7 +135,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "two"
+            "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: keep going\n\nKeep working until the goal is fully satisfied, then stop."
           }
         ]
       },
@@ -113,7 +145,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "2"
+            "text": "try"
           }
         ]
       }
@@ -128,7 +160,14 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 8,
+        "goal": {
+          "condition": "say done",
+          "max_turns": 2,
+          "reason": "max_turns 2 reached",
+          "state": "exhausted",
+          "turns": 2
+        },
+        "head_seq": 16,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -141,8 +180,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
+          "input_tokens": 20,
+          "output_tokens": 12
         }
       }
     }

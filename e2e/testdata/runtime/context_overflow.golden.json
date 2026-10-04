@@ -27,34 +27,6 @@
           ]
         }
       ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "go"
-            }
-          ]
-        }
-      ]
     }
   ],
   "sessions": {
@@ -68,16 +40,6 @@
             "text": "go"
           }
         ]
-      },
-      {
-        "id": "msg#2",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "recovered"
-          }
-        ]
       }
     ]
   },
@@ -86,14 +48,15 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 5,
+          "tokens": 0,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 5,
         "id": "ses:a",
         "last_turn": {
-          "stop_reason": "completed",
+          "error": "turn: context overflow: context exhausted: prompt 205102 tokens \u003e limit 200000",
+          "stop_reason": "failed",
           "turn_id": "turn#1"
         },
         "model": "anthropic/claude-fable-5",
@@ -103,8 +66,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
+          "input_tokens": 0,
+          "output_tokens": 0
         }
       }
     }

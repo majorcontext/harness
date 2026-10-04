@@ -227,7 +227,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})
+		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff)
 		if err == nil {
 			err = a.settle(true)
 		}
@@ -383,6 +383,9 @@ func (a *Actor) View() *View { return a.view.Load() }
 
 func (a *Actor) publish(stopped bool) {
 	next := &View{Session: Describe(a.cfg.ID, a.state), Stopped: stopped, changed: make(chan struct{})}
+	if next.Session.Context.Window == 0 {
+		next.Session.Context.Window = int64(a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow)
+	}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)

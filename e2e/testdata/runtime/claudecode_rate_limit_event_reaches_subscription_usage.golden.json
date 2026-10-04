@@ -17,16 +17,6 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "reasoning",
-            "text": "Let me reason about this."
-          }
-        ]
-      },
-      {
-        "id": "msg#3",
-        "role": "assistant",
-        "parts": [
-          {
             "type": "text",
             "text": "Here is my answer."
           }
@@ -52,12 +42,35 @@
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "idle",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "overage": {
+            "in_use": false,
+            "resets_at": 1789000000,
+            "status": "allowed"
+          },
+          "plan": "",
+          "provider": "claude",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour",
+              "resets_at": 1788785267,
+              "used_percent": 2
+            },
+            {
+              "key": "seven_day",
+              "label": "Weekly",
+              "resets_at": 1789200000,
+              "used_percent": 13
+            }
+          ]
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 20,
-          "output_tokens": 10
+          "input_tokens": 9,
+          "output_tokens": 4
         }
       }
     }

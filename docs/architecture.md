@@ -262,17 +262,17 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |
 | `turn.suspended` | `turn_id`, `cause` |
 | `turn.resumed` | `turn_id`, `count` |
-| `turn.ended` | `turn_id`, `stop_reason`, `error?`, `usage` |
+| `turn.ended` | `turn_id`, `stop_reason`, `error?` |
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
 | `goal.set` | `condition`, `max_turns`, `turns?` |
-| `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
+| `goal.evaluated` | `turn_id`, `verdict`, `guidance?`, `usage?` |
 | `goal.changed` | `state`, `reason?`, `retry_at?` |
-| `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
+| `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend`, `usage?` |
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
 | `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
-| `context.measured` | `tokens`, `window`, `source` |
+| `context.measured` | `tokens`, `window`, `source`, `usage?`, `subscription_usage?` |
 | `backend.state` | `backend`, `blob_key` |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
 
@@ -285,6 +285,8 @@ func (s *State) Apply(r Record) error
 ```
 
 `Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. `State.History` holds the summary of the newest compaction and the messages after it, so the model sees the history from the newest compaction on. There is no other fold. The summary for `GET /sessions` is `State.Summary()`.
+
+Usage is part of the fold. Each model call that measures anything appends one `context.measured` record with its `usage`, its context reading, and the `subscription_usage` that the provider reported with it. A summary call and a goal evaluator call add their `usage` to the `compaction.applied` or `goal.evaluated` record that they produce. `State.Usage()` sums all three, so a handoff, a crash, and a restart keep it. A record with no prompt tokens changes no context reading, and the newest `subscription_usage` is the one that the view shows. A backend that reports usage once for a turn, as Claude Code does in its `result` frame, records it once. The actor stamps `captured_at` of a snapshot that has none.
 
 ### Invariants enforced at append
 
@@ -343,7 +345,7 @@ Lifecycle:
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
 - When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, head seq) and whether the actor stopped. At parity with the engine view, it also reports the context gauge, the last turn, and the subscription usage (finding F02).
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped.
 
 ### Ownership
 
@@ -422,7 +424,7 @@ admitted ─► promoted   (queue: next turn; steer: next item boundary)
 admitted ─► withdrawn
 ```
 
-A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
+A `queue` input joins no running turn: the engine injected a queued prompt at a tool boundary, and the runtime does so only for a `steer` input, which the console sends for a message that it writes while a turn runs. A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
 
 Goal:
 
@@ -475,7 +477,7 @@ A child is a session with `parent_id`. The `task` tool starts it in the backgrou
 - Spawn. The tool reads the agent profile (default `general-purpose`) and checks the tree limits. The parent actor appends `child.spawned`. Then the runtime creates the child in one append: `session.created` with `parent_id`, `agent`, the settings of the parent, the model of the parent unless the profile names a model, and the allowed tools of the parent narrowed by the profile; the task as an input with `source: parent`; and the `turn.started` of that input. The tool returns the child ID at once. A child that fails to start settles `failed` with no input, and the tool call fails.
 - Settle. When a turn of a child ends, the child reports to its parent: `done` for a completed turn, `failed` for a failed or crashed turn, `canceled` for a stopped turn. A completed turn with a queued input does not report; the next turn reports, as the engine runs a queued message before it notifies the parent. The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child, as the Task tool of Claude Code returns. The parent appends `child.settled`, with the child turn ID as `result_ref`, and the report as an input with `source: child`, in one append. An idle parent starts a turn with it; a busy parent queues it. A child settles once, so a later report changes nothing until a `send` of the `task` tool spawns it again. Each turn end of a child reports, and the runtime opens a parent that it does not run, so a later input to a settled child opens its parent again.
 - Crash and handoff. Each session follows its own rules. A child that a handoff suspended resumes when it opens. A crashed child turn ends `crashed` and settles `failed`. When a parent opens, it settles each unsettled child that has ended, because a crash can come between the `turn.ended` of the child and the `child.settled` of the parent. It settles a child with no log `failed` with no input, and opens each other child, which reports when its turn ends. No tool call runs again.
-- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned or opened: a child that a parent opens after a restart counts too, and so does a settled child that a `send` runs again. `max_tree_tokens` (default 0, no limit) is the token budget of a tree, as in the engine: a spawn fails once the root and its descendants have used that many tokens, input, output, and cache tokens summed. The sum reads the usage of the ended turns in each log of the tree, so it holds across a restart. Each spawn replays every log of the tree, so its cost grows with the size of the tree logs; the engine kept a running sum in memory. The budget is opt-in, so this cost is accepted. A spawn past any limit fails the tool call. `HARNESS_MAX_TASK_DEPTH`, `HARNESS_MAX_CONCURRENT_TASKS`, and `HARNESS_MAX_TREE_TOKENS` set the keys through `ApplyEnv`.
+- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned or opened: a child that a parent opens after a restart counts too, and so does a settled child that a `send` runs again. `max_tree_tokens` (default 0, no limit) is the token budget of a tree, as in the engine: a spawn fails once the root and its descendants have used that many tokens, input, output, and cache tokens summed. The sum reads the usage that each log of the tree records, so it holds across a restart. Each spawn replays every log of the tree, so its cost grows with the size of the tree logs; the engine kept a running sum in memory. The budget is opt-in, so this cost is accepted. A spawn past any limit fails the tool call. `HARNESS_MAX_TASK_DEPTH`, `HARNESS_MAX_CONCURRENT_TASKS`, and `HARNESS_MAX_TREE_TOKENS` set the keys through `ApplyEnv`.
 - Actions. The `task` tool keeps the engine actions and wording. `action` defaults to `spawn`. `cancel`, `status`, `send`, and `log` take a `session_id` that the caller spawned, directly or through its own children; the tool walks the `session.created` records of the target to check it. `status` reads the log of the target: its status (`running` until its last turn ends, then its outcome), parent, depth, children, agent, final text, failure, and usage. `log` returns the newest `tail` messages (default 20, at most 100) as text entries, each cut at 2000 runes, newest first within 20000 runes. `send` admits the text as a steer input with `source: parent`, so a running child takes it at its next item boundary and an idle child starts a turn. When the parent has settled the child, the parent appends `child.spawned` again first, with the agent of the child, so the child reports the new turn. A parent that this runtime opens for the send settles or opens its unsettled children before the send reads them. Two windows remain: a crash between the `child.spawned` and the input repeats the earlier report, and a child turn that ends just before a send can settle after the send reads the parent, so the turn of that send does not report. `cancel` withdraws the queued inputs of the target and of each of its descendants and stops their turns, as the engine cancel drops the queue of each canceled session, so a queued `send` never runs. The report of the target reaches its parent. The queued `send` note keeps the engine hedge that an interrupt leaves a queued message undelivered.
 - Tree interrupt. `interrupt {tree}` stops the turn of the session, then withdraws the queued inputs and stops the turn of each descendant that this runtime runs (`Cancel`). Before it stops a session, the walk silences the children of that session, so a descendant that ends during the walk settles with no report input and no parent inside the tree starts a turn. The walk outlives the request context. A stopped descendant settles `canceled` with no report input. At the switch, the `contract_children` rows are the oracle; the cancel-tree row matches the engine for the queued send, which is dropped, and changes by design in one way: a later send is not refused.
 
@@ -644,7 +646,7 @@ func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 - `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
 - Private backend state is one `backend.state` event plus a blob, one blob key for each owner. The Claude Code transcript mirror is that blob. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
-- `Telemetry` carries usage and the context reading. Cost and subscription quota are not built yet.
+- `Telemetry` carries the usage of one model call, its context reading, and the subscription snapshot that the provider reported with it. Cost is not built yet.
 
 ### Model API backend
 

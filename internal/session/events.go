@@ -25,9 +25,31 @@ func Describe(id string, s *eventlog.State) protocol.Session {
 	for _, in := range s.Queue() {
 		v.Queued = append(v.Queued, in.InputID)
 	}
+	if c := s.Context(); c.Tokens > 0 {
+		v.Context = protocol.Context{Tokens: c.Tokens, Window: c.Window}
+	}
+	if last := s.LastEnded(); last.TurnID != "" {
+		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Error: last.Error}
+	}
+	v.CompactionCount = s.CompactionCount()
+	if sub := s.SubscriptionUsage(); sub != nil {
+		v.SubscriptionUsage = subscriptionView(sub)
+	}
 	if g, ok := s.Goal(); ok {
 		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
 			State: string(g.State), Turns: g.Turns, Reason: g.Reason, RetryAt: g.RetryAt}
+	}
+	return v
+}
+
+func subscriptionView(u *eventlog.SubscriptionUsage) *protocol.SubscriptionUsage {
+	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt,
+		Windows: make([]protocol.SubscriptionUsageWindow, len(u.Windows))}
+	for i, w := range u.Windows {
+		v.Windows[i] = protocol.SubscriptionUsageWindow(w)
+	}
+	if o := u.Overage; o != nil {
+		v.Overage = &protocol.SubscriptionOverage{InUse: o.InUse, Status: o.Status, ResetsAt: o.ResetsAt}
 	}
 	return v
 }

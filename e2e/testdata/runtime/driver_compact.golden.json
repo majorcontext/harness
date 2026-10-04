@@ -22,7 +22,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
             }
           ]
         }
@@ -50,7 +50,59 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
             }
           ]
         }
@@ -60,12 +112,22 @@
   "sessions": {
     "a": [
       {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[compacted summary of earlier conversation]\n\ngist"
+          }
+        ]
+      },
+      {
         "id": "msg#1",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "two"
           }
         ]
       },
@@ -75,22 +137,31 @@
         "parts": [
           {
             "type": "text",
-            "text": "recovered"
+            "text": "2"
           }
         ]
       }
     ]
   },
   "calls": {
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "folded": true,
+        "from_seq": 1,
+        "to_seq": 8
+      }
+    },
     "get_session.a": {
       "status": 200,
       "body": {
+        "compaction_count": 1,
         "context": {
           "tokens": 5,
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
+        "head_seq": 13,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -103,8 +174,8 @@
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 5,
-          "output_tokens": 3
+          "input_tokens": 15,
+          "output_tokens": 9
         }
       }
     }

@@ -221,6 +221,10 @@ func (r *run) handle(env envelope) error {
 		return r.settle(env)
 	case "transcript_mirror":
 		return r.addMirror(env)
+	case "rate_limit_event":
+		if u := env.RateLimitInfo.subscription(); u != nil {
+			r.out.Telemetry(turn.Telemetry{SubscriptionUsage: u})
+		}
 	}
 	return nil
 }

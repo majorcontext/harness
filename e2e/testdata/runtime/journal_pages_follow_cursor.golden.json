@@ -266,6 +266,10 @@
             "d": {
               "source": "anthropic",
               "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
               "window": 1000000
             },
             "k": "context.measured",
@@ -301,11 +305,7 @@
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#1",
-              "usage": {
-                "input_tokens": 5,
-                "output_tokens": 3
-              }
+              "turn_id": "turn#1"
             },
             "k": "turn.ended",
             "seq": 7,
@@ -350,6 +350,10 @@
             "d": {
               "source": "anthropic",
               "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
               "window": 1000000
             },
             "k": "context.measured",
@@ -377,11 +381,7 @@
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#2",
-              "usage": {
-                "input_tokens": 5,
-                "output_tokens": 3
-              }
+              "turn_id": "turn#2"
             },
             "k": "turn.ended",
             "seq": 12,
@@ -404,11 +404,7 @@
           {
             "d": {
               "stop_reason": "completed",
-              "turn_id": "turn#1",
-              "usage": {
-                "input_tokens": 5,
-                "output_tokens": 3
-              }
+              "turn_id": "turn#1"
             },
             "k": "turn.ended",
             "seq": 7,

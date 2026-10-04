@@ -189,9 +189,9 @@ func (a *Actor) judge(g eventlog.Goal) {
 		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
 	a.spawn(func() {
-		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		answer, usage, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-			a.judged(r, turnID, answer, err)
+			a.judged(r, turnID, answer, usage, err)
 			reply(struct{}{}, nil)
 		})
 	})
@@ -200,7 +200,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 // judged records the verdict of run r on turnID, unless r was stopped or
 // the goal changed. An evaluator error pauses or fails the goal as a turn
 // error does.
-func (a *Actor) judged(r *running, turnID, answer string, err error) {
+func (a *Actor) judged(r *running, turnID, answer string, usage eventlog.Usage, err error) {
 	if a.run != r {
 		return
 	}
@@ -210,7 +210,7 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	g, _ := a.state.Goal()
 	var appendErr error
 	if stopped == nil && len(a.releasing) == 0 && g.State == eventlog.GoalActive && g.Evaluated != turnID {
-		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
+		events := append(a.withdrawGoal(), verdict(turnID, g, answer, usage)...)
 		if err != nil {
 			events = a.goalStop(err)
 		}
@@ -226,9 +226,9 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	a.finishRun(r, err, appendErr, next)
 }
 
-func verdict(turnID string, g eventlog.Goal, answer string) []eventlog.Event {
+func verdict(turnID string, g eventlog.Goal, answer string, usage eventlog.Usage) []eventlog.Event {
 	v, why := parseVerdict(answer)
-	ev := eventlog.GoalEvaluated{TurnID: turnID, Verdict: v}
+	ev := eventlog.GoalEvaluated{TurnID: turnID, Verdict: v, Usage: usage}
 	switch v {
 	case eventlog.VerdictMet:
 		return []eventlog.Event{ev, eventlog.GoalChanged{State: eventlog.GoalAchieved, Reason: why}}

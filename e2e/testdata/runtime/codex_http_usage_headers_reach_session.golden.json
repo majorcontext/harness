@@ -2,7 +2,7 @@
   "requests": [
     {
       "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
+      "model": "gpt-5.6-sol",
       "tools": [
         "bash",
         "edit_file",
@@ -22,35 +22,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "go"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "go"
+              "text": "hello"
             }
           ]
         }
@@ -65,7 +37,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "go"
+            "text": "hello"
           }
         ]
       },
@@ -75,7 +47,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "recovered"
+            "text": "hi"
           }
         ]
       }
@@ -96,10 +68,33 @@
           "stop_reason": "completed",
           "turn_id": "turn#1"
         },
-        "model": "anthropic/claude-fable-5",
+        "model": "codex/gpt-5.6-sol",
         "origin": "",
         "status": "idle",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "plan": "pro",
+          "provider": "codex",
+          "windows": [
+            {
+              "key": "primary",
+              "label": "Weekly",
+              "resets_at": 1900000000,
+              "used_percent": 42.5
+            },
+            {
+              "key": "bengalfox_primary",
+              "label": "5-hour",
+              "resets_at": 1700000000,
+              "used_percent": 1.5
+            },
+            {
+              "key": "secondary",
+              "label": "5-hour",
+              "resets_at": 1800000000,
+              "used_percent": 7
+            }
+          ]
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
