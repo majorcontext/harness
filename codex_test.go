@@ -228,18 +228,20 @@ func TestCreateChecksTheModel(t *testing.T) {
 			cfg: func(c *config.Config) { c.ContextWindowTokens = 1000 }},
 		{name: "an unknown model when the context window is not required", model: "codex/no-such-model",
 			cfg: func(c *config.Config) { c.ContextWindowRequired = new(false) }},
+		{name: "a provider entry of an unknown type fails New", model: "codex/gpt-5", want: harness.ErrInvalidRequest,
+			cfg: func(c *config.Config) { c.Providers["bad"] = config.Provider{Type: "bogus"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.Config{Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI}, "openai": {}}}
+			cfg := config.Config{Providers: map[string]config.Provider{"codex": {Type: config.TypeOpenAI, BaseURL: "https://codex.test"}, "openai": {}}}
 			if tc.cfg != nil {
 				tc.cfg(&cfg)
 			}
 			r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: cfg})
-			if err != nil {
-				t.Fatal(err)
+			if err == nil {
+				t.Cleanup(func() { closeRuntime(t, r) })
+				_, err = r.Create(bg, protocol.CreateSession{Model: tc.model})
 			}
-			t.Cleanup(func() { closeRuntime(t, r) })
-			if _, err := r.Create(bg, protocol.CreateSession{Model: tc.model}); !errors.Is(err, tc.want) {
+			if !errors.Is(err, tc.want) {
 				t.Errorf("Create(%q) = %v, want %v", tc.model, err, tc.want)
 			}
 		})
@@ -248,9 +250,9 @@ func TestCreateChecksTheModel(t *testing.T) {
 
 func TestModelsListsTheConfiguredProviders(t *testing.T) {
 	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Config: config.Config{Providers: map[string]config.Provider{
-		"codex":       {Type: config.TypeOpenAI},
+		"codex":       {Type: config.TypeOpenAI, BaseURL: "https://codex.test"},
 		"claude-code": {Type: config.TypeClaudeCodeCLI},
-		"work":        {Type: config.TypeOpenAI},
+		"work":        {Type: config.TypeOpenAI, BaseURL: "https://work.test"},
 	}}})
 	if err != nil {
 		t.Fatal(err)

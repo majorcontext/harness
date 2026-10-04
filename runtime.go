@@ -93,9 +93,13 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Store == nil {
 		return nil, fmt.Errorf("%w: Options.Store is nil", ErrInvalidRequest)
 	}
+	if err := opts.Config.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
 		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
-		threshold: positive(opts.Config.CompactionThreshold, 0.8), keep: positive(opts.Config.CompactionKeepTurns, 2)}
+		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	names := map[string]bool{}
 	for _, t := range opts.Tools {
 		name := t.Spec().Name
