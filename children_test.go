@@ -447,3 +447,16 @@ func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
 		closeRuntime(t, r)
 	})
 }
+
+func TestASpawnOfAnUnsettledChildNeedsNoSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := familyRuntime(t, harness.NewMemStore(), &family{}, nil, config.Config{MaxConcurrentTasks: 1}, t.TempDir())
+		create(t, r)
+		for range 2 {
+			if err := r.SpawnChild(bg, "s1", "ses_kid", "general-purpose"); err != nil {
+				t.Errorf("SpawnChild of a child that max_concurrent_tasks 1 already counts = %v, want nil", err)
+			}
+		}
+		closeRuntime(t, r)
+	})
+}

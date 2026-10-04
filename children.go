@@ -48,17 +48,20 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 // spawnChild appends child.spawned to parent ps and returns the
 // session.created record of the child, unless the tree of ps is at a limit.
 // One lock for each tree makes the count of the unsettled children and the
-// append one step.
+// append one step. A child that ps already counts needs no new slot, so a
+// second spawn of it, as two senders to one settled child make, passes.
 func (r *Runtime) spawnChild(ctx context.Context, ps *Session, child, agent string) (eventlog.SessionCreated, error) {
 	if depth := ps.depth + 1; depth > r.sup.depth {
 		return eventlog.SessionCreated{}, fmt.Errorf("max_task_depth %d allows no child at depth %d", r.sup.depth, depth)
 	}
 	defer r.sup.lock(ps.root)()
-	if n := r.unsettled(ps.root); n >= r.sup.running {
-		return eventlog.SessionCreated{}, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", r.sup.running, n)
-	}
-	if err := r.withinBudget(ctx, ps.root); err != nil {
-		return eventlog.SessionCreated{}, err
+	if !slices.Contains(ps.a.View().Unsettled, child) {
+		if n := r.unsettled(ps.root); n >= r.sup.running {
+			return eventlog.SessionCreated{}, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", r.sup.running, n)
+		}
+		if err := r.withinBudget(ctx, ps.root); err != nil {
+			return eventlog.SessionCreated{}, err
+		}
 	}
 	return ps.a.Spawn(ctx, child, agent)
 }

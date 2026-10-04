@@ -177,3 +177,33 @@ func TestReadGivesTheLiveStateToTheCallerAndStopsWithTheActor(t *testing.T) {
 		<-a.Done()
 	})
 }
+
+func TestReadReturnsAfterItsFunctionHasFinishedWhenTheCallerLeaves(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, own := newHeldBackend(false), &lease{lost: make(chan struct{})}
+		a, err := Create(context.Background(), actorConfig(t, &memLog{}, own, b), eventlog.SessionCreated{Model: "m/m"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Run()
+		ctx, cancel := context.WithCancel(context.Background())
+		gate, finished, returned := make(chan struct{}), false, false
+		go func() {
+			_ = a.Read(ctx, func(*eventlog.State) { <-gate; finished = true })
+			returned = true
+		}()
+		synctest.Wait()
+		cancel()
+		synctest.Wait()
+		if returned {
+			t.Error("Read returned while its function still ran on the actor goroutine, so the caller could read what the function writes")
+		}
+		close(gate)
+		synctest.Wait()
+		if !returned || !finished {
+			t.Errorf("after the function ended: returned = %v, finished = %v, want both", returned, finished)
+		}
+		close(own.lost)
+		<-a.Done()
+	})
+}

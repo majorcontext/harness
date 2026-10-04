@@ -1,6 +1,7 @@
 package harness_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func TestAGetOfASessionNeitherOwnsItNorStartsItsTurn(t *testing.T) {
@@ -44,5 +47,26 @@ func TestAGetOfASessionNeitherOwnsItNorStartsItsTurn(t *testing.T) {
 				closeRuntime(t, r2)
 			})
 		})
+	}
+}
+
+func TestAGetOfASessionThatTheRuntimeDoesNotRunListsThePlugins(t *testing.T) {
+	st := harness.NewMemStore()
+	r1 := runtime(t, st, newFake())
+	create(t, r1)
+	closeRuntime(t, r1)
+	r2, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{Plugins: pluginFixture(t, `{}`)}}, newFake())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeRuntime(t, r2) })
+	if _, err := r2.Create(bg, protocol.CreateSession{ID: "s2", Model: "fake/model"}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r2.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/s1", nil))
+	var got protocol.Session
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Plugins) != 1 || got.Plugins[0].Name != "fixture" {
+		t.Errorf("GET of a cold session = %d %s (%v), want the fixture plugin", rec.Code, rec.Body, err)
 	}
 }

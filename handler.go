@@ -45,7 +45,24 @@ func (r reads) Read(ctx context.Context, id string) (server.Reader, error) {
 	if s := r.running(id); s != nil {
 		return live{s}, nil
 	}
-	return OpenView(ctx, r.store, id)
+	v, err := OpenView(ctx, r.store, id)
+	if err != nil {
+		return nil, err
+	}
+	return cold{v, r.pluginInfo()}, nil
+}
+
+// cold is a session that this runtime does not run, as a server.Reader. The
+// log does not hold the plugins, so it names those of this runtime.
+type cold struct {
+	*View
+	plugins []protocol.Plugin
+}
+
+func (c cold) Session() protocol.Session {
+	s := c.View.Session()
+	s.Plugins = c.plugins
+	return s
 }
 
 // live is a session that this runtime runs, as a server.Reader.

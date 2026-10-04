@@ -34,3 +34,10 @@ func PanicIn(t testing.TB, o command.Op) {
 	ops[o] = op{prior.method, prior.path, func(context.Context, *Session, map[string]any) (any, error) { panic("test panic") }}
 	t.Cleanup(func() { ops[o] = prior })
 }
+
+// SpawnChild runs the admission and the child.spawned append of a spawn of
+// child by the session id, which the runtime runs.
+func (r *Runtime) SpawnChild(ctx context.Context, id, child, agent string) error {
+	_, err := r.spawnChild(ctx, r.running(id), child, agent)
+	return err
+}

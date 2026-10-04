@@ -397,12 +397,22 @@ func (a *Actor) Done() <-chan struct{} { return a.done }
 func (a *Actor) View() *View { return a.view.Load() }
 
 // Read runs f on the actor goroutine with the state of the session, which f
-// must not keep. It fails with ErrNotOwned once the actor stops.
+// must not keep. It fails with ErrNotOwned once the actor stops. When Read
+// returns, f is not running and never runs, so a caller may read what f wrote
+// whatever the error.
 func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
+	var claimed atomic.Bool
+	ended := make(chan struct{})
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		f(a.state)
+		if claimed.CompareAndSwap(false, true) {
+			f(a.state)
+		}
+		close(ended)
 		reply(struct{}{}, nil)
 	})
+	if err != nil && !claimed.CompareAndSwap(false, true) {
+		<-ended
+	}
 	return err
 }
 
