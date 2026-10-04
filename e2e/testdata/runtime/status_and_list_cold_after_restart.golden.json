@@ -1,0 +1,172 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      }
+    ],
+    "b": [
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.b": {
+      "status": 200,
+      "body": {
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 8,
+        "id": "ses:b",
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "list_sessions": {
+      "status": 200,
+      "body": {
+        "sessions": [
+          {
+            "created_at": "\u003ctime\u003e",
+            "head_seq": 7,
+            "id": "ses:a",
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 3
+            }
+          },
+          {
+            "created_at": "\u003ctime\u003e",
+            "head_seq": 7,
+            "id": "ses:b",
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 3
+            }
+          }
+        ]
+      }
+    },
+    "session_status": {
+      "status": 0,
+      "body": {
+        "deleted_by_design": "GET /session/status"
+      }
+    },
+    "session_status#2": {
+      "status": 0,
+      "body": {
+        "deleted_by_design": "GET /session/status"
+      }
+    }
+  }
+}

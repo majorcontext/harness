@@ -112,7 +112,7 @@ func bareOpenAIKey(cfg map[string]any) map[string]any {
 	return cfg
 }
 
-func runCodexScenario(t *testing.T, sc codexScenario) observation {
+func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	t.Helper()
 	sc.opts.APIKey = codexAPIKey
 	o := harnesstest.NewOpenAI(t, sc.opts, sc.model...)
@@ -129,7 +129,7 @@ func runCodexScenario(t *testing.T, sc codexScenario) observation {
 		cfg = bareOpenAIKey(cfg)
 	}
 	r := &run{
-		drv:    newHTTPDriverWith(t, o.URL(), cfg),
+		drv:    h.newDriver(t, o.URL(), cfg),
 		fake:   o.Server,
 		ids:    map[string]string{},
 		noIdle: map[string]bool{},
@@ -150,8 +150,10 @@ func runCodexScenario(t *testing.T, sc codexScenario) observation {
 			t.Errorf("session %s: %s", alias, v)
 		}
 	}
-	for _, v := range journalViolations(r.drv.Events(t)) {
-		t.Errorf("journal: %s", v)
+	for _, j := range r.drv.Journals(t) {
+		for _, v := range journalViolations(j) {
+			t.Errorf("journal: %s", v)
+		}
 	}
 	return normalizeRun(o.Requests(), sessions, r.calls, r.ids, r.drv.Workdir())
 }
@@ -162,9 +164,11 @@ func runCodexScenarios(t *testing.T, table []codexScenario) {
 	for _, sc := range table {
 		t.Run(sc.name, func(t *testing.T) {
 			t.Parallel()
-			compareGolden(t, sc.name, runCodexScenario(t, sc))
+			compareGolden(t, sc.name, runCodexScenario(t, sc, serveHost))
 		})
 	}
+	onRuntime(t, table, func(sc codexScenario) (string, bool) { return sc.name, false },
+		func(t *testing.T, sc codexScenario) observation { return runCodexScenario(t, sc, runtimeHost) })
 }
 
 func codexText(s string) harnesstest.Reply { return harnesstest.Reply{Text: s} }

@@ -1,0 +1,148 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      }
+    ],
+    "b": [
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "sse_resume": {
+      "status": 0,
+      "body": {
+        "deleted_by_design": "GET /event"
+      }
+    },
+    "sse_resume.b": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "7",
+            "seq": 7,
+            "type": "turn.ended"
+          },
+          {
+            "id": "8",
+            "seq": 8,
+            "type": "owner.acquired"
+          }
+        ]
+      }
+    },
+    "sse_resume.b#2": {
+      "status": 200,
+      "body": {
+        "frames": [
+          {
+            "id": "7",
+            "seq": 7,
+            "type": "turn.ended"
+          },
+          {
+            "id": "8",
+            "seq": 8,
+            "type": "owner.acquired"
+          }
+        ]
+      }
+    }
+  }
+}

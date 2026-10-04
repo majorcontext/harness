@@ -813,6 +813,8 @@ Firm deletions remove about 1.2k–1.5k lines. The persistence and provider dupl
 - `scenario.config` adds top-level keys to the served config, for example `context_window_tokens` or `compaction_keep_turns`.
 - `harnesstest.NewOpenAI` serves the ChatGPT Codex Responses wire over SSE and websocket from the same `Step` script. It answers a websocket prewarm without consuming a step, rejects a `previous_response_id` that its connection never completed, and can report `x-codex-*` usage headers or a `codex.rate_limits` frame, drop a response mid-turn, or refuse the websocket upgrade. `WireEvents` lists each dial, prewarm, and request. The Codex scenarios record it under `calls.codex_wire`.
 - `scenario.chat` serves the model through `NewChat` and points the config at it as provider `bifrost`.
+- The runtime host is the oracle for the new runtime. With `HARNESS_E2E_RUNTIME=1`, each row also runs on `harness.Runtime` in process, through `Runtime.Handler`, on a `DiskStore`, with the config that serve reads. A restart closes the runtime and opens a new one on the same store; a kill closes it under an ended context. The driver reads the transcript from the session events, as the model sees it, and maps each old route to its new route. It never calls a route that this spec deletes; the call records `deleted_by_design`.
+- Each golden has one disposition in `e2e/runtime_rows_test.go`: the same golden, a runtime golden under `e2e/testdata/runtime` that cites the line of this spec that changes it, deleted by a cited line of this spec, or pending on the findings or phases that it waits for (`unowned` marks a break that no finding names). Only the first two run. `TestRuntimeRows` checks that each golden has one disposition and that each citation holds. A same row compares with its serve golden less three suite breaks that wait for a decision (see Open questions): the `model` and `session_info` tools, and the engine banner of the first user message. CI runs the runtime host in a step that does not gate until the phase 4 switch.
 - `HARNESS_E2E_COVER=1 go test -race ./e2e/ -run TestContract` builds an instrumented binary, runs the contract scenarios, and prints the statement coverage by package from `TestMain`. It appends a Markdown table to `$GITHUB_STEP_SUMMARY` when that variable is set. Test cleanup sends SIGTERM before SIGKILL so a serve process flushes its counters. CI runs the command without gating.
 
 Today ~70% of 127k test lines read unexported state and will not survive the restructure. The target is 40k–50k test lines.
@@ -906,6 +908,7 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 ## Open questions
 
 - Does the switch port `session_info` and `model`? No contract row calls them, and Claude Code and Codex have neither. The contract goldens list both in the tool list of each request, so leaving them out changes those goldens at the switch.
+- Does the switch keep the engine banner, `[engine: harness <version> · session_sync=… · engine started …]` in `<harness-engine-context>` tags, that serve adds to the first user message of a session? The runtime sends none, so each request golden differs there.
 
 Decided:
 

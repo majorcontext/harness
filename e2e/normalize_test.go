@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -13,7 +14,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_`)
+var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_`)
 
 var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 
@@ -21,7 +22,14 @@ var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
 var enginePattern = regexp.MustCompile(`engine: harness \S+`)
 
+// runtimeOwner is the owner name that an in-process runtime records.
+var runtimeOwner = func() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s/%d", host, os.Getpid())
+}()
+
 func maskUnstable(s string) string {
+	s = strings.ReplaceAll(s, runtimeOwner, "<owner>")
 	s = timePattern.ReplaceAllString(s, "<time>")
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
 	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
@@ -173,7 +181,7 @@ type normCall struct {
 	Messages []normMessage `json:"messages,omitempty"`
 }
 
-var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt)_[0-9A-Za-z_]+$`)
+var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_[0-9A-Za-z_]+$`)
 
 // value normalizes decoded JSON. Object keys are visited in sorted order so
 // the first-seen id numbering does not depend on map order. A session id that

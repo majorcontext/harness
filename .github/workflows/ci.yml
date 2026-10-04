@@ -57,6 +57,12 @@ jobs:
         continue-on-error: true
         run: HARNESS_E2E_COVER=1 go test -race -count=1 ./e2e/ -run TestContract
 
+      - name: Runtime contract
+        # Runs the contract rows on harness.Runtime by their dispositions in
+        # e2e/runtime_rows_test.go. It does not gate until the phase 4 switch.
+        continue-on-error: true
+        run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$'
+
       - name: Startup budget
         # AGENTS.md: startup speed is a CI-enforced budget. Best-of-5 keeps
         # shared-runner noise out; the bound is generous versus the ~5ms

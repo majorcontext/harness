@@ -24,7 +24,7 @@ type scenario struct {
 	setup      func(t *testing.T, fx map[string]any) map[string]any // fills fx for actions; the result is added to config
 	model      []harnesstest.Step
 	actions    []action
-	driver     func(t *testing.T, modelURL string) driver // nil runs the default HTTP driver
+	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -260,7 +260,7 @@ func (a bindChild) run(t *testing.T, r *run) {
 	}
 }
 
-func runScenario(t *testing.T, sc scenario) observation {
+func runScenario(t *testing.T, sc scenario, h host) observation {
 	t.Helper()
 	fake, config := scenarioFake(t, sc)
 	fx := map[string]any{}
@@ -273,9 +273,9 @@ func runScenario(t *testing.T, sc scenario) observation {
 	}
 	var drv driver
 	if sc.driver != nil {
-		drv = sc.driver(t, fake.URL())
+		drv = sc.driver(t, h, fake.URL())
 	} else {
-		drv = newHTTPDriverWith(t, fake.URL(), config)
+		drv = h.newDriver(t, fake.URL(), config)
 	}
 	r := &run{
 		drv:    drv,
@@ -301,8 +301,10 @@ func runScenario(t *testing.T, sc scenario) observation {
 			t.Errorf("session %s: %s", alias, v)
 		}
 	}
-	for _, v := range journalViolations(r.drv.Events(t)) {
-		t.Errorf("journal: %s", v)
+	for _, j := range r.drv.Journals(t) {
+		for _, v := range journalViolations(j) {
+			t.Errorf("journal: %s", v)
+		}
 	}
 	reqs := fake.Requests()
 	if sc.concurrent {
@@ -317,9 +319,11 @@ func runScenarios(t *testing.T, table []scenario) {
 	for _, sc := range table {
 		t.Run(sc.name, func(t *testing.T) {
 			t.Parallel()
-			compareGolden(t, sc.name, runScenario(t, sc))
+			compareGolden(t, sc.name, runScenario(t, sc, serveHost))
 		})
 	}
+	onRuntime(t, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
+		func(t *testing.T, sc scenario) observation { return runScenario(t, sc, runtimeHost) })
 }
 
 func mustJSON(t *testing.T, v any) []byte {
@@ -333,9 +337,13 @@ func mustJSON(t *testing.T, v any) []byte {
 
 func compareGolden(t *testing.T, name string, obs observation) {
 	t.Helper()
-	path := filepath.Join("testdata", "contract", name+".golden.json")
+	compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, *updateGoldens)
+}
+
+func compareGoldenAt(t *testing.T, path string, obs observation, update bool) {
+	t.Helper()
 	got := mustJSON(t, obs)
-	if *updateGoldens {
+	if update {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -396,8 +404,8 @@ func TestScenarioRunsTwiceIdentically(t *testing.T) {
 			submit{as: "a", text: "hi"},
 		},
 	}
-	first := runScenario(t, sc)
-	second := runScenario(t, sc)
+	first := runScenario(t, sc, serveHost)
+	second := runScenario(t, sc, serveHost)
 	if string(mustJSON(t, first)) != string(mustJSON(t, second)) {
 		t.Fatalf("observations differ between runs:\n%s", lineDiff(string(mustJSON(t, first)), string(mustJSON(t, second))))
 	}

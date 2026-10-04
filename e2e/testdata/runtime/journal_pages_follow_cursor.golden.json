@@ -1,0 +1,443 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "one"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "1"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "two"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "2"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "3"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "model": "anthropic/claude-fable-5",
+              "origin": "",
+              "settings": {}
+            },
+            "k": "session.created",
+            "seq": 1,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 2,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "one",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          }
+        ],
+        "next": 3
+      }
+    },
+    "journal_page.a#2": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "one",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in1"
+              ],
+              "turn#1": "turn#2"
+            },
+            "k": "turn.started",
+            "seq": 4,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          }
+        ],
+        "next": 5
+      }
+    },
+    "journal_page.a#3": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "item#1": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "text": "1",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn#1": "turn#2"
+            },
+            "k": "item.completed",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn#1": "turn#2",
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              }
+            },
+            "k": "turn.ended",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in2",
+              "parts": [
+                {
+                  "text": "two",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          }
+        ],
+        "next": 8
+      }
+    },
+    "journal_page.a#4": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "input_ids": [
+                "in2"
+              ],
+              "turn#1": "turn#3"
+            },
+            "k": "turn.started",
+            "seq": 9,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 10,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item#1": "item#3",
+              "message": {
+                "parts": [
+                  {
+                    "text": "2",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn#1": "turn#3"
+            },
+            "k": "item.completed",
+            "seq": 11,
+            "t": "\u003ctime\u003e"
+          }
+        ],
+        "next": 11
+      }
+    },
+    "journal_page.a#5": {
+      "status": 200,
+      "body": {
+        "events": []
+      }
+    },
+    "journal_page.a#6": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "item#1": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "text": "1",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn#1": "turn#2"
+            },
+            "k": "item.completed",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn#1": "turn#2",
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              }
+            },
+            "k": "turn.ended",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          }
+        ],
+        "next": 7
+      }
+    }
+  }
+}
