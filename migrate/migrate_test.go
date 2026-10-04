@@ -1,7 +1,9 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -63,7 +65,7 @@ func oldTranscript(t *testing.T, dir, id string) []string {
 			case *message.Reasoning:
 				line += "|reasoning:" + p.Text
 			case *message.ToolCall:
-				line += "|call:" + p.CallID + ":" + p.Name
+				line += "|call:" + p.CallID + ":" + p.Name + ":" + compactJSON(p.Arguments)
 			case *message.ToolResult:
 				line += "|result:" + p.CallID + ":" + p.SafeContent().Text()
 			}
@@ -73,6 +75,16 @@ func oldTranscript(t *testing.T, dir, id string) []string {
 	return out
 }
 
+// compactJSON returns raw with no insignificant space, so the arguments of
+// a call compare by value.
+func compactJSON(raw []byte) string {
+	var b bytes.Buffer
+	if err := json.Compact(&b, raw); err != nil {
+		return string(raw)
+	}
+	return b.String()
+}
+
 func newTranscript(s *eventlog.State) []string {
 	var out []string
 	for _, m := range s.History() {
@@ -80,7 +92,7 @@ func newTranscript(s *eventlog.State) []string {
 		for _, p := range m.Parts {
 			switch p.Type {
 			case eventlog.PartToolCall:
-				line += "|call:" + p.CallID + ":" + p.Name
+				line += "|call:" + p.CallID + ":" + p.Name + ":" + compactJSON(p.Arguments)
 			case eventlog.PartToolResult:
 				line += "|result:" + p.CallID + ":" + p.Text
 			default:

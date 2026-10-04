@@ -60,6 +60,9 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	var err error
 	switch {
 	case *from != "" && *to != "" && *archive == "":
+		if _, err := os.Stat(*from); err != nil {
+			return err
+		}
 		results, err = migrate.Dir(ctx, *from, harness.NewDiskStore(*to), model)
 	case *archive != "" && *dst != "" && *from == "":
 		results, err = convertArchive(ctx, out, *archive, *dst, *dir, *store, model)
