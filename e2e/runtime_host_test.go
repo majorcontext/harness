@@ -128,13 +128,10 @@ const (
 	pendingBound  = 5 * time.Minute
 )
 
-// A pending row that does not match fails fast or waits for what never comes,
-// so its child process waits less.
-func init() {
-	if os.Getenv(pendingBinEnv) != "" {
-		waitBound = 15 * time.Second
-	}
-}
+// pendingWaitBound is the wait bound of a child process. A pending row that
+// does not match fails fast or waits for what never comes, so its child waits
+// less.
+const pendingWaitBound = 15 * time.Second
 
 // pendingSlots bounds the child processes that pending rows start.
 var pendingSlots = make(chan struct{}, 4)
