@@ -178,7 +178,7 @@ func New(opts Options) (*Runtime, error) {
 	names := map[string]bool{}
 	for _, t := range tools {
 		name := t.Spec().Name
-		if name == "" || names[name] || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) {
+		if name == "" || names[name] || r.taken(name) {
 			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
 		}
 		names[name] = true
@@ -629,7 +629,7 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool {
-		return r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
+		return r.taken(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
 	})
 }
 
@@ -640,6 +640,11 @@ func (r *Runtime) agent() []turn.Tool {
 		return nil
 	}
 	return builtin.Tools(r.workDir)
+}
+
+// taken reports whether name belongs to a tool that the runtime provides.
+func (r *Runtime) taken(name string) bool {
+	return name == turn.HistoryTool || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name)
 }
 
 // builtin reports whether name is a built-in tool of the WorkDir.

@@ -159,6 +159,29 @@ func TestAnInputDismissesAnOpenQuestionFirst(t *testing.T) {
 	})
 }
 
+func TestAModelOfAnotherProviderDismissesAnOpenQuestion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, p := harness.NewMemStore(), newParker()
+		r, s := parked(t, st, p)
+		same := "test/other"
+		if _, err := s.Update(bg, protocol.SettingsPatch{Model: &same}); err != nil {
+			t.Fatal(err)
+		}
+		if s.View().Status != protocol.StatusWaiting {
+			t.Errorf("status after a model of the same provider = %s, want waiting", s.View().Status)
+		}
+		other := "elsewhere/model"
+		if _, err := s.Update(bg, protocol.SettingsPatch{Model: &other}); err != nil {
+			t.Fatal(err)
+		}
+		wantLog(t, st, 7, "settings.changed", "request.resolved", "settings.changed")
+		if err := s.Resolve(bg, "c1", protocol.Resolution{Dismiss: true}); !errors.Is(err, harness.ErrRequestNotPending) {
+			t.Errorf("Resolve after the switch = %v, want ErrRequestNotPending", err)
+		}
+		closeRuntime(t, r)
+	})
+}
+
 func TestResolveRefusesWhatNoRequestOrBodyAllows(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		st, p := harness.NewMemStore(), newParker()
@@ -174,6 +197,8 @@ func TestResolveRefusesWhatNoRequestOrBodyAllows(t *testing.T) {
 			{"neither", "c1", protocol.Resolution{}, harness.ErrInvalidRequest},
 			{"an empty answer", "c1", protocol.Resolution{Answer: json.RawMessage(`{}`)}, harness.ErrInvalidRequest},
 			{"an empty answer with space", "c1", protocol.Resolution{Answer: json.RawMessage(`{ }`)}, harness.ErrInvalidRequest},
+			{"a padded null", "c1", protocol.Resolution{Answer: json.RawMessage("  null  ")}, harness.ErrInvalidRequest},
+			{"a padded empty object", "c1", protocol.Resolution{Answer: json.RawMessage("\n{}\t")}, harness.ErrInvalidRequest},
 			{"an answer that is not a map", "c1", protocol.Resolution{Answer: json.RawMessage(`["SQLite"]`)}, harness.ErrInvalidRequest},
 			{"a choice that is not text", "c1", protocol.Resolution{Answer: json.RawMessage(`{"Which database?":1}`)}, harness.ErrInvalidRequest},
 		} {

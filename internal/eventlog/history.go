@@ -83,7 +83,8 @@ func (s *State) say(seq uint64, m Message) {
 	s.history = append(s.history, entry{seq: seq, msg: m, by: s.turnBy, turn: s.turnN})
 }
 
-func providerOf(model string) string {
+// ProviderOf returns the provider of a model reference.
+func ProviderOf(model string) string {
 	p, _, _ := strings.Cut(model, "/")
 	return p
 }
@@ -97,7 +98,7 @@ func providerOf(model string) string {
 // keeps its own session has not seen such a message. The current turn is left
 // out, as it brings its own input.
 func (s *State) Foreign(model string) bool {
-	by, end := providerOf(model), len(s.history)
+	by, end := ProviderOf(model), len(s.history)
 	if s.turn.ID != "" {
 		end = s.turnAt
 	}

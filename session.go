@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,8 +137,7 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 // ID is the call ID of the AskUserQuestion item, and the answer maps each
 // question to the chosen label or free text.
 func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error {
-	answered := len(res.Answer) > 0 && !slices.Contains([]string{"null", "{}", `""`}, string(res.Answer))
-	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !answered || len(res.Answer) > 0 && !json.Valid(res.Answer) {
+	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !hasAnswer(res.Answer) || len(res.Answer) > 0 && !json.Valid(res.Answer) {
 		return fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
 	}
 	err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
@@ -145,6 +145,16 @@ func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Re
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return err
+}
+
+// hasAnswer reports whether answer is a JSON value other than null, an empty
+// object, or an empty string, whatever whitespace surrounds it.
+func hasAnswer(answer json.RawMessage) bool {
+	var b bytes.Buffer
+	if json.Compact(&b, answer) != nil {
+		return len(answer) > 0
+	}
+	return !slices.Contains([]string{"", "null", "{}", `""`}, b.String())
 }
 
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An

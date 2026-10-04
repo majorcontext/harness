@@ -459,7 +459,7 @@ Request:
 pending ─► answered | dismissed
 ```
 
-A backend opens a request with `Sink.Ask` on an open tool call of its turn, with the call ID as the request ID. The turn then ends `awaiting_input`, keeps the call open, and the session reads `waiting`. `Resolve` closes the request. A dismissal closes the call with an error result that says the user dismissed the question. An answer leaves the call open, and the turn that it starts records the result. That turn has no input; a dismissal starts none. A question takes an answer that maps each question to text. An input admitted while a request is open dismisses it first, and so does a queued input that starts after the turn. Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal. The Codex CLI approvals come with phase 5.
+A backend opens a request with `Sink.Ask` on an open tool call of its turn, with the call ID as the request ID. The turn then ends `awaiting_input`, keeps the call open, and the session reads `waiting`. `Resolve` closes the request. A dismissal closes the call with an error result that says the user dismissed the question. An answer leaves the call open, and the turn that it starts records the result. That turn has no input; a dismissal starts none. A question takes an answer that maps each question to text. An input admitted while a request is open dismisses it first, and so does a queued input that starts after the turn. A settings change to a model of another provider dismisses it too. Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal. The Codex CLI approvals come with phase 5.
 
 ### Compaction
 

@@ -35,7 +35,7 @@ func (s *State) applyStarted(e TurnStarted) error {
 		s.takeInput(id, inputPromoted)
 	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
-	s.turnAt, s.turnBy, s.turnItems = len(s.history), providerOf(s.model), 0
+	s.turnAt, s.turnBy, s.turnItems = len(s.history), ProviderOf(s.model), 0
 	s.turnN++
 	s.turnIDs[e.TurnID] = true
 	return nil
@@ -75,14 +75,7 @@ func (s *State) applyItem(e ItemCompleted) error {
 
 func (s *State) unanswered() error {
 	for _, c := range s.calls {
-		open := 0
-		for _, o := range s.calls {
-			if o.ItemID == c.ItemID {
-				open++
-			}
-		}
-		asked := slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.ItemID == c.ItemID })
-		if !asked || open > 1 {
+		if s.openRequest(c.CallID) < 0 {
 			return illegal("tool call %s has no result", c.CallID)
 		}
 	}
@@ -157,6 +150,9 @@ func (s *State) applyRequestOpened(e RequestOpened) error {
 	if e.RequestID == "" || e.ItemID == "" || s.openRequest(e.RequestID) >= 0 {
 		return illegal("request %q on item %q is already open or unnamed", e.RequestID, e.ItemID)
 	}
+	if !slices.ContainsFunc(s.calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID && c.ItemID == e.ItemID }) {
+		return illegal("no open tool call %s on item %s", e.RequestID, e.ItemID)
+	}
 	s.requests = append(s.requests, pendingRequest{e, s.turn.ID})
 	return nil
 }
@@ -169,19 +165,8 @@ func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 	if e.Resolution != ResolutionAnswered && e.Resolution != ResolutionDismissed {
 		return illegal("request %s has resolution %q", e.RequestID, e.Resolution)
 	}
-	item := s.requests[i].ItemID
-	var held []int
-	for k, c := range s.calls {
-		if c.ItemID == item {
-			held = append(held, k)
-		}
-	}
-	if len(held) > 1 {
-		return illegal("request %s has %d open tool calls", e.RequestID, len(held))
-	}
 	calls := slices.Clone(s.calls)
-	if len(held) == 1 {
-		k := held[0]
+	if k := slices.IndexFunc(calls, func(c OpenToolCall) bool { return c.CallID == e.RequestID }); k >= 0 {
 		if e.Resolution == ResolutionAnswered {
 			calls[k].answered = true
 		} else {

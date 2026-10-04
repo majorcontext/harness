@@ -24,7 +24,7 @@ func TestHistory(t *testing.T) {
 	resultOf := func(text string, isErr bool) Message {
 		return Message{Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Name: "bash", Text: text, IsError: isErr}}}
 	}
-	choice := RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: []byte(`{"Which database?":"SQLite","Which cache?":"none"}`)}
+	choice := RequestResolved{RequestID: "c1", Resolution: ResolutionAnswered, Answer: []byte(`{"Which database?":"SQLite","Which cache?":"none"}`)}
 	for _, tc := range []struct {
 		name   string
 		events []Event
@@ -33,7 +33,7 @@ func TestHistory(t *testing.T) {
 		{"an answer leaves its call open for the turn that it starts", with(parked, choice), []Message{userText("hi"), callMsg}},
 		{"the turn that an answer starts records the result of the call", with(parked, choice, start("t2"), result("t2", "i2", "c1")),
 			[]Message{userText("hi"), callMsg, {Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}}},
-		{"a dismissal is an error result", with(parked, dismiss("r1")),
+		{"a dismissal is an error result", with(parked, dismiss("c1")),
 			[]Message{userText("hi"), callMsg, resultOf("The user dismissed this question without answering.", true)}},
 		{"a queued input is not history until a turn takes it", with(base, says("a", DeliveryQueue, "one")), nil},
 		{"the inputs of a turn lead its items", firstTurn, []Message{userText("one"), calling, answered}},
@@ -87,9 +87,9 @@ func TestFold(t *testing.T) {
 }
 
 func TestResolutionOutlivesTheRequest(t *testing.T) {
-	s := replay(t, with(asking, end("t1", StopAwaitingInput, ""), dismiss("r1")))
-	if got, ok := s.Resolution("r1"); !ok || got.Resolution != ResolutionDismissed {
-		t.Errorf("Resolution(r1) = %+v, %v, want the dismissal", got, ok)
+	s := replay(t, with(asking, end("t1", StopAwaitingInput, ""), dismiss("c1")))
+	if got, ok := s.Resolution("c1"); !ok || got.Resolution != ResolutionDismissed {
+		t.Errorf("Resolution(c1) = %+v, %v, want the dismissal", got, ok)
 	}
 	if _, ok := s.Resolution("r2"); ok {
 		t.Error("Resolution(r2) found a request that never opened")
