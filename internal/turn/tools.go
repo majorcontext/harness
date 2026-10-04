@@ -34,7 +34,7 @@ type Hooks interface {
 type Source interface {
 	// Toolset returns the tools of the next model call. history is the
 	// conversation so far; allowed restricts the tools as AllowedTools does.
-	Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset
+	Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset
 }
 
 // Sources gives the tools of each Source in order, their prompts joined
@@ -42,11 +42,11 @@ type Source interface {
 type Sources []Source
 
 // Toolset implements Source.
-func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset {
+func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset {
 	var out Toolset
 	var prompts []string
 	for _, src := range s {
-		ts := src.Toolset(ctx, history, allowed)
+		ts := src.Toolset(ctx, history, allowed, model)
 		out.Tools, out.Deferred = append(out.Tools, ts.Tools...), append(out.Deferred, ts.Deferred...)
 		if ts.Prompt != "" {
 			prompts = append(prompts, ts.Prompt)
@@ -64,7 +64,7 @@ func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowe
 func describe(ctx context.Context, call *Request, tools []Tool, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
 	ts := Toolset{Tools: tools}
 	if src != nil {
-		more := src.Toolset(ctx, call.History, call.AllowedTools)
+		more := src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
 		ts.Tools, ts.Deferred, ts.Prompt, ts.Hooks = append(slices.Clip(tools), more.Tools...), more.Deferred, more.Prompt, more.Hooks
 	}
 	if all {

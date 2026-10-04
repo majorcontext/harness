@@ -181,7 +181,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 		return nil, err
 	}
 	if r.models != nil {
-		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.tools); err != nil {
+		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.named()); err != nil {
 			return nil, err
 		}
 	}
@@ -294,7 +294,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	}
 	if r.models != nil {
 		cfg.Check = func(from, to string, names []string) error {
-			return r.models.change(from, to, r.unowned(names), r.tools)
+			return r.models.change(from, to, r.unowned(names), r.named())
 		}
 	}
 	var srcs turn.Sources
@@ -424,20 +424,40 @@ func (r *Runtime) Close(ctx context.Context) error {
 }
 
 // unowned returns the allowed names that the Options.Tools and the backend
-// do not own. The MCP source owns its names, which depend on the servers,
-// and the plugins own the names of their tools.
+// do not own. The MCP source owns its names, which depend on the servers.
 func (r *Runtime) unowned(names []string) []string {
-	return slices.DeleteFunc(slices.Clone(names), func(n string) bool {
-		return r.mcp != nil && mcpsrc.Reserved(n) || r.plugins != nil && r.plugins.Owns(n)
-	})
+	if r.mcp == nil {
+		return names
+	}
+	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
 }
 
-// startPlugins reads the plugin manifests once for each runtime. A plugin
-// tool may not take the name of another tool.
+// named returns the Options.Tools and the plugin tools, for their names.
+func (r *Runtime) named() []turn.Tool {
+	if r.plugins == nil {
+		return r.tools
+	}
+	return append(slices.Clip(r.tools), r.plugins.Tools()...)
+}
+
+// startPlugins reads the plugin manifests once for each runtime, as part of
+// the work that Close waits for. A plugin tool may not take the name of
+// another tool.
 func (r *Runtime) startPlugins(ctx context.Context) error {
 	if r.plugins == nil {
 		return nil
 	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return ErrDraining
+	}
+	r.group.Add(1)
+	r.mu.Unlock()
+	defer r.group.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool {
 		return r.mcp != nil && mcpsrc.Reserved(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
 	})
@@ -459,18 +479,22 @@ func (r *Runtime) closeTools(ctx context.Context) {
 		r.procs.Close(ctx)
 	}
 	if r.plugins != nil {
-		r.plugins.Close()
+		closeBy(ctx, r.plugins.Close)
 	}
 	if r.mcp != nil {
-		done := make(chan struct{})
-		go func() {
-			r.mcp.Close()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-ctx.Done():
-		}
+		closeBy(ctx, r.mcp.Close)
+	}
+}
+
+func closeBy(ctx context.Context, closeFn func()) {
+	done := make(chan struct{})
+	go func() {
+		closeFn()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 

@@ -33,7 +33,6 @@ type Plugins struct {
 
 	mu     sync.Mutex
 	host   *plugin.Host
-	names  map[string]bool
 	closed bool
 }
 
@@ -81,16 +80,13 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool) error {
 	if err != nil {
 		return err
 	}
-	p.host, p.names = host, names
+	p.host = host
 	return nil
 }
 
-// Owns reports whether a started plugin has a tool named name.
-func (p *Plugins) Owns(name string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.names[name]
-}
+// Tools returns the tools of the started plugins, for their names. Call it
+// after Start.
+func (p *Plugins) Tools() []turn.Tool { return p.Session("").tools }
 
 // Session returns the plugins of session id. Call it after Start.
 func (p *Plugins) Session(id string) *Session {
@@ -123,8 +119,9 @@ type Session struct {
 
 // Toolset gives the plugin tools that allowed keeps, and the system.transform
 // segments of this model call as its prompt.
-func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []string) turn.Toolset {
-	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id})
+func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []string, model string) turn.Toolset {
+	ref, _ := message.ParseModelRef(model)
+	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
 }
 
@@ -144,10 +141,12 @@ func (s *Session) After(ctx context.Context, c protocol.ToolCall, r protocol.Too
 	s.emit(plugin.EventToolExecuteEnd, plugin.ToolExecuteEndProperties{Tool: c.Name, CallID: c.ID, OK: !r.IsError})
 	var edit struct{ Path string }
 	if (c.Name == "write_file" || c.Name == "edit_file") && !r.IsError && json.Unmarshal(c.Arguments, &edit) == nil && edit.Path != "" {
-		if !filepath.IsAbs(edit.Path) && s.workDir != "" {
+		if !filepath.IsAbs(edit.Path) {
 			edit.Path = filepath.Join(s.workDir, edit.Path)
 		}
-		s.emit(plugin.EventFileEdited, plugin.FileEditedProperties{Path: edit.Path})
+		if abs, err := filepath.Abs(edit.Path); err == nil {
+			s.emit(plugin.EventFileEdited, plugin.FileEditedProperties{Path: abs})
+		}
 	}
 	out := s.host.ToolExecuteAfter(ctx, &plugin.ToolExecuteAfterRequest{SessionID: s.id, CallID: c.ID, Tool: c.Name, Args: c.Arguments,
 		Output: message.Parts{&message.Text{Text: r.Text}}})

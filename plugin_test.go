@@ -2,6 +2,7 @@ package harness_test
 
 import (
 	"cmp"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -15,13 +16,13 @@ import (
 )
 
 // pluginFixture builds the wire-level plugin of the contract suite.
-func pluginFixture(t *testing.T) []config.PluginSpec {
+func pluginFixture(t *testing.T, cfg string) []config.PluginSpec {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "pluginfixture")
 	if out, err := exec.Command("go", "build", "-o", bin, "./harnesstest/pluginfixture").CombinedOutput(); err != nil {
 		t.Fatalf("go build pluginfixture: %v\n%s", err, out)
 	}
-	return []config.PluginSpec{{Name: "fixture", Command: []string{bin}, Config: []byte(`{"segment":"SEGMENT","recall":true}`)}}
+	return []config.PluginSpec{{Name: "fixture", Command: []string{bin}, Config: []byte(cfg)}}
 }
 
 func pluginRuntime(t *testing.T, plugins []config.PluginSpec, tools []harness.Tool, steps ...harnesstest.Step) (*harness.Runtime, *harnesstest.OpenAI) {
@@ -44,7 +45,7 @@ func TestPluginToolsAndHooks(t *testing.T) {
 	call := func(id, name string, in map[string]any) harnesstest.ToolCall {
 		return harnesstest.ToolCall{ID: id, Name: name, Input: in}
 	}
-	r, s := pluginRuntime(t, pluginFixture(t), []harness.Tool{newProbe("bash", false), newProbe("write_file", false)},
+	r, s := pluginRuntime(t, pluginFixture(t, `{"segment":"SEGMENT","recall":true}`), []harness.Tool{newProbe("bash", false), newProbe("write_file", false)},
 		harnesstest.Step{Name: "calls", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
 			call("call_1", "bash", map[string]any{"command": "echo rewrite-me"}),
 			call("call_2", "bash", map[string]any{"command": "echo block-me"}),
@@ -93,15 +94,38 @@ func TestPluginToolsAndHooks(t *testing.T) {
 		t.Errorf("tool results:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	events := `["session.status busy","tool.execute.start bash","tool.execute.end bash","tool.execute.start fixture_echo","tool.execute.end fixture_echo",` +
-		`"tool.execute.start write_file","tool.execute.end write_file","file.edited","tool.execute.start fixture_report","tool.execute.end fixture_report",` +
+		`"tool.execute.start write_file","tool.execute.end write_file","file.edited absolute","tool.execute.start fixture_report","tool.execute.end fixture_report",` +
 		`"session.status idle","session.status busy","tool.execute.start fixture_report"]`
 	if got := lastText(reqs[3]); got != events {
 		t.Errorf("events that the plugin saw:\n%s\nwant:\n%s", got, events)
 	}
 }
 
+func TestPluginSeesTheModelOfEachCall(t *testing.T) {
+	r, s := pluginRuntime(t, pluginFixture(t, `{"model":true}`), nil,
+		harnesstest.Step{Name: "a", Match: harnesstest.LastUserText("a"), Reply: harnesstest.Reply{Text: "ok"}},
+		harnesstest.Step{Name: "b", Match: harnesstest.LastUserText("b"), Reply: harnesstest.Reply{Text: "ok"}})
+	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	converse(t, sess, "a")
+	changed := "codex/gpt-5-mini"
+	if _, err := sess.Update(bg, protocol.SettingsPatch{Model: &changed}); err != nil {
+		t.Fatal(err)
+	}
+	watch(t, sess, sess.View().HeadSeq-1, sess.View().HeadSeq, text("b", "b"), false)
+	var got []string
+	for _, req := range s.Requests() {
+		got = append(got, req.System)
+	}
+	if want := []string{"MODEL: codex/gpt-5", "MODEL: codex/gpt-5-mini"}; !slices.Equal(got, want) {
+		t.Errorf("system prompts %q, want %q", got, want)
+	}
+}
+
 func TestCreateStartsThePlugins(t *testing.T) {
-	fixture := pluginFixture(t)
+	fixture := pluginFixture(t, `{}`)
 	for _, tc := range []struct {
 		name    string
 		plugins []config.PluginSpec
@@ -113,6 +137,8 @@ func TestCreateStartsThePlugins(t *testing.T) {
 		{name: "a missing executable fails", plugins: []config.PluginSpec{{Name: "gone", Command: []string{"/nonexistent/plugin"}}}, want: "plugin gone"},
 		{name: "a manifest of another name fails", plugins: []config.PluginSpec{{Name: "other", Command: fixture[0].Command}}, want: `manifest name "fixture"`},
 		{name: "a tool name that an embedder tool has fails", plugins: fixture, tools: []harness.Tool{newProbe("fixture_echo", false)}, want: `tool name "fixture_echo"`},
+		{name: "a plugin tool with the name of a built-in tool fails", plugins: []config.PluginSpec{{Name: "fixture", Command: fixture[0].Command, Config: []byte(`{"extra_tool":"Read"}`)}},
+			model: "claude-code/opus", want: `built-in tool`},
 		{name: "a backend that owns the loop allows a plugin tool", plugins: fixture, model: "claude-code/opus", allowed: []string{"fixture_echo"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,5 +148,13 @@ func TestCreateStartsThePlugins(t *testing.T) {
 				t.Errorf("Create = %v, want an error that names %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestCreateAfterCloseDoesNotProbeThePlugins(t *testing.T) {
+	r, _ := pluginRuntime(t, []config.PluginSpec{{Name: "gone", Command: []string{"/nonexistent/plugin"}}}, nil)
+	closeRuntime(t, r)
+	if _, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"}); !errors.Is(err, harness.ErrDraining) {
+		t.Errorf("Create after Close = %v, want ErrDraining", err)
 	}
 }

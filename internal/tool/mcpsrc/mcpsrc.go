@@ -196,7 +196,7 @@ func dial(ctx context.Context, spec config.MCPServerSpec) (*server, error) {
 // Toolset returns the mcp tool, the resource tools when a server serves
 // resources, and the tools of each connected server. A tool that defers is
 // in Deferred, and the prompt lists it, until history selects or calls it.
-func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowed []string) turn.Toolset {
+func (s *Source) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, _ string) turn.Toolset {
 	if !s.wait(ctx) {
 		return turn.Toolset{}
 	}
