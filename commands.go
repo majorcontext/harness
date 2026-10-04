@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -63,16 +64,27 @@ var ops = map[command.Op]op{
 // errNoFold reports a compaction that appended nothing.
 var errNoFold = errors.New("/compact did nothing: the session does not have enough turns yet to fold")
 
-// compact runs Session.Compact, which always keeps compaction_keep_turns.
+// compactResult is the result of /compact: the folded seq range, or
+// by_backend. The summary stays in compaction.applied.
+type compactResult struct {
+	FromSeq   uint64 `json:"from_seq,omitempty"`
+	ToSeq     uint64 `json:"to_seq,omitempty"`
+	ByBackend bool   `json:"by_backend,omitempty"`
+}
+
 func compact(ctx context.Context, s *Session, args map[string]any) (any, error) {
-	if _, ok := args["keep_turns"]; ok {
-		return nil, fmt.Errorf("%w: /compact takes no keep_turns; compaction_keep_turns sets it", ErrInvalidRequest)
+	var req protocol.Compact
+	if n, ok := args["keep_turns"].(int); ok {
+		req.KeepTurns = &n
 	}
-	ran, err := s.a.Compact(ctx)
-	if err == nil && !ran {
-		err = errNoFold
+	c, ran, err := s.compact(ctx, req)
+	switch {
+	case err != nil:
+		return nil, err
+	case !ran:
+		return nil, errNoFold
 	}
-	return nil, err
+	return compactResult{c.FromSeq, c.ToSeq, c.ByBackend}, nil
 }
 
 const (
@@ -145,10 +157,6 @@ func commandEntry(spec *command.Spec) protocol.CommandEntry {
 	if o, ok := ops[spec.Op]; ok {
 		e.Method, e.Path = o.method, o.path
 		e.AvailableDuringTask = &spec.AvailableDuringTask
-	}
-	// compaction_keep_turns sets keep_turns, so /compact takes no args.
-	if spec.Op == command.OpCompact {
-		e.ArgHint, e.Args = "", nil
 	}
 	return e
 }
@@ -248,8 +256,16 @@ func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool
 	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status}, repeat, nil
 }
 
-// dispatch runs the operation of an accepted command and records its outcome.
+// dispatch runs the operation of an accepted command and records its
+// outcome. A panic records failed: no caller above this goroutine recovers.
 func (s *Session) dispatch(rec eventlog.CommandRecorded, res command.Resolution) {
+	defer func() {
+		if p := recover(); p != nil {
+			slog.Error("harness: command panicked", "input_id", rec.InputID, "command", rec.Name, "panic", p)
+			rec.Status, rec.Text, rec.Result, rec.ResultTruncated = protocol.CommandFailed, "/"+session.Typed(rec.Line)+" failed: internal error", nil, false
+			_, _, _, _ = s.a.Record(s.r.base, rec, nil)
+		}
+	}()
 	result, err := ops[res.Spec.Op].run(s.r.base, s, res.Args)
 	rec.Status, rec.Text, rec.Result, rec.ResultTruncated = outcome(session.Typed(rec.Line), res.Spec, result, err)
 	_, _, _, _ = s.a.Record(s.r.base, rec, nil)

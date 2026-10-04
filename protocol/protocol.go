@@ -137,6 +137,12 @@ type Interrupt struct {
 	Tree   bool   `json:"tree,omitempty"`
 }
 
+// Compact folds the turns before the newest KeepTurns, or before the
+// newest compaction_keep_turns when KeepTurns is nil. KeepTurns is at least 1.
+type Compact struct {
+	KeepTurns *int `json:"keep_turns,omitempty"`
+}
+
 // Event is one durable record of a session log, or an ephemeral frame of a
 // live subscription. An ephemeral frame is never stored; its Seq is the last
 // durable seq when it was sent.

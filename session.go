@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -127,14 +128,28 @@ func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
 // ClearGoal clears the goal and returns after a running goal turn stops.
 func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ctx) }
 
-// Compact folds the turns before the newest compaction_keep_turns into a
-// summary that the next model call reads first. A backend that owns its
-// context runs its own /compact command instead. It returns when the
-// compaction ends, and fails with ErrSessionBusy while a turn runs or
-// inputs wait.
-func (s *Session) Compact(ctx context.Context) error {
-	_, err := s.a.Compact(ctx)
+// Compact folds the turns before the newest req.KeepTurns, or
+// compaction_keep_turns, into a summary that the next model call reads
+// first. A backend that owns its context runs its own /compact command
+// instead, and takes no KeepTurns. It returns when the compaction ends,
+// and fails with ErrSessionBusy while a turn runs or inputs wait.
+func (s *Session) Compact(ctx context.Context, req protocol.Compact) error {
+	_, _, err := s.compact(ctx, req)
 	return err
+}
+
+func (s *Session) compact(ctx context.Context, req protocol.Compact) (eventlog.CompactionApplied, bool, error) {
+	keep := 0
+	if req.KeepTurns != nil {
+		if keep = *req.KeepTurns; keep < 1 {
+			return eventlog.CompactionApplied{}, false, fmt.Errorf("%w: keep_turns must be >= 1", ErrInvalidRequest)
+		}
+	}
+	c, ran, err := s.a.Compact(ctx, keep)
+	if errors.Is(err, session.ErrKeepTurns) {
+		err = fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return c, ran, err
 }
 
 // Events yields the durable events after seq, then each new one as it is

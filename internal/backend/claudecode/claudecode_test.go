@@ -210,7 +210,11 @@ func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
 	st := harness.NewMemStore()
 	r := claudeRuntime(t, st, nil, false)
 	defer closeRuntime(t, r)
-	if err := createClaude(t, r, nil).Compact(bg); err != nil {
+	s, one := createClaude(t, r, nil), 1
+	if err := s.Compact(bg, protocol.Compact{KeepTurns: &one}); !errors.Is(err, harness.ErrInvalidRequest) {
+		t.Errorf("Compact with keep_turns = %v, want ErrInvalidRequest", err)
+	}
+	if err := s.Compact(bg, protocol.Compact{}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 	wantLog(t, st, 4, "backend.state", "compaction.applied", "turn.ended completed")

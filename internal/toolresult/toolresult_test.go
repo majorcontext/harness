@@ -213,7 +213,7 @@ func TestRetainedResultsAcrossTurns(t *testing.T) {
 			}
 		}
 	}
-	if err := sess.Compact(bg); err != nil {
+	if err := sess.Compact(bg, protocol.Compact{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.Requests()[1].Messages; !strings.HasPrefix(got[len(got)-1].Parts[0].Text, "[tool result retained: handle=trh_1 ") {

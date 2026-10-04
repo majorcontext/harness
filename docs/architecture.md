@@ -139,7 +139,7 @@ func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Re
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
-func (s *Session) Compact(ctx context.Context) error
+func (s *Session) Compact(ctx context.Context, req protocol.Compact) error
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
 
@@ -309,7 +309,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Cancel()` | Append `input.withdrawn` for each queued input, then cancel the turn, in one step; reply when it has stopped |
 | `Update(settings)` | Check the model; append `settings.changed` |
 | `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
-| `Compact()` | Run a compaction as the run of the actor |
+| `Compact(keep)` | Run a compaction as the run of the actor; `keep` replaces `compaction_keep_turns` |
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
 | `Settle(outcome, report)` | Append `child.settled` and admit the report as an input with `source: child`; a settled child changes nothing |
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
@@ -427,7 +427,7 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - `to_seq` is the seq before the first kept message. The `input.admitted` record of a kept or queued input can have a lower seq, so a reader that hides `from_seq` through `to_seq` keeps each `input.admitted` record.
 - A backend without `OwnsContext` summarizes the folded messages with the session model and the engine compaction prompt. The actor appends `compaction.applied` with `by_backend: false`.
 - A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`.
-- `Compact()` fails with `session_busy` while a turn runs or inputs wait.
+- `Compact()` fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
 - Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
 - A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
@@ -537,8 +537,8 @@ Each code except `internal` and `payload_too_large` is a sentinel error and a `p
 - Bad arguments: one `command.recorded` with `failed` and the error of `Resolve`. Nothing runs.
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
-- Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error"), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
-- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact` with `keep_turns` fails: `compaction_keep_turns` sets it, so `GET /commands` lists no args for `compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `from_seq` and `to_seq` of the new `compaction.applied`, or `by_backend: true` for a backend with `OwnsContext`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
 - `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.

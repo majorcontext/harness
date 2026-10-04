@@ -13,35 +13,51 @@ import (
 // ErrBusy reports a Compact while a turn or a compaction runs, or inputs wait.
 var ErrBusy = errors.New("harness: session busy")
 
+// ErrKeepTurns reports a keep count for a backend that owns its context.
+var ErrKeepTurns = errors.New("keep_turns does not apply to a backend that owns its context")
+
 // compactCommand asks a backend that owns its context to compact it.
 const compactCommand = "/compact"
 
-// Compact folds the turns before the newest Config.KeepTurns into a
-// summary, or runs compactCommand as a turn of a backend that owns its
-// context. It returns when the compaction ends. When too few turns exist,
-// it appends nothing and ran is false.
-func (a *Actor) Compact(ctx context.Context) (ran bool, err error) {
-	return call(ctx, a, func(reply func(bool, error)) {
-		done := func(_ struct{}, err error) { reply(true, err) }
+// Compact folds the turns before the newest keep, or Config.KeepTurns when
+// keep is 0, into a summary, or runs compactCommand as a turn of a backend
+// that owns its context. It returns when the compaction ends, with the
+// compaction that it appended, or one with only ByBackend for a backend
+// that owns its context. When too few turns exist, it appends nothing and
+// ran is false.
+func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApplied, ran bool, err error) {
+	type result struct {
+		c   eventlog.CompactionApplied
+		ran bool
+	}
+	r, err := call(ctx, a, func(reply func(result, error)) {
+		done := func(_ struct{}, err error) {
+			c, _ := a.state.Compaction()
+			reply(result{c, true}, err)
+		}
+		owns := a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
 		switch {
 		case a.run != nil || len(a.state.Queue()) > 0:
-			reply(false, ErrBusy)
-		case a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext:
+			reply(result{}, ErrBusy)
+		case owns && keep != 0:
+			reply(result{}, ErrKeepTurns)
+		case owns:
 			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliveryQueue, Source: "harness",
 				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: compactCommand}}}
 			if _, err := a.admit(in, ""); err != nil {
-				reply(false, err)
+				reply(result{}, err)
 				return
 			}
-			a.run.done = done
-		case !a.compact(done):
-			reply(false, nil)
+			a.run.done = func(_ struct{}, err error) { reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, err) }
+		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done):
+			reply(result{}, nil)
 		}
 	})
+	return r.c, r.ran, err
 }
 
 // autoCompact starts a compaction when overThreshold, and reports whether one started.
-func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(nil) }
+func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(a.cfg.KeepTurns, nil) }
 
 // overThreshold reports whether the newest context reading passes
 // Config.Threshold of its window, for a backend that does not own its context.
@@ -51,11 +67,11 @@ func (a *Actor) overThreshold() bool {
 	return over && !a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
 }
 
-// compact runs a summary of the folded turns as the run of the actor, and
-// reports false when no turn can fold. done receives the outcome.
-func (a *Actor) compact(done func(struct{}, error)) bool {
+// compact runs a summary of the turns before the newest keep as the run of
+// the actor, and reports false when no turn can fold. done receives the outcome.
+func (a *Actor) compact(keep int, done func(struct{}, error)) bool {
 	id := newID("compaction")
-	req, c, ok := a.fold(id)
+	req, c, ok := a.fold(id, keep)
 	if !ok {
 		return false
 	}
@@ -74,10 +90,10 @@ func (a *Actor) compact(done func(struct{}, error)) bool {
 	return true
 }
 
-// fold returns the summary request of the turns before the newest
-// Config.KeepTurns, and the compaction that records the summary.
-func (a *Actor) fold(id string) (turn.Request, eventlog.CompactionApplied, bool) {
-	folded, to, ok := a.state.Fold(a.cfg.KeepTurns)
+// fold returns the summary request of the turns before the newest keep,
+// and the compaction that records the summary.
+func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionApplied, bool) {
+	folded, to, ok := a.state.Fold(keep)
 	if !ok {
 		return turn.Request{}, eventlog.CompactionApplied{}, false
 	}
@@ -104,7 +120,7 @@ func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Mess
 			reply(folding{}, ErrTurnMismatch)
 			return
 		}
-		req, c, ok := a.fold(turnID)
+		req, c, ok := a.fold(turnID, a.cfg.KeepTurns)
 		reply(folding{req, c, ok, a.retained()}, nil)
 	})
 	if err != nil || !f.ok {

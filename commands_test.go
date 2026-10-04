@@ -3,16 +3,19 @@ package harness_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -58,6 +61,7 @@ type commandRow struct {
 	name, line string
 	source     string
 	busy       bool
+	panics     bool
 	receipt    string
 	log        []string
 	prompt     string
@@ -72,6 +76,12 @@ var commandRows = []commandRow{
 		log: []string{"command.recorded new unsupported /clear is not available in this client"}},
 	{name: "a compaction with nothing to fold fails", line: "/compact", receipt: "accepted",
 		log: []string{"command.recorded compact accepted", "command.recorded compact failed /compact did nothing: the session does not have enough turns yet to fold"}},
+	{name: "a compaction takes keep_turns", line: "/compact 5", receipt: "accepted",
+		log: []string{"command.recorded compact accepted", "command.recorded compact failed /compact did nothing: the session does not have enough turns yet to fold"}},
+	{name: "a keep_turns below 1 fails", line: "/compact 0", receipt: "accepted",
+		log: []string{"command.recorded compact accepted", "command.recorded compact failed harness: invalid request: keep_turns must be >= 1"}},
+	{name: "a command that panics fails", line: "/status", panics: true, receipt: "accepted",
+		log: []string{"command.recorded status accepted", "command.recorded status failed /status failed: internal error"}},
 	{name: "a goal without an evaluator fails", line: "/goal ship it", receipt: "accepted",
 		log: []string{"command.recorded goal accepted", "command.recorded goal failed harness: invalid request: a goal needs goal_evaluator_model"}},
 	{name: "a command that waits for idle is refused during a turn", line: "/compact", busy: true, receipt: "refused",
@@ -100,6 +110,9 @@ func typedCommand(t *testing.T, row commandRow) {
 		t.Fatal(err)
 	}
 	s := create(t, r)
+	if row.panics {
+		harness.PanicIn(t, command.OpStatus)
+	}
 	after := uint64(2)
 	var run fakeRun
 	if row.busy {
@@ -162,6 +175,49 @@ func TestTypedCommandRepeats(t *testing.T) {
 	})
 }
 
+func TestTypedCompactKeepsKeepTurnsAndReportsTheRange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f := harness.NewMemStore(), newFake()
+		r := runtime(t, st, f)
+		s := create(t, r)
+		for _, id := range []string{"t1", "t2", "t3"} {
+			submit(t, s, text(id, id))
+			(<-f.runs).end()
+		}
+		submit(t, s, typed("c", "/compact 1"))
+		sum := <-f.runs
+		if h := sum.req.History; len(h) != 3 || h[0].Parts[0].Text != "t1" || h[1].Parts[0].Text != "t2" {
+			t.Errorf("summary history = %+v, want t1 and t2 folded", h)
+		}
+		sum.emit(say("sum"))
+		sum.end()
+		var applied, result string
+		recs, _ := st.Read(bg, "s1", 0, 100)
+		for _, rec := range recs {
+			var env struct {
+				K string
+				D struct {
+					Status string
+					Result json.RawMessage
+					From   uint64 `json:"from_seq"`
+					To     uint64 `json:"to_seq"`
+				}
+			}
+			_ = json.Unmarshal(rec.Data, &env)
+			switch {
+			case env.K == "compaction.applied":
+				applied = fmt.Sprintf(`{"from_seq":%d,"to_seq":%d}`, env.D.From, env.D.To)
+			case env.K == "command.recorded" && env.D.Status == protocol.CommandSucceeded:
+				result = string(env.D.Result)
+			}
+		}
+		if applied == "" || result != applied {
+			t.Errorf("/compact result = %s, want the range of compaction.applied %s", result, applied)
+		}
+		closeRuntime(t, r)
+	})
+}
+
 func TestOpenEndsAnUnfinishedCommand(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		st := harness.NewMemStore()
@@ -219,8 +275,9 @@ func TestCommandList(t *testing.T) {
 	if strings.Join(names, " ") != want {
 		t.Errorf("names = %q, want %q", names, want)
 	}
-	if c := byName["compact"]; c.Method != "POST" || c.Path != "/sessions/{id}/compact" || c.AvailableDuringTask == nil || *c.AvailableDuringTask || c.ArgHint != "" || c.Args != nil {
-		t.Errorf("compact = %+v, want POST /sessions/{id}/compact with no args, not during a task", c)
+	if c := byName["compact"]; c.Method != "POST" || c.Path != "/sessions/{id}/compact" || c.AvailableDuringTask == nil || *c.AvailableDuringTask || c.ArgHint != "[keep_turns]" ||
+		!reflect.DeepEqual(c.Args, []protocol.CommandArg{{Name: "keep_turns", Type: "int", Optional: true}}) {
+		t.Errorf("compact = %+v, want POST /sessions/{id}/compact with an optional keep_turns, not during a task", c)
 	}
 	for _, c := range got.Commands {
 		if c.Path == "" {

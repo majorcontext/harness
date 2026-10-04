@@ -23,7 +23,7 @@ type Session interface {
 	View() protocol.Session
 	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
-	Compact(ctx context.Context) error
+	Compact(ctx context.Context, req protocol.Compact) error
 	SetGoal(ctx context.Context, g protocol.Goal) error
 	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -321,7 +321,11 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 }
 
 func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
-	if err := s.Compact(r.Context()); err != nil {
+	var req protocol.Compact
+	if err := decode(w, r, &req); err != nil {
+		return err
+	}
+	if err := s.Compact(r.Context(), req); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)
