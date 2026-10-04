@@ -10,7 +10,7 @@ import (
 // Handler returns the HTTP API of r. A route that names a session opens it
 // through r.Open. It has no authentication; the embedder wraps it.
 func (r *Runtime) Handler() http.Handler {
-	return server.New[*Session](r, []server.Code{
+	return server.New[*Session](r, server.Options{WorkDir: r.workDir, Codes: []server.Code{
 		{Err: ErrInvalidRequest, Code: protocol.CodeInvalidRequest},
 		{Err: ErrSessionNotFound, Code: protocol.CodeSessionNotFound},
 		{Err: ErrSessionExists, Code: protocol.CodeSessionExists},
@@ -20,5 +20,5 @@ func (r *Runtime) Handler() http.Handler {
 		{Err: ErrSessionBusy, Code: protocol.CodeSessionBusy},
 		{Err: ErrModelUnavailable, Code: protocol.CodeModelUnavailable},
 		{Err: ErrDraining, Code: protocol.CodeDraining},
-	})
+	}})
 }

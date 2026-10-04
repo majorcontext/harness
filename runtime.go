@@ -104,6 +104,8 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	// commandDirs are the prompt-command dirs; nil without a WorkDir.
+	commandDirs []string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
 	keep      int
@@ -142,6 +144,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	r.resolve = opts.Config.ResolveModel
+	r.commandDirs = commandDirs(opts.WorkDir, opts.Config.CommandsDirs)
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
 		roots: map[string]string{}, quiet: map[string]int{}}
@@ -544,6 +547,17 @@ func (r *Runtime) named() []turn.Tool {
 	return append(slices.Clip(r.tools), r.plugins.Tools()...)
 }
 
+// hold adds one unit of the work that Close waits for, unless Close started.
+func (r *Runtime) hold() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return ErrDraining
+	}
+	r.group.Add(1)
+	return nil
+}
+
 // startPlugins reads the plugin manifests once for each runtime, as part of
 // the work that Close waits for. A plugin tool may not take the name of
 // another tool.
@@ -551,13 +565,9 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	if r.plugins == nil {
 		return nil
 	}
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return ErrDraining
+	if err := r.hold(); err != nil {
+		return err
 	}
-	r.group.Add(1)
-	r.mu.Unlock()
 	defer r.group.Done()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -647,6 +657,9 @@ func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
 func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
 	return l.st.GetBlob(ctx, l.id, key)
 }
+
+// Processes returns the process manager of the WorkDir, or nil without a WorkDir.
+func (r *Runtime) Processes() *process.Manager { return r.procs }
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.

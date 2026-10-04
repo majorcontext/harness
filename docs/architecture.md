@@ -125,6 +125,8 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
+func (r *Runtime) Processes() *process.Manager // nil without a WorkDir
+func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
 // every record through each handoff, or ctx ends.
 func (r *Runtime) Close(ctx context.Context) error
@@ -137,7 +139,7 @@ func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Re
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
-func (s *Session) Compact(ctx context.Context) error
+func (s *Session) Compact(ctx context.Context, req protocol.Compact) error
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
 
@@ -183,10 +185,11 @@ Free to change.
 | `internal/tool/builtin` | The file, search, and shell tools of a coding agent |
 | `internal/toolresult` | Large-result retention and `read_tool_result`, at parity with the engine |
 | `internal/prompt` | System-prompt segments; agent profiles are planned |
+| `internal/workspace` | The git diff of the work tree for `GET /workspace/changes` |
 
 Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
 
-`internal/workspace` is planned for phase 4. It serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
+`internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
 Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer).
 
@@ -265,6 +268,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
+| `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
 | `context.measured` | `tokens`, `window`, `source` |
 | `backend.state` | `backend`, `blob_key` |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
@@ -305,10 +309,11 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Cancel()` | Append `input.withdrawn` for each queued input, then cancel the turn, in one step; reply when it has stopped |
 | `Update(settings)` | Check the model; append `settings.changed` |
 | `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
-| `Compact()` | Run a compaction as the run of the actor |
+| `Compact(keep)` | Run a compaction as the run of the actor; `keep` replaces `compaction_keep_turns` |
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
 | `Settle(outcome, report)` | Append `child.settled` and admit the report as an input with `source: child`; a settled child changes nothing |
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
+| `Record(command)` | Append `command.recorded`; a repeated input ID returns the newest status |
 | `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
 | `Resolve(requestID, resolution)` | Phase 5: append `request.resolved`; resume the turn |
 
@@ -422,7 +427,7 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - `to_seq` is the seq before the first kept message. The `input.admitted` record of a kept or queued input can have a lower seq, so a reader that hides `from_seq` through `to_seq` keeps each `input.admitted` record.
 - A backend without `OwnsContext` summarizes the folded messages with the session model and the engine compaction prompt. The actor appends `compaction.applied` with `by_backend: false`.
 - A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`.
-- `Compact()` fails with `session_busy` while a turn runs or inputs wait.
+- `Compact()` fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
 - Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
 - A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
@@ -466,13 +471,14 @@ GET    /sessions/{id}/messages?before=&limit= projection, same seq
 GET    /models                                models and their capabilities
 GET    /commands                              slash commands
 GET    /processes · POST /processes/{name}/{action}
+GET    /processes/{name}/logs?tail=           last log lines and status
 GET    /workspace/changes                     working-tree diff
 GET    /health
 ```
 
 There is no version prefix: harness and its clients change together.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -485,6 +491,8 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 | New id | `201 {input_id, seq}` |
 | Same id, same body | `200` with the original receipt |
 | Same id, other body | `409 input_conflict` |
+
+A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command, and its `seq` is the first `command.recorded` record. See "Slash commands".
 
 ### Events
 
@@ -510,11 +518,32 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `turn_mismatch` | 409 |
 | `session_busy` | 409 |
 | `model_unavailable` | 409 |
+| `not_a_git_repo` | 409 |
+| `no_base` | 409 |
+| `too_many_changes` | 409 |
+| `process_not_found` | 404 |
 | `payload_too_large` | 413 |
 | `draining` | 503 |
 | `internal` | 500 |
 
-Each code except `internal` and `payload_too_large` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+
+### Slash commands
+
+`Session.Admit` resolves an input with `source: typed` and one text part through the `command` package, with the dispatch rules of the engine server. Any other input is never a command.
+
+- Not a command: the input is admitted as is. `//x` is admitted as the text `/x`.
+- An unknown name: the prompt command of that name under `commands_dirs` (default `<WorkDir>/.agents/commands`) is admitted as its expanded text with `source: command`. With no such file, or no `WorkDir`, the line is admitted as text.
+- Bad arguments: one `command.recorded` with `failed` and the error of `Resolve`. Nothing runs.
+- A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
+- A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
+- Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `from_seq` and `to_seq` of the new `compaction.applied`, or `by_backend: true` for a backend with `OwnsContext`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
+- A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
+- `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.
+
+`GET /commands` returns `Runtime.Commands`: each built-in command and each prompt command, sorted by name, with `serve_support` by name and `discovery_errors` for files with no usable name. A control command names the route of the same operation, where one exists, and `available_during_task`. A prompt file that is not valid is listed, unsupported, with its error as the reason. The engine records the label of a prompt command; the runtime does not, and a client shows the expanded text. Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape.
 
 ### Contract source
 
@@ -716,7 +745,18 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - This deviates from the engine, which puts the status at the end of the newest user message. Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
 - `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes before it returns.
-- The `/processes` routes come with the phase 4 switch. Switch oracle: `process_tool_from_the_model`. Its two double-prefix rows change by design.
+- `Runtime.Processes` returns the one manager, which the process tool and the `/processes` routes share. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
+
+### workspace
+
+`GET /workspace/changes?scope=&dir=` diffs the git work tree with the rules of the engine route `GET /git/changes`. The route exists only with a `WorkDir`.
+
+- `scope` is `branch` (default), against the merge base with the first of `origin/HEAD`, `origin/main`, and `origin/master` that resolves, or `uncommitted`, against `HEAD`. An unborn `HEAD` diffs against the empty tree.
+- `dir` defaults to the `WorkDir`. Any other `dir`, relative to the `WorkDir`, and its repository must stay under the `WorkDir` after symlinks.
+- Untracked files count as added, through a private copy of the index and a private object directory. The request never writes the real index or object store, never runs a filter driver, hook, external diff, or textconv, and ignores the `GIT_*` variables that select another repository.
+- `files` is complete. An untracked file above 2 MiB is `large` with no hunk. `patch` ends at the last whole file within 1 MiB and sets `truncated`. The patch is not HTML-escaped.
+- One request has a 28 s budget. A request that passes it, or whose file list passes 32 MiB, fails with `too_many_changes`. Errors: `invalid_request`, `not_a_git_repo`, and `no_base`.
+- Switch oracle: the `git_changes_*` rows, with the route renamed and the error body in the new shape.
 
 ### config
 

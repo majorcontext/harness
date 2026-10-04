@@ -84,6 +84,7 @@ func decodeAs[E Event](d json.RawMessage) (Event, error) {
 
 var registry = map[string]func(json.RawMessage) (Event, error){
 	SessionCreated{}.Kind():     decodeAs[SessionCreated],
+	CommandRecorded{}.Kind():    decodeAs[CommandRecorded],
 	OwnerAcquired{}.Kind():      decodeAs[OwnerAcquired],
 	SettingsChanged{}.Kind():    decodeAs[SettingsChanged],
 	InputAdmitted{}.Kind():      decodeAs[InputAdmitted],

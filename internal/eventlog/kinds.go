@@ -199,6 +199,20 @@ type ChildSettled struct {
 	ResultRef string  `json:"result_ref"`
 }
 
+// CommandRecorded records the status of a typed slash command. InputID is
+// the client ID of the input that held it. A dispatched command records
+// accepted, then one other status; any other command records one status.
+type CommandRecorded struct {
+	InputID         string          `json:"input_id"`
+	Line            string          `json:"line"`
+	Name            string          `json:"name"`
+	Args            map[string]any  `json:"args,omitempty"`
+	Status          string          `json:"status"`
+	Text            string          `json:"text,omitempty"`
+	Result          json.RawMessage `json:"result,omitempty"`
+	ResultTruncated bool            `json:"result_truncated,omitempty"`
+}
+
 // ContextMeasured records the context size of the session.
 type ContextMeasured struct {
 	Tokens int64  `json:"tokens"`
@@ -279,6 +293,9 @@ func (ChildSpawned) Kind() string { return "child.spawned" }
 
 // Kind returns "child.settled".
 func (ChildSettled) Kind() string { return "child.settled" }
+
+// Kind returns "command.recorded".
+func (CommandRecorded) Kind() string { return "command.recorded" }
 
 // Kind returns "context.measured".
 func (ContextMeasured) Kind() string { return "context.measured" }

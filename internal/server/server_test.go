@@ -19,6 +19,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/server"
+	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -202,7 +203,10 @@ func TestInterruptOverHTTP(t *testing.T) {
 	want(t, "compact while a turn runs", [2]any{call(t, "POST", s1+"/compact", "", &busy), busy.Error.Code},
 		[2]any{http.StatusConflict, protocol.CodeSessionBusy})
 	want(t, "interrupt status", call(t, "POST", s1+"/interrupt", "", nil), http.StatusNoContent)
-	want(t, "compact status", call(t, "POST", s1+"/compact", "", nil), http.StatusNoContent)
+	var bad protocol.ErrorBody
+	want(t, "compact with keep_turns 0", [2]any{call(t, "POST", s1+"/compact", `{"keep_turns":0}`, &bad), bad.Error.Code},
+		[2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
+	want(t, "compact status", call(t, "POST", s1+"/compact", `{"keep_turns":1}`, nil), http.StatusNoContent)
 	var page protocol.EventPage
 	call(t, "GET", s1+"/events?after=6", "", &page)
 	want(t, "events after the interrupt", len(page.Events), 2)
@@ -293,9 +297,11 @@ func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, 
 	return protocol.SessionPage{}, nil
 }
 func (stub) Models() []protocol.Model                            { return nil }
+func (stub) Processes() *process.Manager                         { return nil }
+func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
-func (stub) Compact(context.Context) error                       { return nil }
+func (stub) Compact(context.Context, protocol.Compact) error     { return nil }
 func (stub) SetGoal(context.Context, protocol.Goal) error        { return nil }
 func (stub) ClearGoal(context.Context) error                     { return nil }
 func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session, error) {
@@ -307,7 +313,7 @@ func (s stub) Admit(context.Context, protocol.Input) (protocol.Admitted, bool, e
 }
 
 func TestInternalErrorHidesItsCause(t *testing.T) {
-	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, nil))
+	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, server.Options{}))
 	t.Cleanup(srv.Close)
 	var got protocol.ErrorBody
 	want(t, "status", call(t, "GET", srv.URL+"/sessions/s1", "", &got), http.StatusInternalServerError)
@@ -322,7 +328,7 @@ func TestSubmitStatusFollowsTheSessionVerdict(t *testing.T) {
 		if repeat {
 			status = http.StatusOK
 		}
-		srv := httptest.NewServer(server.New(stub{head: 9, receipt: protocol.Admitted{InputID: "a", Seq: 5}, repeat: repeat}, nil))
+		srv := httptest.NewServer(server.New(stub{head: 9, receipt: protocol.Admitted{InputID: "a", Seq: 5}, repeat: repeat}, server.Options{}))
 		t.Cleanup(srv.Close)
 		want(t, fmt.Sprintf("status with repeat=%v", repeat),
 			call(t, "POST", srv.URL+"/sessions/s1/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil), status)

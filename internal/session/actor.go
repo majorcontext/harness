@@ -198,6 +198,9 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	}
 	a := newActor(cfg, s)
 	a.fenced = head
+	if err := a.endCommands(ctx); err != nil {
+		return nil, err
+	}
 	t, ok := s.Turn()
 	switch {
 	case ok && t.Suspended:

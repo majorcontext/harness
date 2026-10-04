@@ -134,7 +134,7 @@ func TestCompactFoldsTheOlderTurns(t *testing.T) {
 		summarize("summary", harnesstest.Reply{Text: "sum"}), answer("delta", 5))
 	_, sess := open(t, s, harness.NewMemStore(), 0, 0, nil)
 	converse(t, sess, "alpha", "bravo", "charlie")
-	if err := sess.Compact(bg); err != nil {
+	if err := sess.Compact(bg, protocol.Compact{}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
 	converse(t, sess, "delta")
@@ -194,23 +194,23 @@ func TestHandoffDuringCompaction(t *testing.T) {
 	}{
 		{"a manual compaction stops and the next owner compacts", false, 0, 5, []string{"alpha", "bravo", "charlie"},
 			func(s *harness.Session) error {
-				if err := s.Compact(bg); err == nil {
+				if err := s.Compact(bg, protocol.Compact{}); err == nil {
 					return errors.New("Compact during a handoff = nil, want an error")
 				}
 				return nil
 			},
 			nil,
-			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg) },
+			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg, protocol.Compact{}) },
 			[]string{"owner.acquired", "compaction.applied"}},
 		{"a summary that finishes during the handoff is not appended", true, 0, 5, []string{"alpha", "bravo", "charlie"},
 			func(s *harness.Session) error {
-				if err := s.Compact(bg); err == nil {
+				if err := s.Compact(bg, protocol.Compact{}); err == nil {
 					return errors.New("Compact during a handoff = nil, want an error")
 				}
 				return nil
 			},
 			nil,
-			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg) },
+			func(_ *testing.T, s *harness.Session, _ uint64) error { return s.Compact(bg, protocol.Compact{}) },
 			[]string{"owner.acquired", "compaction.applied"}},
 		{"an auto-compaction stops and the next owner runs the queued input", false, 0.5, 200_000, []string{"alpha", "bravo"},
 			func(s *harness.Session) error { _, err := s.Submit(bg, charlie); return err },

@@ -43,6 +43,10 @@ func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedT
 		repeat bool
 	}
 	r, err := call(ctx, a, func(reply func(receipt, error)) {
+		if _, _, ok := a.state.Command(in.InputID); ok {
+			reply(receipt{}, ErrInputConflict)
+			return
+		}
 		if old, seq, ok := a.state.Input(in.InputID); ok {
 			if !sameJSON(old, in) {
 				reply(receipt{}, ErrInputConflict)

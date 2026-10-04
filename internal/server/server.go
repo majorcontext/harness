@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/workspace"
+	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -21,7 +23,7 @@ type Session interface {
 	View() protocol.Session
 	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
-	Compact(ctx context.Context) error
+	Compact(ctx context.Context, req protocol.Compact) error
 	SetGoal(ctx context.Context, g protocol.Goal) error
 	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -34,6 +36,18 @@ type Runtime[S Session] interface {
 	Open(ctx context.Context, id string) (S, error)
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	Models() []protocol.Model
+	// Processes returns the process manager, or nil when no process runs.
+	Processes() *process.Manager
+	Commands() (protocol.Commands, error)
+}
+
+// Options configures the handler.
+type Options struct {
+	// Codes maps an error to the code of its first matching entry, or to
+	// CodeInternal.
+	Codes []Code
+	// WorkDir is the root of GET /workspace/changes. Empty: no such route.
+	WorkDir string
 }
 
 // Code is the wire code of a sentinel error.
@@ -59,20 +73,27 @@ var statuses = map[string]int{
 	protocol.CodeModelUnavailable: http.StatusConflict,
 	protocol.CodePayloadTooLarge:  http.StatusRequestEntityTooLarge,
 	protocol.CodeDraining:         http.StatusServiceUnavailable,
+	protocol.CodeNotAGitRepo:      http.StatusConflict,
+	protocol.CodeNoBase:           http.StatusConflict,
+	protocol.CodeTooManyChanges:   http.StatusConflict,
+	protocol.CodeProcessNotFound:  http.StatusNotFound,
 }
 
 // errInvalid reports a request that the handler cannot decode.
 var errInvalid = errors.New("invalid request")
 
 type handler[S Session] struct {
-	rt    Runtime[S]
-	codes []Code
+	rt      Runtime[S]
+	codes   []Code
+	workDir string
 }
 
-// New returns the HTTP API of rt. An error gets the code of the first entry
-// of codes that it matches, or CodeInternal.
-func New[S Session](rt Runtime[S], codes []Code) http.Handler {
-	h := &handler[S]{rt: rt, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest}}, codes...)}
+// New returns the HTTP API of rt.
+func New[S Session](rt Runtime[S], opts Options) http.Handler {
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
+		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
+		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sessions", h.serve(h.create))
 	mux.HandleFunc("GET /sessions", h.serve(h.list))
@@ -86,6 +107,15 @@ func New[S Session](rt Runtime[S], codes []Code) http.Handler {
 	mux.HandleFunc("GET /sessions/{id}/events", h.session(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
+		return nil
+	}))
+	h.box(mux)
+	mux.HandleFunc("GET /commands", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+		c, err := rt.Commands()
+		if err != nil {
+			return err
+		}
+		reply(w, http.StatusOK, c)
 		return nil
 	}))
 	mux.HandleFunc("GET /health", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
@@ -171,6 +201,15 @@ func reply(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// replyRaw is reply without HTML escapes, so a patch of HTML keeps its size.
+func replyRaw(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
 }
 
 // decode reads the JSON body into v. An empty body leaves v as is.
@@ -282,7 +321,11 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 }
 
 func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
-	if err := s.Compact(r.Context()); err != nil {
+	var req protocol.Compact
+	if err := decode(w, r, &req); err != nil {
+		return err
+	}
+	if err := s.Compact(r.Context(), req); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

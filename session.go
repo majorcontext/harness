@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -50,7 +51,19 @@ func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admit
 
 // Admit is Submit that also reports whether in repeats an input that the
 // session already admitted. The verdict is atomic with the admission.
+// A typed slash command records command.recorded instead of an input, and
+// the receipt carries its status; see docs/architecture.md.
 func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) {
+	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
+		p, next, err := s.resolve(in)
+		if err != nil {
+			return protocol.Admitted{}, false, err
+		}
+		if p != nil {
+			return s.command(ctx, p)
+		}
+		in = next
+	}
 	ev, err := admission(in)
 	if err != nil {
 		return protocol.Admitted{}, false, err
@@ -115,12 +128,29 @@ func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
 // ClearGoal clears the goal and returns after a running goal turn stops.
 func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ctx) }
 
-// Compact folds the turns before the newest compaction_keep_turns into a
-// summary that the next model call reads first. A backend that owns its
-// context runs its own /compact command instead. It returns when the
-// compaction ends, and fails with ErrSessionBusy while a turn runs or
-// inputs wait.
-func (s *Session) Compact(ctx context.Context) error { return s.a.Compact(ctx) }
+// Compact folds the turns before the newest req.KeepTurns, or
+// compaction_keep_turns, into a summary that the next model call reads
+// first. A backend that owns its context runs its own /compact command
+// instead, and takes no KeepTurns. It returns when the compaction ends,
+// and fails with ErrSessionBusy while a turn runs or inputs wait.
+func (s *Session) Compact(ctx context.Context, req protocol.Compact) error {
+	_, _, err := s.compact(ctx, req)
+	return err
+}
+
+func (s *Session) compact(ctx context.Context, req protocol.Compact) (eventlog.CompactionApplied, bool, error) {
+	keep := 0
+	if req.KeepTurns != nil {
+		if keep = *req.KeepTurns; keep < 1 {
+			return eventlog.CompactionApplied{}, false, fmt.Errorf("%w: keep_turns must be >= 1", ErrInvalidRequest)
+		}
+	}
+	c, ran, err := s.a.Compact(ctx, keep)
+	if errors.Is(err, session.ErrKeepTurns) {
+		err = fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return c, ran, err
+}
 
 // Events yields the durable events after seq, then each new one as it is
 // appended, with the ephemeral frames of the running turn between them:

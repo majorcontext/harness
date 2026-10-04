@@ -121,10 +121,13 @@ type Input struct {
 	ExpectedTurnID string `json:"expected_turn_id,omitempty"`
 }
 
-// Admitted is the receipt of an input: the seq of its input.admitted record.
+// Admitted is the receipt of an input: the seq of its input.admitted
+// record. A typed slash command has no input.admitted record: Seq is its
+// first command.recorded record, and Command is its newest status.
 type Admitted struct {
 	InputID string `json:"input_id"`
 	Seq     uint64 `json:"seq"`
+	Command string `json:"command,omitempty"`
 }
 
 // Interrupt stops the running turn, or only the named turn when TurnID is
@@ -132,6 +135,12 @@ type Admitted struct {
 type Interrupt struct {
 	TurnID string `json:"turn_id,omitempty"`
 	Tree   bool   `json:"tree,omitempty"`
+}
+
+// Compact folds the turns before the newest KeepTurns, or before the
+// newest compaction_keep_turns when KeepTurns is nil. KeepTurns is at least 1.
+type Compact struct {
+	KeepTurns *int `json:"keep_turns,omitempty"`
 }
 
 // Event is one durable record of a session log, or an ephemeral frame of a
@@ -235,6 +244,10 @@ const (
 	CodePayloadTooLarge  = "payload_too_large"
 	CodeDraining         = "draining"
 	CodeInternal         = "internal"
+	CodeNotAGitRepo      = "not_a_git_repo"
+	CodeNoBase           = "no_base"
+	CodeTooManyChanges   = "too_many_changes"
+	CodeProcessNotFound  = "process_not_found"
 )
 
 // ErrorBody is the body of every HTTP error response.
