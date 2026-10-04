@@ -125,6 +125,7 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
+func (r *Runtime) Processes() *process.Manager // nil without a WorkDir
 // Close hands off every session, then returns once Sync has acknowledged
 // every record through each handoff, or ctx ends.
 func (r *Runtime) Close(ctx context.Context) error
@@ -183,10 +184,11 @@ Free to change.
 | `internal/tool/builtin` | The file, search, and shell tools of a coding agent |
 | `internal/toolresult` | Large-result retention and `read_tool_result`, at parity with the engine |
 | `internal/prompt` | System-prompt segments; agent profiles are planned |
+| `internal/workspace` | The git diff of the work tree for `GET /workspace/changes` |
 
 Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
 
-`internal/workspace` is planned for phase 4. It serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated.
+`internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
 Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer).
 
@@ -466,13 +468,14 @@ GET    /sessions/{id}/messages?before=&limit= projection, same seq
 GET    /models                                models and their capabilities
 GET    /commands                              slash commands
 GET    /processes · POST /processes/{name}/{action}
+GET    /processes/{name}/logs?tail=           last log lines and status
 GET    /workspace/changes                     working-tree diff
 GET    /health
 ```
 
 There is no version prefix: harness and its clients change together.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -510,11 +513,15 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `turn_mismatch` | 409 |
 | `session_busy` | 409 |
 | `model_unavailable` | 409 |
+| `not_a_git_repo` | 409 |
+| `no_base` | 409 |
+| `too_many_changes` | 409 |
+| `process_not_found` | 404 |
 | `payload_too_large` | 413 |
 | `draining` | 503 |
 | `internal` | 500 |
 
-Each code except `internal` and `payload_too_large` is a sentinel error in `harness` and a `protocol` constant. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 ### Contract source
 
@@ -716,7 +723,18 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - This deviates from the engine, which puts the status at the end of the newest user message. Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
 - `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes before it returns.
-- The `/processes` routes come with the phase 4 switch. Switch oracle: `process_tool_from_the_model`. Its two double-prefix rows change by design.
+- `Runtime.Processes` returns the one manager, which the process tool and the `/processes` routes share. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
+
+### workspace
+
+`GET /workspace/changes?scope=&dir=` diffs the git work tree with the rules of the engine route `GET /git/changes`. The route exists only with a `WorkDir`.
+
+- `scope` is `branch` (default), against the merge base with the first of `origin/HEAD`, `origin/main`, and `origin/master` that resolves, or `uncommitted`, against `HEAD`. An unborn `HEAD` diffs against the empty tree.
+- `dir` defaults to the `WorkDir`. Any other `dir`, relative to the `WorkDir`, and its repository must stay under the `WorkDir` after symlinks.
+- Untracked files count as added, through a private copy of the index and a private object directory. The request never writes the real index or object store, never runs a filter driver, hook, external diff, or textconv, and ignores the `GIT_*` variables that select another repository.
+- `files` is complete. An untracked file above 2 MiB is `large` with no hunk. `patch` ends at the last whole file within 1 MiB and sets `truncated`. The patch is not HTML-escaped.
+- One request has a 28 s budget. A request that passes it, or whose file list passes 32 MiB, fails with `too_many_changes`. Errors: `invalid_request`, `not_a_git_repo`, and `no_base`.
+- Switch oracle: the `git_changes_*` rows, with the route renamed and the error body in the new shape.
 
 ### config
 

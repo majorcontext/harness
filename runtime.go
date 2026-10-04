@@ -648,6 +648,9 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 	return l.st.GetBlob(ctx, l.id, key)
 }
 
+// Processes returns the process manager of the WorkDir, or nil without a WorkDir.
+func (r *Runtime) Processes() *process.Manager { return r.procs }
+
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
 func (r *Runtime) Models() []protocol.Model {

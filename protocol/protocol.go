@@ -235,6 +235,10 @@ const (
 	CodePayloadTooLarge  = "payload_too_large"
 	CodeDraining         = "draining"
 	CodeInternal         = "internal"
+	CodeNotAGitRepo      = "not_a_git_repo"
+	CodeNoBase           = "no_base"
+	CodeTooManyChanges   = "too_many_changes"
+	CodeProcessNotFound  = "process_not_found"
 )
 
 // ErrorBody is the body of every HTTP error response.
