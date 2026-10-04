@@ -24,18 +24,25 @@ const (
 	specEventsRoute   = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
 	specBoxGlobal     = "| Box-global `events.jsonl` | Delete |"
 	specModelCheck    = "An unknown model fails with `model_unavailable` at create and at a settings change."
+	specChildResend   = "changes by design in one way: a later send is not refused"
+
+	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
+	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
+	specOpenPlugins      = "Does the switch keep the plugin inventory?"
+	specOpenCrashMarker  = "Does the switch keep the crash marker?"
+	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
 
 // reGolden cites each spec line that decides a difference of the row, and
-// each finding that owns the rest. "unowned" marks a parity break that no
-// finding names yet.
+// each finding that owns the rest. A break that no decision covers is a line
+// under Open questions.
 func reGolden(cites ...string) runtimeRow { return runtimeRow{kind: rowRegolden, cites: cites} }
 
 func deletedBy(spec string) runtimeRow { return runtimeRow{kind: rowDeleted, cites: []string{spec}} }
 
-// pendingOn names the findings or phases that a row waits for.
+// pendingOn names the findings, phases, and spec lines that a row waits for.
 func pendingOn(cites ...string) runtimeRow { return runtimeRow{kind: rowPending, cites: cites} }
 
 // runtimeRows is the disposition of each contract row on the runtime host.
@@ -45,7 +52,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_context_overflow":                                  pendingOn("F02"),
 	"bifrost_goal_met_first_turn":                               pendingOn("F18"),
 	"bifrost_goal_not_met_then_met":                             pendingOn("F18"),
-	"bifrost_max_tokens_continuation":                           pendingOn("F02", "unowned"),
+	"bifrost_max_tokens_continuation":                           pendingOn("F02", specOpenContinuation),
 	"bifrost_reasoning_and_effort":                              reGolden(specItems, specUpdate),
 	"bifrost_text_reply":                                        reGolden(specItems),
 	"bifrost_tool_error_marker":                                 reGolden(specItems),
@@ -55,7 +62,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bootstrap_cold_window_after_kill":                          pendingOn("phase 4"),
 	"builtin_commands_run_and_record":                           pendingOn("F02", "phase 4"),
 	"busy_deferred_goal_with_max_turns":                         deletedBy(specGoalDeferred),
-	"child_crash_recovered":                                     pendingOn("F02", "F10", "F11"),
+	"child_crash_recovered":                                     pendingOn("F02", "F11"),
 	"child_error_delivered":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, "F02"),
 	"claudecode_compact_delegated":                              pendingOn("F02", "F18", "F20"),
 	"claudecode_configured_mcp_servers_reach_the_cli":           pendingOn("F20"),
@@ -118,8 +125,8 @@ var runtimeRows = map[string]runtimeRow{
 	"interrupt_drops_unfinished_text_then_queue_continues":      sameAsServe(),
 	"interrupt_idle_is_noop":                                    sameAsServe(),
 	"journal_pages_follow_cursor":                               reGolden(specCursor, specEventsRoute),
-	"kill_mid_turn_then_continue":                               reGolden(specCrash, "F10", "unowned"),
-	"max_tokens_continuation":                                   pendingOn("F02", "unowned"),
+	"kill_mid_turn_then_continue":                               reGolden(specCrash, specOpenCrashMarker),
+	"max_tokens_continuation":                                   pendingOn("F02", specOpenContinuation),
 	"mcp_auto_default_threshold_defers_at_21_tools":             sameAsServe(),
 	"mcp_auto_default_threshold_stays_eager_at_20_tools":        sameAsServe(),
 	"mcp_auto_defers_over_threshold":                            sameAsServe(),
@@ -143,7 +150,7 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_tool_error_and_rpc_error_reach_model":                  reGolden(specMCPText),
 	"mcp_two_servers_share_a_tool_name":                         sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                     reGolden(specMCPNoStatus),
-	"mcp_unavailable_connect_fails_with_classified_reason":      pendingOn("unowned"),
+	"mcp_unavailable_connect_fails_with_classified_reason":      pendingOn(specOpenMCPReason),
 	"messages_page_after_compaction":                            pendingOn("F18", "phase 4"),
 	"messages_page_windows":                                     pendingOn("phase 4"),
 	"one_tool_round_trip":                                       sameAsServe(),
@@ -152,25 +159,25 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_after_hook_sees_output":                             sameAsServe(),
 	"plugin_before_hook_rewrites_and_blocks":                    sameAsServe(),
 	"plugin_boxes_style_command_and_dir":                        sameAsServe(),
-	"plugin_crash_mid_call_session_continues":                   reGolden(specView, "unowned", "F02"),
+	"plugin_crash_mid_call_session_continues":                   reGolden(specView, specOpenPlugins, "F02"),
 	"plugin_event_and_after_hook_payloads":                      sameAsServe(),
 	"plugin_system_segment_in_every_request":                    sameAsServe(),
 	"plugin_system_transform_reads_session_messages":            sameAsServe(),
-	"plugin_tools_listed_and_run":                               reGolden(specView, "unowned", "F02"),
+	"plugin_tools_listed_and_run":                               reGolden(specView, specOpenPlugins, "F02"),
 	"provider_429_then_ok":                                      reGolden(specView, "F02"),
 	"provider_5xx_then_ok":                                      reGolden(specView, "F02"),
 	"queue_delete_while_busy":                                   pendingOn("F02", "phase 4"),
 	"queue_survives_clean_restart_then_delete":                  pendingOn("F02", "phase 4"),
 	"queue_survives_clean_restart_then_drains_with_next_prompt": reGolden(specQueue, specHandoffResume, specView, "F02"),
-	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue, "F10", "unowned"),
+	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue, specOpenCrashMarker),
 	"queued_input_survives_kill":                                deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":               deletedBy(specGoalDeferred),
 	"replay_after_kill_full_transcript":                         pendingOn("F02", "phase 4"),
-	"send_to_child_and_cancel_tree":                             pendingOn("F02", "unowned"),
+	"send_to_child_and_cancel_tree":                             reGolden(specChildResend, specChildNoGoal, specView, "F02"),
 	"session_settings_validation_and_persistence":               reGolden(specModelCheck, specErrors, specUpdate, specView, "F02"),
 	"sse_resume_after_kill":                                     reGolden(specCursor, specBoxGlobal, "F10"),
 	"sse_resume_cursor":                                         reGolden(specCursor, specBoxGlobal),
-	"status_and_list_cold_after_restart":                        pendingOn("F02", "unowned"),
+	"status_and_list_cold_after_restart":                        pendingOn("F02", specOpenListOrder),
 	"steer_joins_the_turn_at_the_tool_boundary":                 pendingOn("F01"),
 	"stream_stall":                                              reGolden(specView, "F02"),
 	"task_child_result_reaches_parent":                          reGolden(specTaskInputs, specChildReport, specChildNoGoal),

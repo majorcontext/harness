@@ -1,14 +1,18 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // host starts what a scenario drives: the serve binary, or harness.Runtime
@@ -60,12 +64,13 @@ const (
 	rowRegolden
 	// rowDeleted: the spec deletes what the row pins. It does not run.
 	rowDeleted
-	// rowPending: the row waits for a fix or a later phase. It does not run.
+	// rowPending: the row waits for a fix or a later phase. It runs as an
+	// expected failure.
 	rowPending
 )
 
 // runtimeRow is the disposition of one row. cites are the lines of
-// docs/architecture.md and the finding IDs, phases, or "unowned" that the
+// docs/architecture.md and the finding IDs and phases that the
 // disposition rests on.
 type runtimeRow struct {
 	kind  rowKind
@@ -94,14 +99,19 @@ func onRuntime[S any](t *testing.T, table []S, key func(S) (name string, serial 
 				if !ok {
 					t.Fatalf("row %s has no runtime disposition", name)
 				}
-				if row.kind == rowDeleted || row.kind == rowPending {
+				if row.kind == rowDeleted {
 					t.Skip(row)
 				}
-				if !serial {
+				pending := row.kind == rowPending
+				if pending && os.Getenv(pendingBinEnv) == "" {
+					expectPendingFailure(t, row)
+					return
+				}
+				if !serial && !pending {
 					t.Parallel()
 				}
 				obs := run(t, sc)
-				if row.kind == rowSame {
+				if row.kind == rowSame || pending {
 					compareSame(t, name, obs)
 					return
 				}
@@ -109,6 +119,58 @@ func onRuntime[S any](t *testing.T, table []S, key func(S) (name string, serial 
 			})
 		}
 	})
+}
+
+const (
+	// pendingBinEnv holds the binaries of the parent when it runs a pending row
+	// in a child test process, which compares the row like a same row.
+	pendingBinEnv = "HARNESS_E2E_PENDING_BIN"
+	pendingBound  = 5 * time.Minute
+)
+
+// A pending row that does not match fails fast or waits for what never comes,
+// so its child process waits less.
+func init() {
+	if os.Getenv(pendingBinEnv) != "" {
+		waitBound = 15 * time.Second
+	}
+}
+
+// pendingSlots bounds the child processes that pending rows start.
+var pendingSlots = make(chan struct{}, 4)
+
+// expectPendingFailure runs a pending row in a child test process, so its
+// failure does not fail this run, and fails when the row passes: a fix or a
+// phase has made it match serve, and it must become a same row.
+func expectPendingFailure(t *testing.T, row runtimeRow) {
+	t.Helper()
+	t.Parallel()
+	pendingSlots <- struct{}{}
+	defer func() { <-pendingSlots }()
+	var parts []string
+	for _, p := range strings.Split(t.Name(), "/") {
+		parts = append(parts, "^"+regexp.QuoteMeta(p)+"$")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), pendingBound)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.v", "-test.count=1", "-test.run", strings.Join(parts, "/"))
+	cmd.Env = append(os.Environ(), pendingBinEnv+"="+harnessBin)
+	out, _ := cmd.CombinedOutput()
+	switch {
+	case bytes.Contains(out, []byte("--- PASS: "+t.Name()+" (")):
+		t.Errorf("pending row now matches serve; mark it same (was %s)", row)
+	case bytes.Contains(out, []byte("--- FAIL: "+t.Name()+" (")):
+		t.Skipf("%s\n%s", row, tail(out, 4096))
+	default:
+		t.Errorf("pending row did not run:\n%s", out)
+	}
+}
+
+func tail(b []byte, n int) []byte {
+	if len(b) > n {
+		return b[len(b)-n:]
+	}
+	return b
 }
 
 // suiteBreaks are the differences that every row shows on the runtime. Each
@@ -159,10 +221,12 @@ func compareSame(t *testing.T, name string, obs observation) {
 	}
 }
 
-var pendingCite = regexp.MustCompile(`^(F\d\d|phase \d|unowned)$`)
+// pendingCite matches a finding of the re-architecture review, which is not
+// in the repository, or a phase.
+var pendingCite = regexp.MustCompile(`^(F(0[1-9]|1\d|2[0-4])|phase \d)$`)
 
-// citeErrors reports each cite of row that is neither a pending cite nor a
-// line of spec, and a cite list that the kind of row does not allow.
+// citeErrors reports each cite of row that is neither a finding, a phase, nor
+// a line of spec, and a cite list that the kind of row does not allow.
 func citeErrors(row runtimeRow, spec string) []string {
 	var errs []string
 	lines, pending := 0, 0
@@ -173,7 +237,7 @@ func citeErrors(row runtimeRow, spec string) []string {
 		case strings.Contains(spec, c):
 			lines++
 		default:
-			errs = append(errs, fmt.Sprintf("cites %q, which is not a line of docs/architecture.md or a finding, phase, or unowned", c))
+			errs = append(errs, fmt.Sprintf("cites %q, which is not a line of docs/architecture.md, a finding F01 to F24, or a phase", c))
 		}
 	}
 	switch {
@@ -183,8 +247,8 @@ func citeErrors(row runtimeRow, spec string) []string {
 		errs = append(errs, "a re-golden row cites at least one line of docs/architecture.md")
 	case row.kind == rowDeleted && (lines != 1 || pending > 0):
 		errs = append(errs, "a deleted row cites one line of docs/architecture.md")
-	case row.kind == rowPending && (lines > 0 || pending == 0):
-		errs = append(errs, "a pending row cites only findings, phases, or unowned")
+	case row.kind == rowPending && len(row.cites) == 0:
+		errs = append(errs, "a pending row cites a finding, a phase, or a line of docs/architecture.md")
 	}
 	return errs
 }
@@ -230,6 +294,31 @@ func TestRuntimeRows(t *testing.T) {
 	for _, name := range runtime {
 		if _, ok := runtimeRows[name]; !ok {
 			t.Errorf("runtime golden %s has no disposition", name)
+		}
+	}
+}
+
+func TestCiteErrors(t *testing.T) {
+	skipShort(t)
+	const spec = "line one\nline two"
+	for _, tc := range []struct {
+		name string
+		row  runtimeRow
+		bad  bool
+	}{
+		{"known finding", pendingOn("F24"), false},
+		{"phase", pendingOn("phase 4"), false},
+		{"unknown finding", pendingOn("F99"), true},
+		{"finding zero", pendingOn("F00"), true},
+		{"unowned", pendingOn("unowned"), true},
+		{"spec line on a pending row", pendingOn("line two"), false},
+		{"line not in the spec", reGolden("line three"), true},
+		{"re-golden without a line", reGolden("F02"), true},
+		{"pending without a cite", pendingOn(), true},
+		{"same with a cite", runtimeRow{kind: rowSame, cites: []string{"line one"}}, true},
+	} {
+		if got := len(citeErrors(tc.row, spec)) > 0; got != tc.bad {
+			t.Errorf("%s: citeErrors reports an error = %t, want %t", tc.name, got, tc.bad)
 		}
 	}
 }

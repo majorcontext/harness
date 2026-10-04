@@ -111,6 +111,7 @@ func TestContractChildrenControl(t *testing.T) {
 				getSession{as: "kid"},
 				getSession{as: "a"},
 				sendToSession{as: "kid", text: "again"},
+				waitIdle{as: "kid"},
 				getSession{as: "kid"},
 			},
 		},

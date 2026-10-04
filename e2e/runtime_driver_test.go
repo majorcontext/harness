@@ -74,17 +74,26 @@ func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 	}
 }
 
-// Restart with kill closes the runtime under an ended context, so it stops
-// each session with no further append, as a killed process would.
+// Restart closes the runtime and opens a new one on the same store. A kill
+// copies the store first, then closes the old runtime on its own directory
+// under an ended context, and opens the new runtime on the copy, so nothing
+// that the old runtime does after the kill point reaches the next owner, as
+// with SIGKILL of serve.
 func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 	t.Helper()
-	ctx := context.Background()
-	if kill {
-		c, cancel := context.WithCancel(ctx)
-		cancel()
-		ctx = c
+	if !kill {
+		d.stop(t, context.Background())
+		d.start(t)
+		return
 	}
-	d.stop(t, ctx)
+	next := t.TempDir()
+	if err := os.CopyFS(next, os.DirFS(d.store)); err != nil {
+		t.Fatalf("copy store: %v", err)
+	}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	d.stop(t, ended)
+	d.store = next
 	d.start(t)
 }
 
@@ -258,19 +267,22 @@ func (d *runtimeDriver) SetServiceTier(t *testing.T, id, tier string) callResult
 	return d.patch(t, id, "service_tier", tier)
 }
 
-func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
+// notServed fails a row that reaches a route that Runtime.Handler does not
+// serve yet, so no row runs a guess at a route that its phase has not built.
+func notServed(t *testing.T, route, phase string) callResult {
 	t.Helper()
-	return d.call(t, http.MethodDelete, "/sessions/"+id, nil)
+	t.Fatalf("Runtime.Handler does not serve %s until %s", route, phase)
+	return callResult{}
 }
 
-// DeleteQueued withdraws each queued input and reports the last answer.
+func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
+	t.Helper()
+	return notServed(t, "DELETE /sessions/{id}", "phase 4")
+}
+
 func (d *runtimeDriver) DeleteQueued(t *testing.T, id string) callResult {
 	t.Helper()
-	res := callResult{Status: http.StatusNoContent}
-	for _, in := range d.view(t, id).Queued {
-		res = d.call(t, http.MethodDelete, "/sessions/"+id+"/inputs/"+in, nil)
-	}
-	return res
+	return notServed(t, "DELETE /sessions/{id}/inputs/{input}", "phase 4")
 }
 
 func (d *runtimeDriver) GetSession(t *testing.T, id string) callResult {
@@ -290,12 +302,12 @@ func (d *runtimeDriver) SessionStatus(t *testing.T) callResult {
 
 func (d *runtimeDriver) MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult {
 	t.Helper()
-	return d.call(t, http.MethodGet, withQuery("/sessions/"+id+"/messages", "before", beforeSeq, "limit", limit), nil)
+	return notServed(t, "GET /sessions/{id}/messages", "phase 4")
 }
 
 func (d *runtimeDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
 	t.Helper()
-	return d.call(t, http.MethodGet, withQuery("/sessions/"+id+"/messages", "limit", limit), nil)
+	return notServed(t, "GET /sessions/{id}/messages", "phase 4")
 }
 
 // JournalPage reads the page after the cursor from, as serve read the page
