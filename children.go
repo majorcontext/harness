@@ -276,9 +276,11 @@ type supervisor struct {
 	quiet map[string]int
 }
 
+// treeLock is a channel, not a sync.Mutex, so that a spawner that waits for
+// it is durably blocked in a synctest bubble.
 type treeLock struct {
-	mu sync.Mutex
-	n  int
+	held chan struct{}
+	n    int
 }
 
 // lock holds the lock of the tree of root, and returns its unlock.
@@ -286,14 +288,14 @@ func (s *supervisor) lock(root string) (unlock func()) {
 	s.mu.Lock()
 	l := s.locks[root]
 	if l == nil {
-		l = &treeLock{}
+		l = &treeLock{held: make(chan struct{}, 1)}
 		s.locks[root] = l
 	}
 	l.n++
 	s.mu.Unlock()
-	l.mu.Lock()
+	l.held <- struct{}{}
 	return func() {
-		l.mu.Unlock()
+		<-l.held
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if l.n--; l.n == 0 {
