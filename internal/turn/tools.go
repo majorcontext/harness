@@ -3,6 +3,7 @@ package turn
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
@@ -16,6 +17,17 @@ type Toolset struct {
 	Deferred []Tool
 	// Prompt follows the system prompt.
 	Prompt string
+	// Hooks run around each tool call. nil: none.
+	Hooks Hooks
+}
+
+// Hooks run around each tool call of a model call.
+type Hooks interface {
+	// Before returns the call to run, or a deny that becomes the error
+	// result of the call. A denied call does not run.
+	Before(ctx context.Context, c protocol.ToolCall) (run protocol.ToolCall, deny string)
+	// After returns the result that the model sees.
+	After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult
 }
 
 // Source gives tools that can change between the model calls of a turn.
@@ -25,13 +37,35 @@ type Source interface {
 	Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset
 }
 
-// describe sets the tools and prompt of call and returns the tools it may
-// run. all describes every tool, for a backend that owns the loop.
-func describe(ctx context.Context, call *Request, tools []Tool, src Source, all bool) []Tool {
+// Sources gives the tools of each Source in order, their prompts joined
+// by a blank line, and the hooks of the last Source that has any.
+type Sources []Source
+
+// Toolset implements Source.
+func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowed []string) Toolset {
+	var out Toolset
+	var prompts []string
+	for _, src := range s {
+		ts := src.Toolset(ctx, history, allowed)
+		out.Tools, out.Deferred = append(out.Tools, ts.Tools...), append(out.Deferred, ts.Deferred...)
+		if ts.Prompt != "" {
+			prompts = append(prompts, ts.Prompt)
+		}
+		if ts.Hooks != nil {
+			out.Hooks = ts.Hooks
+		}
+	}
+	out.Prompt = strings.Join(prompts, "\n\n")
+	return out
+}
+
+// describe sets the tools, prompt, and Call of call and returns Call. all
+// describes every tool, for a backend that owns the loop.
+func describe(ctx context.Context, call *Request, tools []Tool, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
 	ts := Toolset{Tools: tools}
 	if src != nil {
 		more := src.Toolset(ctx, call.History, call.AllowedTools)
-		ts.Tools, ts.Deferred, ts.Prompt = append(slices.Clip(tools), more.Tools...), more.Deferred, more.Prompt
+		ts.Tools, ts.Deferred, ts.Prompt, ts.Hooks = append(slices.Clip(tools), more.Tools...), more.Deferred, more.Prompt, more.Hooks
 	}
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil
@@ -47,8 +81,10 @@ func describe(ctx context.Context, call *Request, tools []Tool, src Source, all 
 		call.Instructions += "\n\n" + ts.Prompt
 	}
 	runnable := append(slices.Clip(ts.Tools), ts.Deferred...)
-	call.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult { return runTool(ctx, runnable, c) }
-	return runnable
+	call.Call = func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult {
+		return runTool(ctx, runnable, ts.Hooks, c)
+	}
+	return call.Call
 }
 
 // Restrict returns the tools that names lists, or every tool when names is nil.
@@ -71,9 +107,21 @@ func toolCalls(items []eventlog.Message) []protocol.ToolCall {
 	return out
 }
 
-// runTool refuses a call to a tool that the model may not call, and turns an
-// error into an error result that the model sees.
-func runTool(ctx context.Context, tools []Tool, c protocol.ToolCall) protocol.ToolResult {
+// runTool runs c between the hooks h. It refuses a call to a tool that the
+// model may not call, and turns an error into an error result that the
+// model sees.
+func runTool(ctx context.Context, tools []Tool, h Hooks, c protocol.ToolCall) protocol.ToolResult {
+	if h == nil {
+		return invoke(ctx, tools, c)
+	}
+	c, deny := h.Before(ctx, c)
+	if deny != "" {
+		return protocol.ToolResult{Text: deny, IsError: true}
+	}
+	return h.After(ctx, c, invoke(ctx, tools, c))
+}
+
+func invoke(ctx context.Context, tools []Tool, c protocol.ToolCall) protocol.ToolResult {
 	i := slices.IndexFunc(tools, func(t Tool) bool { return t.Spec().Name == c.Name })
 	if i < 0 {
 		return protocol.ToolResult{Text: "no such tool available: " + c.Name, IsError: true}

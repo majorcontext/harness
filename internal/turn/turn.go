@@ -187,7 +187,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 			return context.Cause(step)
 		}
 		s, call := &sink{turnID: req.TurnID, to: to}, req
-		runnable := describe(step, &call, tools, src, caps.OwnsLoop)
+		runTool := describe(step, &call, tools, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
@@ -210,7 +210,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 			}
 			r := protocol.ToolResult{Text: notRun, IsError: true}
 			if !res.MaxTokens {
-				r = runTool(ctx, runnable, c)
+				r = runTool(ctx, c)
 			}
 			if ctx.Err() != nil {
 				return context.Cause(ctx)
