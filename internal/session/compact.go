@@ -19,25 +19,25 @@ const compactCommand = "/compact"
 // Compact folds the turns before the newest Config.KeepTurns into a
 // summary, or runs compactCommand as a turn of a backend that owns its
 // context. It returns when the compaction ends. When too few turns exist,
-// it appends nothing.
-func (a *Actor) Compact(ctx context.Context) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+// it appends nothing and ran is false.
+func (a *Actor) Compact(ctx context.Context) (ran bool, err error) {
+	return call(ctx, a, func(reply func(bool, error)) {
+		done := func(_ struct{}, err error) { reply(true, err) }
 		switch {
 		case a.run != nil || len(a.state.Queue()) > 0:
-			reply(struct{}{}, ErrBusy)
+			reply(false, ErrBusy)
 		case a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext:
 			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliveryQueue, Source: "harness",
 				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: compactCommand}}}
 			if _, err := a.admit(in, ""); err != nil {
-				reply(struct{}{}, err)
+				reply(false, err)
 				return
 			}
-			a.run.done = reply
-		case !a.compact(reply):
-			reply(struct{}{}, nil)
+			a.run.done = done
+		case !a.compact(done):
+			reply(false, nil)
 		}
 	})
-	return err
 }
 
 // autoCompact starts a compaction when overThreshold, and reports whether one started.

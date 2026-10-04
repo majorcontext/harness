@@ -547,13 +547,15 @@ func (r *Runtime) named() []turn.Tool {
 	return append(slices.Clip(r.tools), r.plugins.Tools()...)
 }
 
-// goOpen runs f as work that Close waits for, unless Close started.
-func (r *Runtime) goOpen(f func()) {
+// hold adds one unit of the work that Close waits for, unless Close started.
+func (r *Runtime) hold() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.closed {
-		r.group.Go(f)
+	if r.closed {
+		return ErrDraining
 	}
+	r.group.Add(1)
+	return nil
 }
 
 // startPlugins reads the plugin manifests once for each runtime, as part of

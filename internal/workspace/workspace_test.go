@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,7 +41,14 @@ func write(t *testing.T, dir, rel, content string) {
 // records origin/main at that commit.
 func repo(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	return repoAt(t, t.TempDir())
+}
+
+func repoAt(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	git(t, dir, "init", "-q", "-b", "main")
 	git(t, dir, "config", "maintenance.auto", "false")
 	write(t, dir, "seed.txt", "seed\n")
@@ -69,13 +77,19 @@ func files(c protocol.WorkspaceChanges) string {
 	return strings.Join(out, "; ")
 }
 
+var big = strings.Repeat("x\n", 3*1024*1024/2)
+
 var changeRows = []struct {
 	name  string
 	scope string
-	setup func(t *testing.T, dir string)
-	files string
-	patch []string
-	check func(t *testing.T, dir string, c protocol.WorkspaceChanges)
+	// at names the repository dir; dir is the dir that Changes gets, and
+	// relative passes root relative to the working directory.
+	at, dir  string
+	relative bool
+	setup    func(t *testing.T, dir string)
+	files    string
+	patch    []string
+	check    func(t *testing.T, dir string, c protocol.WorkspaceChanges)
 }{
 	{name: "uncommitted reports modified, deleted, and untracked files", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) {
@@ -174,23 +188,137 @@ var changeRows = []struct {
 			t.Setenv("GIT_LITERAL_PATHSPECS", "1")
 		},
 		files: ""},
+	{name: "a large file removed from the index is listed once", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			write(t, dir, "big.txt", big)
+			git(t, dir, "add", "big.txt")
+			git(t, dir, "commit", "-q", "-m", "big")
+			git(t, dir, "rm", "-q", "--cached", "big.txt")
+		},
+		files: "big.txt deleted +0 -1572864"},
+	{name: "a rename from a large old path is listed once", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			full := make([]byte, 2*1024*1024+100_000)
+			_, _ = rand.NewChaCha8([32]byte{1}).Read(full)
+			write(t, dir, "p.bin", string(full))
+			git(t, dir, "add", "p.bin")
+			git(t, dir, "commit", "-q", "-m", "p")
+			git(t, dir, "rm", "-q", "--cached", "p.bin")
+			write(t, dir, "q.bin", string(full[:2*1024*1024-50_000]))
+		},
+		files: "q.bin renamed +0 -0 from p.bin binary"},
+	{name: "a missing index starts from HEAD", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			write(t, dir, "big.txt", big)
+			git(t, dir, "add", "big.txt")
+			git(t, dir, "commit", "-q", "-m", "big")
+			write(t, dir, "seed.txt", "seed\nmore\n")
+			if err := os.Remove(filepath.Join(dir, ".git", "index")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		files: "seed.txt modified +1 -0"},
+	{name: "a stale origin/HEAD falls through to origin/main", scope: protocol.ScopeBranch,
+		setup: func(t *testing.T, dir string) {
+			git(t, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+		},
+		files: "",
+		check: func(t *testing.T, _ string, c protocol.WorkspaceChanges) {
+			if c.Base == nil || c.Base.Ref != "origin/main" {
+				t.Errorf("base = %v, want origin/main", c.Base)
+			}
+		}},
+	{name: "an unmerged file is listed", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			git(t, dir, "checkout", "-q", "-b", "side")
+			write(t, dir, "seed.txt", "side\n")
+			git(t, dir, "commit", "-q", "-am", "side")
+			git(t, dir, "checkout", "-q", "main")
+			write(t, dir, "seed.txt", "main\n")
+			git(t, dir, "commit", "-q", "-am", "main")
+			cmd := exec.Command("git", "-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "side")
+			cmd.Dir = dir
+			_ = cmd.Run()
+		},
+		files: "seed.txt modified +4 -0"},
+	{name: "a split index gains no shared index", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			git(t, dir, "config", "core.splitIndex", "true")
+			git(t, dir, "update-index", "--split-index")
+			write(t, dir, "seed.txt", "seed\nmore\n")
+			write(t, dir, "new.txt", "n\n")
+		},
+		files: "new.txt added +1 -0; seed.txt modified +1 -0",
+		check: func(t *testing.T, dir string, _ protocol.WorkspaceChanges) {
+			if shared, _ := filepath.Glob(filepath.Join(dir, ".git", "sharedindex.*")); len(shared) != 1 {
+				t.Errorf("shared indexes = %q, want only the one that update-index wrote", shared)
+			}
+		}},
+	{name: "objects resolve through the alternates of a shared clone", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) {
+			alt := filepath.Join(t.TempDir(), "objects")
+			if err := os.Rename(filepath.Join(dir, ".git", "objects"), alt); err != nil {
+				t.Fatal(err)
+			}
+			write(t, dir, ".git/objects/info/alternates", alt+"\n")
+			write(t, dir, "seed.txt", "seed\nmore\n")
+		},
+		files: "seed.txt modified +1 -0"},
+	{name: "a colon in the repository path keeps its objects", scope: protocol.ScopeUncommitted, at: "my:repo",
+		setup: func(t *testing.T, dir string) { write(t, dir, "new.txt", "n\n") },
+		files: "new.txt added +1 -0"},
+	{name: "a trailing space in the repository root is kept", scope: protocol.ScopeUncommitted, at: "repo ",
+		setup: func(t *testing.T, dir string) { write(t, dir, "new.txt", "n\n") },
+		files: "new.txt added +1 -0"},
+	{name: "a subdirectory dir covers the whole repository", scope: protocol.ScopeUncommitted, dir: "sub",
+		setup: func(t *testing.T, dir string) {
+			write(t, dir, "sub/f.txt", "f\n")
+			git(t, dir, "add", ".")
+			git(t, dir, "commit", "-q", "-m", "sub")
+			write(t, dir, "sub/f.txt", "f\nmore\n")
+			write(t, dir, "root.txt", "root\n")
+		},
+		files: "root.txt added +1 -0; sub/f.txt modified +1 -0",
+		patch: []string{"+more", "+root"}},
+	{name: "a relative root takes a relative dir", scope: protocol.ScopeUncommitted, dir: "sub", relative: true,
+		setup: func(t *testing.T, dir string) { write(t, dir, "sub/f.txt", "f\n") },
+		files: "sub/f.txt added +1 -0"},
+	{name: "a detached HEAD has no branch", scope: protocol.ScopeUncommitted,
+		setup: func(t *testing.T, dir string) { git(t, dir, "checkout", "-q", "--detach") },
+		files: "",
+		check: func(t *testing.T, dir string, c protocol.WorkspaceChanges) {
+			if c.Branch != "" || c.Head != git(t, dir, "rev-parse", "HEAD") {
+				t.Errorf("changes = branch %q head %q, want no branch at HEAD", c.Branch, c.Head)
+			}
+		}},
 }
 
 func TestChanges(t *testing.T) {
 	for _, row := range changeRows {
 		t.Run(row.name, func(t *testing.T) {
 			dir := repo(t)
+			if row.at != "" {
+				dir = repoAt(t, filepath.Join(t.TempDir(), row.at))
+			}
 			row.setup(t, dir)
+			root, want := dir, dir
+			if row.relative {
+				t.Chdir(filepath.Dir(dir))
+				root = filepath.Base(dir)
+			}
+			if row.dir != "" {
+				want = filepath.Join(dir, row.dir)
+			}
 			index := fileStamp(t, filepath.Join(dir, ".git", "index"))
-			c, err := workspace.Changes(context.Background(), dir, "", row.scope)
+			c, err := workspace.Changes(context.Background(), root, row.dir, row.scope)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := fileStamp(t, filepath.Join(dir, ".git", "index")); got != index {
 				t.Errorf("index = %s, want unchanged %s", got, index)
 			}
-			if got := files(c); got != row.files || c.Scope != row.scope || c.Dir != dir {
-				t.Errorf("changes = %q in %s scope %s, want %q in %s", got, c.Dir, c.Scope, row.files, dir)
+			if got := files(c); got != row.files || c.Scope != row.scope || c.Dir != want {
+				t.Errorf("changes = %q in %s scope %s, want %q in %s", got, c.Dir, c.Scope, row.files, want)
 			}
 			for _, want := range row.patch {
 				if !strings.Contains(c.Patch, want) {
@@ -207,6 +335,9 @@ func TestChanges(t *testing.T) {
 func fileStamp(t *testing.T, path string) string {
 	t.Helper()
 	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "missing"
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +359,11 @@ func TestChangesRefusals(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
+	unrelated := repoAt(t, filepath.Join(root, "unrelated"))
+	git(t, unrelated, "checkout", "-q", "--orphan", "other")
+	git(t, unrelated, "commit", "-q", "--allow-empty", "-m", "other")
+	git(t, unrelated, "update-ref", "refs/remotes/origin/main", "HEAD")
+	git(t, unrelated, "checkout", "-q", "main")
 	outer := repo(t)
 	inner := filepath.Join(outer, "har:ness", "root")
 	write(t, inner, "x.txt", "x\n")
@@ -237,7 +373,9 @@ func TestChangesRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 5000 {
-		fmt.Fprintf(f, "[filter \"d%05d\"]\n\tclean = cat\n", i)
+		if _, err := fmt.Fprintf(f, "[filter \"d%05d\"]\n\tclean = cat\n", i); err != nil {
+			t.Fatal(err)
+		}
 	}
 	_ = f.Close()
 	canceled, cancel := context.WithCancel(context.Background())
@@ -257,6 +395,7 @@ func TestChangesRefusals(t *testing.T) {
 		{"a colon in the root does not reach an outer repository", inner, inner, protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_git_repo: "` + inner + `" is not a git work tree`},
 		{"branch scope with no commit", root, "unborn", "", nil, workspace.ErrNoBase, "no_base: HEAD has no commit yet"},
 		{"branch scope with no default branch", root, "nobase", "", nil, workspace.ErrNoBase, "no_base: no default branch found (checked origin/HEAD, origin/main, origin/master)"},
+		{"branch scope with no common ancestor", root, "unrelated", "", nil, workspace.ErrNoBase, "no_base: HEAD and origin/main share no common ancestor"},
 		{"an ended deadline", filters, "", protocol.ScopeUncommitted, canceled, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
 		{"a flood of filter drivers", filters, "", protocol.ScopeUncommitted, nil, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
 	}

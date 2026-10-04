@@ -136,7 +136,7 @@ func changeSet(ctx context.Context, repoRoot, head, base string, limit int) (fil
 	if err != nil {
 		return nil, "", false, err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 	env, diffEnv, err := privateIndex(ctx, repoRoot, head, tmp)
 	if err != nil {
 		return nil, "", false, err

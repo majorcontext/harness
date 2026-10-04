@@ -68,14 +68,11 @@ func compact(ctx context.Context, s *Session, args map[string]any) (any, error) 
 	if _, ok := args["keep_turns"]; ok {
 		return nil, fmt.Errorf("%w: /compact takes no keep_turns; compaction_keep_turns sets it", ErrInvalidRequest)
 	}
-	head := s.View().HeadSeq
-	if err := s.Compact(ctx); err != nil {
-		return nil, err
+	ran, err := s.a.Compact(ctx)
+	if err == nil && !ran {
+		err = errNoFold
 	}
-	if s.View().HeadSeq == head {
-		return nil, errNoFold
-	}
-	return nil, nil
+	return nil, err
 }
 
 const (
@@ -148,6 +145,10 @@ func commandEntry(spec *command.Spec) protocol.CommandEntry {
 	if o, ok := ops[spec.Op]; ok {
 		e.Method, e.Path = o.method, o.path
 		e.AvailableDuringTask = &spec.AvailableDuringTask
+	}
+	// compaction_keep_turns sets keep_turns, so /compact takes no args.
+	if spec.Op == command.OpCompact {
+		e.ArgHint, e.Args = "", nil
 	}
 	return e
 }
@@ -222,15 +223,27 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 	return nil, in, nil
 }
 
-// command records the first status of p and dispatches an accepted command
-// as work that Runtime.Close waits for.
+// command records the first status of p. An accepted command joins the
+// work that Runtime.Close waits for before its record, so Close refuses it.
 func (s *Session) command(ctx context.Context, p *plan) (protocol.Admitted, bool, error) {
+	if p.res != nil {
+		if err := s.r.hold(); err != nil {
+			return protocol.Admitted{}, false, err
+		}
+	}
 	rec, seq, repeat, err := s.a.Record(ctx, p.rec, p.busy)
+	switch {
+	case p.res == nil:
+	case err == nil && !repeat && rec.Status == protocol.CommandAccepted:
+		go func() {
+			defer s.r.group.Done()
+			s.dispatch(rec, *p.res)
+		}()
+	default:
+		s.r.group.Done()
+	}
 	if err != nil {
 		return protocol.Admitted{}, false, err
-	}
-	if !repeat && rec.Status == protocol.CommandAccepted {
-		s.r.goOpen(func() { s.dispatch(rec, *p.res) })
 	}
 	return protocol.Admitted{InputID: rec.InputID, Seq: seq, Command: rec.Status}, repeat, nil
 }

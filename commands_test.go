@@ -219,8 +219,19 @@ func TestCommandList(t *testing.T) {
 	if strings.Join(names, " ") != want {
 		t.Errorf("names = %q, want %q", names, want)
 	}
-	if c := byName["compact"]; c.Method != "POST" || c.Path != "/sessions/{id}/compact" || c.AvailableDuringTask == nil || *c.AvailableDuringTask {
-		t.Errorf("compact = %+v, want POST /sessions/{id}/compact, not during a task", c)
+	if c := byName["compact"]; c.Method != "POST" || c.Path != "/sessions/{id}/compact" || c.AvailableDuringTask == nil || *c.AvailableDuringTask || c.ArgHint != "" || c.Args != nil {
+		t.Errorf("compact = %+v, want POST /sessions/{id}/compact with no args, not during a task", c)
+	}
+	for _, c := range got.Commands {
+		if c.Path == "" {
+			continue
+		}
+		req := httptest.NewRequest(c.Method, strings.ReplaceAll(c.Path, "{id}", "nope"), nil)
+		rec := httptest.NewRecorder()
+		r.Handler().ServeHTTP(rec, req)
+		if rec.Code == http.StatusMethodNotAllowed || rec.Code == http.StatusNotFound && strings.Contains(rec.Body.String(), protocol.CodeInvalidRequest) {
+			t.Errorf("%s %s has no route: %d %s", c.Method, c.Path, rec.Code, rec.Body)
+		}
 	}
 	if c := byName["review"]; c.Kind != "prompt" || c.Summary != "Review a ref" || c.ArgHint != "<ref>" {
 		t.Errorf("review = %+v, want the prompt command", c)
@@ -238,4 +249,33 @@ func TestCommandList(t *testing.T) {
 		t.Errorf("bad = %+v, discovery errors %q: want bad disabled with its error and one name error", got.ServeSupport["bad"], got.DiscoveryErrors)
 	}
 	closeRuntime(t, r)
+}
+
+func TestCloseRefusesATypedCommand(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f := &held{Store: harness.NewMemStore(), hold: make(chan struct{})}, newFake()
+		r := runtime(t, st, f)
+		s := create(t, r)
+		submit(t, s, text("busy", "work"))
+		<-f.runs
+		st.armed.Store(true)
+		closed := make(chan error, 1)
+		go func() { closed <- r.Close(bg) }()
+		synctest.Wait()
+		admitted := make(chan error, 1)
+		go func() { _, err := s.Submit(bg, typed("a", "/thinking high")); admitted <- err }()
+		synctest.Wait()
+		select {
+		case err := <-admitted:
+			if !errors.Is(err, harness.ErrDraining) {
+				t.Errorf("Submit = %v, want ErrDraining", err)
+			}
+		default:
+			t.Error("Submit waits for the session while Close runs, want ErrDraining")
+		}
+		close(st.hold)
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+	})
 }

@@ -45,6 +45,10 @@ func Changes(ctx context.Context, root, dir, scope string) (protocol.WorkspaceCh
 	if scope != protocol.ScopeBranch && scope != protocol.ScopeUncommitted {
 		return protocol.WorkspaceChanges{}, fmt.Errorf("%w: scope %q must be \"branch\" or \"uncommitted\"", ErrInvalid, scope)
 	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return protocol.WorkspaceChanges{}, err
+	}
 	abs, real, ceiling, err := resolve(root, dir)
 	if err != nil {
 		return protocol.WorkspaceChanges{}, err

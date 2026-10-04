@@ -132,7 +132,10 @@ func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ct
 // context runs its own /compact command instead. It returns when the
 // compaction ends, and fails with ErrSessionBusy while a turn runs or
 // inputs wait.
-func (s *Session) Compact(ctx context.Context) error { return s.a.Compact(ctx) }
+func (s *Session) Compact(ctx context.Context) error {
+	_, err := s.a.Compact(ctx)
+	return err
+}
 
 // Events yields the durable events after seq, then each new one as it is
 // appended, with the ephemeral frames of the running turn between them:
