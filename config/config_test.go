@@ -537,7 +537,7 @@ func TestMergeAgentDefsDirs(t *testing.T) {
 // TestMergeCompactionFields verifies that project non-zero values override user
 // layer, same scalar-override rule as GoalEvaluatorModel.
 func TestMergeCompactionFields(t *testing.T) {
-	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3}
+	base := &Config{ContextWindowTokens: 100000, CompactionThreshold: 0.9, CompactionKeepTurns: 3, MaxTaskDepth: 3, MaxConcurrentTasks: 9}
 	t.Run("zero project values inherit the user layer", func(t *testing.T) {
 		got := merge(base, &Config{})
 		if got.ContextWindowTokens != 100000 {
@@ -551,15 +551,15 @@ func TestMergeCompactionFields(t *testing.T) {
 		}
 	})
 	t.Run("non-zero project values override", func(t *testing.T) {
-		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1})
+		got := merge(base, &Config{ContextWindowTokens: 50000, CompactionThreshold: 0.7, CompactionKeepTurns: 1, MaxTaskDepth: 1, MaxConcurrentTasks: 2})
 		if got.ContextWindowTokens != 50000 {
 			t.Errorf("ContextWindowTokens = %d, want project override 50000", got.ContextWindowTokens)
 		}
 		if got.CompactionThreshold != 0.7 {
 			t.Errorf("CompactionThreshold = %v, want project override 0.7", got.CompactionThreshold)
 		}
-		if got.CompactionKeepTurns != 1 {
-			t.Errorf("CompactionKeepTurns = %d, want project override 1", got.CompactionKeepTurns)
+		if got.CompactionKeepTurns != 1 || got.MaxTaskDepth != 1 || got.MaxConcurrentTasks != 2 {
+			t.Errorf("CompactionKeepTurns, MaxTaskDepth, MaxConcurrentTasks = %d, %d, %d, want project overrides 1, 1, 2", got.CompactionKeepTurns, got.MaxTaskDepth, got.MaxConcurrentTasks)
 		}
 	})
 }

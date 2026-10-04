@@ -19,6 +19,8 @@ func Defaults() Config {
 		ModelTool:               new(true),
 		InstructionsMaxBytes:    64 << 10,
 		MCPToolLoadingThreshold: 20,
+		MaxTaskDepth:            3,
+		MaxConcurrentTasks:      20,
 		Providers: map[string]Provider{
 			"openrouter": {Type: TypeOpenAICompat, BaseURL: "https://openrouter.ai/api/v1", APIKeyEnv: "OPENROUTER_API_KEY"},
 		},

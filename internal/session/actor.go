@@ -71,11 +71,15 @@ type Config struct {
 	Tools     []turn.Tool
 	// Source gives more tools to each model call. nil: Tools only.
 	Source turn.Source
-	// Prompt returns the system prompt of a turn when the turn starts.
-	Prompt func() string
+	// Prompt returns the system prompt of a turn of a session with the
+	// agent profile, when the turn starts.
+	Prompt func(agent string) string
 	// Appended receives the events of each append on the actor goroutine.
 	// It must not block. nil: none.
 	Appended func([]eventlog.Event)
+	// Report receives the outcome of each turn of a child session that
+	// ends, for its parent. It must not wait for the actor. nil: no report.
+	Report func(parent string, s eventlog.ChildSettled, text string)
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.
@@ -131,18 +135,26 @@ func newActor(cfg Config, s *eventlog.State) *Actor {
 	return a
 }
 
-// Create appends session.created and owner.acquired to an empty log and runs the session.
-func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated) (*Actor, error) {
+// Create appends session.created and owner.acquired to an empty log and
+// runs the session. A first input starts the first turn in the same append.
+func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Actor, error) {
 	a := newActor(cfg, &eventlog.State{})
-	fence := eventlog.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}
-	if err := a.appendCtx(ctx, c, fence); err != nil {
+	events := []eventlog.Event{c, eventlog.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}}
+	a.fenced = uint64(len(events))
+	turnID := newID("turn")
+	if first != nil {
+		events = append(events, *first, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{first.InputID}})
+	}
+	if err := a.appendCtx(ctx, events...); err != nil {
 		cfg.Ownership.Release()
 		if errors.Is(err, ErrConflict) {
 			return nil, fmt.Errorf("%w: %s", ErrExists, cfg.ID)
 		}
 		return nil, err
 	}
-	a.fenced = a.state.Head()
+	if first != nil {
+		a.start(turnID, []string{first.InputID}, 0)
+	}
 	a.launch()
 	return a, nil
 }

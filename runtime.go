@@ -62,15 +62,18 @@ type Options struct {
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
-	// Tools are the embedder tools. Each name must be unique. With
-	// Config.MCPServers, no name may be mcp, list_mcp_resources,
-	// read_mcp_resource, or start with mcp__.
+	// Tools are the embedder tools. Each name must be unique. With a
+	// WorkDir, no name may be process or task. With Config.MCPServers, no
+	// name may be mcp, list_mcp_resources, read_mcp_resource, or start
+	// with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
-	// AGENTS.md chain and skills when it starts, and the process tool runs
-	// Config.Processes in it. The tool's declare action runs any argv, so
-	// WorkDir alone grants command execution. Empty: the system prompt is
-	// Config.AppendSystemPrompt alone, no file is read, and no process runs.
+	// AGENTS.md chain and skills when it starts, the process tool runs
+	// Config.Processes in it, and the task tool starts child sessions with
+	// the agent profiles of its .agents dir. The process tool's declare
+	// action runs any argv, so WorkDir alone grants command execution.
+	// Empty: the system prompt is Config.AppendSystemPrompt alone, no file
+	// is read, no process runs, and no session has the task tool.
 	WorkDir string
 
 	backend turn.Backend
@@ -89,6 +92,8 @@ type Runtime struct {
 	// prompt reads the system prompt of a session.
 	prompt    func() string
 	evaluator string
+	resolve   func(string) string
+	sup       *supervisor
 	// procs is nil without a WorkDir.
 	procs *process.Manager
 	// mcp is nil without MCP servers.
@@ -133,10 +138,13 @@ func New(opts Options) (*Runtime, error) {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
 	}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
+	r.resolve = opts.Config.ResolveModel
+	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
+		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), roots: map[string]string{}}
 	tools := opts.Tools
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
-		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes))
+		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes), taskTool{r: r})
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
@@ -180,24 +188,27 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 	if err := r.startPlugins(ctx); err != nil {
 		return nil, err
 	}
-	if r.models != nil {
-		if err := r.models.check(req.Model, r.unowned(req.AllowedTools), r.named()); err != nil {
-			return nil, err
-		}
-	}
-	id := req.ID
-	if id == "" {
-		id = "ses_" + strings.ToLower(rand.Text())
-	}
+	id := cmp.Or(req.ID, "ses_"+newSuffix())
 	if err := checkName("session", id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	created := eventlog.SessionCreated{Model: req.Model, Origin: req.Origin,
 		Settings: eventlog.Settings{Effort: req.Effort, ServiceTier: req.ServiceTier}, AllowedTools: req.AllowedTools}
+	return r.create(ctx, id, created, nil)
+}
+
+func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Session, error) {
+	if r.models != nil {
+		if err := r.models.check(c.Model, r.unowned(c.AllowedTools), r.named()); err != nil {
+			return nil, err
+		}
+	}
 	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		return session.Create(ctx, cfg, created)
+		return session.Create(ctx, cfg, c, first)
 	})
 }
+
+func newSuffix() string { return strings.ToLower(rand.Text()) }
 
 // Open acquires a session, fences earlier owners, replays its log, and runs
 // it. A session that this runtime already runs is returned as is.
@@ -206,7 +217,11 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		return session.Open(ctx, cfg)
+		a, err := session.Open(ctx, cfg)
+		if err == nil {
+			r.group.Go(func() { r.recoverChildren(a) })
+		}
+		return a, err
 	})
 }
 
@@ -282,8 +297,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Owner:     r.name(),
 		Backend:   r.backend,
 		Evaluator: r.evaluator,
-		Tools:     r.tools,
+		Tools:     r.bind(id),
 		Prompt:    r.instructions(),
+		Report:    r.report,
 		Sync:      r.sync,
 		Limits:    r.limits,
 		Threshold: r.threshold,
@@ -316,10 +332,15 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 }
 
 // instructions reads the system prompt of a session once and returns the
-// system prompt of each of its turns: that prompt and the process status.
-func (r *Runtime) instructions() func() string {
-	p := r.prompt()
-	return func() string {
+// system prompt of each of its turns: that prompt, the prompt of its agent
+// profile, and the process status. The actor calls it from one goroutine.
+func (r *Runtime) instructions() func(agent string) string {
+	p, read := r.prompt(), false
+	return func(agent string) string {
+		if !read && agent != "" {
+			p = strings.Trim(p+"\n\n"+prompt.Profiles(r.workDir)[agent].Prompt, "\n")
+		}
+		read = true
 		if r.procs == nil {
 			return p
 		}
@@ -327,6 +348,34 @@ func (r *Runtime) instructions() func() string {
 			return strings.Join([]string{p, message.RenderEngineContext(s)}, "\n\n")
 		}
 		return p
+	}
+}
+
+// bind returns the tools of session id: the task tool starts children of id.
+func (r *Runtime) bind(id string) []turn.Tool {
+	tools := slices.Clone(r.tools)
+	for i, t := range tools {
+		if task, ok := t.(taskTool); ok {
+			task.parent = id
+			tools[i] = task
+		}
+	}
+	return tools
+}
+
+// running returns session id when this runtime runs it, or nil.
+func (r *Runtime) running(id string) *Session {
+	r.mu.Lock()
+	e := r.sessions[id]
+	r.mu.Unlock()
+	if e == nil {
+		return nil
+	}
+	select {
+	case <-e.ready:
+		return e.s
+	default:
+		return nil
 	}
 }
 

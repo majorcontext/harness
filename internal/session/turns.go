@@ -101,7 +101,7 @@ func sameJSON(x, y any) bool {
 func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	step, handoff := context.WithCancelCause(ctx)
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
 		History: a.state.History(), Resumed: resumed, AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
@@ -258,7 +258,11 @@ func (a *Actor) next(check bool) error {
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage, after ...eventlog.Event) error {
 	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause, Usage: u})
-	return a.appendCtx(ctx, append(events, after...)...)
+	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
+		return err
+	}
+	a.report()
+	return nil
 }
 
 // closeOpen dismisses every open request, which closes its tool call, and

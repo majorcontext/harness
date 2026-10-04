@@ -66,7 +66,9 @@ func (u Usage) Add(v Usage) Usage {
 
 // SessionCreated is the first record of every session.
 type SessionCreated struct {
-	ParentID string   `json:"parent_id,omitempty"`
+	ParentID string `json:"parent_id,omitempty"`
+	// Agent names the profile of a child session.
+	Agent    string   `json:"agent,omitempty"`
 	Model    string   `json:"model"`
 	Settings Settings `json:"settings"`
 	Origin   string   `json:"origin"`

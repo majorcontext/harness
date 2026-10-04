@@ -164,6 +164,7 @@ const (
 type State struct {
 	created    bool
 	parentID   string
+	agent      string
 	origin     string
 	model      string
 	settings   Settings
@@ -270,6 +271,21 @@ func (s *State) Settings() Settings { return s.settings }
 // AllowedTools returns the tool names of the session: the embedder tools,
 // and the built-in tools of a delegated backend. nil allows every tool.
 func (s *State) AllowedTools() []string { return slices.Clone(s.allowed) }
+
+// Agent returns the profile of a child session, or "".
+func (s *State) Agent() string { return s.agent }
+
+// Unsettled returns the spawned children that have not settled, sorted.
+func (s *State) Unsettled() []string {
+	var out []string
+	for id, o := range s.children {
+		if o == "" {
+			out = append(out, id)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
 
 // Usage returns the token usage summed over every ended turn.
 func (s *State) Usage() Usage { return s.usage }
