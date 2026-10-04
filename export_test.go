@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -23,8 +24,7 @@ func NewWithBackends(opts Options, backends map[string]turn.Backend) (*Runtime, 
 		return nil, err
 	}
 	r.models.Close()
-	r.models.backends = backends
-	r.models.strict = false
+	r.models = backend.NewRouter(backends, false)
 	return r, nil
 }
 

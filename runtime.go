@@ -15,11 +15,13 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
+	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -98,7 +100,7 @@ type Runtime struct {
 	sync  Sync
 	tools []turn.Tool
 	// models routes each turn to the backend of its model.
-	models *models
+	models *backend.Router
 	limits turn.Limits
 	// prompt reads the system prompt of a session.
 	prompt    func() string
@@ -171,12 +173,12 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), goalTool{r: r})
 	}
 	if opts.WorkDir != "" {
-		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
-		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes), taskTool{r: r})
+		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
+		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), taskTool{r: r})
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
-	r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
+	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
@@ -418,7 +420,7 @@ func (r *Runtime) instructions(agent string, p prompt.Profile) func() string {
 		if r.procs == nil {
 			return base
 		}
-		if s := processStatus(r.procs, r.workDir); s != "" {
+		if s := proc.StatusLine(r.procs, r.workDir); s != "" {
 			return strings.Join([]string{base, message.RenderEngineContext(s)}, "\n\n")
 		}
 		return base
@@ -671,4 +673,4 @@ func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
-func (r *Runtime) Models() []protocol.Model { return r.models.list() }
+func (r *Runtime) Models() []protocol.Model { return r.models.List() }
