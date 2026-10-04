@@ -10,9 +10,9 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// turnRun is the turn.Turn of one running turn. The turn goroutine calls
-// it, and each durable change runs in the actor and fails with
-// ErrTurnMismatch once the turn is no longer the run of the actor.
+// turnRun is the turn.Turn of one running turn. Each durable change runs in
+// the actor, and fails with ErrTurnMismatch after the turn stops being the
+// run of the actor.
 type turnRun struct {
 	a *Actor
 	r *running

@@ -41,7 +41,8 @@ type Capabilities struct {
 	OwnsContext bool
 	// OwnsMCP reports a backend that connects the configured MCP servers
 	// itself on a turn with no tool restriction.
-	OwnsMCP       bool
+	OwnsMCP bool
+	// Steering is a backend that owns the loop and calls Sink.Steer.
 	Steering      bool
 	ContextWindow int
 	// Tools names the built-in tools of a backend that owns the loop. A
@@ -76,7 +77,7 @@ type Request struct {
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
 	// Steered receives a value when a steer input waits for Sink.Steer. It
-	// is nil when the backend does not accept steering.
+	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
 }
 
@@ -133,19 +134,17 @@ type Limits struct {
 	Idle time.Duration
 }
 
-// Turn is the one value that a running turn reports through. It is bound to
-// its turn, so no method takes a turn ID. Only CompactTurn takes a ctx: a
-// backend reports items after the ctx of the turn ends.
+// Turn is what a running turn reports through. It is bound to its turn, so
+// no method takes a turn ID. Only CompactTurn takes a ctx: a backend reports
+// items after the ctx of the turn ends.
 type Turn interface {
 	Sink
-	// Status sends a status frame to live subscribers. A retrying frame
-	// abandons the item that the failed attempt streamed.
+	// Status sends a status frame. A retrying frame abandons the item that
+	// the failed attempt streamed.
 	Status(f protocol.StatusFrame)
 	// CompactTurn folds the turns before the newest kept turns into a
-	// summary while the turn runs, and returns the new history. ok is
-	// false when no turn can fold.
+	// summary, and returns the new history. ok is false when no turn can fold.
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
-	// Ended ends the turn with the outcome of the run.
 	Ended(err error)
 }
 
@@ -160,7 +159,8 @@ const (
 // Run runs req on b and reports its items and its end to to. Only tools,
 // and the tools that src gives each model call, reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
-// order, then calls b again, until a call asks for no tool. Model calls run
+// order, then takes the steer inputs and calls b again, until a call asks
+// for no tool. Model calls run
 // under step and tools under ctx: when only step ends, a running tool
 // finishes and no new tool starts.
 func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) {
@@ -217,6 +217,11 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 			}
 			req.History = append(req.History, m)
 		}
+		in, err := to.Steer()
+		if err != nil {
+			return err
+		}
+		req.History = append(req.History, in...)
 		switch {
 		case !res.MaxTokens:
 			nudge = nil

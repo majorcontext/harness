@@ -588,7 +588,7 @@ type Capabilities struct {
 	OwnsLoop      bool     // backend runs tools and multi-step turns
 	OwnsContext   bool     // backend compacts its own context
 	OwnsMCP       bool     // backend connects Config.MCPServers itself on an unrestricted turn
-	Steering      bool     // accepts input mid-turn
+	Steering      bool     // a backend with OwnsLoop takes steer input mid-turn through Sink.Steer
 	ContextWindow int      // 0 means the backend reports it
 	Tools         []string // built-in tools of a delegated backend
 }
@@ -622,7 +622,7 @@ func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 
 `Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The `Turn` gives the item that the first delta starts a harness ID, and `Item` records the next message under it.
 
-- A model API backend runs one model call per `Run`. The loop runs the tools.
+- A model API backend runs one model call per `Run`. The loop runs the tools, then takes the queued steer inputs through `Sink.Steer`, appends them to the history, and calls the backend again. This item boundary comes after the tool results of each response and before a `max_tokens` continuation. A queued input joins no running turn. Every model API backend steers, because the loop does it, not the backend.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
 - `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools` and the embedder tools, and any other name fails `Create`. An embedder tool with the name of a built-in tool also fails `Create`.
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.

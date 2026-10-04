@@ -30,7 +30,7 @@ func (a *Actor) turnTools(r *running) ([]turn.Tool, turn.Source) {
 
 // agentSource wraps the source of an agent turn.
 type agentSource struct {
-	src    turn.Source
+	src turn.Source
 	a   *Actor
 	r   *running
 }

@@ -30,6 +30,7 @@ const (
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
 	specOpenPlugins      = "Does the switch keep the plugin inventory?"
+	specOpenSteerWrap    = "Does the switch wrap an input that joins a running turn at an item boundary?"
 	specOpenCrashMarker  = "Does the switch keep the crash marker?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 	specOpenBanner       = "Does the switch keep the engine banner"
@@ -180,7 +181,7 @@ var runtimeRows = map[string]runtimeRow{
 	"sse_resume_after_kill":                                     reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                         reGolden(specCursor, specBoxGlobal),
 	"status_and_list_cold_after_restart":                        pendingOn("F02", specOpenListOrder),
-	"steer_joins_the_turn_at_the_tool_boundary":                 pendingOn("F01"),
+	"steer_joins_the_turn_at_the_tool_boundary":                 reGolden(specQueue, specOpenSteerWrap),
 	"stream_stall":                                              reGolden(specView, "F02"),
 	"task_child_result_reaches_parent":                          reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"text_reply":                                                sameAsServe(),

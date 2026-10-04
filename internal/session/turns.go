@@ -109,7 +109,7 @@ func (a *Actor) start(id string, inputIDs []string) {
 		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
-		steering: caps.Steering, ownsLoop: caps.OwnsLoop}
+		steering: caps.Steering || !caps.OwnsLoop, ownsLoop: caps.OwnsLoop}
 	if r.steering {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
@@ -156,7 +156,7 @@ func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
 }
 
 // steer promotes the queued steer inputs into r and returns them. A turn
-// that is stopping gets none.
+// that is stopping, or that takes no steer input, gets none.
 func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
 	if a.run != r {
 		return nil, ErrTurnMismatch
