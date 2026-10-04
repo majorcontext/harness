@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
@@ -109,25 +110,38 @@ type handler[S Session] struct {
 	codes   []Code
 	workDir string
 	procs   Processes
+	// routes names the route that runs each control command.
+	routes map[command.Op]route
+}
+
+type route struct{ method, path string }
+
+// handle registers f at pattern, "METHOD path", as the route of each op.
+func (h *handler[S]) handle(mux *http.ServeMux, pattern string, f http.HandlerFunc, ops ...command.Op) {
+	mux.HandleFunc(pattern, f)
+	method, path, _ := strings.Cut(pattern, " ")
+	for _, op := range ops {
+		h.routes[op] = route{method, path}
+	}
 }
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
 		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /sessions", h.serve(h.create))
 	mux.HandleFunc("GET /sessions", h.serve(h.list))
-	mux.HandleFunc("GET /sessions/{id}", h.serve(h.view))
-	mux.HandleFunc("PATCH /sessions/{id}", h.session(h.update))
+	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
+	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
-	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
-	mux.HandleFunc("POST /sessions/{id}/compact", h.session(h.compact))
+	h.handle(mux, "POST /sessions/{id}/interrupt", h.session(h.interrupt), command.OpAbort)
+	h.handle(mux, "POST /sessions/{id}/compact", h.session(h.compact), command.OpCompact)
 	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
-	mux.HandleFunc("PUT /sessions/{id}/goal", h.session(h.setGoal))
-	mux.HandleFunc("DELETE /sessions/{id}/goal", h.session(h.clearGoal))
+	h.handle(mux, "PUT /sessions/{id}/goal", h.session(h.setGoal), command.OpSetGoal)
+	h.handle(mux, "DELETE /sessions/{id}/goal", h.session(h.clearGoal), command.OpClearGoal)
 	mux.HandleFunc("GET /sessions/{id}/events", h.serve(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
@@ -138,6 +152,10 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 		c, err := rt.Commands()
 		if err != nil {
 			return err
+		}
+		for i, e := range c.Commands {
+			at := h.routes[command.Op(e.Op)]
+			c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
 		}
 		reply(w, http.StatusOK, c)
 		return nil

@@ -335,7 +335,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	}
 	own, err := r.owner.Acquire(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrSessionNotOwned, err)
 	}
 	var c eventlog.SessionCreated
 	if l.created != nil {

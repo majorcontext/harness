@@ -3,8 +3,11 @@ package harness_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -445,4 +448,26 @@ func TestCloseEndsAnOpenThatWaitsForOwnership(t *testing.T) {
 			t.Fatal("Open still waits for ownership after Close returned")
 		}
 	})
+}
+
+// deniedOwner is an Owner that refuses every grant with err.
+type deniedOwner struct{ err error }
+
+func (o deniedOwner) Acquire(context.Context, string) (harness.Ownership, error) { return nil, o.err }
+
+func TestAnOwnerRefusalIsSessionNotOwned(t *testing.T) {
+	boom := errors.New("lease held elsewhere")
+	r, err := harness.NewWithBackend(harness.Options{Store: harness.NewMemStore(), Owner: deniedOwner{boom}}, newFake())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Open(bg, "s1"); !errors.Is(err, harness.ErrSessionNotOwned) || !errors.Is(err, boom) {
+		t.Fatalf("Open = %v, want ErrSessionNotOwned that wraps the refusal", err)
+	}
+	body := strings.NewReader(`{"id":"a","parts":[{"type":"text","text":"hi"}]}`)
+	rec := httptest.NewRecorder()
+	r.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/sessions/s1/inputs", body))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), protocol.CodeSessionNotOwned) {
+		t.Fatalf("POST inputs = %d %s, want 409 %s", rec.Code, rec.Body, protocol.CodeSessionNotOwned)
+	}
 }

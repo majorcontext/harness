@@ -254,6 +254,15 @@ func TestCommandList(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	menu, err := r.Commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range menu.Commands {
+		if c.Method != "" || c.Path != "" {
+			t.Errorf("Commands entry %s names the route %s %s; the HTTP handler names routes", c.Name, c.Method, c.Path)
+		}
+	}
 	srv := httptest.NewServer(r.Handler())
 	t.Cleanup(srv.Close)
 	resp, err := http.Get(srv.URL + "/commands")
