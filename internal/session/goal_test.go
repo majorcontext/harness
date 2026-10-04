@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -43,12 +44,11 @@ func (*goalBackend) Capabilities(string) turn.Capabilities { return turn.Capabil
 
 func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
 	text, judge := "", req.Instructions == evaluatorPrompt
+	var fail error
 	if judge {
 		text = next(&b.mu, &b.verdicts)
 	} else {
-		if err := next(&b.mu, &b.errs); err != nil {
-			return turn.Result{}, err
-		}
+		fail = next(&b.mu, &b.errs)
 		in, _, _ := strings.Cut(req.Input[0].Parts[0].Text, "\n")
 		text = "re " + in
 	}
@@ -59,15 +59,18 @@ func (b *goalBackend) Run(ctx context.Context, req turn.Request, out turn.Sink) 
 			return turn.Result{}, context.Cause(ctx)
 		}
 	}
+	if fail != nil {
+		return turn.Result{}, fail
+	}
 	return turn.Result{}, out.Item(eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}})
 }
 
-func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool) *Actor {
+func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *atomic.Int32) *Actor {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	t.Cleanup(func() { cancel(); wg.Wait() })
-	cfg := Config{ID: "s1", Log: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: wg.Go, Done: func() {}, Prompt: func() string { return "" }}
+	cfg := Config{ID: "s1", Log: log, Evaluator: "m/eval", Ownership: owned{}, Backend: b, Base: ctx, Go: func(f func()) { wg.Go(func() { live.Add(1); defer live.Add(-1); f() }) }, Done: func() {}, Prompt: func() string { return "" }}
 	open := func() (*Actor, error) { return Open(ctx, cfg) }
 	if create {
 		open = func() (*Actor, error) { return Create(ctx, cfg, eventlog.SessionCreated{Model: "m/m"}) }
@@ -88,6 +91,21 @@ func settled(a *Actor) {
 			return
 		}
 		<-v.changed
+	}
+}
+
+func submitHi(t *testing.T, a *Actor) {
+	t.Helper()
+	in := eventlog.InputAdmitted{InputID: "hi", Delivery: eventlog.DeliveryQueue, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
+	if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func clearGoal(t *testing.T, a *Actor) {
+	t.Helper()
+	if err := a.ClearGoal(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -122,29 +140,29 @@ func TestGoal(t *testing.T) {
 		{"an error the user must fix fails the goal", &goalBackend{errs: []error{errors.New("bad request")}}, setGoal(0),
 			slices.Concat(ran[:3], []string{"turn.ended failed bad request", "goal.changed failed"})},
 		{"a goal set on a busy session judges the running turn", &goalBackend{verdicts: []string{"MET: ok"}, gated: true}, func(t *testing.T, a *Actor, b *goalBackend) {
-			in := eventlog.InputAdmitted{InputID: "hi", Delivery: eventlog.DeliveryQueue, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
-			if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
-				t.Fatal(err)
-			}
+			submitHi(t, a)
 			setGoal(0)(t, a, b)
 			close(b.gate)
 		}, slices.Concat([]string{"input.admitted", "turn.started", "goal.set", "item.completed assistant re hi", "turn.ended completed"}, achieved)},
 		{"clearing a goal stops its turn", &goalBackend{gated: true}, func(t *testing.T, a *Actor, b *goalBackend) {
 			setGoal(0)(t, a, b)
-			if err := a.ClearGoal(context.Background()); err != nil {
-				t.Fatal(err)
-			}
+			clearGoal(t, a)
 		}, slices.Concat(ran[:3], []string{"goal.changed cleared", "turn.ended interrupted goal_cleared"})},
 		{"an input during a goal turn leaves no goal input after the verdict", &goalBackend{verdicts: []string{"NOT MET: a", "NOT MET: b", "MET: ok"}, gated: true},
 			func(t *testing.T, a *Actor, b *goalBackend) {
 				setGoal(0)(t, a, b)
-				in := eventlog.InputAdmitted{InputID: "hi", Delivery: eventlog.DeliveryQueue, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "hi"}}}
-				if _, _, err := a.Submit(context.Background(), in, ""); err != nil {
-					t.Fatal(err)
-				}
+				submitHi(t, a)
 				close(b.gate)
 			}, slices.Concat(ran[:3], []string{"input.admitted", "item.completed assistant re say done", "turn.ended completed", "goal.evaluated not_met", "input.admitted",
 				"turn.started", "item.completed assistant re hi", "turn.ended completed", "input.withdrawn", "goal.evaluated not_met"}, again, achieved)},
+		{"clearing a paused goal starts the input it left queued", &goalBackend{errs: []error{turn.ErrExhausted, nil}, gated: true}, func(t *testing.T, a *Actor, b *goalBackend) {
+			setGoal(0)(t, a, b)
+			submitHi(t, a)
+			close(b.gate)
+			synctest.Wait()
+			clearGoal(t, a)
+		}, slices.Concat(ran[:3], []string{"input.admitted", "turn.ended failed provider_exhausted", "goal.changed paused", "goal.changed cleared",
+			"turn.started", "item.completed assistant re hi", "turn.ended completed"})},
 		{"an interrupt during the evaluation leaves the goal running", &goalBackend{verdicts: []string{"MET: ok"}, gated: true, gateJudge: true},
 			func(t *testing.T, a *Actor, b *goalBackend) {
 				setGoal(0)(t, a, b)
@@ -159,18 +177,37 @@ func TestGoal(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				start, log := time.Now(), &memLog{}
 				tc.b.gate = make(chan struct{})
-				a := goalActor(t, log, tc.b, true)
+				a := goalActor(t, log, tc.b, true, new(atomic.Int32))
 				tc.act(t, a, tc.b)
 				settled(a)
 				if got := lines(t, log, 2); !slices.Equal(got, tc.want) {
 					t.Errorf("log =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
 				}
-				if paused := slices.Contains(tc.want, "goal.changed paused"); paused != (time.Since(start) >= goalRetry) {
-					t.Errorf("goal ran again after %v, paused %v", time.Since(start), paused)
+				if resumed := slices.Contains(tc.want, "goal.changed active"); resumed != (time.Since(start) >= goalRetry) {
+					t.Errorf("goal ran again after %v, resumed %v", time.Since(start), resumed)
 				}
 			})
 		})
 	}
+}
+
+func TestResumedGoalLeavesNoRetryTimer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		live := new(atomic.Int32)
+		b := &goalBackend{verdicts: []string{"MET: ok"}, errs: []error{turn.ErrExhausted, nil}, gate: make(chan struct{})}
+		a := goalActor(t, &memLog{}, b, true, live)
+		synctest.Wait()
+		idle := live.Load()
+		if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		submitHi(t, a)
+		settled(a)
+		if n := live.Load(); n != idle {
+			t.Errorf("%d goroutines run after the goal ended, %d before it", n, idle)
+		}
+	})
 }
 
 func TestOpenContinuesTheGoal(t *testing.T) {
@@ -189,7 +226,7 @@ func TestOpenContinuesTheGoal(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				log := &memLog{}
 				tc.b.gate = make(chan struct{})
-				a := goalActor(t, log, tc.b, true)
+				a := goalActor(t, log, tc.b, true, new(atomic.Int32))
 				if err := a.SetGoal(context.Background(), "say done", 0); err != nil {
 					t.Fatal(err)
 				}
@@ -198,7 +235,7 @@ func TestOpenContinuesTheGoal(t *testing.T) {
 					t.Fatal(err)
 				}
 				close(tc.b.gate)
-				settled(goalActor(t, log, tc.b, false))
+				settled(goalActor(t, log, tc.b, false, new(atomic.Int32)))
 				got := lines(t, log, 0)
 				if got = got[max(0, len(got)-len(tc.want)):]; !slices.Equal(got, tc.want) {
 					t.Errorf("log ends\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))

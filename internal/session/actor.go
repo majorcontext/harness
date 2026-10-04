@@ -116,6 +116,8 @@ type Actor struct {
 	run       *running
 	releasing []func(struct{}, error)
 	stopped   bool
+	retryStop context.CancelFunc
+	retryAt   time.Time
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
@@ -387,6 +389,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 			a.stopped = true
 			return err
 		}
+	}
+	if g, _ := a.state.Goal(); g.State != eventlog.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
+		a.stopRetry()
 	}
 	a.publish(false)
 	return nil

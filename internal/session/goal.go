@@ -74,6 +74,9 @@ func (a *Actor) ClearGoal(ctx context.Context) error {
 			r.waiters = append(r.waiters, reply)
 			return
 		}
+		if err == nil && a.run == nil {
+			err = a.next(true)
+		}
 		reply(struct{}{}, err)
 	})
 	return err
@@ -249,23 +252,36 @@ func (a *Actor) goalStop(err error) []eventlog.Event {
 	return append(a.withdrawGoal(), change)
 }
 
-// retryLater resumes a paused goal at its retry time, unless the goal
-// changed by then.
+// retryLater resumes a paused goal at its retry time. It replaces the
+// timer of an earlier pause, and appending an event that ends the pause
+// stops it.
 func (a *Actor) retryLater() {
+	a.stopRetry()
 	g, _ := a.state.Goal()
 	if g.State != eventlog.GoalPaused {
 		return
 	}
+	ctx, cancel := context.WithCancel(a.cfg.Base)
+	a.retryStop, a.retryAt = cancel, g.RetryAt
 	a.cfg.Go(func() {
 		t := time.NewTimer(time.Until(g.RetryAt))
 		defer t.Stop()
 		select {
 		case <-t.C:
+		case <-ctx.Done():
+			return
 		case <-a.quit:
 			return
 		}
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.retry(g.RetryAt)) })
 	})
+}
+
+func (a *Actor) stopRetry() {
+	if a.retryStop != nil {
+		a.retryStop()
+		a.retryStop = nil
+	}
 }
 
 // retry resumes the goal paused until at. It judges the last turn again
