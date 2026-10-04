@@ -312,6 +312,23 @@ func reason(err error) string {
 	return "request failed"
 }
 
+// connectReason classifies a failed connect without its text. An HTTP
+// status error has no typed code, so it reads as a failed initialize.
+func connectReason(err error) string {
+	var oe *net.OpError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "initialize timed out"
+	case errors.Is(err, context.Canceled):
+		return "initialize cancelled"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection refused"
+	case errors.As(err, &oe):
+		return "connection failed"
+	}
+	return "initialize failed"
+}
+
 // text renders content as text. The result carries no binary data, so a
 // binary item becomes one line that names its size and type.
 func text(content []mcp.Content) string {

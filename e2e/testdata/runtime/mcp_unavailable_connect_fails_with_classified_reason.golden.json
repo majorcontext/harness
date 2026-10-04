@@ -83,7 +83,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: connect for \"weather\" failed: request failed",
+              "text": "mcp: connect for \"weather\" failed: initialize failed",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -142,7 +142,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: connect for \"weather\" failed: request failed",
+              "text": "mcp: connect for \"weather\" failed: initialize failed",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -227,7 +227,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "mcp: connect for \"weather\" failed: request failed",
+              "text": "mcp: connect for \"weather\" failed: initialize failed",
               "tool_name": "mcp",
               "tool_use_id": "toolu#1",
               "is_error": true
@@ -323,7 +323,7 @@
             "type": "tool_result",
             "call_id": "toolu#1",
             "is_error": true,
-            "content": "mcp: connect for \"weather\" failed: request failed"
+            "content": "mcp: connect for \"weather\" failed: initialize failed"
           }
         ]
       },

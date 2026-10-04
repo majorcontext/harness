@@ -210,7 +210,9 @@ func TestToolCalls(t *testing.T) {
 		{name: "connect of an unknown server", call: call("mcp", `{"action":"connect","server":"nope"}`), want: `error: mcp: unknown server "nope" (configured: docs, weather)`},
 		{name: "connect of a connected server", call: call("mcp", `{"action":"connect","server":"docs"}`), want: `{"server":"docs","connected":true,"message":"already connected"}`},
 		{name: "connect of a server that refuses", edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].SetAvailable(false) },
-			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: request failed`},
+			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: initialize failed`},
+		{name: "connect of a server that is down", edit: stop,
+			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: connection refused`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, srv := source(t, tc.edit)

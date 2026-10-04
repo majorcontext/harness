@@ -54,6 +54,7 @@ First tagged release.
 - **Compaction result** (`harness`, `protocol`) — `Session.Compact` returns a `protocol.Compacted` with `from_seq`, `to_seq`, `by_backend`, and `folded`, and `POST /sessions/{id}/compact` answers `200` with it. `folded` is false when the session has too few turns.
 - **Engine banner** (`harness`) — with `Options.Version`, each model call of a harness-loop turn sends the status line `[engine: harness <version> · session_sync=<mode> · engine started <time>]` as engine context, as `harness serve` does. The first request of a session pins it after the newest message of the history, and each later request keeps it there, so the request prefix stays the same. A turn of a backend that owns its loop, such as Claude Code, gets none. Empty: no banner.
 - **Crash marker** (`harness`) — `Open` ends a crashed turn with the assistant item `[harness: this turn was interrupted by a process restart and could not complete]` before `turn.ended`, as the engine did, so the next user message no longer joins the crashed one on the wire.
+- **MCP connect reasons** (`harness`) — `mcp(action="connect")` names the class of a failed connect, as the engine did: `initialize timed out`, `initialize cancelled`, `connection refused`, `connection failed`, or `initialize failed`. It never names the endpoint URL or a response body.
 
 ### Changed
 

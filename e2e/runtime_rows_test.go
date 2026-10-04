@@ -30,7 +30,6 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
-	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
 	specOpenPlugins      = "Does the switch keep the plugin inventory?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 	specOpenBanner       = "Does the switch keep the engine banner"
@@ -153,7 +152,7 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_tool_error_and_rpc_error_reach_model":                  reGolden(specMCPText),
 	"mcp_two_servers_share_a_tool_name":                         sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                     reGolden(specMCPNoStatus),
-	"mcp_unavailable_connect_fails_with_classified_reason":      reGolden(specMCPNoStatus, specMCPText, specOpenMCPReason),
+	"mcp_unavailable_connect_fails_with_classified_reason":      reGolden(specMCPNoStatus, specMCPText),
 	"messages_page_after_compaction":                            pendingOn("phase 4"),
 	"messages_page_windows":                                     pendingOn("phase 4"),
 	"one_tool_round_trip":                                       sameAsServe(),
