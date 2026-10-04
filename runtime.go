@@ -219,7 +219,7 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
 		a, err := session.Open(ctx, cfg)
 		if err == nil {
-			r.group.Go(func() { r.recoverChildren(a) })
+			r.group.Go(func() { r.recoverChildren(id, a) })
 		}
 		return a, err
 	})

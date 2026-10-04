@@ -275,3 +275,45 @@ func settled(t *testing.T, st harness.Store) eventlog.Outcome {
 	}
 	return ""
 }
+
+func TestRecoveredChildCountsAgainstMaxConcurrentTasks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, dir := harness.NewMemStore(), t.TempDir()
+		cfg := config.Config{MaxConcurrentTasks: 1}
+		f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { return nil })}
+		r1 := familyRuntime(t, st, f1, nil, cfg, dir)
+		submit(t, create(t, r1), text("a", "delegate"))
+		closeRuntime(t, r1)
+		f2 := &family{answer: f1.answer}
+		r2 := familyRuntime(t, st, f2, nil, cfg, dir)
+		s, err := r2.Open(bg, "s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		submit(t, s, text("b", "delegate"))
+		if _, got := f2.last("s1", "task: max_concurrent_tasks 1"); got == "" {
+			t.Error("a spawn beside the recovered running child does not fail on max_concurrent_tasks")
+		}
+		closeRuntime(t, r2)
+	})
+}
+
+func TestTaskNamesArgumentsOfTheWrongType(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		call := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{
+			{Type: eventlog.PartToolCall, CallID: "t0", Name: "task", Arguments: json.RawMessage(`{"prompt":5}`)}}}
+		f := &family{answer: func(p eventlog.Part) []eventlog.Message {
+			if p.Type == eventlog.PartToolResult {
+				return []eventlog.Message{say("waiting")}
+			}
+			return []eventlog.Message{call}
+		}}
+		r := familyRuntime(t, harness.NewMemStore(), f, nil, config.Config{}, t.TempDir())
+		submit(t, create(t, r), text("a", "delegate"))
+		if _, got := f.last("s1", "task: invalid arguments"); got == "" {
+			t.Error("a task call with arguments of the wrong type does not report invalid arguments")
+		}
+		closeRuntime(t, r)
+	})
+}

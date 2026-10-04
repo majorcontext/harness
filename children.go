@@ -48,7 +48,10 @@ func (taskTool) Spec() protocol.ToolSpec {
 
 func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
 	var in struct{ Agent, Prompt string }
-	if err := json.Unmarshal(c.Arguments, &in); err != nil || strings.TrimSpace(in.Prompt) == "" {
+	if err := json.Unmarshal(c.Arguments, &in); err != nil {
+		return protocol.ToolResult{}, fmt.Errorf("task: invalid arguments: %w", err)
+	}
+	if strings.TrimSpace(in.Prompt) == "" {
 		return protocol.ToolResult{}, errors.New("task: prompt is required")
 	}
 	in.Agent = cmp.Or(in.Agent, prompt.GeneralPurpose)
@@ -170,10 +173,14 @@ func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
 
 // recoverChildren settles each unsettled child of a that has ended, or
 // that never started, and opens each other one, which reports when its
-// turn ends. A crash can come between the end of a child turn and its
+// turn ends. Each opened child counts against the limits of its tree. A crash can come between the end of a child turn and its
 // child.settled record.
-func (r *Runtime) recoverChildren(a *session.Actor) {
+func (r *Runtime) recoverChildren(parent string, a *session.Actor) {
 	ids, err := a.Unsettled(r.base)
+	if err != nil {
+		return
+	}
+	root, _, err := r.lineage(r.base, parent)
 	if err != nil {
 		return
 	}
@@ -192,6 +199,7 @@ func (r *Runtime) recoverChildren(a *session.Actor) {
 			_ = a.Settle(r.base, s, text)
 			continue
 		}
+		r.sup.adopt(root, id)
 		_, _ = r.Open(r.base, id)
 	}
 }
@@ -222,6 +230,12 @@ func (s *supervisor) admit(root, child string, depth int) error {
 	}
 	s.roots[child] = root
 	return nil
+}
+
+func (s *supervisor) adopt(root, child string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roots[child] = root
 }
 
 func (s *supervisor) done(child string) {
