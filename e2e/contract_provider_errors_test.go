@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -44,6 +45,18 @@ func TestContractProviderErrors(t *testing.T) {
 				{Name: "overflow", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
 			},
 			actions: oneTurn(getSession{as: "a"}),
+		},
+		{
+			name: "provider_error_text_is_masked_and_bounded",
+			model: []harnesstest.Step{
+				{Name: "leak", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request, Authorization: Bearer sk-live-0123456789abcdef " + strings.Repeat("x", 400)}},
+			},
+			actions: []action{
+				create{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 2},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
 		},
 		{
 			name:   "stream_stall",

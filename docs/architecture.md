@@ -580,6 +580,8 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 
 Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
+As the engine did, the actor masks and bounds each error text that it writes to the log (`turn.ended` error, `goal.changed` reason): credential shapes are redacted, and a text longer than 256 runes keeps its first 256 runes and ends with `...[truncated]`.
+
 ### Slash commands
 
 `Session.Submit` resolves an input with `source: typed` and one text part through the `command` package, with the dispatch rules of the engine server. Any other input is never a command.
