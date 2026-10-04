@@ -141,12 +141,12 @@ func block() []eventlog.Message { return nil }
 // grandchild that answers with grand. act is the answer of the root to "act".
 func generations(grand func() []eventlog.Message, act func() eventlog.Message) func(eventlog.Part) []eventlog.Message {
 	return func(p eventlog.Part) []eventlog.Message {
-		switch {
-		case p.Text == "act":
+		switch p.Text {
+		case "act":
 			return []eventlog.Message{act()}
-		case p.Text == "child work":
+		case "child work":
 			return []eventlog.Message{calls("task", map[string]any{"prompt": "grand work"})}
-		case p.Text == "grand work":
+		case "grand work":
 			return grand()
 		}
 		return delegation("general-purpose", 1, nil)(p)
