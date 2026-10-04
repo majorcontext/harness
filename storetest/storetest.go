@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -86,6 +87,7 @@ func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 		{"ConcurrentAppendOneWins", testConcurrentAppendOneWins},
 		{"InvalidRecordRejected", testInvalidRecordRejected},
 		{"ReadPaging", testReadPaging},
+		{"ReadAtManyOffsets", testReadAtManyOffsets},
 		{"UnknownSessionIsEmpty", testUnknownSessionIsEmpty},
 		{"InvalidSessionRejected", testInvalidSessionRejected},
 		{"SessionsSortedAndPaged", testSessionsSortedAndPaged},
@@ -107,6 +109,7 @@ func RunInstances(t *testing.T, newStorage func(t *testing.T) func() harness.Sto
 	}{
 		{"StaleInstanceAppendConflicts", testStaleInstanceAppendConflicts},
 		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
+		{"ReadSeesRecordsOfOtherInstance", testReadSeesRecordsOfOtherInstance},
 	} {
 		t.Run(c.name, func(t *testing.T) { c.fn(t, newStorage(t)) })
 	}
@@ -126,6 +129,21 @@ func testStaleInstanceAppendConflicts(t *testing.T, open func() store) {
 	wantRecords(t, a, "s", "1", "2")
 	mustAppend(t, a, "s", 2, "3")
 	wantRecords(t, b, "s", "1", "2", "3")
+}
+
+// testReadSeesRecordsOfOtherInstance checks reads on an instance that has
+// read a log before another instance appended to it: the records of the
+// other instance come back at their own seqs, and a fresh instance reads
+// the whole log too.
+func testReadSeesRecordsOfOtherInstance(t *testing.T, open func() store) {
+	a, b := open(), open()
+	appendMany(t, a, "s", 0, 1000)
+	checkManyReads(t, a, "s", 1000)
+	appendMany(t, b, "s", 1000, manyRecords)
+	checkManyReads(t, a, "s", manyRecords)
+	checkManyReads(t, open(), "s", manyRecords)
+	appendMany(t, a, "s", manyRecords, manyRecords+300)
+	checkManyReads(t, b, "s", manyRecords+300)
 }
 
 func testAppendReadOrder(t *testing.T, st store) {
@@ -236,6 +254,57 @@ func testReadPaging(t *testing.T, st store) {
 			t.Errorf("Read(after %d, limit %d) = %q, want %q", tc.after, tc.limit, got, tc.want)
 		}
 	}
+}
+
+// manyRecords is the count of records for the cases that read at many
+// offsets, enough for a store with a sparse index to hold many entries.
+const manyRecords = 3000
+
+func manyRecord(seq int) string {
+	return `{"seq":` + strconv.Itoa(seq) + `,"pad":"` + strings.Repeat("x", seq%37) + `"}`
+}
+
+func appendMany(t *testing.T, st store, id string, from, to int) {
+	t.Helper()
+	for at := from; at < to; {
+		n := min(1+at%97, to-at)
+		batch := make([]string, n)
+		for i := range batch {
+			batch[i] = manyRecord(at + i + 1)
+		}
+		mustAppend(t, st, id, uint64(at), batch...)
+		at += n
+	}
+}
+
+// checkManyReads reads at afterSeq values around every 64th seq and checks
+// that each read returns the records from afterSeq+1 on, up to the limit.
+func checkManyReads(t *testing.T, st store, id string, count int) {
+	t.Helper()
+	afters := []int{0, 1, count - 1, count, count + 1}
+	for a := 0; a <= count; a += 64 {
+		afters = append(afters, a-1, a, a+1)
+	}
+	for _, after := range afters {
+		if after < 0 {
+			continue
+		}
+		for _, limit := range []int{1, 5, 300, count + 10} {
+			var want []string
+			for seq := after + 1; seq <= count && len(want) < limit; seq++ {
+				want = append(want, manyRecord(seq))
+			}
+			if got := readAll(t, st, id, uint64(after), limit); !slices.Equal(got, want) {
+				t.Fatalf("Read(after %d, limit %d) of %q returned %d records, want %d: got %.80q, want %.80q",
+					after, limit, id, len(got), len(want), got, want)
+			}
+		}
+	}
+}
+
+func testReadAtManyOffsets(t *testing.T, st store) {
+	appendMany(t, st, "a", 0, manyRecords)
+	checkManyReads(t, st, "a", manyRecords)
 }
 
 func testUnknownSessionIsEmpty(t *testing.T, st store) {

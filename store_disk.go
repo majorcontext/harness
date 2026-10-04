@@ -25,15 +25,22 @@ type DiskStore struct {
 	durable  map[string]bool
 }
 
+// indexStride is the count of lines between two entries of the offset index.
+const indexStride = 256
+
 // diskSession guards the log of one session within one DiskStore. head,
 // size, and total hold the last scan of the file: size is the byte length of
 // the whole lines and total the file size, so bytes after size are torn.
+// offsets[i] is the byte offset of the line with seq i*indexStride+1, for
+// each such line up to head. It holds offsets only, so a scan or an append
+// of this instance can rebuild it and it is no checkpoint.
 type diskSession struct {
-	mu     sync.Mutex
-	head   uint64
-	size   int64
-	total  int64
-	loaded bool
+	mu      sync.Mutex
+	head    uint64
+	size    int64
+	total   int64
+	loaded  bool
+	offsets []int64
 }
 
 // NewDiskStore returns a DiskStore rooted at root. It creates root on first write.
@@ -99,46 +106,55 @@ func (d *DiskStore) scanHead(session string, s *diskSession) (uint64, error) {
 		return s.head, nil
 	}
 	if !s.loaded || total < s.size {
-		s.head, s.size = 0, 0
+		s.head, s.size, s.offsets = 0, 0, s.offsets[:0]
 	}
-	lines, size, total, err := scanLog(path, s.size)
+	lines, size, total, offsets, err := scanLog(path, s.size, s.head, s.offsets)
 	if err != nil {
 		s.loaded = false
 		return 0, err
 	}
-	s.head, s.size, s.total, s.loaded = s.head+lines, size, total, true
+	s.head, s.size, s.total, s.loaded, s.offsets = s.head+lines, size, total, true, offsets
 	return s.head, nil
 }
 
 // scanLog returns the count of newline-terminated lines after offset from,
-// the end offset of the last of them (from when there is none), and the
-// file size. A missing file is empty.
-func scanLog(path string, from int64) (lines uint64, size, total int64, err error) {
+// the end offset of the last of them (from when there is none), the file
+// size, and offsets extended by the lines it counted. The line at from has
+// seq head+1. A missing file is empty.
+func scanLog(path string, from int64, head uint64, offsets []int64) (lines uint64, size, total int64, out []int64, err error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, 0, 0, nil
+		return 0, 0, 0, offsets, nil
 	}
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	defer func() { _ = f.Close() }()
 	if _, err := f.Seek(from, io.SeekStart); err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	size, total = from, from
 	buf := make([]byte, 64<<10)
 	for {
 		n, rerr := f.Read(buf)
-		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
-			size = total + int64(i) + 1
+		for off := 0; ; {
+			i := bytes.IndexByte(buf[off:n], '\n')
+			if i < 0 {
+				break
+			}
+			if (head+lines)%indexStride == 0 {
+				offsets = append(offsets, size)
+			}
+			lines++
+			off += i + 1
+			size = total + int64(off)
 		}
-		lines += uint64(bytes.Count(buf[:n], []byte{'\n'}))
 		total += int64(n)
 		if rerr == io.EOF {
-			return lines, size, total, nil
+			return lines, size, total, offsets, nil
 		}
 		if rerr != nil {
-			return 0, 0, 0, rerr
+			return 0, 0, 0, nil, rerr
 		}
 	}
 }
@@ -203,7 +219,7 @@ func (d *DiskStore) writeLocked(ctx context.Context, session string, s *diskSess
 		err = d.durably(path, func() error { return syncDir(dir) })
 	}
 	if err == nil {
-		err = appendSynced(f, s, bytes.Join(records, []byte{'\n'}))
+		err = appendSynced(f, s, records)
 	}
 	if err == nil {
 		s.head += uint64(len(records))
@@ -214,10 +230,11 @@ func (d *DiskStore) writeLocked(ctx context.Context, session string, s *diskSess
 	return err
 }
 
-// appendSynced cuts torn bytes, writes b and a final newline after the whole
-// lines, then fsyncs. On failure it cuts the log back so the append reads
-// as not landed.
-func appendSynced(f *os.File, s *diskSession, b []byte) error {
+// appendSynced cuts torn bytes, writes the records as lines after the whole
+// lines, then fsyncs, and adds the new lines to the offset index. On failure
+// it cuts the log back so the append reads as not landed.
+func appendSynced(f *os.File, s *diskSession, records [][]byte) error {
+	b := bytes.Join(records, []byte{'\n'})
 	var err error
 	if s.total > s.size {
 		err = f.Truncate(s.size)
@@ -233,17 +250,24 @@ func appendSynced(f *os.File, s *diskSession, b []byte) error {
 		_ = f.Sync()
 		return err
 	}
-	s.size += int64(len(b)) + 1
-	s.total = s.size
+	off := s.size
+	for i, r := range records {
+		if (s.head+uint64(i))%indexStride == 0 {
+			s.offsets = append(s.offsets, off)
+		}
+		off += int64(len(r)) + 1
+	}
+	s.size, s.total = off, off
 	return nil
 }
 
-// Read implements Store.
+// Read implements Store. It reads from the indexed line at or before
+// afterSeq+1, up to the whole lines of the head it took.
 func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, limit int) ([]Record, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	head, err := d.Head(ctx, session)
+	head, first, off, end, err := d.readStart(ctx, session, afterSeq)
 	if err != nil || head <= afterSeq || limit <= 0 {
 		return nil, err
 	}
@@ -253,8 +277,8 @@ func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, l
 	}
 	defer func() { _ = f.Close() }()
 	var out []Record
-	r := bufio.NewReader(f)
-	for seq := uint64(1); seq <= head && len(out) < limit; seq++ {
+	r := bufio.NewReader(io.NewSectionReader(f, off, end-off))
+	for seq := first; seq <= head && len(out) < limit; seq++ {
 		line, err := r.ReadBytes('\n')
 		if err != nil {
 			return nil, err
@@ -264,6 +288,23 @@ func (d *DiskStore) Read(ctx context.Context, session string, afterSeq uint64, l
 		}
 	}
 	return out, nil
+}
+
+// readStart returns the head, the seq and byte offset of the indexed line at
+// or before afterSeq+1, and the byte length of the whole lines of the head,
+// taken together under the session lock.
+func (d *DiskStore) readStart(ctx context.Context, session string, afterSeq uint64) (head, first uint64, off, end int64, err error) {
+	s, err := d.lock(session)
+	if err != nil {
+		return 0, 0, 0, 0, err
+	}
+	defer s.mu.Unlock()
+	head, err = d.headLocked(ctx, session, s)
+	if err != nil || head <= afterSeq {
+		return head, 0, 0, 0, err
+	}
+	i := min(afterSeq/indexStride, uint64(len(s.offsets))-1)
+	return head, i*indexStride + 1, s.offsets[i], s.size, nil
 }
 
 // Head implements Store.
