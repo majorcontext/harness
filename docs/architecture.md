@@ -186,7 +186,7 @@ Free to change.
 | `internal/session` | Session actor, mailbox, state machines, views, replication, and the child commands |
 | `internal/tree` | The child tree: limits, spawn, report, recovery, the tree interrupt, and the `task` tool. It reads the runtime through its own `Sessions` interface |
 | `internal/turn` | One agent loop; declares `Backend`, `Tool`, and `Source`; `Restrict` |
-| `internal/backend` | The `turn.Backend` of a runtime: it builds a backend for each configured provider and routes each model ref to one. Only this package and the provider packages import a provider wire |
+| `internal/backend` | The `turn.Backend` of a runtime: it builds a backend for each configured provider and routes each model ref to one. In the new runtime, only this package and the provider packages import a provider wire |
 | `internal/backend/modelapi` | The one model API backend, for every provider wire |
 | `internal/backend/external`, `claudecode` | Third-party harness backends; phase 5 adds `codexcli` |
 | `internal/tool/mcpsrc` | A `turn.Source` that gives MCP tools to each model call |
@@ -194,16 +194,17 @@ Free to change.
 | `internal/tool/proc` | The `process` tool, the process manager of a runtime, and the process status line |
 | `internal/tool/builtin` | The file, search, and shell tools of a coding agent |
 | `internal/toolresult` | Large-result retention and `read_tool_result`, at parity with the engine |
+| `internal/admit` | Checks each part of an input and returns the `input.admitted` record with the blobs of its attachments |
 | `internal/prompt` | System-prompt segments and agent profiles |
 | `internal/workspace` | The git diff of the work tree for `GET /workspace/changes` |
 
-The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `server`, no internal package imports `engine`, and only `internal/backend` builds a provider wire.
+The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `server`, no internal package imports `engine`, and, in the new runtime, only `internal/backend` builds a provider wire; `engine`, `server`, `cmd`, and `harnesstest` still import the wires until phase 6.
 
 Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer). It also deletes the config keys that `New` refuses, their `Defaults` entries, and `harnesstest.SinkReceiver`, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them), their `Defaults` entries, and `harnesstest.SinkReceiver`, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -535,7 +536,7 @@ Today harness has 36 routes and seven ways to read a session. This has one log a
 
 Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `id`.
 
-A part is `{type: "text", text}` or an attachment `{type: "blob", media_type, data}` with its bytes in `data` as base64. The engine accepted png, jpeg, gif, webp, and pdf attachments, and so does the runtime: an attachment is at most 20 MiB, its bytes must be the type that it claims (an image decodes as that image, a PDF begins with `%PDF-`), and a request body is at most 32 MiB (8 MiB for any other route). A part that fails one check is `invalid_request` and leaves no trace. The runtime stores the bytes with `Store.PutBlob` under `attachment-<sha256>` before it appends `input.admitted`, whose blob part holds `media_type`, `blob_key`, and `bytes` and never the bytes. `Sync` carries the blob in the batch of that record, as it carries `backend.state`. A turn reads a blob through `turn.Request.Blob`. `modelapi` sends it as an image or file part of the wire, and `claudecode` sends an `image` or `document` content block on stdin after the text block. A steer input keeps its blob parts.
+A part is `{type: "text", text}` or an attachment `{type: "blob", media_type, data}` with its bytes in `data` as base64. The engine accepted png, jpeg, gif, webp, and pdf attachments, and so does the runtime: an attachment is at most 20 MiB, its bytes must be the type that it claims (an image decodes as that image, a PDF begins with `%PDF-`), and a request body is at most 32 MiB (8 MiB for any other route). A part that fails one check is `invalid_request` and leaves no trace. The runtime stores the bytes with `Store.PutBlob` under `attachment-<sha256>` before it appends `input.admitted`, whose blob part holds `media_type`, `blob_key`, and `bytes` and never the bytes. `Sync` carries the blob in the batch of that record, as it carries `backend.state`. A turn reads a blob through `turn.Request.Blob`. `modelapi` sends it as an image or file part of the wire, and `claudecode` sends an `image` or `document` content block on stdin after the text block. A steer input keeps its blob parts. The blob is stored before the input is appended, so an input that then fails (a conflict, a turn mismatch, or no ownership) leaves its blob in the store; a retry with the same bytes reuses it.
 
 | Case | Response |
 | --- | --- |
@@ -578,7 +579,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `draining` | 503 |
 | `internal` | 500 |
 
-Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 ### Slash commands
 
@@ -835,7 +836,7 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 
 One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject` runs it on the merged config, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
 
-`New` also refuses a config that sets a key which the runtime does not read, with `ErrInvalidRequest` that names the key: `instructions_mode`, `model_tool`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`. `session_dir` stays for `cmd/harness`, and `session_sync` sets the engine banner. The switch deletes these keys and changes boxinit in the same release; `model_tool` returns with the `model` tool.
+`New` also refuses a config that sets a key which the runtime does not read, with `ErrInvalidRequest` that names the key: `instructions_mode`, `model_tool`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`. `session_dir` stays for `cmd/harness`, and `session_sync` sets the engine banner. The switch stops reading these keys and changes boxinit in the same release, and phase 6 deletes them; `model_tool` returns with the `model` tool.
 
 `ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. The phase 4 switch wires `ApplyEnv` into `cmd/harness`.
 
@@ -968,7 +969,7 @@ Each phase is one or more PRs on `main`. Each ships alone.
 | 1 | Contract suite: scenario scripts and `harnesstest`; CI gates that diff against the merge base; new `AGENTS.md` | Boxes contract suite reuses `harnesstest` |
 | 2 | New runtime core beside the old engine, in the order meta needs it: `harness.Store` and `storetest`; `Owner` with `Epoch`; `Runtime`, `Session.Submit`, `Events`, `OpenView`; `Sync` and `SyncBatch`; handoff and crash causes; a native backend with `ModelTransport` (Codex first); `harness.Tool` and `Restrict`; the `external` adapter and `claudecode`. Absorbs the design of PR #359, its conformance suite, and its `fakeclaude` modes. | The meta home chat embeds it on `pgstore`; it is the first consumer |
 | 3 | `harness/config` with `Defaults`, `Validate`, and `ApplyEnv`, on the standard library only; one `modelapi` backend for every model API wire; provider error classes, the stall watchdog, and max_tokens continuation in `turn`; goals as one state machine in `session`; the built-in tools, and large-result retention and `read_tool_result` in `internal/toolresult`; children, agent profiles, and the `task` tool | Boxes `BootConfig` |
-| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal, including the journals in archived boxes, to the event log in the quiesced window, before the new harness starts; see "Old-format migration". Merged before the switch: `Runtime.Handler`, the box routes and slash commands, the MCP tools, the plugins, the processes and the `process` tool, the prompt builder, the workspace route, and `harness/migrate` with `cmd/harness-migrate`. Also merged before the switch: requests with `Resolve`, the engine banner, the plugin inventory, the crash marker, the MCP connect reason, the history bridge, the frames of a subagent, and the settings change in the middle of a turn. Still to come before the switch: the `session_info` and `model` tools. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
+| 4 | New HTTP and `protocol` generation. Scenario scripts carry over; their assertions move to the new API. One PR switches `cmd/harness`. A one-time tool converts every old session journal, including the journals in archived boxes, to the event log in the quiesced window, before the new harness starts; see "Old-format migration". Merged before the switch: `Runtime.Handler`, the box routes and slash commands, the MCP tools, the plugins, the processes and the `process` tool, the prompt builder, the workspace route, and `harness/migrate` with `cmd/harness-migrate`. Also merged before the switch: requests with `Resolve`, the engine banner, the plugin inventory, the crash marker, the MCP connect reason, the history bridge, the frames of a subagent, and the settings change in the middle of a turn. Still to come before the switch: the `session_info` and `model` tools, the `model` and `effort` of `task spawn`, the attachment migration of the tool, the `goal` tool left out of a Claude Code turn, and the blob parts of `client/session.messages`. The rows of "Deliberate parity breaks" that are open wait for a decision. | Boxes console adopts the harness shapes; boxes routes become thin forwarders. Same release. |
 | 5 | Remaining backends on capabilities; `codexcli` with its approvals | None |
 | 6 | Delete `engine`, `server`, the migration tool, dead features; move leaves to `internal/` | None |
 
@@ -981,6 +982,8 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 - Does the answer route keep the serve receipt `202 {seq, status}`? The runtime answers `204`.
 - Does the switch keep the context gauge and the session cost of a Claude Code turn? Serve took the usage of the `result` frame as the last call when no assistant frame carried usage, and added `total_cost_usd` of each turn to `session_cost_usd` of `subscription_usage`, with provider `claude`. The runtime reads the gauge from an assistant frame only, and reports no cost.
 - Does a failed Claude Code turn run again? Serve ran the CLI once, and the turn failed with the text of the `result` frame. The runtime marks `error_during_execution` as retryable, so it runs the CLI again up to `prompt_retries` times before the turn fails.
+- Does a repeated agent definition name fail the load? The engine fails it and names both files. The runtime keeps the first file of that name, in one directory and across `agent_defs_dirs`, and logs a WARN line for the other.
+- What posts `SyncBatch` to the control plane in a box? The engine posted each journal record to `event_sink`. The runtime has `Options.Sync` and no HTTP client for it, and `New` refuses `event_sink`. The epoch of a batch is `claim_epoch` (see Decided).
 - Does a settings change to a model of another kind of backend take effect in the middle of a turn? Serve fails the turn at its next model call, because Claude Code has no model API. The runtime finishes the turn on its own backend, and the next turn uses the new model.
 
 ## Closed parity questions
@@ -995,7 +998,7 @@ Andy closed these on 2026-10-04: the switch keeps each one, at parity with the e
 
 ## Deliberate parity breaks
 
-Each row is a difference between the runtime and the engine that remains after the parity work. A decision of Andy decides a row, or a line under Open questions waits for one. The contract rows name each row of `e2e/runtime_rows_test.go` that the difference re-goldens. The cross-lane history bridge, the frames of a subagent, and a settings change in the middle of a turn are kept (see Decided), so they are not rows.
+Each row is a difference between the runtime and the engine that remains after the parity work. A decision of Andy decides a row, or a line under Open questions waits for one, and each line under Open questions has a row. A pending row waits for its line, so it names no re-golden. The contract rows name each row of `e2e/runtime_rows_test.go` that the difference re-goldens. The cross-lane history bridge, the frames of a subagent, and a settings change in the middle of a turn are kept (see Decided), so they are not rows.
 
 | Difference | Engine | Runtime | Decision | Contract rows |
 | --- | --- | --- | --- | --- |
@@ -1003,8 +1006,16 @@ Each row is a difference between the runtime and the engine that remains after t
 | `session_info` tool | Reports the session to the model | None | Port it before the switch | None re-golden. Its suite break ends |
 | `model` and `effort` of `task spawn` | The child can run another model at another effort | The child takes the model of its profile and the effort of the session | Port both with the `model` tool, checked as `model set` is | None: no row spawns with them |
 | Claude Code `/compact` | A `/compact` message and `compaction.claude_code` with the tokens before and after | `compaction.applied` with `by_backend`, and no `/compact` message | Decided by the Compaction rules above | `claudecode_compact_delegated` |
-| Claude Code gauge and cost | The gauge and the cost come from the `result` frame | The gauge comes from the assistant frames, and no cost | Open: see Open questions | `claudecode_turn_text_and_tool` |
+| Claude Code gauge and cost | The gauge and the cost come from the `result` frame | The gauge comes from the assistant frames, and no cost | Open: see Open questions | `claudecode_turn_text_and_tool` and `claudecode_error_result_fails_turn` |
 | Claude Code failed turn | One run | A run again up to `prompt_retries` times | Open: see Open questions | `claudecode_error_result_fails_turn` |
+| `[continuation: …]` message of a max_tokens turn | In `<harness-engine-context>` tags | Plain user text | Open: see Open questions | `bifrost_max_tokens_continuation` and `max_tokens_continuation` wait, as pending rows |
+| Order of `GET /sessions` | Creation order | ID order | Open: see Open questions | `status_and_list_cold_after_restart` waits, as a pending row |
+| Receipt of the answer route | `202 {seq, status}` | `204` | Open: see Open questions | `claudecode_question_parks_then_answer_resumes` and `claudecode_question_unknown_call_id_conflicts` |
+| Settings change to a model of another kind of backend in the middle of a turn | The turn fails at its next model call | The turn finishes on its own backend, and the next turn uses the new model | Open: see Open questions | None: no row changes between a model API and a delegated backend |
+| `goal` tool of a Claude Code turn | The tool bridge offers `process`, `task`, the `list` action of `model`, and the history tool; it leaves out `goal`, `session_info`, `mcp`, and `read_tool_result` | The runtime tools of the session reach the CLI, `goal` among them | Port before the switch: a delegated turn gets the tools of the engine bridge | None: no row reads the tools of a Claude Code turn |
+| `client/session.messages` of a plugin | Returns the history with each attachment as a `blob` part and its bytes | A blob part of the log is left out | Port before the switch: map a blob part to a `message.Blob` with a store read | None: no row sends an attachment to a plugin |
+| Repeated agent definition name | The load fails and names both files | The first file of that name wins, in one directory and across `agent_defs_dirs`, and a WARN log line names the other | Open: see Open questions | None: no row repeats a name |
+| `event_sink` | The engine posts each journal record to the URL | `New` refuses the key; `Options.Sync` is a Go interface, and no HTTP client implements it | Open: see Open questions | None: no row sets `event_sink` |
 
 ## Decided
 
