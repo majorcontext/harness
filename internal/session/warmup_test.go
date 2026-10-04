@@ -1,9 +1,11 @@
-package harness_test
+package session_test
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +15,24 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 )
+
+// closeRuntime closes r and fails the test when it cannot.
+func closeRuntime(t *testing.T, r *harness.Runtime) {
+	t.Helper()
+	if err := r.Close(bg); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// pluginFixture builds the wire-level plugin of the contract suite.
+func pluginFixture(t *testing.T, cfg string) []config.PluginSpec {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "pluginfixture")
+	if out, err := exec.Command("go", "build", "-o", bin, "github.com/majorcontext/harness/harnesstest/pluginfixture").CombinedOutput(); err != nil {
+		t.Fatalf("go build pluginfixture: %v\n%s", err, out)
+	}
+	return []config.PluginSpec{{Name: "fixture", Command: []string{bin}, Config: []byte(cfg)}}
+}
 
 // warmWindow is how long a test waits to see a warm-up that must not happen.
 const warmWindow = 500 * time.Millisecond
@@ -145,7 +165,7 @@ func TestWakeWarmsTheWebsocketAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	awaitPrewarms(t, s, 1)
-	converse(t, sess, "hello")
+	ask(t, sess, "hello")
 	closeRuntime(t, r1)
 
 	r2 := warmRuntime(t, s, st, nil)

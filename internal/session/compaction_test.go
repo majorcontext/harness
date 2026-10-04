@@ -1,4 +1,4 @@
-package harness_test
+package session_test
 
 import (
 	"context"
@@ -14,6 +14,8 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/protocol"
 )
+
+var bg = context.Background()
 
 const (
 	compactBanner      = "[compacted summary of earlier conversation]\n\n"
