@@ -30,9 +30,9 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 		ran bool
 	}
 	r, err := call(ctx, a, func(reply func(result, error)) {
-		done := func(_ struct{}, err error) {
+		done := func(runErr, appendErr error) {
 			c, _ := a.state.Compaction()
-			reply(result{c, true}, err)
+			reply(result{c, true}, errors.Join(runErr, appendErr))
 		}
 		owns := a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
 		switch {
@@ -47,7 +47,9 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 				reply(result{}, err)
 				return
 			}
-			a.run.done = func(_ struct{}, err error) { reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, err) }
+			a.run.waiters = append(a.run.waiters, func(runErr, appendErr error) {
+				reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, errors.Join(runErr, appendErr))
+			})
 		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done):
 			reply(result{}, nil)
 		}
@@ -67,19 +69,22 @@ func (a *Actor) overThreshold() bool {
 }
 
 // compact runs a summary of the turns before the newest keep as the run of
-// the actor, and reports false when no turn can fold. done receives the outcome.
-func (a *Actor) compact(keep int, done func(struct{}, error)) bool {
+// the actor, and reports false when no turn can fold. done, when it is not
+// nil, receives the outcome.
+func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	id := newID("compaction")
 	req, c, ok := a.fold(id, keep)
 	if !ok {
 		return false
 	}
 	metas := a.retained()
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
+	r := a.newRun(kindCompaction, id)
+	if done != nil {
+		r.waiters = append(r.waiters, done)
+	}
 	a.run = r
 	a.spawn(func() {
-		summary, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		summary, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		c.Summary = a.indexed(summary, metas)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
@@ -106,27 +111,18 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 
 // compacted appends the summary of run r, then starts the next queued
 // input with no new compaction. A failed summary appends nothing.
-func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, err error) {
+func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error) {
 	if a.run != r {
 		return
 	}
 	a.run = nil
 	r.cancel(nil)
-	if len(a.releasing) > 0 {
-		err = ErrNotOwned
+	var appendErr error
+	switch {
+	case len(a.releasing) > 0:
+		runErr = ErrNotOwned
+	case runErr == nil:
+		appendErr = a.append(c)
 	}
-	if err == nil {
-		err = a.append(c)
-	}
-	for _, w := range r.waiters {
-		w(struct{}{}, nil)
-	}
-	if r.done != nil {
-		r.done(struct{}{}, err)
-	}
-	if len(a.releasing) > 0 {
-		a.stop(nil)
-		return
-	}
-	_ = a.settle(false)
+	a.finishRun(r, runErr, appendErr, func() error { return a.settle(false) })
 }

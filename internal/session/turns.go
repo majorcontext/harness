@@ -17,24 +17,6 @@ const (
 
 var errStopTurn = errors.New("harness: turn stopped")
 
-// running is a turn. An interrupt or a lost ownership ends ctx, which stops
-// the running tools. A handoff ends only step: running tools finish.
-type running struct {
-	id       string
-	ctx      context.Context
-	cancel   context.CancelCauseFunc
-	step     context.Context
-	handoff  context.CancelCauseFunc
-	steering bool
-	ownsLoop bool
-	steered  chan struct{}
-	judge    bool
-	usage    eventlog.Usage
-	waiters  []func(struct{}, error)
-	// done receives the outcome of a Compact that this run serves.
-	done func(struct{}, error)
-}
-
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
 func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedTurn string) (seq uint64, repeat bool, err error) {
@@ -103,13 +85,11 @@ func sameJSON(x, y any) bool {
 }
 
 func (a *Actor) start(id string, inputIDs []string) {
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	step, handoff := context.WithCancelCause(ctx)
+	r := a.newRun(kindTurn, id)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
 		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
-	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
-		steering: caps.Steering || !caps.OwnsLoop, ownsLoop: caps.OwnsLoop}
+	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
@@ -122,8 +102,8 @@ func (a *Actor) start(id string, inputIDs []string) {
 	tools, src := a.turnTools(r)
 	t := &turnRun{a: a, r: r}
 	a.spawn(func() {
-		a.awaitWarm(ctx)
-		turn.Run(ctx, step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
+		a.awaitWarm(r.ctx)
+		turn.Run(r.ctx, r.step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
 	})
 }
 
@@ -212,20 +192,11 @@ func (a *Actor) ended(r *running, runErr error) {
 	default:
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage, a.goalStop(runErr)...)
 	}
-	a.retryLater()
-	for _, w := range r.waiters {
-		w(struct{}{}, err)
-	}
-	if r.done != nil {
-		r.done(struct{}{}, errors.Join(runErr, err))
-	}
-	if len(a.releasing) > 0 {
-		a.stop(err)
-		return
-	}
+	var after func() error
 	if next && err == nil {
-		_ = a.settle(true)
+		after = func() error { return a.settle(true) }
 	}
+	a.finishRun(r, runErr, err, after)
 }
 
 // next starts the next queued input. With check, a compaction runs first
@@ -307,7 +278,7 @@ func (a *Actor) Cancel(ctx context.Context) error {
 
 func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 	r := a.run
-	if r != nil && r.judge {
+	if r != nil && r.kind == kindJudge {
 		r = nil
 	}
 	switch {
@@ -317,7 +288,7 @@ func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
 		r.cancel(errStopTurn)
-		r.waiters = append(r.waiters, reply)
+		r.waiters = append(r.waiters, replyAppend(reply))
 	}
 }
 

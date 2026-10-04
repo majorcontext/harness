@@ -383,6 +383,17 @@ Session status derives from the turn and the open requests:
 
 `retrying` is not a session status. A turn that waits for backoff sends an ephemeral `status` frame with `retrying`, `attempt`, and `next_at`, and the session stays `running`.
 
+The actor has one run at a time. A run is a turn, a compaction, or a goal evaluation, and all three end through one path that answers the waiters of the run and then starts the next work. Status derives from the turn alone, so `idle` also holds while a compaction or an evaluation runs, and `running` always has a `turn_id`. A command acts on each kind of run like this:
+
+| Command | Turn | Compaction | Evaluation |
+| --- | --- | --- | --- |
+| `Submit` | A `steer` input joins at the next item boundary; any other input waits | Waits | Waits |
+| `Interrupt` | Stops the turn | Stops it and appends nothing | Stops nothing |
+| `Compact` | `session_busy` | `session_busy` | `session_busy` |
+| `ClearGoal` | Stops the turn with `goal_cleared` while the goal is active | The compaction continues | Stops it with `goal_cleared` |
+| `Release` | Hands off the turn | Stops it and appends nothing | Stops it and appends nothing |
+| Typed control command | Refused unless `available_during_task` | Same | Same |
+
 Turn:
 
 ```
