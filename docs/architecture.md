@@ -107,7 +107,7 @@ type Options struct {
 	Owner  Owner  // nil: the local process owns every session
 	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
 	// WorkDir is the directory of a coding agent. Empty: no file is read,
-	// and the system prompt is append_system_prompt alone.
+	// no process runs, and the system prompt is append_system_prompt alone.
 	WorkDir string
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
@@ -604,7 +604,18 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-There is no outline mode, no chain ceiling, and no ambient segment. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". There is no outline mode, no chain ceiling, and no other ambient segment. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+
+### processes
+
+With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processes` and adds the `process` tool over that manager. Without a `WorkDir`, no process runs and the model sees no `process` tool. With a `WorkDir`, an embedder tool named `process` fails `New`.
+
+- The tool description names the configured processes only, so it never changes while the runtime runs. `declare` adds a process in memory until the runtime closes.
+- A tool error is the error of the manager, with one `process:` prefix.
+- A result reports no elapsed time. The status line names instants instead.
+- When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
+- `Runtime.Close` stops every process after the sessions end.
+- The `/processes` routes come with the phase 4 switch. Switch oracle: `process_tool_from_the_model`. Its two double-prefix rows change by design.
 
 ### config
 

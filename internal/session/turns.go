@@ -99,7 +99,7 @@ func sameJSON(x, y any) bool {
 func (a *Actor) start(id string, inputIDs []string, resumed int) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	step, handoff := context.WithCancelCause(ctx)
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt,
+	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
 		History: a.state.History(), Resumed: resumed, AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
