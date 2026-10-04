@@ -54,6 +54,9 @@ func resolve(req string) Event {
 func dismiss(req string) Event {
 	return RequestResolved{RequestID: req, Resolution: ResolutionDismissed}
 }
+func cmd(id, status string) Event {
+	return CommandRecorded{InputID: id, Line: "/x", Name: "x", Status: status}
+}
 func suspend(turn string, c Cause) Event { return TurnSuspended{TurnID: turn, Cause: c} }
 func resume(turn string, n int) Event    { return TurnResumed{TurnID: turn, Count: n} }
 func goal(s GoalState) Event             { return GoalChanged{State: s} }
@@ -190,6 +193,11 @@ var applyRows = []struct {
 	{"a settled child spawns again", with(base, ChildSpawned{ChildID: "x"}, ChildSettled{ChildID: "x", Outcome: OutcomeDone}, ChildSpawned{ChildID: "x"}), "", view{Status: StatusIdle}},
 	{"an unsettled child does not spawn again", with(base, ChildSpawned{ChildID: "x"}, ChildSpawned{ChildID: "x"}), "already spawned", view{}},
 	{"a settings change keeps a model", with(base, SettingsChanged{Model: new("")}), "empty model", view{}},
+	{"an accepted command ends once", with(base, cmd("a", "accepted"), cmd("a", "succeeded")), "", view{Status: StatusIdle}},
+	{"an ended command records nothing more", with(base, cmd("a", "accepted"), cmd("a", "failed"), cmd("a", "failed")), "command a is failed", view{}},
+	{"a command is accepted once", with(base, cmd("a", "accepted"), cmd("a", "accepted")), "command a is accepted", view{}},
+	{"an input ID is not a command", with(base, admit("a"), cmd("a", "failed")), "command a is an input", view{}},
+	{"a command ID is not an input", with(base, cmd("a", "failed"), admit("a")), "input a is a command", view{}},
 }
 
 func TestApply(t *testing.T) {

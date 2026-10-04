@@ -104,6 +104,8 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	// commandDirs are the prompt-command dirs; nil without a WorkDir.
+	commandDirs []string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
 	keep      int
@@ -142,6 +144,7 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	r.resolve = opts.Config.ResolveModel
+	r.commandDirs = commandDirs(opts.WorkDir, opts.Config.CommandsDirs)
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
 		roots: map[string]string{}, quiet: map[string]int{}}
@@ -542,6 +545,15 @@ func (r *Runtime) named() []turn.Tool {
 		return r.tools
 	}
 	return append(slices.Clip(r.tools), r.plugins.Tools()...)
+}
+
+// goOpen runs f as work that Close waits for, unless Close started.
+func (r *Runtime) goOpen(f func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.closed {
+		r.group.Go(f)
+	}
 }
 
 // startPlugins reads the plugin manifests once for each runtime, as part of

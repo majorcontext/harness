@@ -186,6 +186,7 @@ type State struct {
 	children   map[string]Outcome
 	backends   map[string]string
 	retained   []ToolResultRetained
+	commands   map[string]command
 	history    []entry
 }
 
@@ -198,6 +199,7 @@ func (s *State) clone() *State {
 	c.requests = slices.Clone(s.requests)
 	c.children = maps.Clone(s.children)
 	c.backends = maps.Clone(s.backends)
+	c.commands = maps.Clone(s.commands)
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
 	c.retained = slices.Clip(s.retained)
@@ -395,6 +397,8 @@ func (s *State) step(env Envelope) error {
 		return s.applyChildSpawned(e)
 	case ChildSettled:
 		return s.applyChildSettled(e)
+	case CommandRecorded:
+		return s.applyCommand(e, env.Seq)
 	case ContextMeasured:
 		s.context = e
 		return nil

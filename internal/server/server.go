@@ -38,6 +38,7 @@ type Runtime[S Session] interface {
 	Models() []protocol.Model
 	// Processes returns the process manager, or nil when no process runs.
 	Processes() *process.Manager
+	Commands() (protocol.Commands, error)
 }
 
 // Options configures the handler.
@@ -109,6 +110,14 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 		return nil
 	}))
 	h.box(mux)
+	mux.HandleFunc("GET /commands", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+		c, err := rt.Commands()
+		if err != nil {
+			return err
+		}
+		reply(w, http.StatusOK, c)
+		return nil
+	}))
 	mux.HandleFunc("GET /health", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, map[string]string{"status": "ok"})
 		return nil

@@ -50,7 +50,19 @@ func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admit
 
 // Admit is Submit that also reports whether in repeats an input that the
 // session already admitted. The verdict is atomic with the admission.
+// A typed slash command records command.recorded instead of an input, and
+// the receipt carries its status; see docs/architecture.md.
 func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitted, bool, error) {
+	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
+		p, next, err := s.resolve(in)
+		if err != nil {
+			return protocol.Admitted{}, false, err
+		}
+		if p != nil {
+			return s.command(ctx, p)
+		}
+		in = next
+	}
 	ev, err := admission(in)
 	if err != nil {
 		return protocol.Admitted{}, false, err

@@ -77,6 +77,8 @@ func everyKind() []Event {
 		goal(GoalAchieved),
 		ChildSettled{ChildID: "k", Outcome: OutcomeDone, ResultRef: "blob/k"},
 		admit("b"), withdraw("b"),
+		CommandRecorded{InputID: "c", Line: "/thinking high", Name: "thinking", Args: map[string]any{"effort": "high"},
+			Status: "succeeded", Text: "/thinking succeeded", Result: json.RawMessage(`{"effort":"high"}`)},
 	}
 }
 
@@ -117,7 +119,7 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 		t.Fatalf("replayed state differs from live state:\n%+v\n%+v", replayed, live)
 	}
 	want := Summary{ParentID: "p", Origin: "cli", Model: "openai/gpt-5", Status: StatusIdle, Goal: GoalAchieved,
-		HeadSeq: 25, CreatedAt: t0, UpdatedAt: t0.Add(24 * time.Second)}
+		HeadSeq: 26, CreatedAt: t0, UpdatedAt: t0.Add(25 * time.Second)}
 	if got := live.Summary(); got != want {
 		t.Fatalf("Summary = %+v, want %+v", got, want)
 	}

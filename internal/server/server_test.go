@@ -295,6 +295,7 @@ func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, 
 }
 func (stub) Models() []protocol.Model                            { return nil }
 func (stub) Processes() *process.Manager                         { return nil }
+func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
 func (stub) Compact(context.Context) error                       { return nil }

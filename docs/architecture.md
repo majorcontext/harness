@@ -126,6 +126,7 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acqu
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
 func (r *Runtime) Processes() *process.Manager // nil without a WorkDir
+func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
 // every record through each handoff, or ctx ends.
 func (r *Runtime) Close(ctx context.Context) error
@@ -267,6 +268,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
+| `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
 | `context.measured` | `tokens`, `window`, `source` |
 | `backend.state` | `backend`, `blob_key` |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
@@ -311,6 +313,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
 | `Settle(outcome, report)` | Append `child.settled` and admit the report as an input with `source: child`; a settled child changes nothing |
 | `Release()` | Suspend the turn with cause `handoff`; stop; release ownership |
+| `Record(command)` | Append `command.recorded`; a repeated input ID returns the newest status |
 | `Withdraw(id)` | Phase 4: append `input.withdrawn` if still queued |
 | `Resolve(requestID, resolution)` | Phase 5: append `request.resolved`; resume the turn |
 
@@ -475,7 +478,7 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET` and `PATCH /sessions/{id}`, `POST /sessions/{id}/inputs`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes; `requests` comes with phase 5. The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -488,6 +491,8 @@ Request: `{id, parts, delivery, source?, expected_turn_id?}`. The client mints `
 | New id | `201 {input_id, seq}` |
 | Same id, same body | `200` with the original receipt |
 | Same id, other body | `409 input_conflict` |
+
+A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command, and its `seq` is the first `command.recorded` record. See "Slash commands".
 
 ### Events
 
@@ -522,6 +527,23 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `internal` | 500 |
 
 Each code except `internal` and `payload_too_large` is a sentinel error and a `protocol` constant. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above 8 MiB fails with `payload_too_large`. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+
+### Slash commands
+
+`Session.Admit` resolves an input with `source: typed` and one text part through the `command` package, with the dispatch rules of the engine server. Any other input is never a command.
+
+- Not a command: the input is admitted as is. `//x` is admitted as the text `/x`.
+- An unknown name: the prompt command of that name under `commands_dirs` (default `<WorkDir>/.agents/commands`) is admitted as its expanded text with `source: command`. With no such file, or no `WorkDir`, the line is admitted as text.
+- Bad arguments: one `command.recorded` with `failed` and the error of `Resolve`. Nothing runs.
+- A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
+- A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
+- Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error"), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact` with `keep_turns` fails: `compaction_keep_turns` sets it. A compaction that appends nothing fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
+- A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
+- `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.
+
+`GET /commands` returns `Runtime.Commands`: each built-in command and each prompt command, sorted by name, with `serve_support` by name and `discovery_errors` for files with no usable name. A control command names the route of the same operation, where one exists, and `available_during_task`. A prompt file that is not valid is listed, unsupported, with its error as the reason. The engine records the label of a prompt command; the runtime does not, and a client shows the expanded text. Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape.
 
 ### Contract source
 
