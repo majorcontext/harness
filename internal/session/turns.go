@@ -28,6 +28,7 @@ type running struct {
 	steering bool
 	ownsLoop bool
 	steered  chan struct{}
+	judge    bool
 	usage    eventlog.Usage
 	waiters  []func(struct{}, error)
 	// done receives the outcome of a Compact that this run serves.
@@ -50,17 +51,18 @@ func (a *Actor) Submit(ctx context.Context, in eventlog.InputAdmitted, expectedT
 			reply(receipt{seq, true}, nil)
 			return
 		}
-		seq, err := a.admit(in, expectedTurn)
+		seq, err := a.admit(in, expectedTurn, a.resumed()...)
 		reply(receipt{seq, false}, err)
 	})
 	return r.seq, r.repeat, err
 }
 
-func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string) (uint64, error) {
+// admit appends before, then admits in.
+func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...eventlog.Event) (uint64, error) {
 	if in.Delivery == eventlog.DeliverySteer && expectedTurn != "" && (a.run == nil || a.run.id != expectedTurn) {
 		return 0, ErrTurnMismatch
 	}
-	events := append(a.dismissRequests(), in)
+	events := append(append(before, a.dismissRequests()...), in)
 	seq := a.state.Head() + uint64(len(events))
 	r := a.run
 	if r == nil && !a.overThreshold() {
@@ -215,11 +217,15 @@ func (a *Actor) ended(turnID string, runErr error) {
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
 		next = true
+	case errors.Is(cause, errGoalCleared):
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted, r.usage)
+		next = true
 	case errors.Is(runErr, turn.ErrExhausted):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage, a.goalStop(runErr)...)
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage, a.goalStop(runErr)...)
 	}
+	a.retryLater()
 	for _, w := range r.waiters {
 		w(struct{}{}, err)
 	}
@@ -231,7 +237,7 @@ func (a *Actor) ended(turnID string, runErr error) {
 		return
 	}
 	if next && err == nil {
-		_ = a.next(true)
+		_ = a.settle(true)
 	}
 }
 
@@ -250,9 +256,9 @@ func (a *Actor) next(check bool) error {
 	return nil
 }
 
-func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage) error {
+func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage, after ...eventlog.Event) error {
 	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause, Usage: u})
-	return a.appendCtx(ctx, events...)
+	return a.appendCtx(ctx, append(events, after...)...)
 }
 
 // closeOpen dismisses every open request, which closes its tool call, and
@@ -287,6 +293,9 @@ func (a *Actor) dismissRequests() []eventlog.Event {
 func (a *Actor) Interrupt(ctx context.Context, turnID string) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		r := a.run
+		if r != nil && r.judge {
+			r = nil
+		}
 		switch {
 		case r == nil && turnID == "":
 			reply(struct{}{}, nil)

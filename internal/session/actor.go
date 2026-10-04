@@ -66,7 +66,9 @@ type Config struct {
 	// Check reports why a session at model from that allows tools cannot
 	// move to model to. nil accepts every model.
 	Check func(from, to string, tools []string) error
-	Tools []turn.Tool
+	// Evaluator is the model that judges goal turns.
+	Evaluator string
+	Tools     []turn.Tool
 	// Source gives more tools to each model call. nil: Tools only.
 	Source turn.Source
 	// Prompt returns the system prompt of a turn when the turn starts.
@@ -114,6 +116,8 @@ type Actor struct {
 	run       *running
 	releasing []func(struct{}, error)
 	stopped   bool
+	retryStop context.CancelFunc
+	retryAt   time.Time
 }
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
@@ -186,10 +190,10 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	case ok:
 		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})
 		if err == nil {
-			err = a.next(true)
+			err = a.settle(true)
 		}
 	default:
-		err = a.next(true)
+		err = a.settle(true)
 	}
 	return a, err
 }
@@ -252,6 +256,7 @@ func Load(ctx context.Context, id string, log Log) (*eventlog.State, error) {
 
 func (a *Actor) loop() {
 	defer a.finish()
+	a.retryLater()
 	for !a.stopped {
 		select {
 		case f := <-a.mail:
@@ -384,6 +389,9 @@ func (a *Actor) appendCtx(ctx context.Context, events ...eventlog.Event) error {
 			a.stopped = true
 			return err
 		}
+	}
+	if g, _ := a.state.Goal(); g.State != eventlog.GoalPaused || !g.RetryAt.Equal(a.retryAt) {
+		a.stopRetry()
 	}
 	a.publish(false)
 	return nil

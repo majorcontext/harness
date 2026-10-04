@@ -178,3 +178,14 @@ func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
 		t.Errorf("transport calls = %q, effort = %q, want codex then openai, high", calls, e)
 	}
 }
+
+func TestSetGoalNeedsAnEvaluator(t *testing.T) {
+	r, _, _ := codexRuntime(t, harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}), false, false, "")
+	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "claude-code/opus"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetGoal(bg, protocol.Goal{Condition: "say done"}); !errors.Is(err, harness.ErrInvalidRequest) || s.View().Goal != nil {
+		t.Errorf("SetGoal with no goal_evaluator_model = %v, goal %v, want %v and no goal", err, s.View().Goal, harness.ErrInvalidRequest)
+	}
+}

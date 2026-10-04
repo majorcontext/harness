@@ -36,33 +36,42 @@ func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) 
 	req.Instructions = summaryPrompt
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
-	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
-	var s summary
-	if _, err := watch(ctx, b, req, &s, idle); err != nil {
+	text, err := Ask(ctx, b, req, idle)
+	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(s.text.String()) == "" {
+	if strings.TrimSpace(text) == "" {
 		return "", errEmptySummary
 	}
-	return SummaryBanner + s.text.String(), nil
+	return SummaryBanner + text, nil
 }
 
-// summary is the Sink of a summary call. It keeps only the text.
-type summary struct{ text strings.Builder }
+// Ask makes one model call of req with no tools and returns its text.
+func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
+	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
+	var a answer
+	if _, err := watch(ctx, b, req, &a, idle); err != nil {
+		return "", err
+	}
+	return a.text.String(), nil
+}
 
-func (s *summary) Item(m eventlog.Message) error {
+// answer is the Sink of Ask. It keeps only the text.
+type answer struct{ text strings.Builder }
+
+func (a *answer) Item(m eventlog.Message) error {
 	for _, p := range m.Parts {
 		if p.Type == eventlog.PartText {
-			s.text.WriteString(p.Text)
+			a.text.WriteString(p.Text)
 		}
 	}
 	return nil
 }
 
-func (*summary) Delta(string, Delta)                {}
-func (*summary) Alive()                             {}
-func (*summary) Telemetry(Telemetry)                {}
-func (*summary) Steer() ([]eventlog.Message, error) { return nil, nil }
-func (*summary) State(string) ([]byte, error)       { return nil, nil }
-func (*summary) SaveState(string, []byte) error     { return nil }
-func (*summary) Compacted(string) error             { return nil }
+func (*answer) Delta(string, Delta)                {}
+func (*answer) Alive()                             {}
+func (*answer) Telemetry(Telemetry)                {}
+func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
+func (*answer) State(string) ([]byte, error)       { return nil, nil }
+func (*answer) SaveState(string, []byte) error     { return nil }
+func (*answer) Compacted(string) error             { return nil }

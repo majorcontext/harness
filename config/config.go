@@ -93,9 +93,9 @@ type Config struct {
 	// replaces the user value during config merge; explicit [] disables discovery.
 	CommandsDirs []string `json:"commands_dirs,omitempty"`
 	// GoalEvaluatorModel names the model ref (or alias) used to evaluate goal
-	// completion for `harness run --goal` and the server's goal endpoints.
-	// There is no default — goal use requires this field to be set. Resolve it
-	// with ResolveModel so aliases apply.
+	// completion for `harness run --goal`, the server goal routes, and
+	// Session.SetGoal. There is no default — goal use requires this field to
+	// be set. Resolve it with ResolveModel so aliases apply.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
 	// ModelTool, when set to false, disables the built-in `model` session tool
 	// (status/set — the model swaps its own MAIN model in-process; see package

@@ -145,5 +145,5 @@ func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, err error) {
 		a.stop(nil)
 		return
 	}
-	_ = a.next(false)
+	_ = a.settle(false)
 }

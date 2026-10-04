@@ -1,6 +1,9 @@
 package eventlog
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Event is the payload of one record. Kind names its registered type.
 type Event interface {
@@ -165,10 +168,11 @@ type GoalEvaluated struct {
 	Guidance string  `json:"guidance,omitempty"`
 }
 
-// GoalChanged moves the goal to another state.
+// GoalChanged moves the goal to another state. A paused goal resumes at RetryAt.
 type GoalChanged struct {
-	State  GoalState `json:"state"`
-	Reason string    `json:"reason,omitempty"`
+	State   GoalState `json:"state"`
+	Reason  string    `json:"reason,omitempty"`
+	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
 // CompactionApplied replaces the records from FromSeq to ToSeq with Summary.

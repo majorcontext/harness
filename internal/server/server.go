@@ -22,6 +22,8 @@ type Session interface {
 	Admit(ctx context.Context, in protocol.Input) (receipt protocol.Admitted, repeat bool, err error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context) error
+	SetGoal(ctx context.Context, g protocol.Goal) error
+	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 }
@@ -79,6 +81,8 @@ func New[S Session](rt Runtime[S], codes []Code) http.Handler {
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
 	mux.HandleFunc("POST /sessions/{id}/interrupt", h.session(h.interrupt))
 	mux.HandleFunc("POST /sessions/{id}/compact", h.session(h.compact))
+	mux.HandleFunc("PUT /sessions/{id}/goal", h.session(h.setGoal))
+	mux.HandleFunc("DELETE /sessions/{id}/goal", h.session(h.clearGoal))
 	mux.HandleFunc("GET /sessions/{id}/events", h.session(h.events))
 	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		reply(w, http.StatusOK, rt.Models())
@@ -279,6 +283,26 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 
 func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
 	if err := s.Compact(r.Context()); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error {
+	var g protocol.Goal
+	if err := decode(w, r, &g); err != nil {
+		return err
+	}
+	if err := s.SetGoal(r.Context(), g); err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, s.View())
+	return nil
+}
+
+func (h *handler[S]) clearGoal(s S, w http.ResponseWriter, r *http.Request) error {
+	if err := s.ClearGoal(r.Context()); err != nil {
 		return err
 	}
 	w.WriteHeader(http.StatusNoContent)

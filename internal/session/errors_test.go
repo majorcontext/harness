@@ -72,6 +72,10 @@ func lines(t *testing.T, l *memLog, after uint64) []string {
 			}
 		case eventlog.TurnEnded:
 			f = append(f, string(e.StopReason), e.Error)
+		case eventlog.GoalEvaluated:
+			f = append(f, string(e.Verdict))
+		case eventlog.GoalChanged:
+			f = append(f, string(e.State))
 		}
 		out = append(out, strings.TrimSpace(strings.Join(f, " ")))
 	}

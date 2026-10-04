@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
@@ -14,7 +15,8 @@ import (
 
 // Session is a session that this runtime runs.
 type Session struct {
-	a *session.Actor
+	a            *session.Actor
+	hasEvaluator bool
 }
 
 // View returns the session as of its last durable record.
@@ -27,6 +29,10 @@ func (s *Session) View() protocol.Session {
 
 func detach(s protocol.Session) protocol.Session {
 	s.Queued = slices.Clone(s.Queued)
+	if s.Goal != nil {
+		g := *s.Goal
+		s.Goal = &g
+	}
 	return s
 }
 
@@ -83,6 +89,21 @@ func admission(in protocol.Input) (eventlog.InputAdmitted, error) {
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 	return s.a.Interrupt(ctx, req.TurnID)
 }
+
+// SetGoal replaces the goal of the session, as Claude Code /goal does. An
+// evaluator judges each turn, and its guidance is the input of the next one.
+func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error {
+	if strings.TrimSpace(g.Condition) == "" || g.MaxTurns < 0 {
+		return fmt.Errorf("%w: a goal needs a condition and max_turns >= 0", ErrInvalidRequest)
+	}
+	if !s.hasEvaluator {
+		return fmt.Errorf("%w: a goal needs goal_evaluator_model", ErrInvalidRequest)
+	}
+	return s.a.SetGoal(ctx, g.Condition, g.MaxTurns)
+}
+
+// ClearGoal clears the goal and returns after a running goal turn stops.
+func (s *Session) ClearGoal(ctx context.Context) error { return s.a.ClearGoal(ctx) }
 
 // Compact folds the turns before the newest compaction_keep_turns into a
 // summary that the next model call reads first. A backend that owns its
