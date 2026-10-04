@@ -203,7 +203,7 @@ Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), 
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer).
+Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer). It also deletes the config keys that `New` refuses, their `Defaults` entries, and `harnesstest.SinkReceiver`, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -590,12 +590,12 @@ Each code except `internal` and `payload_too_large` is a sentinel error and a `p
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
 - Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
-- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is the process list of `GET /processes`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
 - `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.
 
-`GET /commands` returns `Runtime.Commands`: each built-in command and each prompt command, sorted by name, with `serve_support` by name and `discovery_errors` for files with no usable name. A control command names the route of the same operation, where one exists, and `available_during_task`. A prompt file that is not valid is listed, unsupported, with its error as the reason. The engine records the label of a prompt command; the runtime does not, and a client shows the expanded text. Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape.
+`GET /commands` returns `Runtime.Commands`: each built-in command and each prompt command, sorted by name, with `serve_support` by name and `discovery_errors` for files with no usable name. A control command names its operation and `available_during_task`; the handler adds the route of the same operation, where one exists. A prompt file that is not valid is listed, unsupported, with its error as the reason. The engine records the label of a prompt command; the runtime does not, and a client shows the expanded text. Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape.
 
 ### Contract source
 
@@ -979,6 +979,8 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 - Does the switch wrap the messages that the engine writes for the model in `<harness-engine-context>` tags? Serve wraps the `[continuation: …]` message of a max_tokens turn, so the model reads it as engine text. The runtime sends it as plain user text.
 - Does `GET /sessions` keep creation order? It lists in ID order, and a minted ID has a random suffix. Serve listed in creation order.
 - Does the answer route keep the serve receipt `202 {seq, status}`? The runtime answers `204`.
+- Does the switch keep the context gauge and the session cost of a Claude Code turn? Serve took the usage of the `result` frame as the last call when no assistant frame carried usage, and added `total_cost_usd` of each turn to `session_cost_usd` of `subscription_usage`, with provider `claude`. The runtime reads the gauge from an assistant frame only, and reports no cost.
+- Does a failed Claude Code turn run again? Serve ran the CLI once, and the turn failed with the text of the `result` frame. The runtime marks `error_during_execution` as retryable, so it runs the CLI again up to `prompt_retries` times before the turn fails.
 - Does a settings change to a model of another kind of backend take effect in the middle of a turn? Serve fails the turn at its next model call, because Claude Code has no model API. The runtime finishes the turn on its own backend, and the next turn uses the new model.
 
 ## Closed parity questions
@@ -990,6 +992,19 @@ Andy closed these on 2026-10-04: the switch keeps each one, at parity with the e
 - Does the switch keep the plugin inventory? Yes, built: `protocol.Session.Plugins` lists each plugin with its hooks, tools, and state.
 - Does the switch keep the crash marker? Yes, built: a crashed turn ends with the assistant message `[harness: this turn was interrupted by a process restart and could not complete]`.
 - Does the switch keep the classified reason of a failed MCP connect? Yes, built: `connect` names `initialize timed out`, `initialize cancelled`, `connection refused`, `connection failed`, or `initialize failed`.
+
+## Deliberate parity breaks
+
+Each row is a difference between the runtime and the engine that remains after the parity work. A decision of Andy decides a row, or a line under Open questions waits for one. The contract rows name each row of `e2e/runtime_rows_test.go` that the difference re-goldens. The cross-lane history bridge, the frames of a subagent, and a settings change in the middle of a turn are kept (see Decided), so they are not rows.
+
+| Difference | Engine | Runtime | Decision | Contract rows |
+| --- | --- | --- | --- | --- |
+| `model` tool | `status`, `list`, and `set` for the model of the session; `model_tool` turns it off | None | Port it fully before the switch: `status`, `list`, and `set` through `Session.Update`, which checks the model as an update does, and the `model_tool` key | None re-golden. The `model` suite break of every row that lists tools ends |
+| `session_info` tool | Reports the session to the model | None | Port it before the switch | None re-golden. Its suite break ends |
+| `model` and `effort` of `task spawn` | The child can run another model at another effort | The child takes the model of its profile and the effort of the session | Port both with the `model` tool, checked as `model set` is | None: no row spawns with them |
+| Claude Code `/compact` | A `/compact` message and `compaction.claude_code` with the tokens before and after | `compaction.applied` with `by_backend`, and no `/compact` message | Decided by the Compaction rules above | `claudecode_compact_delegated` |
+| Claude Code gauge and cost | The gauge and the cost come from the `result` frame | The gauge comes from the assistant frames, and no cost | Open: see Open questions | `claudecode_turn_text_and_tool` |
+| Claude Code failed turn | One run | A run again up to `prompt_retries` times | Open: see Open questions | `claudecode_error_result_fails_turn` |
 
 ## Decided
 
