@@ -211,6 +211,7 @@ func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreat
 		}
 	}
 	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
+		cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
 		return session.Create(ctx, cfg, c, first)
 	})
 }
@@ -224,12 +225,20 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		a, err := session.Open(ctx, cfg)
-		if err == nil {
-			r.group.Go(func() { r.recoverChildren(id, a) })
+		if c, err := r.created(ctx, id); err == nil {
+			cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
 		}
-		return a, err
+		return session.Open(ctx, cfg)
 	})
+}
+
+// sessionTools returns the tools of a session with parent. A child has no
+// goal tool, as no goal of an engine child ever ran.
+func sessionTools(tools []turn.Tool, parent string) []turn.Tool {
+	if parent == "" {
+		return tools
+	}
+	return slices.DeleteFunc(tools, func(t turn.Tool) bool { _, ok := t.(goalTool); return ok })
 }
 
 func (r *Runtime) load(ctx context.Context, id string, create bool, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
@@ -246,10 +255,18 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.group.Add(1)
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, start)
-			r.group.Done()
-			if e.err != nil {
+			switch {
+			case e.err != nil:
 				r.forget(id, e)
+			case create:
+				close(e.s.recovered)
+			default:
+				r.group.Go(func() {
+					r.recoverChildren(id, e.s.a)
+					close(e.s.recovered)
+				})
 			}
+			r.group.Done()
 			close(e.ready)
 			return e.s, e.err
 		}
@@ -336,7 +353,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a, r: r, id: id}, nil
+	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
 }
 
 // mcpTools gives the MCP tools to each turn whose backend does not connect
@@ -396,6 +413,23 @@ func (r *Runtime) running(id string) *Session {
 	case <-e.ready:
 		return e.s
 	default:
+		return nil
+	}
+}
+
+// loaded returns session id once this runtime has loaded it, or nil when
+// it does not run it.
+func (r *Runtime) loaded(ctx context.Context, id string) *Session {
+	r.mu.Lock()
+	e := r.sessions[id]
+	r.mu.Unlock()
+	if e == nil {
+		return nil
+	}
+	select {
+	case <-e.ready:
+		return e.s
+	case <-ctx.Done():
 		return nil
 	}
 }

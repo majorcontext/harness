@@ -295,22 +295,43 @@ func (a *Actor) dismissRequests() []eventlog.Event {
 // Interrupt stops the running turn, or only turnID when it is set, and
 // returns after the turn has ended.
 func (a *Actor) Interrupt(ctx context.Context, turnID string) error {
+	_, err := call(ctx, a, func(reply func(struct{}, error)) { a.interrupt(turnID, reply) })
+	return err
+}
+
+// Cancel withdraws each queued input and stops the running turn in one
+// step, so no queued input starts, and returns after the turn has ended.
+func (a *Actor) Cancel(ctx context.Context) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		r := a.run
-		if r != nil && r.judge {
-			r = nil
+		var events []eventlog.Event
+		for _, in := range a.state.Queue() {
+			events = append(events, eventlog.InputWithdrawn{InputID: in.InputID})
 		}
-		switch {
-		case r == nil && turnID == "":
-			reply(struct{}{}, nil)
-		case r == nil || turnID != "" && turnID != r.id:
-			reply(struct{}{}, ErrTurnMismatch)
-		default:
-			r.cancel(errStopTurn)
-			r.waiters = append(r.waiters, reply)
+		if len(events) > 0 {
+			if err := a.append(events...); err != nil {
+				reply(struct{}{}, err)
+				return
+			}
 		}
+		a.interrupt("", reply)
 	})
 	return err
+}
+
+func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
+	r := a.run
+	if r != nil && r.judge {
+		r = nil
+	}
+	switch {
+	case r == nil && turnID == "":
+		reply(struct{}{}, nil)
+	case r == nil || turnID != "" && turnID != r.id:
+		reply(struct{}{}, ErrTurnMismatch)
+	default:
+		r.cancel(errStopTurn)
+		r.waiters = append(r.waiters, reply)
+	}
 }
 
 // Release hands the session off: it suspends the running turn at an item

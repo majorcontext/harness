@@ -18,6 +18,8 @@ type Session struct {
 	a  *session.Actor
 	r  *Runtime
 	id string
+	// recovered closes once Open has settled or opened each unsettled child.
+	recovered chan struct{}
 }
 
 // View returns the session as of its last durable record.
@@ -87,15 +89,15 @@ func admission(in protocol.Input) (eventlog.InputAdmitted, error) {
 
 // Interrupt stops the running turn and returns after it has ended. The
 // partial turn stays in the log, and the next queued input starts. With
-// Tree, it then stops the turn of each descendant that this runtime runs.
-// A stopped descendant settles canceled with its parent, and starts no
-// turn of a parent inside the tree.
+// Tree, it then stops the turn of each descendant that this runtime runs
+// and withdraws its queued inputs. A stopped descendant settles canceled
+// with its parent, and starts no turn of a parent inside the tree.
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
-	err := s.a.Interrupt(ctx, req.TurnID)
-	if err != nil || !req.Tree {
-		return err
+	stop := func(ctx context.Context) error { return s.a.Interrupt(ctx, req.TurnID) }
+	if !req.Tree {
+		return stop(ctx)
 	}
-	return s.r.interruptChildren(ctx, s.id)
+	return s.r.interruptTree(ctx, s.id, stop)
 }
 
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An

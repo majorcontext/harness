@@ -34,7 +34,7 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 		return "", err
 	}
 	id := "ses_" + newSuffix()
-	if err := r.sup.admit(root, id, depth+1); err != nil {
+	if _, err := r.sup.admit(root, id, depth+1); err != nil {
 		return "", err
 	}
 	if err := r.withinBudget(ctx, root); err != nil {
@@ -104,18 +104,10 @@ func (r *Runtime) lineage(ctx context.Context, id string) (string, int, error) {
 func (r *Runtime) ancestors(ctx context.Context, id string) ([]string, error) {
 	var up []string
 	for len(up) <= r.sup.depth {
-		recs, err := r.store.Read(ctx, id, 0, 1)
-		if err == nil && len(recs) == 0 {
-			err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
-		}
+		c, err := r.created(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		env, err := eventlog.Decode(recs[0].Data)
-		if err != nil {
-			return nil, err
-		}
-		c, _ := env.Event.(eventlog.SessionCreated)
 		if c.ParentID == "" {
 			break
 		}
@@ -123,6 +115,23 @@ func (r *Runtime) ancestors(ctx context.Context, id string) ([]string, error) {
 		up = append(up, id)
 	}
 	return up, nil
+}
+
+// created returns the session.created record of session id.
+func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
+	recs, err := r.store.Read(ctx, id, 0, 1)
+	if err == nil && len(recs) == 0 {
+		err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
+	}
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	env, err := eventlog.Decode(recs[0].Data)
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	c, _ := env.Event.(eventlog.SessionCreated)
+	return c, nil
 }
 
 // withinBudget fails once the sessions of the tree of root have used
@@ -220,12 +229,17 @@ type supervisor struct {
 	quiet map[string]int
 }
 
-func (s *supervisor) admit(root, child string, depth int) error {
+// admit counts child against the limits of root. added is false for a
+// child that the supervisor already counts.
+func (s *supervisor) admit(root, child string, depth int) (added bool, err error) {
 	if depth > s.depth {
-		return fmt.Errorf("max_task_depth %d allows no child at depth %d", s.depth, depth)
+		return false, fmt.Errorf("max_task_depth %d allows no child at depth %d", s.depth, depth)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.roots[child]; ok {
+		return false, nil
+	}
 	n := 0
 	for _, r := range s.roots {
 		if r == root {
@@ -233,10 +247,10 @@ func (s *supervisor) admit(root, child string, depth int) error {
 		}
 	}
 	if n >= s.running {
-		return fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", s.running, n)
+		return false, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", s.running, n)
 	}
 	s.roots[child] = root
-	return nil
+	return true, nil
 }
 
 func (s *supervisor) adopt(root, child string) {

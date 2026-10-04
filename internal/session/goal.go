@@ -47,15 +47,18 @@ var (
 // and no input queued, it admits the condition as an input with source
 // goal. Otherwise the next turn that ends is the first one judged.
 func (a *Actor) SetGoal(ctx context.Context, condition string, maxTurns int) error {
-	return a.setGoal(ctx, func(eventlog.Goal, bool) (*eventlog.GoalSet, error) {
+	return a.setGoal(ctx, false, func(eventlog.Goal, bool) (*eventlog.GoalSet, error) {
 		return &eventlog.GoalSet{Condition: condition, MaxTurns: maxTurns}, nil
 	})
 }
 
-// StartGoal is SetGoal with no turn limit. It fails with ErrGoalActive
-// while a goal is active or paused.
+// StartGoal is SetGoal with no turn limit that always admits the
+// condition: while a turn runs, the condition waits, and the goal judges
+// no turn before it, as the engine posts the condition after the turn of
+// the goal tool. It fails with ErrGoalActive while a goal is active or
+// paused.
 func (a *Actor) StartGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+	return a.setGoal(ctx, true, func(_ eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
 		if live {
 			return nil, ErrGoalActive
 		}
@@ -68,7 +71,7 @@ func (a *Actor) StartGoal(ctx context.Context, condition string) error {
 // The same condition changes nothing. It fails with ErrNoGoal when no goal
 // is active or paused.
 func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
-	return a.setGoal(ctx, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
+	return a.setGoal(ctx, false, func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error) {
 		switch {
 		case !live:
 			return nil, ErrNoGoal
@@ -80,8 +83,9 @@ func (a *Actor) AdjustGoal(ctx context.Context, condition string) error {
 }
 
 // setGoal appends the goal that set returns for the current goal, and
-// whether that goal is active or paused. A nil goal appends nothing.
-func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error)) error {
+// whether that goal is active or paused. A nil goal appends nothing. With
+// post, the condition is an input even while the session is busy.
+func (a *Actor) setGoal(ctx context.Context, post bool, set func(g eventlog.Goal, live bool) (*eventlog.GoalSet, error)) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		g, _ := a.state.Goal()
 		gs, err := set(g, g.State == eventlog.GoalActive || g.State == eventlog.GoalPaused)
@@ -92,7 +96,7 @@ func (a *Actor) setGoal(ctx context.Context, set func(g eventlog.Goal, live bool
 		events := append(a.withdrawGoal(), *gs)
 		_, busy := a.state.Turn()
 		idle := !busy && len(a.state.Queue()) == len(events)-1
-		if idle {
+		if idle || post {
 			events = append(append(events, a.dismissRequests()...), goalInput(gs.Condition))
 		}
 		err = a.append(events...)
@@ -161,9 +165,12 @@ func (a *Actor) judgeable() bool {
 }
 
 // settle judges the last ended turn for an active goal, or starts the next
-// queued input. The actor runs nothing.
+// queued input. A new goal judges no turn while its condition waits. The
+// actor runs nothing.
 func (a *Actor) settle(check bool) error {
-	if g, _ := a.state.Goal(); g.State == eventlog.GoalActive && a.judgeable() {
+	g, _ := a.state.Goal()
+	posted := g.Turns == 0 && slices.ContainsFunc(a.state.Queue(), func(in eventlog.InputAdmitted) bool { return in.Source == sourceGoal })
+	if g.State == eventlog.GoalActive && a.judgeable() && !posted {
 		a.judge(g)
 		return nil
 	}

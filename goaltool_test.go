@@ -99,13 +99,66 @@ func TestGoalTool(t *testing.T) {
 	}
 }
 
-func TestGoalToolNeedsAnEvaluator(t *testing.T) {
+func TestGoalToolIsOffered(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		evaluator string
+		// child checks the first request of the child, after a restart with restart.
+		child, restart bool
+		want           bool
+	}{
+		{name: "a runtime with no goal_evaluator_model offers no goal tool"},
+		{name: "a root session gets the goal tool", evaluator: "test/eval", want: true},
+		{name: "a child gets no goal tool", evaluator: "test/eval", child: true},
+		{name: "a child opened after a restart gets no goal tool", evaluator: "test/eval", child: true, restart: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				st, dir, cfg := harness.NewMemStore(), t.TempDir(), config.Config{GoalEvaluatorModel: tc.evaluator}
+				f := &family{answer: delegation("general-purpose", 1, block)}
+				r := familyRuntime(t, st, f, nil, cfg, dir)
+				submit(t, create(t, r), text("a", "delegate"))
+				id, prompt := "s1", "delegate"
+				if tc.child {
+					id, prompt = children(t, r)[0].ID, "child work"
+				}
+				if tc.restart {
+					closeRuntime(t, r)
+					f = &family{answer: f.answer}
+					r = familyRuntime(t, st, f, nil, cfg, dir)
+					if _, err := r.Open(bg, "s1"); err != nil {
+						t.Fatal(err)
+					}
+					synctest.Wait()
+				}
+				req, _ := f.last(id, prompt)
+				if got := slices.ContainsFunc(req.Tools, func(s protocol.ToolSpec) bool { return s.Name == "goal" }); got != tc.want || req.SessionID == "" {
+					t.Errorf("request %s offers the goal tool: %v, want %v", req.SessionID, got, tc.want)
+				}
+				closeRuntime(t, r)
+			})
+		})
+	}
+}
+
+func TestGoalToolSetPostsTheConditionAsATurnOfItsOwn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := &family{answer: func(eventlog.Part) []eventlog.Message { return []eventlog.Message{say("ok")} }}
-		r := goalRuntime(t, f, "")
+		f := &family{answer: judging("MET: ok", func(p eventlog.Part) []eventlog.Message {
+			if p.Text == "go" {
+				return []eventlog.Message{calls("goal", map[string]any{"action": "set", "condition": "say done"})}
+			}
+			return []eventlog.Message{say("ok")}
+		})}
+		r := goalRuntime(t, f, "test/eval")
 		submit(t, create(t, r), text("a", "go"))
-		if req, _ := f.last("s1", "go"); slices.ContainsFunc(req.Tools, func(s protocol.ToolSpec) bool { return s.Name == "goal" }) {
-			t.Error("a runtime with no goal_evaluator_model offers the goal tool")
+		judged := 0
+		for _, req := range f.reqs {
+			if strings.HasPrefix(req.History[0].Parts[0].Text, "GOAL CONDITION:") {
+				judged++
+			}
+		}
+		if _, got := f.last("s1", "say done"); got == "" || judged != 1 {
+			t.Errorf("condition turn %q, %d judged turns; want the condition as a turn, then one judged turn", got, judged)
 		}
 		closeRuntime(t, r)
 	})

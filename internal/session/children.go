@@ -15,7 +15,7 @@ const sourceChild = "child"
 // Spawn appends child.spawned and returns the session.created record of the
 // child: this session as its parent, with the model, settings, and allowed
 // tools of this session. It appends nothing once ctx ends, so a stopped
-// turn spawns no child.
+// turn spawns no child, and nothing for a child that has not settled.
 func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.SessionCreated, error) {
 	return call(ctx, a, func(reply func(eventlog.SessionCreated, error)) {
 		if err := ctx.Err(); err != nil {
@@ -24,6 +24,10 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.Sessio
 		}
 		c := eventlog.SessionCreated{ParentID: a.cfg.ID, Agent: agent, Model: a.state.Model(),
 			Settings: a.state.Settings(), AllowedTools: a.state.AllowedTools()}
+		if slices.Contains(a.state.Unsettled(), child) {
+			reply(c, nil)
+			return
+		}
 		reply(c, a.append(eventlog.ChildSpawned{ChildID: child, Agent: agent}))
 	})
 }
