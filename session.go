@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/message"
@@ -85,40 +86,20 @@ func (s *Session) Admit(ctx context.Context, in protocol.Input) (protocol.Admitt
 		}
 		in = next
 	}
-	ev, err := admission(in)
+	ev, blobs, err := admit.Input(in)
 	if err != nil {
-		return protocol.Admitted{}, false, err
+		return protocol.Admitted{}, false, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	for _, b := range blobs {
+		if err := s.r.store.PutBlob(ctx, s.id, b.Key, bytes.NewReader(b.Data)); err != nil {
+			return protocol.Admitted{}, false, err
+		}
 	}
 	seq, repeat, err := s.a.Submit(ctx, ev, in.ExpectedTurnID)
 	if err != nil {
 		return protocol.Admitted{}, false, err
 	}
 	return protocol.Admitted{InputID: in.ID, Seq: seq}, repeat, nil
-}
-
-func admission(in protocol.Input) (eventlog.InputAdmitted, error) {
-	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source}
-	if ev.Delivery == "" {
-		ev.Delivery = eventlog.DeliveryQueue
-	}
-	if ev.Source == "" {
-		ev.Source = "user"
-	}
-	switch {
-	case in.ID == "":
-		return ev, fmt.Errorf("%w: input id is empty", ErrInvalidRequest)
-	case len(in.Parts) == 0:
-		return ev, fmt.Errorf("%w: input %s has no parts", ErrInvalidRequest, in.ID)
-	case ev.Delivery != eventlog.DeliveryQueue && ev.Delivery != eventlog.DeliverySteer:
-		return ev, fmt.Errorf("%w: input %s has delivery %q", ErrInvalidRequest, in.ID, in.Delivery)
-	}
-	for _, p := range in.Parts {
-		if p.Type != protocol.PartText {
-			return ev, fmt.Errorf("%w: input %s has part type %q", ErrInvalidRequest, in.ID, p.Type)
-		}
-		ev.Parts = append(ev.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
-	}
-	return ev, nil
 }
 
 // Interrupt stops the running turn and returns after it has ended. The

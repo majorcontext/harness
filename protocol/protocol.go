@@ -21,8 +21,11 @@ const (
 	DeliverySteer = "steer"
 )
 
-// PartText is the type of a text part.
-const PartText = "text"
+// Input part types.
+const (
+	PartText = "text"
+	PartBlob = "blob"
+)
 
 // CreateSession is the request that creates a session.
 type CreateSession struct {
@@ -163,10 +166,12 @@ type GoalView struct {
 	RetryAt time.Time `json:"retry_at,omitzero"`
 }
 
-// Part is one piece of input content.
+// Part is one piece of input content. A blob part carries one attachment in Data.
 type Part struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type      string `json:"type"`
+	Text      string `json:"text,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      []byte `json:"data,omitempty"`
 }
 
 // Input is a client input. The client mints ID; a repeat of the same ID is idempotent.

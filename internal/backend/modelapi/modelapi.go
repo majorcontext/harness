@@ -47,7 +47,7 @@ func (b *Backend) Capabilities(model string) turn.Capabilities {
 
 // Run makes one model call on the history of req and reports its assistant item.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	preq, err := request(req)
+	preq, err := request(ctx, req)
 	if err != nil {
 		return turn.Result{}, err
 	}
@@ -100,7 +100,7 @@ func (b *Backend) Warm(ctx context.Context, req turn.Request) error {
 	if !b.CanWarm(req.Model) {
 		return nil
 	}
-	preq, err := request(req)
+	preq, err := request(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -142,7 +142,7 @@ func (b *Backend) Close() {
 	}
 }
 
-func request(req turn.Request) (*provider.Request, error) {
+func request(ctx context.Context, req turn.Request) (*provider.Request, error) {
 	ref, err := message.ParseModelRef(req.Model)
 	if err != nil {
 		return nil, err
@@ -153,7 +153,10 @@ func request(req turn.Request) (*provider.Request, error) {
 	}
 	msgs := make([]message.Message, len(req.History))
 	for i, m := range req.History {
-		msgs[i] = toMessage(m)
+		msgs[i], err = toMessage(ctx, req, m)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if req.Banner != "" {
 		banner := message.Message{Role: message.RoleUser, Parts: message.Parts{&message.EngineContext{Text: req.Banner}}}

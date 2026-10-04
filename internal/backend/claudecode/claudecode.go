@@ -339,7 +339,7 @@ func effortArg(e message.Effort) (string, bool) {
 
 // prompt is the stdin line that starts the run. A run that continues the
 // turn sends continuation: the resumed session already holds the input.
-func (r *run) prompt(req turn.Request) input {
+func (r *run) prompt(req turn.Request) (input, error) {
 	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: continuation}}}
 	if !r.continues {
 		m.Parts = nil
@@ -347,5 +347,5 @@ func (r *run) prompt(req turn.Request) input {
 			m.Parts = append(m.Parts, in.Parts...)
 		}
 	}
-	return userLine(m)
+	return userLine(m, r.read)
 }

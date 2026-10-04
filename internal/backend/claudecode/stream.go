@@ -33,6 +33,8 @@ type run struct {
 	denied     bool
 	resolution *resolution
 	question   *question
+	// read returns the bytes of an attachment of the turn.
+	read func(key string) ([]byte, error)
 	// continues reports a run of a turn whose input the CLI already took;
 	// taken reports that this run gave the CLI the input.
 	continues bool
@@ -78,8 +80,13 @@ func (r *run) cleanup() {
 // drive sends the prompt and handles frames until the result, the end of
 // stdout, or the end of ctx.
 func (r *run) drive(ctx context.Context, req turn.Request) error {
+	r.read = func(key string) ([]byte, error) { return req.Blob(ctx, key) }
 	if r.resolution == nil {
-		r.sendErr = r.proc.Send(r.prompt(req))
+		line, err := r.prompt(req)
+		if err != nil {
+			return err
+		}
+		r.sendErr = r.proc.Send(line)
 	}
 	for {
 		select {
@@ -398,8 +405,12 @@ func (r *run) steered() error {
 	}
 	msgs, err := r.out.Steer()
 	for _, m := range msgs {
-		if err == nil {
-			err = r.proc.Send(userLine(m))
+		if err != nil {
+			break
+		}
+		var line input
+		if line, err = userLine(m, r.read); err == nil {
+			err = r.proc.Send(line)
 		}
 	}
 	return err

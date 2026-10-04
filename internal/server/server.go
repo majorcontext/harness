@@ -79,7 +79,9 @@ type Code struct {
 }
 
 const (
-	maxBody      = 8 << 20
+	maxBody = 8 << 20
+	// maxInputBody holds one attachment at its limit, as base64, and its text.
+	maxInputBody = 32 << 20
 	defaultLimit = 100
 	maxLimit     = 1000
 )
@@ -255,9 +257,9 @@ func replyRaw(w http.ResponseWriter, v any) {
 	_ = enc.Encode(v)
 }
 
-// decode reads the JSON body into v. An empty body leaves v as is.
-func decode(w http.ResponseWriter, r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
+// decode reads the JSON body of at most limit bytes into v. An empty body leaves v as is.
+func decode(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -291,7 +293,7 @@ func limit(r *http.Request) (int, error) {
 
 func (h *handler[S]) create(w http.ResponseWriter, r *http.Request) error {
 	var req protocol.CreateSession
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	s, err := h.rt.Create(r.Context(), req)
@@ -326,7 +328,7 @@ func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
 
 func (h *handler[S]) update(s S, w http.ResponseWriter, r *http.Request) error {
 	var p protocol.SettingsPatch
-	if err := decode(w, r, &p); err != nil {
+	if err := decode(w, r, &p, maxBody); err != nil {
 		return err
 	}
 	v, err := s.Update(r.Context(), p)
@@ -340,7 +342,7 @@ func (h *handler[S]) update(s S, w http.ResponseWriter, r *http.Request) error {
 // submit answers 201 for a new input and 200 for a repeat.
 func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 	var in protocol.Input
-	if err := decode(w, r, &in); err != nil {
+	if err := decode(w, r, &in, maxInputBody); err != nil {
 		return err
 	}
 	a, repeat, err := s.Admit(r.Context(), in)
@@ -357,7 +359,7 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 
 func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) error {
 	var req protocol.Interrupt
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	if err := s.Interrupt(r.Context(), req); err != nil {
@@ -369,7 +371,7 @@ func (h *handler[S]) interrupt(s S, w http.ResponseWriter, r *http.Request) erro
 
 func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error {
 	var req protocol.Compact
-	if err := decode(w, r, &req); err != nil {
+	if err := decode(w, r, &req, maxBody); err != nil {
 		return err
 	}
 	c, err := s.Compact(r.Context(), req)
@@ -382,7 +384,7 @@ func (h *handler[S]) compact(s S, w http.ResponseWriter, r *http.Request) error 
 
 func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error {
 	var res protocol.Resolution
-	if err := decode(w, r, &res); err != nil {
+	if err := decode(w, r, &res, maxBody); err != nil {
 		return err
 	}
 	if err := s.Resolve(r.Context(), r.PathValue("request"), res); err != nil {
@@ -394,7 +396,7 @@ func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error 
 
 func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error {
 	var g protocol.Goal
-	if err := decode(w, r, &g); err != nil {
+	if err := decode(w, r, &g, maxBody); err != nil {
 		return err
 	}
 	if err := s.SetGoal(r.Context(), g); err != nil {
