@@ -26,8 +26,10 @@ import (
 type family struct {
 	answer func(last eventlog.Part) []eventlog.Message
 	owns   string
-	mu     sync.Mutex
-	reqs   []turn.Request
+	// usage is the usage of each model call.
+	usage eventlog.Usage
+	mu    sync.Mutex
+	reqs  []turn.Request
 }
 
 func (f *family) Capabilities(model string) turn.Capabilities {
@@ -39,6 +41,7 @@ func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 	f.reqs = append(f.reqs, req)
 	f.mu.Unlock()
 	m := req.History[len(req.History)-1]
+	out.Telemetry(turn.Telemetry{Usage: f.usage})
 	items := f.answer(m.Parts[len(m.Parts)-1])
 	if items == nil {
 		<-ctx.Done()
@@ -197,11 +200,17 @@ func readOnly(t *testing.T, f *family, children []protocol.Session) {
 
 func children(t *testing.T, r *harness.Runtime) []protocol.Session {
 	t.Helper()
+	return descendants(t, r, "s1")
+}
+
+// descendants returns the children of session parent.
+func descendants(t *testing.T, r *harness.Runtime, parent string) []protocol.Session {
+	t.Helper()
 	page, err := r.List(bg, protocol.ListSessions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return slices.DeleteFunc(page.Sessions, func(s protocol.Session) bool { return s.ParentID != "s1" })
+	return slices.DeleteFunc(page.Sessions, func(s protocol.Session) bool { return s.ParentID != parent })
 }
 
 // refusing is a Store that refuses each append to s1 once armed. With arm,
@@ -257,7 +266,7 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 					t.Fatal(err)
 				}
 				synctest.Wait()
-				if got := settled(t, open()); got != tc.outcome {
+				if got := settled(t, open(), "s1"); got != tc.outcome {
 					t.Errorf("child.settled outcome %q, want %q", got, tc.outcome)
 				}
 				if _, got := f2.last("s1", report); tc.report == "" && got != "" || !strings.Contains(got, tc.report) {
@@ -271,23 +280,33 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 	}
 }
 
-// settled returns the outcome of the first child.settled of s1 in st.
-func settled(t *testing.T, st harness.Store) eventlog.Outcome {
+// settled returns the outcome of the first child.settled of session id in st.
+func settled(t *testing.T, st harness.Store, id string) eventlog.Outcome {
 	t.Helper()
-	recs, err := st.Read(bg, "s1", 0, 1000)
+	for _, e := range events(t, st, id) {
+		if s, ok := e.(eventlog.ChildSettled); ok {
+			return s.Outcome
+		}
+	}
+	return ""
+}
+
+// events returns the events of session id in st.
+func events(t *testing.T, st harness.Store, id string) []eventlog.Event {
+	t.Helper()
+	recs, err := st.Read(bg, id, 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var out []eventlog.Event
 	for _, r := range recs {
 		env, err := eventlog.Decode(r.Data)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s, ok := env.Event.(eventlog.ChildSettled); ok {
-			return s.Outcome
-		}
+		out = append(out, env.Event)
 	}
-	return ""
+	return out
 }
 
 func TestRecoveredChildCountsAgainstMaxConcurrentTasks(t *testing.T) {

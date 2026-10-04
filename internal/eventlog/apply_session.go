@@ -47,7 +47,7 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 }
 
 func (s *State) applyChildSpawned(e ChildSpawned) error {
-	if _, ok := s.children[e.ChildID]; ok || e.ChildID == "" {
+	if o, ok := s.children[e.ChildID]; ok && o == "" || e.ChildID == "" {
 		return illegal("child %q already spawned", e.ChildID)
 	}
 	s.children[e.ChildID] = ""

@@ -127,9 +127,11 @@ type Admitted struct {
 	Seq     uint64 `json:"seq"`
 }
 
-// Interrupt stops the running turn, or only the named turn when TurnID is set.
+// Interrupt stops the running turn, or only the named turn when TurnID is
+// set. Tree also stops the turn of each descendant of the session.
 type Interrupt struct {
 	TurnID string `json:"turn_id,omitempty"`
+	Tree   bool   `json:"tree,omitempty"`
 }
 
 // Event is one durable record of a session log, or an ephemeral frame of a

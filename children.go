@@ -1,9 +1,7 @@
 package harness
 
 import (
-	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,55 +15,7 @@ import (
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/protocol"
 )
-
-const taskSchema = `{
-	"type": "object",
-	"properties": {
-		"agent": {"type": "string", "description": "The agent profile of the child (default general-purpose)."},
-		"prompt": {"type": "string", "description": "The whole task. The child sees nothing of this conversation."}
-	},
-	"required": ["prompt"]
-}`
-
-const taskDescription = "Start a child agent that does a task in the background, in a session of its own. " +
-	"The call returns at once with the session id of the child. The final report of the child arrives later as a new message: " +
-	"do not poll or wait for it. agent selects the profile of the child: general-purpose has every tool, " +
-	"explore finds code with read-only tools, plan returns an implementation plan with read-only tools, " +
-	"and each .agents/*.md file of the project adds a profile. A call with an unknown agent lists the profiles."
-
-// taskTool starts a child of the session parent. The runtime binds parent
-// when the session starts.
-type taskTool struct {
-	r      *Runtime
-	parent string
-}
-
-func (taskTool) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: "task", Description: taskDescription, InputSchema: json.RawMessage(taskSchema)}
-}
-
-func (t taskTool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult, error) {
-	var in struct{ Agent, Prompt string }
-	if err := json.Unmarshal(c.Arguments, &in); err != nil {
-		return protocol.ToolResult{}, fmt.Errorf("task: invalid arguments: %w", err)
-	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		return protocol.ToolResult{}, errors.New("task: prompt is required")
-	}
-	in.Agent = cmp.Or(in.Agent, prompt.GeneralPurpose)
-	id, err := t.r.spawn(ctx, t.parent, in.Agent, in.Prompt)
-	if err != nil {
-		return protocol.ToolResult{}, fmt.Errorf("task: %w", err)
-	}
-	out, err := json.Marshal(struct {
-		SessionID string `json:"session_id"`
-		Agent     string `json:"agent"`
-		Note      string `json:"note"`
-	}{id, in.Agent, "running in the background; its report arrives later as a message. Do not poll or wait for it."})
-	return protocol.ToolResult{Text: string(out)}, err
-}
 
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
@@ -84,7 +34,11 @@ func (r *Runtime) spawn(ctx context.Context, parent, agent, task string) (string
 		return "", err
 	}
 	id := "ses_" + newSuffix()
-	if err := r.sup.admit(root, id, depth+1); err != nil {
+	if _, err := r.sup.admit(root, id, depth+1); err != nil {
+		return "", err
+	}
+	if err := r.withinBudget(ctx, root); err != nil {
+		r.sup.done(id)
 		return "", err
 	}
 	c, err := ps.a.Spawn(ctx, id, agent)
@@ -135,34 +89,92 @@ func (r *Runtime) available(model string, names []string) []string {
 	return out
 }
 
-// lineage returns the root of the tree of session id and the depth of id
-// below it. It reads the session.created record of each ancestor, and
-// stops past max_task_depth, where no spawn can pass.
+// lineage returns the root of the tree of session id and the depth of id below it.
 func (r *Runtime) lineage(ctx context.Context, id string) (string, int, error) {
-	for depth := 0; ; depth++ {
-		recs, err := r.store.Read(ctx, id, 0, 1)
-		if err == nil && len(recs) == 0 {
-			err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
-		}
+	up, err := r.ancestors(ctx, id)
+	if err != nil || len(up) == 0 {
+		return id, 0, err
+	}
+	return up[len(up)-1], len(up), nil
+}
+
+// ancestors returns the parents of session id, nearest first. It reads the
+// session.created record of each, up to the root.
+func (r *Runtime) ancestors(ctx context.Context, id string) ([]string, error) {
+	var up []string
+	for {
+		c, err := r.created(ctx, id)
 		if err != nil {
-			return "", 0, err
+			return nil, err
 		}
-		env, err := eventlog.Decode(recs[0].Data)
-		if err != nil {
-			return "", 0, err
-		}
-		c, _ := env.Event.(eventlog.SessionCreated)
-		if c.ParentID == "" || depth > r.sup.depth {
-			return id, depth, nil
+		if c.ParentID == "" {
+			break
 		}
 		id = c.ParentID
+		up = append(up, id)
 	}
+	return up, nil
+}
+
+// created returns the session.created record of session id.
+func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
+	recs, err := r.store.Read(ctx, id, 0, 1)
+	if err == nil && len(recs) == 0 {
+		err = fmt.Errorf("%w: %s", ErrSessionNotFound, id)
+	}
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	env, err := eventlog.Decode(recs[0].Data)
+	if err != nil {
+		return eventlog.SessionCreated{}, err
+	}
+	c, _ := env.Event.(eventlog.SessionCreated)
+	return c, nil
+}
+
+// withinBudget fails once the sessions of the tree of root have used
+// max_tree_tokens. Each session counts the turns that ended in its log.
+func (r *Runtime) withinBudget(ctx context.Context, root string) error {
+	if r.sup.tokens <= 0 {
+		return nil
+	}
+	n, err := r.tokens(ctx, root)
+	if err == nil && n >= int64(r.sup.tokens) {
+		err = fmt.Errorf("max_tree_tokens %d: this session tree has used %d tokens", r.sup.tokens, n)
+	}
+	return err
+}
+
+// tokens returns the tokens that session id and its descendants have used.
+func (r *Runtime) tokens(ctx context.Context, id string) (int64, error) {
+	st, err := session.Load(ctx, id, storeLog{r.store, id})
+	if errors.Is(err, ErrSessionNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	u := st.Usage()
+	n := u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+	for _, kid := range st.Children() {
+		k, err := r.tokens(ctx, kid)
+		if err != nil {
+			return 0, err
+		}
+		n += k
+	}
+	return n, nil
 }
 
 // report delivers the outcome of a child to its parent, which it opens
 // when this runtime does not run it, even when the child has settled. It
-// never waits for the child.
+// never waits for the child. A child that a tree interrupt stops settles
+// with no report input, so no parent inside the tree starts a turn.
 func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
+	if r.sup.quieted(s.ChildID) {
+		text = ""
+	}
 	r.group.Go(func() {
 		r.sup.done(s.ChildID)
 		if p, err := r.Open(r.base, parent); err == nil {
@@ -173,8 +185,9 @@ func (r *Runtime) report(parent string, s eventlog.ChildSettled, text string) {
 
 // recoverChildren settles each unsettled child of a that has ended, or
 // that never started, and opens each other one, which reports when its
-// turn ends. Each opened child counts against the limits of its tree. A crash can come between the end of a child turn and its
-// child.settled record.
+// turn ends. Each opened child counts against the limits of its tree. A
+// crash can come between the end of a child turn and its child.settled
+// record.
 func (r *Runtime) recoverChildren(parent string, a *session.Actor) {
 	ids, err := a.Unsettled(r.base)
 	if err != nil {
@@ -205,20 +218,27 @@ func (r *Runtime) recoverChildren(parent string, a *session.Actor) {
 }
 
 // supervisor holds the limits of each session tree: the depth of a child,
-// and the unsettled children of each root.
+// the unsettled children of each root, and the token budget. It also holds
+// the children that a tree interrupt stops.
 type supervisor struct {
-	depth, running int
+	depth, running, tokens int
 
 	mu    sync.Mutex
 	roots map[string]string
+	quiet map[string]int
 }
 
-func (s *supervisor) admit(root, child string, depth int) error {
+// admit counts child against the limits of root. added is false for a
+// child that the supervisor already counts.
+func (s *supervisor) admit(root, child string, depth int) (added bool, err error) {
 	if depth > s.depth {
-		return fmt.Errorf("max_task_depth %d allows no child at depth %d", s.depth, depth)
+		return false, fmt.Errorf("max_task_depth %d allows no child at depth %d", s.depth, depth)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.roots[child]; ok {
+		return false, nil
+	}
 	n := 0
 	for _, r := range s.roots {
 		if r == root {
@@ -226,10 +246,10 @@ func (s *supervisor) admit(root, child string, depth int) error {
 		}
 	}
 	if n >= s.running {
-		return fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", s.running, n)
+		return false, fmt.Errorf("max_concurrent_tasks %d: %d children of this session tree have not settled", s.running, n)
 	}
 	s.roots[child] = root
-	return nil
+	return true, nil
 }
 
 func (s *supervisor) adopt(root, child string) {
@@ -242,4 +262,19 @@ func (s *supervisor) done(child string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.roots, child)
+}
+
+// silence adds n to the tree interrupts that stop child.
+func (s *supervisor) silence(child string, n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.quiet[child] += n; s.quiet[child] <= 0 {
+		delete(s.quiet, child)
+	}
+}
+
+func (s *supervisor) quieted(child string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quiet[child] > 0
 }

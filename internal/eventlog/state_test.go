@@ -185,6 +185,10 @@ var applyRows = []struct {
 	{"an evaluation needs an active goal", with(running, end("t1", StopCompleted, ""), verdict("t1")), "no active goal", view{}},
 	{"a compaction covers only earlier records", with(base, CompactionApplied{FromSeq: 1, ToSeq: 2}), "to_seq 2", view{}},
 	{"a child settles after it spawns", with(base, ChildSettled{ChildID: "x", Outcome: OutcomeDone}), "child x is unknown", view{}},
+	{"an adjusted goal keeps its turn count", with(evaluated, GoalSet{Condition: "y", MaxTurns: 3, Turns: 1}), "", view{Status: StatusIdle, Goal: "active 1"}},
+	{"a goal starts below max_turns", with(base, GoalSet{Condition: "x", MaxTurns: 1, Turns: 1}), "turns", view{}},
+	{"a settled child spawns again", with(base, ChildSpawned{ChildID: "x"}, ChildSettled{ChildID: "x", Outcome: OutcomeDone}, ChildSpawned{ChildID: "x"}), "", view{Status: StatusIdle}},
+	{"an unsettled child does not spawn again", with(base, ChildSpawned{ChildID: "x"}, ChildSpawned{ChildID: "x"}), "already spawned", view{}},
 	{"a settings change keeps a model", with(base, SettingsChanged{Model: new("")}), "empty model", view{}},
 }
 

@@ -82,20 +82,17 @@ type Config struct {
 	// A nil value uses <WorkDir>/.agents/commands. A non-empty project value
 	// replaces the user value during config merge; explicit [] disables discovery.
 	CommandsDirs []string `json:"commands_dirs,omitempty"`
-	// GoalEvaluatorModel names the model ref (or alias) used to evaluate goal
-	// completion for `harness run --goal`, the server goal routes, and
-	// Session.SetGoal. There is no default — goal use requires this field to
-	// be set. Resolve it with ResolveModel so aliases apply.
+	// GoalEvaluatorModel is the model ref or alias that judges goals. It has no
+	// default: goals and the goal tool need it. Resolve it with ResolveModel.
 	GoalEvaluatorModel string `json:"goal_evaluator_model,omitempty"`
 	// MaxTaskDepth bounds the nesting of the child sessions of the task tool.
 	MaxTaskDepth int `json:"max_task_depth,omitempty"`
 	// MaxConcurrentTasks bounds the unsettled child sessions of one session tree.
 	MaxConcurrentTasks int `json:"max_concurrent_tasks,omitempty"`
-	// ModelTool, when set to false, disables the built-in `model` session tool
-	// (status/set — the model swaps its own MAIN model in-process; see package
-	// engine). A nil value (the field omitted) leaves the tool ENABLED — the
-	// default is on, so a *bool distinguishes "unset" (on) from "false" (off)
-	// across the project-config merge, exactly like Instructions above.
+	// MaxTreeTokens stops a spawn once one session tree has used this many tokens. 0: no limit.
+	MaxTreeTokens int `json:"max_tree_tokens,omitempty"`
+	// ModelTool false disables the engine `model` session tool. nil leaves it
+	// on, so a *bool keeps "unset" apart from "false" in the merge.
 	ModelTool *bool `json:"model_tool,omitempty"`
 	// Plugins lists the plugin processes to wire into every session's
 	// engine.Config.Hooks (see package plugin). Order matters: sync hooks
@@ -1304,6 +1301,9 @@ func merge(base, over *Config) *Config {
 	}
 	if over.MaxConcurrentTasks != 0 {
 		out.MaxConcurrentTasks = over.MaxConcurrentTasks
+	}
+	if over.MaxTreeTokens != 0 {
+		out.MaxTreeTokens = over.MaxTreeTokens
 	}
 	if over.ModelTool != nil {
 		out.ModelTool = over.ModelTool

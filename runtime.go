@@ -65,9 +65,9 @@ type Options struct {
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, or a built-in tool name. With Config.MCPServers, no
-	// name may be mcp, list_mcp_resources, read_mcp_resource, or start
-	// with mcp__.
+	// WorkDir, no name may be process, task, or a built-in tool name. With a
+	// goal evaluator, no name may be goal. With Config.MCPServers, no name
+	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
 	Tools []Tool
 	// WorkDir is the directory of a coding agent. Each session reads its
 	// AGENTS.md chain and skills when it starts, gets the file, search, and
@@ -143,8 +143,12 @@ func New(opts Options) (*Runtime, error) {
 	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	r.resolve = opts.Config.ResolveModel
 	r.sup = &supervisor{depth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
-		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), roots: map[string]string{}}
+		running: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), tokens: opts.Config.MaxTreeTokens,
+		roots: map[string]string{}, quiet: map[string]int{}}
 	tools := opts.Tools
+	if r.evaluator != "" {
+		tools = append(slices.Clip(tools), goalTool{r: r})
+	}
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = newProcesses(opts.WorkDir, opts.Config.Processes), opts.WorkDir
 		tools = append(slices.Clip(tools), newProcessTool(r.procs, opts.Config.Processes), taskTool{r: r})
@@ -207,6 +211,7 @@ func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreat
 		}
 	}
 	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
+		cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
 		return session.Create(ctx, cfg, c, first)
 	})
 }
@@ -220,12 +225,20 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		a, err := session.Open(ctx, cfg)
-		if err == nil {
-			r.group.Go(func() { r.recoverChildren(id, a) })
+		if c, err := r.created(ctx, id); err == nil {
+			cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
 		}
-		return a, err
+		return session.Open(ctx, cfg)
 	})
+}
+
+// sessionTools returns the tools of a session with parent. A child has no
+// goal tool, as no goal of an engine child ever ran.
+func sessionTools(tools []turn.Tool, parent string) []turn.Tool {
+	if parent == "" {
+		return tools
+	}
+	return slices.DeleteFunc(tools, func(t turn.Tool) bool { _, ok := t.(goalTool); return ok })
 }
 
 func (r *Runtime) load(ctx context.Context, id string, create bool, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
@@ -242,10 +255,18 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.group.Add(1)
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, start)
-			r.group.Done()
-			if e.err != nil {
+			switch {
+			case e.err != nil:
 				r.forget(id, e)
+			case create:
+				close(e.s.recovered)
+			default:
+				r.group.Go(func() {
+					r.recoverChildren(id, e.s.a)
+					close(e.s.recovered)
+				})
 			}
+			r.group.Done()
 			close(e.ready)
 			return e.s, e.err
 		}
@@ -332,7 +353,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	if err != nil {
 		return nil, err
 	}
-	return &Session{a: a, hasEvaluator: r.evaluator != ""}, nil
+	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
 }
 
 // mcpTools gives the MCP tools to each turn whose backend does not connect
@@ -369,13 +390,12 @@ func (r *Runtime) instructions() func(agent string) string {
 	}
 }
 
-// bind returns the tools of session id: the task tool starts children of id.
+// bind returns the tools of session id, with each session tool bound to id.
 func (r *Runtime) bind(id string) []turn.Tool {
 	tools := slices.Clone(r.tools)
 	for i, t := range tools {
-		if task, ok := t.(taskTool); ok {
-			task.parent = id
-			tools[i] = task
+		if b, ok := t.(interface{ bind(string) turn.Tool }); ok {
+			tools[i] = b.bind(id)
 		}
 	}
 	return tools
@@ -393,6 +413,23 @@ func (r *Runtime) running(id string) *Session {
 	case <-e.ready:
 		return e.s
 	default:
+		return nil
+	}
+}
+
+// loaded returns session id once this runtime has loaded it, or nil when
+// it does not run it.
+func (r *Runtime) loaded(ctx context.Context, id string) *Session {
+	r.mu.Lock()
+	e := r.sessions[id]
+	r.mu.Unlock()
+	if e == nil {
+		return nil
+	}
+	select {
+	case <-e.ready:
+		return e.s
+	case <-ctx.Done():
 		return nil
 	}
 }

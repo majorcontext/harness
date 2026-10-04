@@ -157,10 +157,11 @@ type RequestResolved struct {
 	Answer     json.RawMessage `json:"answer,omitempty"`
 }
 
-// GoalSet replaces the goal and resets its turn count.
+// GoalSet replaces the goal. Its turn count starts at Turns, which an adjust keeps.
 type GoalSet struct {
 	Condition string `json:"condition"`
 	MaxTurns  int    `json:"max_turns"`
+	Turns     int    `json:"turns,omitempty"`
 }
 
 // GoalEvaluated records the verdict on the goal after a turn.
@@ -185,7 +186,7 @@ type CompactionApplied struct {
 	ByBackend bool   `json:"by_backend"`
 }
 
-// ChildSpawned records a child session.
+// ChildSpawned records a child session, or rearms a settled one to report again.
 type ChildSpawned struct {
 	ChildID string `json:"child_id"`
 	Agent   string `json:"agent,omitempty"`

@@ -12,10 +12,10 @@ var goalFrom = map[GoalState][]GoalState{
 }
 
 func (s *State) applyGoalSet(e GoalSet) error {
-	if e.Condition == "" || e.MaxTurns < 0 {
-		return illegal("goal.set needs a condition and max_turns >= 0")
+	if e.Condition == "" || e.MaxTurns < 0 || e.Turns < 0 || e.MaxTurns > 0 && e.Turns >= e.MaxTurns {
+		return illegal("goal.set needs a condition, max_turns >= 0, and turns below max_turns")
 	}
-	s.goal = Goal{Condition: e.Condition, MaxTurns: e.MaxTurns, State: GoalActive, Evaluated: s.lastEnded.TurnID}
+	s.goal = Goal{Condition: e.Condition, MaxTurns: e.MaxTurns, Turns: e.Turns, State: GoalActive, Evaluated: s.lastEnded.TurnID}
 	return nil
 }
 
