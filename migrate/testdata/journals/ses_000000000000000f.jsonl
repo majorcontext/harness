@@ -1,0 +1,8 @@
+{"type":"session","id":"ses_000000000000000f","created_at":"2026-09-04T07:00:00Z","model":"claude-code/sonnet"}
+{"type":"message","message":{"id":"msg_f1","role":"user","parts":[{"type":"text","text":"hello"}],"created_at":"2026-09-04T07:00:01Z"}}
+{"type":"claude_code.session_id","created_at":"2026-09-04T07:00:02Z","claude_code_session_id":"cli-old"}
+{"type":"claude_code.session_id","created_at":"2026-09-04T07:00:02Z","claude_code_session_id":"cli-123"}
+{"type":"message","message":{"id":"msg_f2","role":"assistant","parts":[{"type":"text","text":"Hi."}],"origin":"claude_code","created_at":"2026-09-04T07:00:03Z"}}
+{"type":"claude_code.usage","created_at":"2026-09-04T07:00:03Z","usage":{"input_tokens":3,"output_tokens":2}}
+{"type":"message","message":{"id":"msg_f3","role":"assistant","parts":[{"type":"tool_call","call_id":"toolu_q1","name":"AskUserQuestion","arguments":{"questions":[{"question":"Which file?"}]}}],"origin":"claude_code","created_at":"2026-09-04T07:00:04Z"}}
+{"type":"claude_code.question","created_at":"2026-09-04T07:00:04Z","claude_code_question":"toolu_q1"}

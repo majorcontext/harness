@@ -99,12 +99,15 @@ func (a *Actor) retain(turnID, tool string, res protocol.ToolResult) protocol.To
 	}
 	var m *toolresult.Meta
 	err := a.onTurn(turnID, func() error {
-		used := 0
+		used, last := 0, 0
 		for _, r := range a.state.Retained() {
 			used += r.Bytes
+			if n, _ := toolresult.Number(r.Handle); n > last {
+				last = n
+			}
 		}
 		if used+len(masked) <= toolresult.Budget {
-			handle := toolresult.Handle(len(a.state.Retained()) + 1)
+			handle := toolresult.Handle(last + 1)
 			m = new(toolresult.NewMeta(handle, tool, fmt.Sprintf("%s-%d", handle, a.fenced), masked))
 		}
 		return nil

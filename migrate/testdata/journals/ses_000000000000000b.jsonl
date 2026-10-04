@@ -1,0 +1,15 @@
+{"type":"session","id":"ses_000000000000000b","created_at":"2026-09-02T09:00:00Z","model":"openai/gpt-5"}
+{"type":"message","message":{"id":"msg_b1","role":"user","parts":[{"type":"text","text":"read the log"}],"created_at":"2026-09-02T09:00:01Z"}}
+{"type":"message","message":{"id":"msg_b2","role":"assistant","parts":[{"type":"tool_call","call_id":"call_b1","name":"read","arguments":{"path":"big.log"}}],"created_at":"2026-09-02T09:00:02Z"},"usage":{"input_tokens":10,"output_tokens":3}}
+{"type":"toolresult.retained","created_at":"2026-09-02T09:00:03Z","tool_result":{"handle":"trh_1","tool":"read","bytes":29,"lines":3,"head":"line one"}}
+{"type":"message","message":{"id":"msg_b3","role":"tool","parts":[{"type":"tool_result","call_id":"call_b1","content":[{"type":"text","text":"[tool result retained: handle=trh_1]\nline one"}]}],"created_at":"2026-09-02T09:00:03Z"}}
+{"type":"message","message":{"id":"msg_b4","role":"assistant","parts":[{"type":"text","text":"The log has three lines."}],"created_at":"2026-09-02T09:00:04Z"},"usage":{"input_tokens":20,"output_tokens":4}}
+{"type":"message","message":{"id":"msg_b5","role":"user","parts":[{"type":"text","text":"summarize it"}],"created_at":"2026-09-02T09:01:00Z"}}
+{"type":"message","message":{"id":"msg_b6","role":"assistant","parts":[{"type":"text","text":"It is a log."}],"created_at":"2026-09-02T09:01:01Z"},"usage":{"input_tokens":30,"output_tokens":5}}
+{"type":"compact","created_at":"2026-09-02T09:02:00Z","compact":{"first_id":"msg_b1","last_id":"msg_b4","turns_folded":1,"summary":{"id":"cmpsum_b1","role":"user","parts":[{"type":"text","text":"Summary: the user read big.log (trh_1)."}],"created_at":"2026-09-02T09:02:00Z"}},"usage":{"input_tokens":5,"output_tokens":5}}
+{"type":"model","created_at":"2026-09-02T09:03:00Z","model":"anthropic/claude-opus-4-1"}
+{"type":"effort","created_at":"2026-09-02T09:03:00Z","effort":"low"}
+{"type":"message","message":{"id":"msg_b7","role":"user","parts":[{"type":"text","text":"now fix it"}],"created_at":"2026-09-02T09:04:00Z"}}
+{"type":"message","message":{"id":"msg_b8","role":"assistant","parts":[{"type":"text","text":"Fixed."}],"created_at":"2026-09-02T09:04:01Z"},"usage":{"input_tokens":40,"output_tokens":6}}
+{"type":"goal.set","created_at":"2026-09-02T09:05:00Z","goal":{"condition":"all tests pass"}}
+{"type":"prompt.queued","created_at":"2026-09-02T09:06:00Z","prompt":{"id":1,"text":"and add docs","message_id":"msg_q1","source":"api"}}

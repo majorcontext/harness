@@ -1,0 +1,12 @@
+{"type":"session","id":"ses_000000000000000c","created_at":"2026-09-03T08:00:00Z","model":"openai/gpt-5"}
+{"type":"message","message":{"id":"msg_c1","role":"user","parts":[{"type":"text","text":"explore two areas"}],"created_at":"2026-09-03T08:00:01Z"}}
+{"type":"message","message":{"id":"msg_c2","role":"assistant","parts":[{"type":"tool_call","call_id":"call_c1","name":"task","arguments":{"agent":"explore","prompt":"area one"}},{"type":"tool_call","call_id":"call_c2","name":"task","arguments":{"agent":"explore","prompt":"area two"}}],"created_at":"2026-09-03T08:00:02Z"},"usage":{"input_tokens":10,"output_tokens":8}}
+{"type":"task.spawned","created_at":"2026-09-03T08:00:03Z","task_spawn":{"child_id":"ses_000000000000000d","agent":"explore"}}
+{"type":"task.spawned","created_at":"2026-09-03T08:00:03Z","task_spawn":{"child_id":"ses_000000000000000e","agent":"explore"}}
+{"type":"message","message":{"id":"msg_c3","role":"tool","parts":[{"type":"tool_result","call_id":"call_c1","content":[{"type":"text","text":"started ses_000000000000000d"}]},{"type":"tool_result","call_id":"call_c2","content":[{"type":"text","text":"started ses_000000000000000e"}]}],"created_at":"2026-09-03T08:00:04Z"}}
+{"type":"message","message":{"id":"msg_c4","role":"assistant","parts":[{"type":"text","text":"Both tasks started."}],"created_at":"2026-09-03T08:00:05Z"},"usage":{"input_tokens":12,"output_tokens":4}}
+{"type":"task.notify_queued","created_at":"2026-09-03T08:01:00Z","task_notify":{"child_id":"ses_000000000000000d","agent":"explore","status":"done","result":"area one is fine"}}
+{"type":"task.notify_delivered","created_at":"2026-09-03T08:01:01Z","task_notify":{"child_id":"ses_000000000000000d","agent":"explore","status":"done","result":"area one is fine"}}
+{"type":"message","message":{"id":"msg_c5","role":"user","parts":[{"type":"text","text":"Task ses_000000000000000d finished: area one is fine"}],"origin":"engine","created_at":"2026-09-03T08:01:01Z"}}
+{"type":"message","message":{"id":"msg_c6","role":"assistant","parts":[{"type":"text","text":"Noted."}],"created_at":"2026-09-03T08:01:02Z"},"usage":{"input_tokens":14,"output_tokens":2}}
+{"type":"task.notify_queued","created_at":"2026-09-03T08:02:00Z","task_notify":{"child_id":"ses_000000000000000e","agent":"explore","status":"failed","fail_reason":"tool crashed"}}
