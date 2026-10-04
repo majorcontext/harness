@@ -36,9 +36,16 @@ type Runtime[S Session] interface {
 	Open(ctx context.Context, id string) (S, error)
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	Models() []protocol.Model
-	// Processes returns the process manager, or nil when no process runs.
-	Processes() *process.Manager
 	Commands() (protocol.Commands, error)
+}
+
+// Processes runs the processes of the box.
+type Processes interface {
+	List() []process.Info
+	Start(ctx context.Context, name string) (process.Status, error)
+	Stop(ctx context.Context, name string) (process.Status, error)
+	Restart(ctx context.Context, name string) (process.Status, error)
+	Logs(name string, tail int) (string, process.Status, error)
 }
 
 // Options configures the handler.
@@ -48,6 +55,8 @@ type Options struct {
 	Codes []Code
 	// WorkDir is the root of GET /workspace/changes. Empty: no such route.
 	WorkDir string
+	// Processes serves the /processes routes. nil: no process runs.
+	Processes Processes
 }
 
 // Code is the wire code of a sentinel error.
@@ -86,11 +95,12 @@ type handler[S Session] struct {
 	rt      Runtime[S]
 	codes   []Code
 	workDir string
+	procs   Processes
 }
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{rt: rt, workDir: opts.WorkDir, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
 		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}

@@ -79,6 +79,7 @@ func goalActor(t *testing.T, log *memLog, b turn.Backend, create bool, live *ato
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.Run()
 	return a
 }
 

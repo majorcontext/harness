@@ -126,10 +126,10 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
-func (r *Runtime) Processes() *process.Manager // nil without a WorkDir
 func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
-// every record through each handoff, or ctx ends.
+// every record through each handoff, or, when ctx ends first, once the
+// turns that it cancels have ended.
 func (r *Runtime) Close(ctx context.Context) error
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
@@ -153,7 +153,8 @@ func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protoc
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
 	// Deliver returns the receiver's head on success and on a seq mismatch;
-	// the sender resends from Head+1. ErrStaleEpoch fires Ownership.Lost.
+	// the sender resends from Head+1. ErrStaleEpoch or ErrConflict stops the
+	// session and releases its Ownership.
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
 
@@ -222,12 +223,13 @@ var ErrConflict = errors.New("harness: append conflict")
 ```
 
 - `seq` starts at 1 and has no gaps. `Head` returns the last seq, or 0 for an empty session. `expectedSeq` is the last seq the writer has seen, so it equals the record count.
-- A stale writer gets `ErrConflict` and stops.
+- A stale writer gets `ErrConflict` and stops. This holds across `Store` instances on one storage, in one process or in many: the fence is in the storage, not in an instance.
 - Any other append error also stops the session actor, with no retry. The next `Open` fences and replays from the store, so an append that landed is in the replay, and one that did not land is not.
 - Compare-and-append alone does not fence a lease handoff: an old owner's in-flight append can still hold the current `expectedSeq`. The new owner therefore appends `owner.acquired` before it replays or runs (see Ownership). Any later append from the old owner conflicts. A shared store may also check its lease in the same transaction as the append.
 - `Append` is durable on return. `DiskStore` writes the records of one `Append` with one `fsync`. `MemStore` is for tests.
+- `DiskStore` takes an exclusive `flock` of the session log for each append, from its first byte to its `fsync` or rollback, and compares `expectedSeq` with the head read under that lock. Each `Head` takes a shared `flock`, so it never reads bytes that a failed append cuts again, and scans again the bytes that another instance appended since the last scan, which a change of the file size shows. A wait for a lock ends with the context of the call. Where `flock` does not exist, only the instance fences its appends.
 - There are no checkpoints. `Open` and `OpenView` replay the whole log. `List` reads the view of a session that this runtime runs, and replays the log of any other session. Add a checkpoint only when a measurement shows that replay costs too much.
-- `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it.
+- `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it. `storetest.RunInstances(t, newStorage)` checks the fence across instances: for each case, `newStorage` returns an opener of new storage, and each call of the opener returns one more instance over that storage. A `Store` that is fenced against another process runs it too.
 
 ### Layout on disk
 
@@ -335,6 +337,11 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 The actor appends with no other goroutine. It checks the batch with `eventlog.Check`, appends it with `Store.Append`, applies each record, and publishes a new view. A command that needs durability replies after `Apply`. The store write is the only wait on disk in the actor.
 
 The turn runner is one goroutine per turn. It gets a `turn.Request` that the actor builds from the `State`, calls the backend and tools, and sends each item and the end of the turn to the actor as commands. It touches no session field.
+
+Lifecycle:
+
+- `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
+- When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
 Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, head seq) and whether the actor stopped.
 
@@ -461,7 +468,7 @@ A child is a session with `parent_id`. The `task` tool starts it in the backgrou
 
 ### Shutdown
 
-One `sync.WaitGroup` per runtime tracks every actor, turn runner, compaction, and `Sync` sender. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers. When its ctx ends first, it stops the remaining sessions without an append and returns; their next `Open` finds a crashed turn.
+One `sync.WaitGroup` per runtime tracks every goroutine that the runtime starts. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers, once. When its ctx ends first, it stops the remaining sessions without an append, which cancels their turns, and still waits for the group before it closes them; their next `Open` finds a crashed turn. A turn ends when its tools and its backend return: a tool gets the canceled context, and an external harness gets SIGINT and is killed after its grace (5 s for Claude Code). This matches the engine `Drain`, which canceled the prompts and waited for them. New work that `Close` would wait for fails with `ErrDraining` after `Close` starts; work that already runs finishes or is canceled.
 
 ## HTTP
 
@@ -515,7 +522,8 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - Only SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`. `harness.ApplySync` implements these receiver rules over any `Store`.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
+- The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch) and `ErrConflict` (different bytes at a seq) are final: a resend cannot change them. Either one stops the session with no further append and releases its `Ownership`. `Session.Release` then returns the `ErrConflict` rejection, and `ErrSessionNotOwned` after a stale epoch. Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
 
 ### Errors
@@ -759,8 +767,8 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - A result reports no elapsed time. The status line names instants instead.
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - This deviates from the engine, which puts the status at the end of the newest user message. Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
-- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes before it returns.
-- `Runtime.Processes` returns the one manager, which the process tool and the `/processes` routes share. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
+- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns, waits for them to end, and kills the processes before it returns.
+- The process tool and the `/processes` routes share the one manager. A `start`, `stop`, or `restart` route is work that `Runtime.Close` waits for, and fails with `draining` (503) after `Close` starts, so no route starts a process that `Close` does not stop. The runtime does not expose the manager. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
 
 ### workspace
 
@@ -883,7 +891,7 @@ Boxes has its own re-architecture ("Boxes architecture") built on this one. The 
 | Durable head per session | `protocol.Session.HeadSeq` from `Session.View()` or `View.Session()` (Apply runs after a durable append) | 2 |
 | Open after a forced stop | the `crashed` cause | 2 |
 | `Models()` with no sessions | `New` does no I/O | 2 |
-| External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` fires `Lost` | 2 |
+| External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` stops the session and releases its `Ownership` | 2 |
 
 Combined sequence:
 

@@ -186,7 +186,7 @@ func (a *Actor) judge(g eventlog.Goal) {
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History())
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
-	a.cfg.Go(func() {
+	a.spawn(func() {
 		answer, err := turn.Ask(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.judged(r, turnID, answer, err)

@@ -19,7 +19,6 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/server"
-	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -297,7 +296,6 @@ func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, 
 	return protocol.SessionPage{}, nil
 }
 func (stub) Models() []protocol.Model                            { return nil }
-func (stub) Processes() *process.Manager                         { return nil }
 func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }

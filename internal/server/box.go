@@ -15,16 +15,16 @@ import (
 func (h *handler[S]) box(mux *http.ServeMux) {
 	mux.HandleFunc("GET /processes", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
 		list := []process.Info{}
-		if m := h.rt.Processes(); m != nil {
-			list = m.List()
+		if h.procs != nil {
+			list = h.procs.List()
 		}
 		reply(w, http.StatusOK, list)
 		return nil
 	}))
-	for action, run := range map[string]func(*process.Manager, context.Context, string) (process.Status, error){
-		"start": (*process.Manager).Start, "stop": (*process.Manager).Stop, "restart": (*process.Manager).Restart,
+	for action, run := range map[string]func(Processes, context.Context, string) (process.Status, error){
+		"start": Processes.Start, "stop": Processes.Stop, "restart": Processes.Restart,
 	} {
-		mux.HandleFunc("POST /processes/{name}/"+action, h.process(func(m *process.Manager, w http.ResponseWriter, r *http.Request) error {
+		mux.HandleFunc("POST /processes/{name}/"+action, h.process(func(m Processes, w http.ResponseWriter, r *http.Request) error {
 			st, err := run(m, r.Context(), r.PathValue("name"))
 			if err != nil {
 				return err
@@ -47,20 +47,19 @@ func (h *handler[S]) box(mux *http.ServeMux) {
 	}
 }
 
-// process runs f over the process manager. Without one, every name is unknown.
-func (h *handler[S]) process(f func(*process.Manager, http.ResponseWriter, *http.Request) error) http.HandlerFunc {
+// process runs f over the processes. Without them, every name is unknown.
+func (h *handler[S]) process(f func(Processes, http.ResponseWriter, *http.Request) error) http.HandlerFunc {
 	return h.serve(func(w http.ResponseWriter, r *http.Request) error {
-		m := h.rt.Processes()
-		if m == nil {
+		if h.procs == nil {
 			return fmt.Errorf("%w %q", process.ErrUnknownProcess, r.PathValue("name"))
 		}
-		return f(m, w, r)
+		return f(h.procs, w, r)
 	})
 }
 
 // logs answers the last tail lines of the log, 50 when tail is not a
 // positive number, and the status of the process.
-func logs(m *process.Manager, w http.ResponseWriter, r *http.Request) error {
+func logs(m Processes, w http.ResponseWriter, r *http.Request) error {
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 	content, st, err := m.Logs(r.PathValue("name"), tail)
 	if err != nil {

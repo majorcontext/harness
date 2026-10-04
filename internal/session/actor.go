@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 )
 
 var (
-	// ErrConflict reports an append whose expected seq is not the log head.
+	// ErrConflict reports an append whose expected seq is not the log head,
+	// or a SyncBatch whose records differ from the records of the receiver.
 	ErrConflict = errors.New("harness: append conflict")
 	// ErrNotFound reports a session with an empty log.
 	ErrNotFound = errors.New("harness: session not found")
@@ -115,10 +117,17 @@ type Actor struct {
 	view atomic.Pointer[View]
 	live live
 
-	stale   chan struct{}
-	flushed chan struct{}
-	synced  atomic.Uint64
-	syncErr error
+	// rejected closes when Sync rejects a batch for good.
+	rejected chan struct{}
+	flushed  chan struct{}
+	synced   atomic.Uint64
+	syncErr  error
+
+	// launched is set by Run. Until then, spawn holds each run in pending.
+	launched bool
+	pending  []func()
+	// runs counts the turn, compaction, and judge goroutines.
+	runs sync.WaitGroup
 
 	state *eventlog.State
 	// fenced is the seq of the owner.acquired record of this actor.
@@ -132,14 +141,14 @@ type Actor struct {
 
 func newActor(cfg Config, s *eventlog.State) *Actor {
 	a := &Actor{cfg: cfg, mail: make(chan func()), quit: make(chan struct{}), done: make(chan struct{}),
-		stale: make(chan struct{}), flushed: make(chan struct{}), state: s}
+		rejected: make(chan struct{}), flushed: make(chan struct{}), state: s}
 	a.view.Store(&View{changed: make(chan struct{})})
 	a.publish(false)
 	return a
 }
 
-// Create appends session.created and owner.acquired to an empty log and
-// runs the session. A first input starts the first turn in the same append.
+// Create appends session.created and owner.acquired to an empty log. A
+// first input starts the first turn in the same append. Run runs the session.
 func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Actor, error) {
 	a := newActor(cfg, &eventlog.State{})
 	events := []eventlog.Event{c, eventlog.OwnerAcquired{Epoch: cfg.Ownership.Epoch(), Owner: cfg.Owner}}
@@ -158,24 +167,30 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 	if first != nil {
 		a.start(turnID, []string{first.InputID}, 0)
 	}
-	a.launch()
 	return a, nil
 }
 
 // Open fences every earlier owner, replays the log through the fence,
-// resumes a suspended turn or ends a crashed one, starts the next queued
-// input when no turn resumes, and runs the session.
+// resumes a suspended turn or ends a crashed one, and starts the next
+// queued input when no turn resumes. Run runs the session.
 func Open(ctx context.Context, cfg Config) (*Actor, error) {
 	a, err := open(ctx, cfg)
 	if err != nil {
 		cfg.Ownership.Release()
 		return nil, err
 	}
-	a.launch()
 	return a, nil
 }
 
-func (a *Actor) launch() {
+// Run starts the actor goroutine, the Sync sender, and the run that Create
+// or Open started. Call it once, after the actor is published: a tool of
+// that run can look up its own session.
+func (a *Actor) Run() {
+	a.launched = true
+	for _, f := range a.pending {
+		a.cfg.Go(f)
+	}
+	a.pending = nil
 	a.cfg.Go(a.loop)
 	if a.cfg.Sync == nil {
 		close(a.flushed)
@@ -288,10 +303,25 @@ func (a *Actor) loop() {
 			a.stopped = true
 		case <-a.cfg.Base.Done():
 			a.stopped = true
-		case <-a.stale:
+		case <-a.rejected:
 			a.stopped = true
 		}
 	}
+}
+
+// spawn runs f as a run of the actor on a goroutine that the runtime waits
+// for. Before Run, it holds f.
+func (a *Actor) spawn(f func()) {
+	a.runs.Add(1)
+	g := func() {
+		defer a.runs.Done()
+		f()
+	}
+	if !a.launched {
+		a.pending = append(a.pending, g)
+		return
+	}
+	a.cfg.Go(g)
 }
 
 // lost reports whether the ownership ended. A select picks among ready
@@ -304,32 +334,37 @@ func (a *Actor) lost() bool {
 	return true
 }
 
-// revoked reports whether Lost closed, Base ended, or Sync reported a stale epoch.
+// revoked reports whether Lost closed, Base ended, or Sync rejected a batch.
 func (a *Actor) revoked() bool {
 	select {
 	case <-a.cfg.Ownership.Lost():
 	case <-a.cfg.Base.Done():
-	case <-a.stale:
+	case <-a.rejected:
 	default:
 		return false
 	}
 	return true
 }
 
+// finish waits for every run to exit before it releases the ownership, so
+// the next owner never runs beside a run of this actor. quit is closed, so
+// each call of a run returns ErrNotOwned.
 func (a *Actor) finish() {
 	if a.run != nil {
 		a.run.cancel(ErrNotOwned)
 	}
 	a.publish(true)
 	close(a.quit)
+	a.runs.Wait()
 	<-a.flushed
 	a.cfg.Ownership.Release()
 	close(a.done)
 	a.cfg.Done()
 }
 
-// Done closes after the actor stops, Sync acknowledges its last record or
-// the ownership ends, and the actor releases its Ownership.
+// Done closes after the actor stops, each of its runs exits, Sync
+// acknowledges its last record or the ownership ends, and the actor
+// releases its Ownership.
 func (a *Actor) Done() <-chan struct{} { return a.done }
 
 // View returns the newest published view.

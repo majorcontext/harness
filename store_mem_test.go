@@ -9,4 +9,8 @@ import (
 
 func TestMemStore(t *testing.T) {
 	storetest.Run(t, func(*testing.T) harness.Store { return harness.NewMemStore() })
+	storetest.RunInstances(t, func(*testing.T) func() harness.Store {
+		st := harness.NewMemStore()
+		return func() harness.Store { return st }
+	})
 }

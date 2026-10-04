@@ -15,7 +15,8 @@ import (
 )
 
 // DiskStore keeps each session under <root>/<session>: records in log.jsonl,
-// one per line, and blobs in blobs/<key>. A line number is the seq.
+// one per line, and blobs in blobs/<key>. A line number is the seq. Where
+// flock does not exist, only the instance fences its appends.
 type DiskStore struct {
 	root string
 
@@ -24,13 +25,14 @@ type DiskStore struct {
 	durable  map[string]bool
 }
 
-// diskSession guards one session's log. head and size are valid only while
-// loaded. size is the byte length of the whole lines; torn reports bytes after it.
+// diskSession guards the log of one session within one DiskStore. head,
+// size, and total hold the last scan of the file: size is the byte length of
+// the whole lines and total the file size, so bytes after size are torn.
 type diskSession struct {
 	mu     sync.Mutex
 	head   uint64
 	size   int64
-	torn   bool
+	total  int64
 	loaded bool
 }
 
@@ -59,23 +61,59 @@ func (d *DiskStore) lock(session string) (*diskSession, error) {
 	return s, nil
 }
 
-// headLocked loads the head on first use. It never writes: a reader may
-// share the directory with a live writer.
-func (d *DiskStore) headLocked(session string, s *diskSession) (uint64, error) {
-	if s.loaded {
-		return s.head, nil
+// headLocked returns the head under a shared lock of the log file, which a
+// writer holds exclusively from its first byte to its fsync or rollback, so
+// the scan never reads bytes that a failed append cuts again. It never
+// writes: a reader may share the directory with a live writer.
+func (d *DiskStore) headLocked(ctx context.Context, session string, s *diskSession) (uint64, error) {
+	f, err := os.Open(d.logPath(session))
+	if errors.Is(err, fs.ErrNotExist) {
+		return d.scanHead(session, s)
 	}
-	lines, size, total, err := scanLog(d.logPath(session))
 	if err != nil {
 		return 0, err
 	}
-	s.head, s.size, s.torn, s.loaded = lines, size, total > size, true
-	return lines, nil
+	defer func() { _ = f.Close() }()
+	if err := lockFile(ctx, f, true); err != nil {
+		return 0, err
+	}
+	return d.scanHead(session, s)
 }
 
-// scanLog returns the count of newline-terminated lines, their byte length,
-// and the file size. A missing file is empty.
-func scanLog(path string) (lines uint64, size, total int64, err error) {
+// scanHead returns the head. Another DiskStore, in this process or in
+// another, can append to the file, so it scans the bytes after the whole
+// lines again when the file size differs from the last scan or the last
+// scan ended in torn bytes. The caller holds a lock of the file.
+func (d *DiskStore) scanHead(session string, s *diskSession) (uint64, error) {
+	path := d.logPath(session)
+	var total int64
+	fi, err := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		return 0, err
+	default:
+		total = fi.Size()
+	}
+	if s.loaded && total == s.total && s.total == s.size {
+		return s.head, nil
+	}
+	if !s.loaded || total < s.size {
+		s.head, s.size = 0, 0
+	}
+	lines, size, total, err := scanLog(path, s.size)
+	if err != nil {
+		s.loaded = false
+		return 0, err
+	}
+	s.head, s.size, s.total, s.loaded = s.head+lines, size, total, true
+	return s.head, nil
+}
+
+// scanLog returns the count of newline-terminated lines after offset from,
+// the end offset of the last of them (from when there is none), and the
+// file size. A missing file is empty.
+func scanLog(path string, from int64) (lines uint64, size, total int64, err error) {
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, 0, 0, nil
@@ -84,6 +122,10 @@ func scanLog(path string) (lines uint64, size, total int64, err error) {
 		return 0, 0, 0, err
 	}
 	defer func() { _ = f.Close() }()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return 0, 0, 0, err
+	}
+	size, total = from, from
 	buf := make([]byte, 64<<10)
 	for {
 		n, rerr := f.Read(buf)
@@ -101,7 +143,8 @@ func scanLog(path string) (lines uint64, size, total int64, err error) {
 	}
 }
 
-// Append implements Store.
+// Append implements Store. It checks the head again under an exclusive
+// lock of the log file, so an instance whose head is stale conflicts.
 func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint64, records ...[]byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -114,27 +157,31 @@ func (d *DiskStore) Append(ctx context.Context, session string, expectedSeq uint
 		return err
 	}
 	defer s.mu.Unlock()
-	head, err := d.headLocked(session, s)
+	head, err := d.headLocked(ctx, session, s)
 	if err != nil {
 		return err
 	}
 	if head != expectedSeq {
-		return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, head, expectedSeq)
+		return conflict(session, head, expectedSeq)
 	}
 	if len(records) == 0 {
 		return nil
 	}
-	if err := d.writeLocked(session, s, records); err != nil {
+	if err := d.writeLocked(ctx, session, s, expectedSeq, records); err != nil {
 		s.loaded = false
 		return err
 	}
-	s.head, s.torn = head+uint64(len(records)), false
 	return nil
 }
 
-// writeLocked appends and fsyncs. A failure leaves the log in an unknown
-// state, so the caller reloads the head from disk.
-func (d *DiskStore) writeLocked(session string, s *diskSession, records [][]byte) error {
+func conflict(session string, head, at uint64) error {
+	return fmt.Errorf("%w: session %q has %d records, append at %d", ErrConflict, session, head, at)
+}
+
+// writeLocked locks the log file exclusively, checks the head, appends, and
+// fsyncs. A failure leaves the log in an unknown state, so the caller scans
+// it again. A wait for the lock ends with ctx.
+func (d *DiskStore) writeLocked(ctx context.Context, session string, s *diskSession, expectedSeq uint64, records [][]byte) error {
 	path := d.logPath(session)
 	dir := filepath.Dir(path)
 	if err := d.mkdirSynced(dir); err != nil {
@@ -144,8 +191,22 @@ func (d *DiskStore) writeLocked(session string, s *diskSession, records [][]byte
 	if err != nil {
 		return err
 	}
-	if err = d.durably(path, func() error { return syncDir(dir) }); err == nil {
+	err = lockFile(ctx, f, false)
+	var head uint64
+	if err == nil {
+		head, err = d.scanHead(session, s)
+	}
+	if err == nil && head != expectedSeq {
+		err = conflict(session, head, expectedSeq)
+	}
+	if err == nil {
+		err = d.durably(path, func() error { return syncDir(dir) })
+	}
+	if err == nil {
 		err = appendSynced(f, s, bytes.Join(records, []byte{'\n'}))
+	}
+	if err == nil {
+		s.head += uint64(len(records))
 	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -153,11 +214,12 @@ func (d *DiskStore) writeLocked(session string, s *diskSession, records [][]byte
 	return err
 }
 
-// appendSynced writes b and a final newline after the whole lines, then
-// fsyncs. On failure it cuts the log back so the append reads as not landed.
+// appendSynced cuts torn bytes, writes b and a final newline after the whole
+// lines, then fsyncs. On failure it cuts the log back so the append reads
+// as not landed.
 func appendSynced(f *os.File, s *diskSession, b []byte) error {
 	var err error
-	if s.torn {
+	if s.total > s.size {
 		err = f.Truncate(s.size)
 	}
 	if err == nil {
@@ -172,6 +234,7 @@ func appendSynced(f *os.File, s *diskSession, b []byte) error {
 		return err
 	}
 	s.size += int64(len(b)) + 1
+	s.total = s.size
 	return nil
 }
 
@@ -213,7 +276,7 @@ func (d *DiskStore) Head(ctx context.Context, session string) (uint64, error) {
 		return 0, err
 	}
 	defer s.mu.Unlock()
-	return d.headLocked(session, s)
+	return d.headLocked(ctx, session, s)
 }
 
 // Sessions implements Store.

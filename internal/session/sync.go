@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -13,7 +14,9 @@ import (
 // ErrStaleEpoch reports a SyncBatch whose epoch is older than the receiver's.
 var ErrStaleEpoch = errors.New("harness: stale epoch")
 
-// Sync replicates the records of a session elsewhere, in seq order.
+// Sync replicates the records of a session elsewhere, in seq order. An
+// error that matches ErrStaleEpoch or ErrConflict rejects the batch for
+// good: a resend cannot change the answer. Any other error is retried.
 type Sync interface {
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
@@ -26,7 +29,8 @@ const (
 // replicate delivers each durable record to Sync in seq order. A failed
 // delivery resends the same batch, so a lost ack meets a duplicate. It
 // returns nil after the last record of a stopped actor is acknowledged, and
-// ErrNotOwned when the ownership ends first. ErrStaleEpoch stops the actor.
+// ErrNotOwned when the ownership ends first. A rejection stops the actor:
+// ErrStaleEpoch returns ErrNotOwned, and ErrConflict returns the rejection.
 func (a *Actor) replicate() error {
 	ctx, cancel := context.WithCancel(a.cfg.Base)
 	defer cancel()
@@ -57,8 +61,12 @@ func (a *Actor) replicate() error {
 			ack, err = a.cfg.Sync.Deliver(ctx, *b)
 		}
 		if errors.Is(err, ErrStaleEpoch) {
-			close(a.stale)
+			close(a.rejected)
 			return ErrNotOwned
+		}
+		if errors.Is(err, ErrConflict) {
+			close(a.rejected)
+			return fmt.Errorf("harness: the Sync receiver rejected seq %d of session %s: %w", b.FromSeq, a.cfg.ID, err)
 		}
 		if err != nil {
 			t := time.NewTimer(wait)
@@ -129,7 +137,7 @@ func await[T any](a *Actor, ch <-chan T) {
 	case <-ch:
 	case <-a.cfg.Ownership.Lost():
 	case <-a.cfg.Base.Done():
-	case <-a.stale:
+	case <-a.rejected:
 	}
 }
 

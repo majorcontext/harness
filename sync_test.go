@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/protocol"
@@ -282,6 +283,34 @@ func TestOwnershipLossEndsABlockedDelivery(t *testing.T) {
 		synctest.Wait()
 		close(k.lost)
 		synctest.Wait()
+		closeRuntime(t, r)
+	})
+}
+
+func TestADivergedReceiverStopsTheSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rep := &replica{st: harness.NewMemStore()}
+		other := protocol.SyncBatch{Epoch: 1, Session: "s1", FromSeq: 1, Records: recs("x1", "x2", "x3")}
+		if _, err := harness.ApplySync(bg, rep.st, other); err != nil {
+			t.Fatal(err)
+		}
+		st, f := harness.NewMemStore(), newFake()
+		r := syncRuntime(t, st, rep, f)
+		s := create(t, r)
+		synctest.Wait()
+		if _, err := s.Submit(bg, text("a", "hi")); !errors.Is(err, harness.ErrSessionNotOwned) {
+			t.Fatalf("Submit after a conflict rejection = %v, want ErrSessionNotOwned", err)
+		}
+		ctx, cancel := context.WithTimeout(bg, time.Minute)
+		defer cancel()
+		if err := s.Release(ctx); !errors.Is(err, harness.ErrConflict) {
+			t.Fatalf("Release after a conflict rejection = %v, want ErrConflict", err)
+		}
+		noRun(t, f)
+		wantLog(t, st, 0, "session.created", "owner.acquired 1")
+		if got := rep.notes(); len(got) != 1 {
+			t.Fatalf("deliveries = %q, want one rejected delivery", got)
+		}
 		closeRuntime(t, r)
 	})
 }

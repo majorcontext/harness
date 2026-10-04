@@ -96,6 +96,38 @@ func Run(t *testing.T, newStore func(t *testing.T) harness.Store) {
 	}
 }
 
+// RunInstances checks the fence across Store instances over one storage, as
+// processes that share it. For each case, newStorage returns an opener of
+// new, empty storage, and each call of the opener returns one more instance
+// over it. A store that is fenced against another process runs it.
+func RunInstances(t *testing.T, newStorage func(t *testing.T) func() harness.Store) {
+	for _, c := range []struct {
+		name string
+		fn   func(t *testing.T, open func() store)
+	}{
+		{"StaleInstanceAppendConflicts", testStaleInstanceAppendConflicts},
+		{"ConcurrentInstancesOneWins", testConcurrentInstancesOneWins},
+	} {
+		t.Run(c.name, func(t *testing.T) { c.fn(t, newStorage(t)) })
+	}
+}
+
+// testStaleInstanceAppendConflicts checks the fence across instances: an
+// append at a head that another instance has moved conflicts, and each
+// instance reads the records of the other.
+func testStaleInstanceAppendConflicts(t *testing.T, open func() store) {
+	a, b := open(), open()
+	mustAppend(t, a, "s", 0, "1")
+	wantRecords(t, b, "s", "1")
+	mustAppend(t, b, "s", 1, "2")
+	if err := a.Append(ctx, "s", 1, rec("x")); !errors.Is(err, harness.ErrConflict) {
+		t.Fatalf("Append at 1 on the stale instance = %v, want ErrConflict", err)
+	}
+	wantRecords(t, a, "s", "1", "2")
+	mustAppend(t, a, "s", 2, "3")
+	wantRecords(t, b, "s", "1", "2", "3")
+}
+
 func testAppendReadOrder(t *testing.T, st store) {
 	mustAppend(t, st, "a", 0, `{"n":1}`)
 	mustAppend(t, st, "a", 1, `{"n":2}`, `{"n":3}`)
@@ -124,15 +156,35 @@ func testFirstAppendAtZero(t *testing.T, st store) {
 }
 
 func testConcurrentAppendOneWins(t *testing.T, st store) {
+	concurrentAppendOneWins(t, st, func() store { return st })
+}
+
+// testConcurrentInstancesOneWins races appends at one head from instances
+// that have each read the head.
+func testConcurrentInstancesOneWins(t *testing.T, open func() store) {
+	st := open()
+	concurrentAppendOneWins(t, st, func() store {
+		o := open()
+		if _, err := o.Head(ctx, "a"); err != nil {
+			t.Error(err)
+		}
+		return o
+	})
+}
+
+// concurrentAppendOneWins appends "1" and "2" to st, then appends at 2 from
+// a contender that each call of contender returns, and checks that one wins.
+func concurrentAppendOneWins(t *testing.T, st store, contender func() store) {
 	mustAppend(t, st, "a", 0, "1", "2")
 	const contenders = 8
 	errs := make([]error, contenders)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range contenders {
+		c := contender()
 		wg.Go(func() {
 			<-start
-			errs[i] = st.Append(ctx, "a", 2, rec(strconv.Itoa(i)))
+			errs[i] = c.Append(ctx, "a", 2, rec(strconv.Itoa(i)))
 		})
 	}
 	close(start)

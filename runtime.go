@@ -259,19 +259,14 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.group.Add(1)
 			r.mu.Unlock()
 			e.s, e.err = r.start(ctx, id, e, start)
-			switch {
-			case e.err != nil:
+			if e.err != nil {
 				r.forget(id, e)
-			case create:
-				close(e.s.recovered)
-			default:
-				r.group.Go(func() {
-					r.recoverChildren(id, e.s.a)
-					close(e.s.recovered)
-				})
+			}
+			close(e.ready)
+			if e.err == nil {
+				r.run(id, e.s, create)
 			}
 			r.group.Done()
-			close(e.ready)
 			return e.s, e.err
 		}
 		r.mu.Unlock()
@@ -296,6 +291,20 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 		}
 		r.forget(id, e)
 	}
+}
+
+// run runs session s after load publishes it, so a tool of its first run
+// finds it. An opened session then settles or opens its unsettled children.
+func (r *Runtime) run(id string, s *Session, create bool) {
+	s.a.Run()
+	if create {
+		close(s.recovered)
+		return
+	}
+	r.group.Go(func() {
+		r.recoverChildren(id, s.a)
+		close(s.recovered)
+	})
 }
 
 func (r *Runtime) forget(id string, e *entry) {
@@ -484,8 +493,10 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 
 // Close hands off every session, waits for every goroutine of the runtime,
 // closes the model connections, and stops the processes. When ctx ends
-// first, it stops the remaining sessions without an append, kills the
-// processes, and returns; their next Open finds a crashed turn.
+// first, it stops the remaining sessions without an append, which cancels
+// their turns, and still waits for every goroutine before it closes the
+// model connections and kills the processes; their next Open finds a
+// crashed turn. An external harness ends within its own stop grace.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -501,6 +512,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 			select {
 			case <-e.ready:
 			case <-ctx.Done():
+			}
+			if ctx.Err() != nil {
 				return
 			}
 			if e.s != nil {
@@ -511,24 +524,24 @@ func (r *Runtime) Close(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
 		r.group.Wait()
-		if r.models != nil {
-			r.models.Close()
-		}
-		r.closeTools(ctx)
-		close(done)
+		close(stopped)
 	}()
-	defer r.cancel()
 	select {
-	case <-done:
-		return errors.Join(errs...)
+	case <-stopped:
 	case <-ctx.Done():
+		errs = append(errs, ctx.Err())
 		r.cancel()
-		r.closeTools(ctx)
-		return errors.Join(append(errs, ctx.Err())...)
+		<-stopped
 	}
+	r.cancel()
+	if r.models != nil {
+		r.models.Close()
+	}
+	r.closeTools(ctx)
+	return errors.Join(errs...)
 }
 
 // unowned returns the allowed names that the Options.Tools and the backend
@@ -635,11 +648,7 @@ type storeLog struct {
 func (l storeLog) Head(ctx context.Context) (uint64, error) { return l.st.Head(ctx, l.id) }
 
 func (l storeLog) Append(ctx context.Context, expectedSeq uint64, records ...[]byte) error {
-	err := l.st.Append(ctx, l.id, expectedSeq, records...)
-	if errors.Is(err, ErrConflict) {
-		return fmt.Errorf("%w: %w", session.ErrConflict, err)
-	}
-	return err
+	return l.st.Append(ctx, l.id, expectedSeq, records...)
 }
 
 func (l storeLog) Read(ctx context.Context, afterSeq uint64, limit int) ([]eventlog.Record, error) {
@@ -658,9 +667,6 @@ func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
 func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
 	return l.st.GetBlob(ctx, l.id, key)
 }
-
-// Processes returns the process manager of the WorkDir, or nil without a WorkDir.
-func (r *Runtime) Processes() *process.Manager { return r.procs }
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
