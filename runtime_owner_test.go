@@ -82,8 +82,8 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 				r2 := runtime(t, openStore(), f2)
 				open(t, r2)
 				next := <-f2.runs
-				if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || next.req.Input[0].Parts[0].Text != "hi" {
-					t.Fatalf("resumed Request = %+v, want turn %s resumed once", next.req, run.req.TurnID)
+				if next.req.TurnID != run.req.TurnID || next.req.Input[0].Parts[0].Text != "hi" {
+					t.Fatalf("resumed Request = %+v, want turn %s again", next.req, run.req.TurnID)
 				}
 				next.emit(say("rest"))
 				next.end()

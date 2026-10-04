@@ -607,6 +607,21 @@ type Sink interface {
 
 The `Sink` method that opens a request is added before the phase 4 switch.
 
+The turn loop reports through one `Turn`, which the actor binds to the turn. No method takes a turn ID, and a call after the turn is no longer the run of the actor fails with `turn mismatch`:
+
+```go
+type Turn interface {
+	Sink
+	Status(f protocol.StatusFrame) // ephemeral frame; a retrying frame abandons the item that the failed attempt streamed
+	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
+	Ended(err error)
+}
+
+func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits)
+```
+
+`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The `Turn` gives the item that the first delta starts a harness ID, and `Item` records the next message under it.
+
 - A model API backend runs one model call per `Run`. The loop runs the tools.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
 - `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools` and the embedder tools, and any other name fails `Create`. An embedder tool with the name of a built-in tool also fails `Create`.

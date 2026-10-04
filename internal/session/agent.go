@@ -13,17 +13,17 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// turnTools returns the tools and the source of turn id. A harness-loop
+// turnTools returns the tools and the source of turn r. A harness-loop
 // turn of an agent gets the agent tools. Its source retains each result
 // after the hooks, unless the profile removes read_tool_result.
-func (a *Actor) turnTools(id string, ownsLoop bool) ([]turn.Tool, turn.Source) {
+func (a *Actor) turnTools(r *running) ([]turn.Tool, turn.Source) {
 	src := a.cfg.Source
-	if ownsLoop || a.cfg.Agent == nil {
+	if r.ownsLoop || a.cfg.Agent == nil {
 		return turn.Restrict(a.cfg.Tools, a.state.AllowedTools()), src
 	}
 	tools := turn.Restrict(slices.Concat(a.cfg.Tools, a.cfg.Agent, []turn.Tool{toolresult.NewTool(a)}), a.state.AllowedTools())
 	if slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == toolresult.ToolName }) {
-		src = agentSource{src: src, a: a, turnID: id}
+		src = agentSource{src: src, a: a, r: r}
 	}
 	return tools, src
 }
@@ -31,8 +31,8 @@ func (a *Actor) turnTools(id string, ownsLoop bool) ([]turn.Tool, turn.Source) {
 // agentSource wraps the source of an agent turn.
 type agentSource struct {
 	src    turn.Source
-	a      *Actor
-	turnID string
+	a   *Actor
+	r   *running
 }
 
 func (s agentSource) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
@@ -62,7 +62,7 @@ func (h retainHooks) After(ctx context.Context, c protocol.ToolCall, r protocol.
 	if h.Hooks != nil {
 		r = h.Hooks.After(ctx, c, r)
 	}
-	return h.s.a.retain(h.s.turnID, c.Name, r)
+	return h.s.a.retain(h.s.r, c.Name, r)
 }
 
 // Retained returns the retained tool results of the session.
@@ -88,7 +88,7 @@ func (a *Actor) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 // returns the preview. A result that fits once masked stays inline. A
 // failed write keeps the whole result: a result is better than none. The
 // blob is written outside the actor, as SaveState writes its blob.
-func (a *Actor) retain(turnID, tool string, res protocol.ToolResult) protocol.ToolResult {
+func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) protocol.ToolResult {
 	if tool == toolresult.ToolName || len(res.Text) <= toolresult.Inline {
 		return res
 	}
@@ -98,7 +98,7 @@ func (a *Actor) retain(turnID, tool string, res protocol.ToolResult) protocol.To
 		return res
 	}
 	var m *toolresult.Meta
-	err := a.onTurn(turnID, func() error {
+	err := a.onRun(run, func() error {
 		used, last := 0, 0
 		for _, r := range a.state.Retained() {
 			used += r.Bytes
@@ -122,7 +122,7 @@ func (a *Actor) retain(turnID, tool string, res protocol.ToolResult) protocol.To
 	if err := a.cfg.Blobs.PutBlob(a.cfg.Base, m.Key, strings.NewReader(masked)); err != nil {
 		return res
 	}
-	err = a.onTurn(turnID, func() error {
+	err = a.onRun(run, func() error {
 		return a.append(eventlog.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head})
 	})
 	if err == nil {

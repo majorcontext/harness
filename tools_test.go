@@ -183,8 +183,8 @@ func TestHandoffLetsARunningToolFinish(t *testing.T) {
 			}
 		}
 		h := next.req.History
-		if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || h[len(h)-2].Parts[0].CallID != "c1" {
-			t.Fatalf("resumed Request = %+v, want turn %s resumed with the result of c1", next.req, run.req.TurnID)
+		if next.req.TurnID != run.req.TurnID || h[len(h)-2].Parts[0].CallID != "c1" {
+			t.Fatalf("resumed Request = %+v, want turn %s again with the result of c1", next.req, run.req.TurnID)
 		}
 		next.emit(say("rest"))
 		next.end()

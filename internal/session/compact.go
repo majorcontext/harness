@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -103,43 +102,6 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 	}
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), History: folded}
 	return req, c, true
-}
-
-// CompactTurn folds the turns before the newest Config.KeepTurns into a
-// summary while turnID runs, and returns the new history. ok is false when
-// no turn can fold. When ctx ends, it appends nothing.
-func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Message, bool, error) {
-	type folding struct {
-		req   turn.Request
-		c     eventlog.CompactionApplied
-		ok    bool
-		metas []toolresult.Meta
-	}
-	f, err := call(ctx, a, func(reply func(folding, error)) {
-		if r := a.run; r == nil || r.id != turnID {
-			reply(folding{}, ErrTurnMismatch)
-			return
-		}
-		req, c, ok := a.fold(turnID, a.cfg.KeepTurns)
-		reply(folding{req, c, ok, a.retained()}, nil)
-	})
-	if err != nil || !f.ok {
-		return nil, false, err
-	}
-	summary, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
-	if err != nil {
-		return nil, false, err
-	}
-	f.c.Summary = a.indexed(summary, f.metas)
-	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
-		if r := a.run; r == nil || r.id != turnID || ctx.Err() != nil {
-			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))
-			return
-		}
-		err := a.append(f.c)
-		reply(a.state.History(), err)
-	})
-	return h, err == nil, err
 }
 
 // compacted appends the summary of run r, then starts the next queued

@@ -167,7 +167,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 		return nil, err
 	}
 	if first != nil {
-		a.start(turnID, []string{first.InputID}, 0)
+		a.start(turnID, []string{first.InputID})
 	}
 	return a, nil
 }
@@ -224,7 +224,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	case ok && t.Suspended:
 		err = a.appendCtx(ctx, eventlog.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1})
 		if err == nil {
-			a.start(t.ID, t.InputIDs, t.Resumes+1)
+			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
 		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})

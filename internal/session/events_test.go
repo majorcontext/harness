@@ -57,12 +57,13 @@ func TestFramesNeverTrailTheDurableHead(t *testing.T) {
 		}
 	}()
 	go func() {
+		t := &turnRun{a: a, r: &running{id: "t1"}}
 		for {
 			select {
 			case <-done:
 				return
 			default:
-				a.Delta("t1", "i1", turn.Delta{Type: eventlog.PartText, Text: "x"})
+				t.Delta("i1", turn.Delta{Type: eventlog.PartText, Text: "x"})
 			}
 		}
 	}()

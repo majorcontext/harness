@@ -78,7 +78,7 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: []string{next}})...); err != nil {
 			return 0, err
 		}
-		a.start(id, []string{next}, 0)
+		a.start(id, []string{next})
 		return seq, nil
 	}
 	if err := a.append(events...); err != nil {
@@ -102,11 +102,11 @@ func sameJSON(x, y any) bool {
 	return errx == nil && erry == nil && string(bx) == string(by)
 }
 
-func (a *Actor) start(id string, inputIDs []string, resumed int) {
+func (a *Actor) start(id string, inputIDs []string) {
 	ctx, cancel := context.WithCancelCause(a.cfg.Base)
 	step, handoff := context.WithCancelCause(ctx)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
-		History: a.state.History(), Resumed: resumed, AllowedTools: a.state.AllowedTools()}
+		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
 		steering: caps.Steering, ownsLoop: caps.OwnsLoop}
@@ -119,25 +119,19 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	tools, src := a.turnTools(id, r.ownsLoop)
+	tools, src := a.turnTools(r)
+	t := &turnRun{a: a, r: r}
 	a.spawn(func() {
 		a.awaitWarm(ctx)
-		turn.Run(ctx, step, a.cfg.Backend, req, tools, src, a, a.cfg.Limits)
+		turn.Run(ctx, step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
 	})
 }
 
-// Item records one completed message of turnID under itemID, or under a new
-// ID when itemID is empty. After a stop or a handoff starts, it admits no
-// new tool call, except from a backend that owns the loop: that backend has
-// already run the call.
-func (a *Actor) Item(turnID, itemID string, m eventlog.Message) error {
-	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, itemID, m)) })
-	return err
-}
-
-func (a *Actor) item(turnID, itemID string, m eventlog.Message) error {
-	r := a.run
-	if r == nil || r.id != turnID {
+// item records m under itemID, or under a new ID when itemID is empty. After
+// a stop or a handoff starts, it admits no new tool call, except from a
+// backend that owns the loop: that backend has already run the call.
+func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
+	if a.run != r {
 		return ErrTurnMismatch
 	}
 	if err := context.Cause(r.step); err != nil && !r.ownsLoop && slices.ContainsFunc(m.Parts, isCall) {
@@ -146,32 +140,25 @@ func (a *Actor) item(turnID, itemID string, m eventlog.Message) error {
 	if itemID == "" {
 		itemID = newID("item")
 	}
-	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: turnID, Message: m})
+	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: r.id, Message: m})
 }
 
-// Telemetry adds the usage in t to turnID and records its context reading.
-func (a *Actor) Telemetry(turnID string, t turn.Telemetry) {
-	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-		var err error
-		if r := a.run; r != nil && r.id == turnID {
-			r.usage = r.usage.Add(t.Usage)
-			if t.Context != (eventlog.ContextMeasured{}) {
-				err = a.append(t.Context)
-			}
-		}
-		reply(struct{}{}, err)
-	})
+// telemetry adds the usage in t to r and records its context reading.
+func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
+	if a.run != r {
+		return nil
+	}
+	r.usage = r.usage.Add(t.Usage)
+	if t.Context != (eventlog.ContextMeasured{}) {
+		return a.append(t.Context)
+	}
+	return nil
 }
 
-// Steer promotes the queued steer inputs into turnID and returns them. A
-// backend without Steering, or a turn that is stopping, gets none.
-func (a *Actor) Steer(turnID string) ([]eventlog.Message, error) {
-	return call(context.Background(), a, func(reply func([]eventlog.Message, error)) { reply(a.steer(turnID)) })
-}
-
-func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
-	r := a.run
-	if r == nil || r.id != turnID {
+// steer promotes the queued steer inputs into r and returns them. A turn
+// that is stopping gets none.
+func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
+	if a.run != r {
 		return nil, ErrTurnMismatch
 	}
 	if !r.steering || r.step.Err() != nil {
@@ -181,7 +168,7 @@ func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
 	var steered []eventlog.Message
 	for _, in := range a.state.Queue() {
 		if in.Delivery == eventlog.DeliverySteer {
-			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: turnID})
+			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id})
 			steered = append(steered, eventlog.Message{Role: eventlog.RoleUser, Parts: in.Parts})
 		}
 	}
@@ -196,20 +183,13 @@ func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
 
 func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }
 
-// Ended ends turnID by the cause of its stop, then starts the next queued
-// input after a normal end or a user interrupt.
-func (a *Actor) Ended(turnID string, runErr error) {
-	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-		a.ended(turnID, runErr)
-		reply(struct{}{}, nil)
-	})
-}
-
-func (a *Actor) ended(turnID string, runErr error) {
-	r := a.run
-	if r == nil || r.id != turnID {
+// ended ends r by the cause of its stop, then starts the next queued input
+// after a normal end or a user interrupt.
+func (a *Actor) ended(r *running, runErr error) {
+	if a.run != r {
 		return
 	}
+	turnID := r.id
 	a.run = nil
 	cause := context.Cause(r.step)
 	r.cancel(nil)
@@ -259,7 +239,7 @@ func (a *Actor) next(check bool) error {
 	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err != nil {
 		return err
 	}
-	a.start(id, []string{q[0].InputID}, 0)
+	a.start(id, []string{q[0].InputID})
 	return nil
 }
 
