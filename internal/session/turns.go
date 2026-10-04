@@ -14,6 +14,9 @@ import (
 const (
 	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
 	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
+	// lostToRestart closes the history of a turn that a crash ended, so the
+	// next user message does not join the crashed one on the wire.
+	lostToRestart = "[harness: this turn was interrupted by a process restart and could not complete]"
 )
 
 var errStopTurn = errors.New("harness: turn stopped")
@@ -227,7 +230,12 @@ func (a *Actor) next(check bool) error {
 }
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
-	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
+	events := a.closeOpen(turnID, text)
+	if cause == string(eventlog.CauseCrashed) {
+		marker := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: lostToRestart}}}
+		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: marker})
+	}
+	events = append(events, eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
 	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
 		return err
 	}

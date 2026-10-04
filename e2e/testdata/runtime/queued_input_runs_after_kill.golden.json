@@ -55,7 +55,21 @@
             {
               "kind": "text",
               "text": "first"
-            },
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
             {
               "kind": "text",
               "text": "second"
@@ -83,6 +97,16 @@
       },
       {
         "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
         "role": "user",
         "parts": [
           {
@@ -92,7 +116,7 @@
         ]
       },
       {
-        "id": "msg#3",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {

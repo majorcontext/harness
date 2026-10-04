@@ -32,7 +32,6 @@ const (
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenMCPReason    = "Does the switch keep the classified reason of a failed MCP connect?"
 	specOpenPlugins      = "Does the switch keep the plugin inventory?"
-	specOpenCrashMarker  = "Does the switch keep the crash marker?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 	specOpenBanner       = "Does the switch keep the engine banner"
 )
@@ -129,7 +128,7 @@ var runtimeRows = map[string]runtimeRow{
 	"interrupt_drops_unfinished_text_then_queue_continues":      sameAsServe(),
 	"interrupt_idle_is_noop":                                    sameAsServe(),
 	"journal_pages_follow_cursor":                               reGolden(specCursor, specEventsRoute),
-	"kill_mid_turn_then_continue":                               reGolden(specCrash, specOpenCrashMarker),
+	"kill_mid_turn_then_continue":                               sameAsServe(),
 	"max_tokens_continuation":                                   pendingOn(specOpenContinuation),
 	"mcp_auto_default_threshold_defers_at_21_tools":             sameAsServe(),
 	"mcp_auto_default_threshold_stays_eager_at_20_tools":        sameAsServe(),
@@ -173,7 +172,7 @@ var runtimeRows = map[string]runtimeRow{
 	"queue_delete_while_busy":                                   pendingOn("phase 4"),
 	"queue_survives_clean_restart_then_delete":                  pendingOn("phase 4"),
 	"queue_survives_clean_restart_then_drains_with_next_prompt": reGolden(specQueue, specHandoffResume, specView),
-	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue, specOpenCrashMarker),
+	"queued_input_runs_after_kill":                              reGolden(specCrash, specCrashQueue),
 	"queued_input_survives_kill":                                deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":               deletedBy(specGoalDeferred),
 	"replay_after_kill_full_transcript":                         pendingOn("phase 4"),

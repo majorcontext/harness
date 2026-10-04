@@ -664,7 +664,7 @@ func TestClaudeCodeCrashWaitsForInput(t *testing.T) {
 	t.Setenv("FAKE_CLAUDE_MODE", "thinking")
 	turnOf(t, s2, text("b", "again"))
 	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant Working on it.",
-		"owner.acquired 1", "turn.ended interrupted crashed",
+		"owner.acquired 1", "item.completed assistant [harness: this turn was interrupted by a process restart and could not complete]", "turn.ended interrupted crashed",
 		"input.admitted b", "turn.started b", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed")
 	if argv := jsonLines[[]string](t, argvLog); !hasArgs(argv[1], "--resume", "fake-session-1") {
 		t.Errorf("argv after the crash = %q, want --resume fake-session-1", argv[1])
