@@ -44,10 +44,13 @@ const (
 	RoleTool      = "tool"
 )
 
-// Message is one completed conversation item.
+// Message is one completed conversation item. ParentCallID is the ID of the
+// tool call that started the subagent that wrote the message, or empty for a
+// message of the session itself. Only a client reads it; the model never does.
 type Message struct {
-	Role  string `json:"role"`
-	Parts []Part `json:"parts"`
+	Role         string `json:"role"`
+	Parts        []Part `json:"parts"`
+	ParentCallID string `json:"parent_call_id,omitempty"`
 }
 
 // Usage counts the tokens of one turn.

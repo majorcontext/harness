@@ -291,22 +291,19 @@ func (r *run) compacted(env envelope) (isSummary bool, err error) {
 }
 
 func (r *run) assistant(env envelope) error {
-	if env.ParentToolUseID != "" {
-		return nil
-	}
 	m := decodeMessage(env.Message)
-	if m.Usage != nil {
+	if m.Usage != nil && env.ParentToolUseID == "" {
 		r.lastCall = m.Usage
 	}
 	parts := assistantParts(m)
 	if len(parts) == 0 {
 		return nil
 	}
-	if r.pending == nil || m.ID == "" || m.ID != r.pendingID {
+	if r.pending == nil || m.ID == "" || m.ID != r.pendingID || r.pending.ParentCallID != env.ParentToolUseID {
 		if err := r.flush(); err != nil {
 			return err
 		}
-		r.pending, r.pendingID = &eventlog.Message{Role: eventlog.RoleAssistant}, m.ID
+		r.pending, r.pendingID = &eventlog.Message{Role: eventlog.RoleAssistant, ParentCallID: env.ParentToolUseID}, m.ID
 	}
 	for i, p := range parts {
 		switch p.Type {
@@ -317,7 +314,9 @@ func (r *run) assistant(env envelope) error {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name
-			r.open++
+			if env.ParentToolUseID == "" {
+				r.open++
+			}
 		}
 	}
 	r.pending.Parts = append(r.pending.Parts, parts...)
@@ -328,15 +327,19 @@ func (r *run) assistant(env envelope) error {
 }
 
 func (r *run) toolResults(env envelope) error {
-	if env.ParentToolUseID != "" {
-		return nil
-	}
 	parts := toolResults(decodeMessage(env.Message), r.names)
 	if len(parts) == 0 {
 		return nil
 	}
-	r.open = max(0, r.open-len(parts))
-	msg := eventlog.Message{Role: eventlog.RoleTool, Parts: parts}
+	msg := eventlog.Message{Role: eventlog.RoleTool, Parts: parts, ParentCallID: env.ParentToolUseID}
+	if r.pending != nil && r.pending.ParentCallID != env.ParentToolUseID {
+		if err := r.flush(); err != nil {
+			return err
+		}
+	}
+	if env.ParentToolUseID == "" {
+		r.open = max(0, r.open-len(parts))
+	}
 	if r.pending != nil {
 		r.deferred = append(r.deferred, msg)
 		return nil

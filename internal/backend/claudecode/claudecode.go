@@ -131,7 +131,7 @@ func (b *Backend) command(ctx context.Context, req turn.Request, r *run) (*exec.
 		return nil, err
 	}
 	args := []string{"--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-		"--thinking-display", "summarized", "--disallowedTools", disallowed}
+		"--forward-subagent-text", "--thinking-display", "summarized", "--disallowedTools", disallowed}
 	if r.allowed != nil {
 		tools := slices.DeleteFunc(slices.Sorted(maps.Keys(r.allowed)), func(n string) bool { return strings.HasPrefix(n, mcpPrefix) })
 		args = append(args, "--tools", strings.Join(tools, ","), "--strict-mcp-config")

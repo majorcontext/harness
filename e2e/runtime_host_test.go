@@ -29,6 +29,7 @@ type laneHost interface {
 	awaitAssistantText(t *testing.T, id, text string)
 	answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult
 	journalEvents(t *testing.T, id, prefix string) []any
+	messageParents(t *testing.T, id string) callResult
 }
 
 var (
