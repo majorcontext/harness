@@ -110,7 +110,7 @@ var journalCases = []struct {
 	name, id string
 	check    func(t *testing.T, s *eventlog.State, st harness.Store)
 }{
-	{"tool loop with an attachment and a cut-off tool call", "ses_000000000000000a", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+	{"tool loop with an attachment, a command, and a cut-off tool call", "ses_000000000000000a", func(t *testing.T, s *eventlog.State, st harness.Store) {
 		if s.Model() != "anthropic/claude-sonnet-4-5" || s.Settings() != (eventlog.Settings{Effort: "high", ServiceTier: "priority"}) {
 			t.Errorf("model %q settings %+v", s.Model(), s.Settings())
 		}
@@ -122,6 +122,12 @@ var journalCases = []struct {
 		}
 		if p := s.History()[1].Parts[0]; p.ProviderData == nil {
 			t.Errorf("reasoning lost its provider data: %+v", p)
+		}
+		if c, _, ok := s.Command("cmd_a1"); !ok || c.Status != "succeeded" || c.Line != "/effort high" || c.Text != "effort is high" || c.Args["level"] != "high" {
+			t.Errorf("command %+v %v", c, ok)
+		}
+		if prev := before(t, st, "ses_000000000000000a", "command.recorded"); prev != "item.completed msg_a4" {
+			t.Errorf("the command follows %q, want the message it followed", prev)
 		}
 	}},
 	{"compaction, retained result, model change, goal, and queued prompt", "ses_000000000000000b", func(t *testing.T, s *eventlog.State, st harness.Store) {
@@ -166,6 +172,16 @@ var journalCases = []struct {
 			t.Errorf("a child with no tools has tools %v", tools)
 		}
 	}},
+	{"child in a turn at the cutover fails as lost to restart", "ses_0000000000000012", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Error != lostToRestart {
+			t.Errorf("last ended %+v", e)
+		}
+	}},
+	{"child that answered but did not settle ends done", "ses_0000000000000013", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopCompleted || e.Error != "" {
+			t.Errorf("last ended %+v", e)
+		}
+	}},
 	{"delegated session resumes its CLI session", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
 		key := s.BackendState(claudeCodeState)
 		m, err := external.LoadMirror([]byte(readBlob(t, st, "ses_000000000000000f", key)))
@@ -179,12 +195,12 @@ func TestDirConvertsEachJournal(t *testing.T) {
 	ctx := context.Background()
 	dir := copyDir(t, "testdata/journals")
 	st := harness.NewDiskStore(t.TempDir())
-	results, err := Dir(ctx, dir, st)
+	results, err := Dir(ctx, dir, st, message.ModelRef{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	failed := Failed(results)
-	if len(results) != 8 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
+	if len(results) != 10 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
 		t.Fatalf("results %+v", results)
 	}
 	for _, c := range journalCases {
@@ -203,7 +219,7 @@ func TestDirConvertsEachJournal(t *testing.T) {
 	if err := sameTree(dir, "testdata/journals"); err != nil {
 		t.Error(err)
 	}
-	again, err := Dir(ctx, dir, st)
+	again, err := Dir(ctx, dir, st, message.ModelRef{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,4 +250,53 @@ func sameTree(got, want string) error {
 		}
 		return nil
 	})
+}
+
+// before returns the kind and item ID of the record before the first
+// record of kind in the log of id.
+func before(t *testing.T, st harness.Store, id, kind string) string {
+	t.Helper()
+	recs, err := st.Read(context.Background(), id, 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := ""
+	for _, r := range recs {
+		e, err := eventlog.Decode(r.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Event.Kind() == kind {
+			return prev
+		}
+		prev = e.Event.Kind()
+		if item, ok := e.Event.(eventlog.ItemCompleted); ok {
+			prev += " " + item.ItemID
+		}
+	}
+	return ""
+}
+
+func TestDirGivesTheFallbackModelToAJournalThatNamesNone(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	journal := `{"type":"session","id":"ses_0000000000000014","created_at":"2026-09-08T07:00:00Z"}
+{"type":"message","message":{"id":"msg_k1","role":"user","parts":[{"type":"text","text":"hi"}]}}
+{"type":"message","message":{"id":"msg_k2","role":"assistant","parts":[{"type":"text","text":"hello"}]}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "ses_0000000000000014.jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := harness.NewMemStore()
+	if results, err := Dir(ctx, dir, st, message.ModelRef{}); err != nil || len(Failed(results)) != 1 {
+		t.Fatalf("with no fallback: results %+v, %v", results, err)
+	}
+	results, err := Dir(ctx, dir, st, message.ModelRef{Provider: "openai", Model: "gpt-5"})
+	if err != nil || len(Failed(results)) != 0 {
+		t.Fatalf("results %+v, %v", results, err)
+	}
+	s := replay(t, st, "ses_0000000000000014")
+	if want := oldTranscript(t, dir, "ses_0000000000000014"); s.Model() != "openai/gpt-5" || !slices.Equal(newTranscript(s), want) {
+		t.Errorf("model %q history %q, want %q", s.Model(), newTranscript(s), want)
+	}
 }

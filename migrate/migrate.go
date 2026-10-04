@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/engine"
+	"github.com/majorcontext/harness/message"
 )
 
 // Result is the outcome of one session. Err is nil for a converted or a
@@ -39,8 +40,10 @@ func Failed(results []Result) []Result {
 }
 
 // Dir converts each engine journal in dir to a log in st. It skips a
-// session that st already holds, and reports each other session.
-func Dir(ctx context.Context, dir string, st harness.Store) ([]Result, error) {
+// session that st already holds, and reports each other session. model is
+// the model of a journal that names none; the zero model fails such a
+// journal.
+func Dir(ctx context.Context, dir string, st harness.Store, model message.ModelRef) ([]Result, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -54,7 +57,7 @@ func Dir(ctx context.Context, dir string, st harness.Store) ([]Result, error) {
 		if e.IsDir() || !ok || !engine.ValidSessionID(id) {
 			continue
 		}
-		out = append(out, convert(ctx, st, id, func() (old, error) { return readJournal(dir, id) }))
+		out = append(out, convert(ctx, st, id, func() (old, error) { return readJournal(dir, id, model) }))
 	}
 	return out, nil
 }
@@ -97,3 +100,7 @@ func write(ctx context.Context, st harness.Store, id string, o old) (int, error)
 }
 
 func toolResultDir(dir, id string) string { return filepath.Join(dir, "toolresults", id) }
+
+// lostToRestart is the failure that engine recovery reports for a child
+// turn that was running when the process stopped.
+const lostToRestart = "lost to restart: turn was in flight when the process last stopped"

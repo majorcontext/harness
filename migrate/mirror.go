@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,34 +16,47 @@ import (
 
 // mirrorRecord is the part of a box journal record that the conversion reads.
 type mirrorRecord struct {
-	Type             string           `json:"type"`
-	SessionID        string           `json:"session_id"`
-	RecordedAt       time.Time        `json:"recorded_at"`
-	Message          *message.Message `json:"message"`
-	Model            message.ModelRef `json:"model"`
-	Effort           *string          `json:"effort"`
-	ServiceTier      *string          `json:"service_tier"`
-	GoalCondition    string           `json:"goal_condition"`
-	CompactFirstID   string           `json:"compact_first_id"`
-	CompactLastID    string           `json:"compact_last_id"`
-	CompactSummaryID string           `json:"compact_summary_id"`
-	ParentSessionID  string           `json:"parent_session_id"`
-	AgentType        string           `json:"agent_type"`
+	Type             string                 `json:"type"`
+	SessionID        string                 `json:"session_id"`
+	Seq              int64                  `json:"seq"`
+	RecordedAt       time.Time              `json:"recorded_at"`
+	Message          *message.Message       `json:"message"`
+	Command          *message.CommandRecord `json:"command"`
+	Model            message.ModelRef       `json:"model"`
+	Effort           *string                `json:"effort"`
+	ServiceTier      *string                `json:"service_tier"`
+	Outcome          string                 `json:"outcome"`
+	Error            string                 `json:"error"`
+	GoalCondition    string                 `json:"goal_condition"`
+	CompactFirstID   string                 `json:"compact_first_id"`
+	CompactLastID    string                 `json:"compact_last_id"`
+	CompactSummaryID string                 `json:"compact_summary_id"`
+	ParentSessionID  string                 `json:"parent_session_id"`
+	AgentType        string                 `json:"agent_type"`
+	QueueID          int64                  `json:"queue_id"`
+	QueueText        string                 `json:"queue_text"`
+	QueueSource      string                 `json:"queue_source"`
+	QueueMessageID   string                 `json:"queue_message_id"`
 }
 
 type mirrorSession struct {
 	o      old
 	goal   string
 	active bool
-	err    error
+	// end ends the last turn when a record after its last message ends it.
+	end   *eventlog.TurnEnded
+	queue []mirrorRecord
+	err   error
 }
 
 // Mirror converts the box journal records that boxes mirrors in its
 // box_journal_records table to a log for each session in st. records are
-// the records of one box generation in seq order. A session that st
-// already holds is skipped.
+// the records of one box generation in seq order from seq 1. A session that
+// st already holds is skipped. A missing seq fails every session, because
+// the missing record can belong to any of them.
 func Mirror(ctx context.Context, records []json.RawMessage, st harness.Store) ([]Result, error) {
 	var order []string
+	var gap error
 	sessions := map[string]*mirrorSession{}
 	get := func(id string) *mirrorSession {
 		if sessions[id] == nil {
@@ -55,6 +69,9 @@ func Mirror(ctx context.Context, records []json.RawMessage, st harness.Store) ([
 		var r mirrorRecord
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return nil, fmt.Errorf("migrate: mirror record %d: %w", i, err)
+		}
+		if want := int64(i) + 1; gap == nil && r.Seq != want {
+			gap = fmt.Errorf("the mirror has seq %d where seq %d belongs, so records are missing", r.Seq, want)
 		}
 		if r.SessionID == "" {
 			continue
@@ -74,9 +91,30 @@ func Mirror(ctx context.Context, records []json.RawMessage, st harness.Store) ([
 	var out []Result
 	for _, id := range order {
 		s := sessions[id]
+		if p := s.o.created.ParentID; p != "" && s.end != nil {
+			sessions[p].o.tail = append(sessions[p].o.tail, eventlog.ChildSettled{ChildID: id, Outcome: outcome(*s.end)})
+		}
+	}
+	for _, id := range order {
+		s := sessions[id]
+		if s.err == nil {
+			s.err = gap
+		}
 		out = append(out, convert(ctx, st, id, s.finish))
 	}
 	return out, nil
+}
+
+// outcome is the outcome that the runtime settles a child with when its
+// last turn ended as e.
+func outcome(e eventlog.TurnEnded) eventlog.Outcome {
+	switch {
+	case e.StopReason == eventlog.StopFailed:
+		return eventlog.OutcomeFailed
+	case e.StopReason == eventlog.StopInterrupted:
+		return eventlog.OutcomeCanceled
+	}
+	return eventlog.OutcomeDone
 }
 
 // apply folds one record as the server journal reader folds it.
@@ -102,7 +140,18 @@ func (s *mirrorSession) apply(r mirrorRecord) error {
 			m := *r.Message
 			m.Normalize()
 			o.history = append(o.history, m)
+			s.end = nil
 		}
+	case "turn.end", "session.error", "session.aborted":
+		s.end = turnEnd(r)
+	case "command":
+		if r.Command != nil {
+			s.command(*r.Command)
+		}
+	case "prompt.queued":
+		s.queue = append(s.queue, r)
+	case "prompt.dequeued":
+		s.queue = slices.DeleteFunc(s.queue, func(q mirrorRecord) bool { return q.QueueID == r.QueueID })
 	case "history.compacted":
 		return s.compact(r)
 	case "goal.set":
@@ -115,6 +164,31 @@ func (s *mirrorSession) apply(r mirrorRecord) error {
 		s.active, s.goal = false, ""
 	}
 	return nil
+}
+
+// turnEnd returns the end of a turn that r records. A turn that waits for
+// an answer to a question ends completed, as its question is in the
+// history, and so does the last turn of a goal that used its turns.
+func turnEnd(r mirrorRecord) *eventlog.TurnEnded {
+	switch {
+	case r.Type == "session.aborted":
+		return &eventlog.TurnEnded{StopReason: eventlog.StopInterrupted, Error: string(eventlog.CauseStopped)}
+	case r.Type == "turn.end" && slices.Contains([]string{"completed", "awaiting_input", "max_turns_exceeded"}, r.Outcome):
+		return &eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
+	}
+	return &eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: cmp.Or(r.Error, r.Outcome)}
+}
+
+// command folds c as the engine folds a command: the newest record of an
+// ID replaces the older one, and keeps its place in the history.
+func (s *mirrorSession) command(c message.CommandRecord) {
+	cmds := s.o.commands
+	if i := slices.IndexFunc(cmds, func(e message.CommandRecord) bool { return e.ID == c.ID }); i >= 0 {
+		c.AfterMessageID = cmds[i].AfterMessageID
+		cmds[i] = c
+		return
+	}
+	s.o.commands = append(cmds, c)
 }
 
 // compact replaces the folded messages with the summary, which an earlier
@@ -146,9 +220,19 @@ func (s *mirrorSession) finish() (old, error) {
 		return old{}, errors.New("the mirror names no model")
 	}
 	o.created.Origin = origin(o.created.ParentID)
+	switch {
+	case s.end != nil:
+		o.end = *s.end
+	case o.created.ParentID != "":
+		o.end = inFlightEnd(o.history)
+	}
 	o.history = message.ResolveOrphanToolCalls(o.history)
 	if s.active {
 		o.tail = append(o.tail, eventlog.GoalSet{Condition: s.goal})
+	}
+	for _, q := range s.queue {
+		o.tail = append(o.tail, eventlog.InputAdmitted{InputID: cmp.Or(q.QueueMessageID, fmt.Sprintf("queued_%d", q.QueueID)),
+			Delivery: eventlog.DeliveryQueue, Source: cmp.Or(q.QueueSource, "user"), Parts: []eventlog.Part{{Type: eventlog.PartText, Text: q.QueueText}}})
 	}
 	return o, nil
 }

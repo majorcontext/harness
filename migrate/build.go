@@ -19,6 +19,8 @@ type old struct {
 	at      time.Time
 	// history is the transcript that the old reader shows, with no open tool call.
 	history []message.Message
+	// commands are the slash commands, each in its newest status.
+	commands []message.CommandRecord
 	// compacted reports that the first message of history is a compaction summary.
 	compacted bool
 	// end ends the last turn. The builder sets its turn ID.
@@ -42,6 +44,7 @@ type builder struct {
 // history is not the history of o.
 func build(o old) ([][]byte, int, error) {
 	b := &builder{at: o.at, names: map[string]string{}, ids: map[string]bool{}}
+	lead, after := b.commands(o)
 	if err := b.add(o.at, o.created); err != nil {
 		return nil, 0, err
 	}
@@ -53,7 +56,12 @@ func build(o old) ([][]byte, int, error) {
 			return nil, 0, err
 		}
 		want = append(want, eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summary}}})
+		lead = append(lead, after[h[0].ID]...)
+		delete(after, h[0].ID)
 		h = h[1:]
+	}
+	if err := b.add(b.at, lead...); err != nil {
+		return nil, 0, err
 	}
 	for i, m := range h {
 		msg := convertMessage(m, b.names)
@@ -61,6 +69,10 @@ func build(o old) ([][]byte, int, error) {
 		if err := b.message(i, m, msg); err != nil {
 			return nil, 0, err
 		}
+		if err := b.add(b.at, after[m.ID]...); err != nil {
+			return nil, 0, err
+		}
+		delete(after, m.ID)
 	}
 	if b.turn != "" {
 		o.end.TurnID = b.turn
@@ -74,6 +86,33 @@ func build(o old) ([][]byte, int, error) {
 		}
 	}
 	return b.records, len(want), same(b.st.History(), want)
+}
+
+// commands returns the command records of o: lead holds each command whose
+// message is not in the history, and after holds the others by the ID of
+// the message that they follow. It reserves each command ID, which a
+// command record shares with no input.
+func (b *builder) commands(o old) (lead []eventlog.Event, after map[string][]eventlog.Event) {
+	after = map[string][]eventlog.Event{}
+	in := map[string]bool{}
+	for _, m := range o.history {
+		in[m.ID] = true
+	}
+	for i, c := range o.commands {
+		id := cmp.Or(c.ID, fmt.Sprintf("migrated_command_%d", i))
+		b.ids[id] = true
+		e := eventlog.CommandRecorded{InputID: id, Line: c.Line, Name: c.Name, Args: c.Args, Status: string(c.Status),
+			Text: c.Text, Result: c.Result, ResultTruncated: c.ResultTruncated}
+		if len(e.Args) == 0 {
+			e.Args = nil
+		}
+		if c.AfterMessageID != "" && in[c.AfterMessageID] {
+			after[c.AfterMessageID] = append(after[c.AfterMessageID], e)
+		} else {
+			lead = append(lead, e)
+		}
+	}
+	return lead, after
 }
 
 // message adds m. A user message starts a turn, unless a tool call of the

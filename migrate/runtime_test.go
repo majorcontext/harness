@@ -9,6 +9,7 @@ import (
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -17,7 +18,7 @@ import (
 func TestRuntimeRunsAConvertedSession(t *testing.T) {
 	ctx := context.Background()
 	st := harness.NewDiskStore(t.TempDir())
-	if _, err := Dir(ctx, copyDir(t, "testdata/journals"), st); err != nil {
+	if _, err := Dir(ctx, copyDir(t, "testdata/journals"), st, message.ModelRef{}); err != nil {
 		t.Fatal(err)
 	}
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{},

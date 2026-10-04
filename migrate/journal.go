@@ -25,34 +25,39 @@ const claudeCodeState = "claude-code"
 
 // readJournal reads session id of the engine journals in dir. The engine
 // loader is the reader, so the history is the transcript that the engine
-// shows.
-func readJournal(dir, id string) (old, error) {
+// shows. model is the model of a journal that names none, as the engine
+// gives it the model of its server.
+func readJournal(dir, id string, model message.ModelRef) (old, error) {
 	recs, err := engine.LoadJournal(dir, id)
 	if err != nil {
 		return old{}, err
 	}
-	var model message.ModelRef
 	for _, r := range recs {
 		if (r.Type == "session" || r.Type == "model") && !r.Model.IsZero() {
 			model = r.Model
 		}
 	}
 	if model.IsZero() {
-		return old{}, errors.New("the journal names no model")
+		return old{}, errors.New("the journal names no model, and no fallback model is given")
 	}
 	s, err := engine.LoadSession(engine.Config{SessionDir: dir, Model: model}, id)
 	if err != nil {
 		return old{}, err
 	}
+	history, commands := s.HistoryAndCommands()
 	o := old{
 		created: eventlog.SessionCreated{ParentID: s.TaskParentID(), Agent: s.TaskAgentType(), Model: s.Model().String(),
 			Settings: eventlog.Settings{Effort: string(s.Effort()), ServiceTier: s.ServiceTier()},
 			Origin:   origin(s.TaskParentID()), AllowedTools: s.TaskToolNames()},
 		at:        s.CreatedAt(),
-		history:   message.ResolveOrphanToolCalls(s.History()),
+		history:   message.ResolveOrphanToolCalls(history),
+		commands:  commands,
 		compacted: s.CompactionCount() > 0,
-		end:       lastOutcome(recs),
+		end:       eventlog.TurnEnded{StopReason: eventlog.StopCompleted},
 		blobs:     map[string][]byte{},
+	}
+	if s.TaskParentID() != "" {
+		o.end = childEnd(recs, history)
 	}
 	o.end.Usage = usage(s.Usage())
 	o.tail = children(recs)
@@ -99,24 +104,44 @@ func usage(u provider.Usage) eventlog.Usage {
 		CacheReadTokens: int64(u.CacheReadTokens), CacheWriteTokens: int64(u.CacheWriteTokens)}
 }
 
-// lastOutcome ends the last turn as the newest committed task outcome of a
-// child says, so that a parent that settles the child reports the same outcome.
-func lastOutcome(recs []engine.JournalRecord) eventlog.TurnEnded {
-	end := eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
-	for _, r := range recs {
-		if r.Type != "task.outcome_committed" {
-			continue
-		}
-		switch {
-		case r.TaskCanceled || r.TaskStatus == string(engine.StatusCanceled):
-			end = eventlog.TurnEnded{StopReason: eventlog.StopInterrupted, Error: string(eventlog.CauseStopped)}
-		case r.TaskStatus == string(engine.StatusFailed):
-			end = eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: r.TaskFailReason}
-		default:
-			end = eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
+// childEnd ends the last turn of a child as engine recovery reports it: with
+// the outcome committed since the last message, or, for a turn that never
+// settled, done when it ends with an answer and failed otherwise.
+func childEnd(recs []engine.JournalRecord, history []message.Message) eventlog.TurnEnded {
+	var commit *engine.JournalRecord
+	unsettled := false
+	for i, r := range recs {
+		switch r.Type {
+		case "message":
+			if !r.RecoveryMarker {
+				commit = nil
+			}
+			unsettled = true
+		case "child_turn.settled":
+			unsettled = false
+		case "task.outcome_committed":
+			commit = &recs[i]
 		}
 	}
-	return end
+	switch {
+	case commit != nil && (commit.TaskCanceled || commit.TaskStatus == string(engine.StatusCanceled)):
+		return eventlog.TurnEnded{StopReason: eventlog.StopInterrupted, Error: string(eventlog.CauseStopped)}
+	case commit != nil && commit.TaskStatus == string(engine.StatusFailed):
+		return eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: commit.TaskFailReason}
+	case commit == nil && unsettled:
+		return inFlightEnd(history)
+	}
+	return eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
+}
+
+// inFlightEnd ends a child turn that was running at the cutover. A turn
+// whose last message is an answer with no tool call is done.
+func inFlightEnd(history []message.Message) eventlog.TurnEnded {
+	if n := len(history); n > 0 && history[n-1].Role == message.RoleAssistant &&
+		!slices.ContainsFunc(history[n-1].Parts, func(p message.Part) bool { _, ok := p.(*message.ToolCall); return ok }) {
+		return eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
+	}
+	return eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: lostToRestart}
 }
 
 // children returns child.spawned for each child, and child.settled for each
