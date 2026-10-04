@@ -76,6 +76,18 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodeMCPServers(t *testing.T) {
+	servers := map[string]any{
+		"chrome-devtools": map[string]any{"command": []string{"chrome-devtools-mcp-absent", "--headless"}, "env": []string{"A=1", "malformed"}, "dir": "/nonexistent"},
+		"gateway":         map[string]any{"url": "http://127.0.0.1:1/mcp", "headers": map[string]string{"Authorization": "Bearer t"}},
+	}
+	runScenarios(t, []scenario{{
+		name:    "claudecode_configured_mcp_servers_reach_the_cli",
+		driver:  claudeLane{mode: "normal", mcp: servers}.newDriver,
+		actions: withActions(claudeOneTurn, claudeMCPConfig{as: "a"}, claudeInvocations{as: "a"}),
+	}})
+}
+
 func TestContractClaudeCodeFrames(t *testing.T) {
 	row := func(name, mode string, more ...action) scenario {
 		return scenario{name: name, driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}

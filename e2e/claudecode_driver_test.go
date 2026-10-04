@@ -19,7 +19,8 @@ func fakeClaudePath() string { return filepath.Join(filepath.Dir(harnessBin), "f
 // delegated claude-code backend, run against fakeclaude in the given mode.
 type claudeLane struct {
 	mode string
-	ask  bool // pass --ask-user-question to serve
+	ask  bool           // pass --ask-user-question to serve
+	mcp  map[string]any // config mcp_servers
 }
 
 // claudeDriver is an httpDriver whose serve process delegates to fakeclaude.
@@ -28,6 +29,7 @@ type claudeDriver struct {
 	lane     claudeLane
 	argvLog  string
 	stdinLog string
+	mcpLog   string
 	stateDir string
 }
 
@@ -40,7 +42,11 @@ func (l claudeLane) newDriver(t *testing.T, modelURL string) driver {
 			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath()},
 		},
 	}
+	if l.mcp != nil {
+		cfg["mcp_servers"] = l.mcp
+	}
 	d := &claudeDriver{lane: l, stateDir: t.TempDir()}
+	d.mcpLog = filepath.Join(d.stateDir, "mcp-config.jsonl")
 	d.argvLog = filepath.Join(d.stateDir, "argv.jsonl")
 	d.stdinLog = filepath.Join(d.stateDir, "stdin.jsonl")
 	d.httpDriver = &httpDriver{
@@ -60,13 +66,14 @@ func (d *claudeDriver) serve(t *testing.T) *serveProc {
 		args = append(args, "--ask-user-question")
 	}
 	return startServeProc(t, freeAddr, d.workDir, map[string]string{
-		"HARNESS_SESSION_DIR":   d.sessDir,
-		"HARNESS_CONFIG":        d.config,
-		"ANTHROPIC_API_KEY":     "e2e-dummy-key",
-		"FAKE_CLAUDE_MODE":      d.lane.mode,
-		"FAKE_CLAUDE_LOG":       d.argvLog,
-		"FAKE_CLAUDE_STDIN_LOG": d.stdinLog,
-		"FAKE_CLAUDE_STATE":     filepath.Join(d.stateDir, "parked"),
+		"HARNESS_SESSION_DIR":        d.sessDir,
+		"HARNESS_CONFIG":             d.config,
+		"ANTHROPIC_API_KEY":          "e2e-dummy-key",
+		"FAKE_CLAUDE_MODE":           d.lane.mode,
+		"FAKE_CLAUDE_LOG":            d.argvLog,
+		"FAKE_CLAUDE_STDIN_LOG":      d.stdinLog,
+		"FAKE_CLAUDE_MCP_CONFIG_LOG": d.mcpLog,
+		"FAKE_CLAUDE_STATE":          filepath.Join(d.stateDir, "parked"),
 	}, args...)
 }
 
@@ -133,6 +140,37 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":      value("--disallowedTools"),
 		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
 	}
+}
+
+// claudeMCPConfig records the operator servers of the --mcp-config file of
+// each invocation, and whether the file also names the harness tools bridge.
+// The bridge entry holds a port and a token, so it is not recorded.
+type claudeMCPConfig struct{ as string }
+
+func (a claudeMCPConfig) run(t *testing.T, r *run) {
+	d := claudeDriverOf(t, r)
+	data, err := os.ReadFile(d.mcpLog)
+	if err != nil {
+		t.Fatalf("read mcp config log: %v", err)
+	}
+	out := []any{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var f struct {
+			MCPServers map[string]map[string]any `json:"mcpServers"`
+		}
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			t.Fatalf("decode mcp config %q: %v", line, err)
+		}
+		bridge := false
+		for name := range f.MCPServers {
+			if strings.HasPrefix(name, "harness") {
+				bridge = true
+				delete(f.MCPServers, name)
+			}
+		}
+		out = append(out, map[string]any{"servers": f.MCPServers, "bridge": bridge})
+	}
+	r.record(t, "claude_mcp_config", a.as, callResult{Status: http.StatusOK, Body: out})
 }
 
 // claudeInputs records, in order across spawns, each stdin line harness wrote
