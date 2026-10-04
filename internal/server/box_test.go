@@ -21,6 +21,12 @@ import (
 // serveBox serves a Runtime with process dev in workDir, which can be empty.
 func serveBox(t *testing.T, workDir string) string {
 	t.Helper()
+	_, url := box(t, workDir)
+	return url
+}
+
+func box(t *testing.T, workDir string) (*harness.Runtime, string) {
+	t.Helper()
 	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: workDir, Config: config.Config{
 		Processes: map[string]config.ProcessSpec{"dev": {Command: []string{"sh", "-c", "echo one; echo two; sleep 100"}, ReadyRegex: "two"}}}})
 	if err != nil {
@@ -31,7 +37,7 @@ func serveBox(t *testing.T, workDir string) string {
 		_ = r.Close(context.Background())
 		srv.Close()
 	})
-	return srv.URL
+	return r, srv.URL
 }
 
 func status(t *testing.T, method, url string) process.Status {
@@ -74,6 +80,23 @@ func TestProcessRoutes(t *testing.T) {
 		{"GET", "/processes/nope/logs", http.StatusNotFound, protocol.CodeProcessNotFound},
 		{"POST", "/processes/dev/explode", http.StatusNotFound, protocol.CodeInvalidRequest},
 	})
+}
+
+func TestProcessActionsAfterCloseAreDraining(t *testing.T) {
+	r, url := box(t, t.TempDir())
+	if err := r.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	errorRows(t, url, []errorRow{
+		{"POST", "/processes/dev/start", http.StatusServiceUnavailable, protocol.CodeDraining},
+		{"POST", "/processes/dev/restart", http.StatusServiceUnavailable, protocol.CodeDraining},
+		{"POST", "/processes/dev/stop", http.StatusServiceUnavailable, protocol.CodeDraining},
+	})
+	var list []process.Info
+	want(t, "list status", call(t, "GET", url+"/processes", "", &list), http.StatusOK)
+	if len(list) != 1 || list[0].Status.State != "" {
+		t.Errorf("list after Close = %+v, want dev never started", list)
+	}
 }
 
 func TestBoxRoutesWithoutAWorkDir(t *testing.T) {

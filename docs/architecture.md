@@ -126,10 +126,10 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 func (r *Runtime) Models() []protocol.Model
-func (r *Runtime) Processes() *process.Manager // nil without a WorkDir
 func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
-// every record through each handoff, or ctx ends.
+// every record through each handoff, or, when ctx ends first, once the
+// turns that it cancels have ended.
 func (r *Runtime) Close(ctx context.Context) error
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
@@ -468,7 +468,7 @@ A child is a session with `parent_id`. The `task` tool starts it in the backgrou
 
 ### Shutdown
 
-One `sync.WaitGroup` per runtime tracks every actor, turn runner, compaction, and `Sync` sender. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers. When its ctx ends first, it stops the remaining sessions without an append and returns; their next `Open` finds a crashed turn.
+One `sync.WaitGroup` per runtime tracks every actor, turn runner, compaction, `Sync` sender, control command, plugin probe, and process route action. `Runtime.Close` releases each session with cause `handoff` and waits for the group. It then closes the model connections, stops the processes, and closes the MCP servers, once. When its ctx ends first, it stops the remaining sessions without an append, which cancels their turns, and still waits for the group before it closes them; their next `Open` finds a crashed turn. A turn ends when its tools and its backend return: a tool gets the canceled context, and an external harness gets SIGINT and is killed after its grace (5 s for Claude Code). This matches the engine `Drain`, which canceled the prompts and waited for them. Work that Close waits for fails with `ErrDraining` after `Close` starts.
 
 ## HTTP
 
@@ -767,8 +767,8 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 - A result reports no elapsed time. The status line names instants instead.
 - When a turn starts, the session appends one status line to its system prompt: `[processes: dev ready :3000 since <RFC 3339> log=.harness/proc/dev.log]`, one entry for each process that has started. The line is inside `<harness-engine-context>` tags, so the base prompt marks it as trusted. An instant changes only when a process changes state, so the line is stable for the turn and for each later turn with no process change. The log never holds it.
 - This deviates from the engine, which puts the status at the end of the newest user message. Each process change (a start, a restart, ready, a stop, or an exit) changes the system prompt of the next turn. That turn misses the prompt cache for the whole history, and on the OpenAI WebSocket path it sends the full input instead of a suffix. A process that exits during a turn shows in the next turn. The cost is one cache miss for each process change, which keeps one prompt for each turn.
-- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns and kills the processes before it returns.
-- `Runtime.Processes` returns the one manager, which the process tool and the `/processes` routes share. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
+- `Runtime.Close` stops every process after the sessions end. When its ctx ends first, it cancels the turns, waits for them to end, and kills the processes before it returns.
+- The process tool and the `/processes` routes share the one manager. A `start`, `stop`, or `restart` route is work that `Runtime.Close` waits for, and fails with `draining` (503) after `Close` starts, so no route starts a process that `Close` does not stop. The runtime does not expose the manager. `GET /processes` lists every process with its definition and status, and is `[]` without a `WorkDir`. `start`, `stop`, and `restart` reply with the status. `GET /processes/{name}/logs` replies with `content`, the last `tail` lines (default 50), and `status`. An unknown name, or any name without a `WorkDir`, is `process_not_found`. Any other error of the manager, such as a failed start, is `internal` with the fixed message. Switch oracle: `process_http_lifecycle`, `process_http_unknown_name_is_404`, and `process_tool_from_the_model`. Its two double-prefix rows change by design.
 
 ### workspace
 

@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -177,20 +176,29 @@ func TestCreateReturnsTheStoreError(t *testing.T) {
 	}
 }
 
-func TestCloseReturnsWhenItsContextEnds(t *testing.T) {
+func TestCloseWaitsForTheTurnsThatItsEndedContextCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newFake()
 		f.stuck = make(chan struct{})
-		r := runtime(t, harness.NewMemStore(), f)
+		st := harness.NewMemStore()
+		r := runtime(t, st, f)
 		submit(t, create(t, r), text("a", "hi"))
 		<-f.runs
-		ctx, cancel := context.WithTimeout(bg, time.Minute)
-		defer cancel()
-		if err := r.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("Close = %v, want DeadlineExceeded", err)
+		ctx, cancel := context.WithCancel(bg)
+		cancel()
+		closed := make(chan error, 1)
+		go func() { closed <- r.Close(ctx) }()
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			t.Fatalf("Close returned %v while a canceled turn still runs", err)
+		default:
 		}
 		close(f.stuck)
-		synctest.Wait()
+		if err := <-closed; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close = %v, want Canceled", err)
+		}
+		wantLog(t, st, 2, "input.admitted a", "turn.started a")
 	})
 }
 

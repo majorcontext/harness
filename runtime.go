@@ -493,8 +493,10 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 
 // Close hands off every session, waits for every goroutine of the runtime,
 // closes the model connections, and stops the processes. When ctx ends
-// first, it stops the remaining sessions without an append, kills the
-// processes, and returns; their next Open finds a crashed turn.
+// first, it stops the remaining sessions without an append, which cancels
+// their turns, and still waits for every goroutine before it closes the
+// model connections and kills the processes; their next Open finds a
+// crashed turn. An external harness ends within its own stop grace.
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
@@ -520,24 +522,24 @@ func (r *Runtime) Close(ctx context.Context) error {
 		})
 	}
 	wg.Wait()
-	done := make(chan struct{})
+	stopped := make(chan struct{})
 	go func() {
 		r.group.Wait()
-		if r.models != nil {
-			r.models.Close()
-		}
-		r.closeTools(ctx)
-		close(done)
+		close(stopped)
 	}()
-	defer r.cancel()
 	select {
-	case <-done:
-		return errors.Join(errs...)
+	case <-stopped:
 	case <-ctx.Done():
+		errs = append(errs, ctx.Err())
 		r.cancel()
-		r.closeTools(ctx)
-		return errors.Join(append(errs, ctx.Err())...)
+		<-stopped
 	}
+	r.cancel()
+	if r.models != nil {
+		r.models.Close()
+	}
+	r.closeTools(ctx)
+	return errors.Join(errs...)
 }
 
 // unowned returns the allowed names that the Options.Tools and the backend
@@ -663,9 +665,6 @@ func (l storeLog) PutBlob(ctx context.Context, key string, r io.Reader) error {
 func (l storeLog) GetBlob(ctx context.Context, key string) (io.ReadCloser, error) {
 	return l.st.GetBlob(ctx, l.id, key)
 }
-
-// Processes returns the process manager of the WorkDir, or nil without a WorkDir.
-func (r *Runtime) Processes() *process.Manager { return r.procs }
 
 // Models returns the models that the configured providers serve, by ID. It
 // does no I/O.
