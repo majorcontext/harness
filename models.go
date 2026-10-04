@@ -14,10 +14,11 @@ var ErrModelUnavailable = backend.ErrUnavailable
 // names. A backend that owns the loop runs only its built-in tools and the
 // tools that no model owns.
 func (r *Runtime) checkModel(model string, names []string) error {
-	if _, err := message.ParseModelRef(model); err != nil {
+	ref, err := message.ParseModelRef(model)
+	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	be, err := r.models.Check(model)
+	be, err := r.models.Check(ref)
 	if err != nil {
 		return err
 	}

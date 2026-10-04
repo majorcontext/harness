@@ -82,19 +82,24 @@ func client(name string, p config.Provider, transport func(provider string) http
 	return nil
 }
 
-// Check returns the backend of model, or reports why no session can run it: no
+// Check returns the backend of ref, or reports why no session can run it: no
 // provider serves it, or modelmeta does not know it while the router is strict.
-func (m *Router) Check(model string) (turn.Backend, error) {
-	ref, err := message.ParseModelRef(model)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
-	}
-	be, err := m.lookup(model)
+func (m *Router) Check(ref message.ModelRef) (turn.Backend, error) {
+	be, err := m.backend(ref)
 	if err != nil {
 		return nil, err
 	}
 	if _, ok := modelmeta.ContextWindow(ref); !ok && m.strict {
-		return nil, fmt.Errorf("%w: modelmeta does not know %s", ErrUnavailable, model)
+		return nil, fmt.Errorf("%w: modelmeta does not know %s", ErrUnavailable, ref)
+	}
+	return be, nil
+}
+
+// backend returns the backend of the provider of ref.
+func (m *Router) backend(ref message.ModelRef) (turn.Backend, error) {
+	be, ok := m.backends[ref.Provider]
+	if !ok {
+		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, ref)
 	}
 	return be, nil
 }
@@ -105,11 +110,7 @@ func (m *Router) lookup(model string) (turn.Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	be, ok := m.backends[ref.Provider]
-	if !ok {
-		return nil, fmt.Errorf("%w: no provider %q is configured for %s", ErrUnavailable, ref.Provider, model)
-	}
-	return be, nil
+	return m.backend(ref)
 }
 
 // Capabilities returns the capabilities of the backend of model, or none for a model with no backend.

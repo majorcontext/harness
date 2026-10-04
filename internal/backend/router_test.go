@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/modelmeta"
 )
 
@@ -33,11 +34,11 @@ func TestRouterCheck(t *testing.T) {
 		{"an unknown model of a configured provider, not strict", false, "codex/no-such-model", true},
 		{"an unknown model of a configured provider, strict", true, "codex/no-such-model", false},
 		{"a provider that is not configured", false, "nope/model", false},
-		{"a ref that does not parse", false, "model", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := backend.NewRouter(map[string]turn.Backend{"codex": stub{}}, tc.strict)
-			be, err := r.Check(tc.model)
+			ref, _ := message.ParseModelRef(tc.model)
+			be, err := r.Check(ref)
 			if (err == nil) != tc.want || err != nil && !errors.Is(err, backend.ErrUnavailable) || tc.want && be == nil {
 				t.Errorf("Check(%q) = %v, %v; want ok = %t, and ErrUnavailable on an error", tc.model, be, err, tc.want)
 			}
