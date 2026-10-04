@@ -1,0 +1,18 @@
+{"type":"session.created","session_id":"ses_p","seq":1,"recorded_at":"2026-09-07T10:00:00Z","model":"openai/gpt-5"}
+{"type":"message","session_id":"ses_p","seq":2,"message":{"id":"m1","role":"user","parts":[{"type":"text","text":"one"}]}}
+{"type":"request.meta","session_id":"ses_p","seq":3,"messages":1}
+{"type":"message","session_id":"ses_p","seq":4,"message":{"id":"m2","role":"assistant","parts":[{"type":"tool_call","call_id":"k1","name":"task","arguments":{}}]}}
+{"type":"session.created","session_id":"ses_c","seq":5,"recorded_at":"2026-09-07T10:00:05Z","model":"openai/gpt-5"}
+{"type":"session.spawned","session_id":"ses_c","seq":6,"parent_session_id":"ses_p","agent_type":"explore"}
+{"type":"message","session_id":"ses_c","seq":7,"message":{"id":"c1","role":"user","parts":[{"type":"text","text":"look"}]}}
+{"type":"message","session_id":"ses_c","seq":8,"message":{"id":"c2","role":"assistant","parts":[{"type":"text","text":"seen"}]}}
+{"type":"message","session_id":"ses_p","seq":9,"message":{"id":"m3","role":"tool","parts":[{"type":"tool_result","call_id":"k1","content":[{"type":"text","text":"started ses_c"}]}]}}
+{"type":"message","session_id":"ses_p","seq":10,"message":{"id":"m4","role":"assistant","parts":[{"type":"text","text":"started"}]}}
+{"type":"message","session_id":"ses_p","seq":11,"message":{"id":"m5","role":"user","parts":[{"type":"text","text":"two"}]}}
+{"type":"message","session_id":"ses_p","seq":12,"message":{"id":"m6","role":"assistant","parts":[{"type":"text","text":"done two"}]}}
+{"type":"message","session_id":"ses_p","seq":13,"message":{"id":"s1","role":"user","parts":[{"type":"text","text":"summary of one"}]}}
+{"type":"history.compacted","session_id":"ses_p","seq":14,"compact_first_id":"m1","compact_last_id":"m4","compact_summary_id":"s1"}
+{"type":"effort","session_id":"ses_p","seq":15,"effort":"high"}
+{"type":"model","session_id":"ses_p","seq":16,"model":"anthropic/claude-opus-4-1"}
+{"type":"goal.set","session_id":"ses_p","seq":17,"goal_condition":"ship it"}
+{"type":"turn.end","session_id":"ses_p","seq":18,"outcome":"completed"}

@@ -95,6 +95,7 @@ These are the compatibility surface.
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated OpenAPI and TS | boxes server, web, boxctl |
 | `harness/storetest` | Conformance suite for a `Store` | boxes `pgstore` |
 | `harness/harnesstest` | Scripted model server for contract suites | harness and boxes contract suites |
+| `harness/migrate` | The one-time conversion of engine journals, box archives, and box mirror records; phase 6 deletes it | boxes cutover |
 
 The Go API:
 
@@ -299,8 +300,12 @@ The runtime reads no old format: not the current journal, index, snapshot, or `e
 A one-time Go migration tool converts each old session journal into `harness.Store` records through `eventlog`. Its inputs are the per-session journal files of the engine on each box disk and the `box_journal_*` mirror tables of boxes. The tool also copies the retained tool-result files of each session into `Store` blobs, so `read_tool_result` reads a converted handle. The tool runs in the quiesced window of the cutover, before the new harness starts. Each converted session opens with its full conversation, so the agent keeps its context and the console keeps its transcript.
 
 - The tool also converts each archived box in the cutover window. It reads the saved session journals from the `sessions.tar.zst` export in the archive object of the box, and writes the converted event logs back into that archive. A later restore needs no converter.
-- The tool verifies each session: the message count and the last message of the new log match the old journal.
+- The tool verifies each session: it replays the new log with `Apply`, and each message of the history matches the old transcript.
 - The tool reports each session that fails conversion. It never silently gives that session an empty history.
+- `cmd/harness-migrate` runs `migrate.Dir` on a session directory or `migrate.Archive` on an archive. Boxes calls `migrate.Mirror` for the mirror records of a box. The engine loader reads each journal, so the converted log replays to the transcript that the engine shows.
+- Each user message starts a turn, unless a tool call of the running turn has no result yet. The newest compaction summary becomes `compaction.applied`. The messages that a compaction folded are not in the log, as no old reader shows them; the old journal keeps them. The log keeps the model, settings, an active goal (which judges no turn until the next input), queued prompts, children with `parent_id`, each child report that reached its parent as `child.settled`, the outcome of the last turn of a child, the Claude Code CLI session as `backend.state`, and each retained tool-result file as a blob with `tool_result.retained`.
+- A log message holds text only, so an attachment becomes a text note. An engine-context part is request-only and is dropped. A tool call with no result gets the result that the engine adds before each request.
+- The tool writes each session in one append, so a session that fails has no log, and a second run skips each session that the store holds.
 - The tool is the only code that reads an old format. Phase 6 deletes it after the cutover, so the runtime never carries an old-format reader. Nothing reads an old format again.
 
 ## session
