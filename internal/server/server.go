@@ -30,6 +30,9 @@ type Session interface {
 	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
+	// Withdraw removes input inputID from the queue. An input that is not
+	// queued is no error.
+	Withdraw(ctx context.Context, inputID string) error
 }
 
 // Reader is a session for reads: its state and its events, with no owner.
@@ -139,6 +142,8 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
 	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
+	h.handle(mux, "GET /sessions/{id}/inputs", h.serve(h.queued), command.OpQueueList)
+	mux.HandleFunc("DELETE /sessions/{id}/inputs/{input}", h.session(h.withdraw))
 	h.handle(mux, "POST /sessions/{id}/interrupt", h.session(h.interrupt), command.OpAbort)
 	h.handle(mux, "POST /sessions/{id}/compact", h.session(h.compact), command.OpCompact)
 	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
@@ -354,6 +359,25 @@ func (h *handler[S]) submit(s S, w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	reply(w, http.StatusCreated, a)
+	return nil
+}
+
+// queued answers the IDs of the queued inputs, oldest first. It only reads
+// the session.
+func (h *handler[S]) queued(w http.ResponseWriter, r *http.Request) error {
+	rd, err := h.rt.Read(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	reply(w, http.StatusOK, append([]string{}, rd.Session().Queued...))
+	return nil
+}
+
+func (h *handler[S]) withdraw(s S, w http.ResponseWriter, r *http.Request) error {
+	if err := s.Withdraw(r.Context(), r.PathValue("input")); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

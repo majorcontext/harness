@@ -19,7 +19,7 @@ func (r *Runtime) Handler() http.Handler {
 	if r.procs != nil {
 		procs = processRoutes{r}
 	}
-	return server.New[*Session](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Codes: codes})
+	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Codes: codes})
 }
 
 // codes maps each sentinel error of the runtime to its wire code.
@@ -38,6 +38,28 @@ var codes = []server.Code{
 
 // reads is the Runtime with the read route of the server.
 type reads struct{ *Runtime }
+
+// Create creates a session as the server runs it.
+func (r reads) Create(ctx context.Context, req protocol.CreateSession) (withdrawing, error) {
+	s, err := r.Runtime.Create(ctx, req)
+	return withdrawing{s}, err
+}
+
+// Open opens a session as the server runs it.
+func (r reads) Open(ctx context.Context, id string) (withdrawing, error) {
+	s, err := r.Runtime.Open(ctx, id)
+	return withdrawing{s}, err
+}
+
+// withdrawing is a Session with the withdraw route of the server. The Go API
+// of Session lists no such method.
+type withdrawing struct{ *Session }
+
+// Withdraw removes the queued input inputID. An input that is not queued is
+// no error.
+func (w withdrawing) Withdraw(ctx context.Context, inputID string) error {
+	return w.a.Withdraw(ctx, inputID)
+}
 
 // Read returns session id. A session that this runtime runs answers from its
 // actor; any other session replays from the store. Nothing acquires it.
