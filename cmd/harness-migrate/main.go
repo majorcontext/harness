@@ -125,6 +125,6 @@ func convertArchive(ctx context.Context, out io.Writer, src, dst, dir, store str
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(out, "archive %s: size_bytes %d checksum_md5_base64 %s\n", dst, written.Size(), base64.StdEncoding.EncodeToString(sum.Sum(nil)))
-	return results, nil
+	_, err = fmt.Fprintf(out, "archive %s: size_bytes %d checksum_md5_base64 %s\n", dst, written.Size(), base64.StdEncoding.EncodeToString(sum.Sum(nil)))
+	return results, err
 }
