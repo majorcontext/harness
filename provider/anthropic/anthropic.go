@@ -33,7 +33,7 @@ const (
 )
 
 // Client is a provider.Provider for the Anthropic Messages API. The zero
-// value plus APIKey is usable; nothing touches the network until Stream.
+// value plus APIKey, or an HTTPClient that sets the credentials, is usable.
 type Client struct {
 	APIKey     string
 	BaseURL    string       // defaults to https://api.anthropic.com
@@ -59,7 +59,7 @@ type Client struct {
 func (c *Client) Name() string { return Family }
 
 func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.Stream, error) {
-	if c.APIKey == "" {
+	if c.APIKey == "" && c.HTTPClient == nil {
 		return nil, fmt.Errorf("anthropic: no API key configured (set ANTHROPIC_API_KEY)")
 	}
 	ttl, err := resolveCacheTTL(c.CacheTTL)
@@ -88,7 +88,9 @@ func (c *Client) Stream(ctx context.Context, req *provider.Request) (provider.St
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("X-Api-Key", c.APIKey)
+	if c.APIKey != "" {
+		httpReq.Header.Set("X-Api-Key", c.APIKey)
+	}
 	httpReq.Header.Set("Anthropic-Version", apiVersion)
 	if ttl == CacheTTL1h {
 		httpReq.Header.Set("Anthropic-Beta", extendedCacheTTLBeta)
