@@ -59,7 +59,7 @@ type taskArgs struct {
 	Tail                  int
 }
 
-func (t taskTool) bind(id string) turn.Tool { t.parent = id; return t }
+func (t taskTool) bind(id string, _ bool) turn.Tool { t.parent = id; return t }
 
 func (taskTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{Name: "task", Description: taskDescription, InputSchema: json.RawMessage(taskSchema)}

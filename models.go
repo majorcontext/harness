@@ -74,40 +74,43 @@ func client(name string, p config.Provider, transport func(provider string) http
 	return nil
 }
 
-// check reports why model cannot start a session that allows the names. A
-// backend that owns the loop runs only its built-in tools and the embedder tools.
-func (m *models) check(model string, names []string, tools []turn.Tool) error {
+// checkModel reports why model cannot start a session that allows the
+// names. A backend that owns the loop runs only its built-in tools and the
+// tools that no model owns.
+func (r *Runtime) checkModel(model string, names []string) error {
 	ref, err := message.ParseModelRef(model)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	be, err := m.backend(model)
+	be, err := r.models.backend(model)
 	if err != nil {
 		return err
 	}
-	if _, ok := modelmeta.ContextWindow(ref); !ok && m.strict {
+	if _, ok := modelmeta.ContextWindow(ref); !ok && r.models.strict {
 		return fmt.Errorf("%w: modelmeta does not know %s", ErrModelUnavailable, model)
 	}
-	if caps := be.Capabilities(model); caps.OwnsLoop {
-		for _, t := range tools {
-			if slices.Contains(caps.Tools, t.Spec().Name) {
-				return fmt.Errorf("%w: tool %q has the name of a built-in tool of %s", ErrInvalidRequest, t.Spec().Name, model)
-			}
+	caps := be.Capabilities(model)
+	if !caps.OwnsLoop {
+		return nil
+	}
+	for _, n := range caps.Tools {
+		if r.owns(n) {
+			return fmt.Errorf("%w: tool %q has the name of a built-in tool of %s", ErrInvalidRequest, n, model)
 		}
-		for _, n := range names {
-			if !slices.Contains(caps.Tools, n) && !slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == n }) {
-				return fmt.Errorf("%w: %s has no tool %q", ErrInvalidRequest, model, n)
-			}
+	}
+	for _, n := range names {
+		if !r.known(model, n) {
+			return fmt.Errorf("%w: %s has no tool %q", ErrInvalidRequest, model, n)
 		}
 	}
 	return nil
 }
 
-// change reports why a session that allows tools cannot move to model to.
-// A backend that owns its context reads the history of another provider
-// through the history tool, so any two models may follow each other.
-func (m *models) change(_, to string, names []string, tools []turn.Tool) error {
-	return m.check(to, names, tools)
+// changeModel reports why a session that allows the names cannot move to
+// model to. A backend that owns its context reads the history of another
+// provider through the history tool, so any two models may follow each other.
+func (r *Runtime) changeModel(_, to string, names []string) error {
+	return r.checkModel(to, names)
 }
 
 func (m *models) backend(model string) (turn.Backend, error) {

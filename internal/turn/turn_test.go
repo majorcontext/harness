@@ -108,7 +108,7 @@ func TestRunTakesNoSteerInputWhenAMaxTokensStopEndsTheTurn(t *testing.T) {
 	m := &model{replies: []eventlog.Message{callTool("c1")}, results: []turn.Result{{MaxTokens: true}}}
 	r := &recorder{steer: [][]eventlog.Message{{steerInput("later")}}}
 	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{})
+	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
 	if len(m.requests) != 1 || len(r.ended) != 1 || r.ended[0] != nil {
 		t.Fatalf("calls = %d, ended = %v, want one call and a clean end", len(m.requests), r.ended)
 	}
@@ -124,7 +124,7 @@ func TestRunTakesNoSteerInputWhenTheContinuationLimitFailsTheTurn(t *testing.T) 
 	}
 	r := &recorder{steer: [][]eventlog.Message{nil, {steerInput("later")}}}
 	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{Continuations: 1})
+	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{Continuations: 1})
 	if len(m.requests) != 2 || len(r.ended) != 1 || r.ended[0] == nil {
 		t.Fatalf("calls = %d, ended = %v, want two calls and a failed turn", len(m.requests), r.ended)
 	}
@@ -136,7 +136,7 @@ func TestRunTakesNoSteerInputWhenTheContinuationLimitFailsTheTurn(t *testing.T) 
 func TestRunReportsItsItemsAndEndThroughOneTurn(t *testing.T) {
 	m, r := &model{replies: []eventlog.Message{say("hi")}}, &recorder{}
 	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{})
+	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
 	if len(r.items) != 1 || r.items[0].Parts[0].Text != "hi" {
 		t.Fatalf("items = %+v, want the reply", r.items)
 	}
@@ -149,7 +149,7 @@ func TestRunReportsAFailureToEnded(t *testing.T) {
 	boom := errors.New("boom")
 	m, r := &model{errs: []error{boom}}, &recorder{}
 	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{})
+	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
 	if len(r.ended) != 1 || !errors.Is(r.ended[0], boom) {
 		t.Fatalf("Ended calls = %v, want boom", r.ended)
 	}
@@ -165,7 +165,7 @@ func TestRetryBackoffDoublesFromOneSecondToAnEightSecondCap(t *testing.T) {
 		m.replies[calls] = say("ok")
 		r := &recorder{}
 		ctx := context.Background()
-		turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, r, turn.Limits{Retries: calls})
+		turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{Retries: calls})
 		want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
 		if len(r.waits) != len(want) {
 			t.Fatalf("waits = %v, want %v", r.waits, want)
@@ -192,7 +192,7 @@ func TestRunStartsOneItemForEachCallThatStreams(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				m := &model{replies: []eventlog.Message{{}, say("ok")}, errs: []error{tc.err}, streams: true}
 				ctx := context.Background()
-				turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, nil, tc.r, tc.lim)
+				turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, tc.r, tc.lim)
 				if len(tc.r.ended) != 1 || tc.r.ended[0] != nil {
 					t.Fatalf("Ended calls = %v, want one with no error", tc.r.ended)
 				}

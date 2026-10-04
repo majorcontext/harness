@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -13,60 +12,46 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// turnTools returns the tools and the source of turn r. A turn of a backend
-// that owns its loop also gets the history tool, which no allow list hides. A
-// harness-loop turn of an agent gets the agent tools. Its source retains each result
-// after the hooks, unless the profile removes read_tool_result.
-func (a *Actor) turnTools(r *running) ([]turn.Tool, turn.Source) {
-	src := a.cfg.Source
-	if r.ownsLoop {
-		return append(slices.Clip(turn.Restrict(a.cfg.Tools, a.state.AllowedTools())), historyTool{a}), src
+// source returns the Source of turn r: the Source of the session, then the
+// tools of the actor.
+func (a *Actor) source(r *running) turn.Source {
+	var srcs turn.Sources
+	if a.cfg.Source != nil {
+		srcs = append(srcs, a.cfg.Source)
 	}
-	if a.cfg.Agent == nil {
-		return turn.Restrict(a.cfg.Tools, a.state.AllowedTools()), src
-	}
-	tools := turn.Restrict(slices.Concat(a.cfg.Tools, a.cfg.Agent, []turn.Tool{toolresult.NewTool(a)}), a.state.AllowedTools())
-	if slices.ContainsFunc(tools, func(t turn.Tool) bool { return t.Spec().Name == toolresult.ToolName }) {
-		src = agentSource{src: src, a: a, r: r}
-	}
-	return tools, src
+	return append(srcs, actorTools{a, r})
 }
 
-// agentSource wraps the source of an agent turn.
-type agentSource struct {
-	src turn.Source
-	a   *Actor
-	r   *running
+// actorTools are the tools that read the session itself. A turn of a backend
+// that owns its loop gets the history tool, which no allow list hides. A
+// harness-loop turn gets read_tool_result and retains each result after the
+// other hooks, so the blob holds the text that the model would see, unless
+// Config.Retain is off or the allowed tools omit read_tool_result.
+type actorTools struct {
+	a *Actor
+	r *running
 }
 
-func (s agentSource) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
-	var ts turn.Toolset
-	if s.src != nil {
-		ts = s.src.Toolset(ctx, history, allowed, model)
+func (s actorTools) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, model string) turn.Toolset {
+	if s.a.cfg.Backend.Capabilities(model).OwnsLoop {
+		return turn.Toolset{Tools: []turn.Tool{historyTool{s.a}}}
 	}
-	ts.Hooks = retainHooks{ts.Hooks, s}
-	return ts
-}
-
-// retainHooks retain a result after the other hooks, so the blob holds the
-// text that the model would see.
-type retainHooks struct {
-	turn.Hooks
-	s agentSource
-}
-
-func (h retainHooks) Before(ctx context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
-	if h.Hooks == nil {
-		return c, ""
+	if !s.a.cfg.Retain {
+		return turn.Toolset{}
 	}
-	return h.Hooks.Before(ctx, c)
+	tools := turn.Restrict([]turn.Tool{toolresult.NewTool(s.a)}, allowed)
+	if len(tools) == 0 {
+		return turn.Toolset{}
+	}
+	return turn.Toolset{Tools: tools, Hooks: s}
 }
 
-func (h retainHooks) After(ctx context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
-	if h.Hooks != nil {
-		r = h.Hooks.After(ctx, c, r)
-	}
-	return h.s.a.retain(h.s.r, c.Name, r)
+func (actorTools) Before(_ context.Context, c protocol.ToolCall) (protocol.ToolCall, string) {
+	return c, ""
+}
+
+func (s actorTools) After(_ context.Context, c protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	return s.a.retain(s.r, c.Name, r)
 }
 
 // Retained returns the retained tool results of the session.

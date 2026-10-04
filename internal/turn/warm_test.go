@@ -55,7 +55,7 @@ func TestWarmDescribesTheFirstModelCall(t *testing.T) {
 	w := &warmer{}
 	src := source{turn.Toolset{Tools: []turn.Tool{tool("more")}, Prompt: "from the source"}}
 	req := turn.Request{SessionID: "s1", Model: "codex/gpt-5", Instructions: "base"}
-	if err := turn.Warm(context.Background(), w, req, []turn.Tool{tool("read")}, src); err != nil {
+	if err := turn.Warm(context.Background(), w, req, turn.Sources{turn.Fixed{tool("read")}, src}); err != nil {
 		t.Fatal(err)
 	}
 	if len(w.got) != 1 {
@@ -75,13 +75,13 @@ func TestWarmDescribesTheFirstModelCall(t *testing.T) {
 
 func TestWarmReportsTheErrorOfTheBackend(t *testing.T) {
 	w := &warmer{err: context.DeadlineExceeded}
-	if err := turn.Warm(context.Background(), w, turn.Request{}, nil, nil); err != context.DeadlineExceeded {
+	if err := turn.Warm(context.Background(), w, turn.Request{}, nil); err != context.DeadlineExceeded {
 		t.Errorf("Warm = %v, want the error of the backend", err)
 	}
 }
 
 func TestWarmSkipsABackendThatCannotWarm(t *testing.T) {
-	if err := turn.Warm(context.Background(), plain{}, turn.Request{}, nil, nil); err != nil {
+	if err := turn.Warm(context.Background(), plain{}, turn.Request{}, nil); err != nil {
 		t.Errorf("Warm = %v, want nil", err)
 	}
 }
@@ -103,14 +103,14 @@ func (s *countSource) Toolset(context.Context, []eventlog.Message, []string, str
 func TestWarmDiscoversNothingForAModelThatCannotWarm(t *testing.T) {
 	g := &gated{}
 	src := &countSource{}
-	if err := turn.Warm(context.Background(), g, turn.Request{Model: "anthropic/claude"}, nil, src); err != nil {
+	if err := turn.Warm(context.Background(), g, turn.Request{Model: "anthropic/claude"}, src); err != nil {
 		t.Fatal(err)
 	}
 	if src.calls != 0 || len(g.got) != 0 {
 		t.Errorf("tool discovery = %d, Warm calls = %d, want none of either", src.calls, len(g.got))
 	}
 	g.can = true
-	if err := turn.Warm(context.Background(), g, turn.Request{Model: "codex/gpt-5"}, nil, src); err != nil {
+	if err := turn.Warm(context.Background(), g, turn.Request{Model: "codex/gpt-5"}, src); err != nil {
 		t.Fatal(err)
 	}
 	if src.calls != 1 || len(g.got) != 1 {

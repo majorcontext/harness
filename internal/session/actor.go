@@ -76,9 +76,12 @@ type Config struct {
 	Banner string
 	// Evaluator is the model that judges goal turns.
 	Evaluator string
-	Tools     []turn.Tool
-	// Source gives more tools to each model call. nil: Tools only.
+	// Source gives the tools of each model call, and the hooks around each
+	// tool call. nil: no tool.
 	Source turn.Source
+	// Retain gives a harness-loop turn read_tool_result and keeps each large
+	// result out of the history, after the hooks of Source.
+	Retain bool
 	// Prompt returns the system prompt of a turn of a session with the
 	// agent profile, when the turn starts.
 	Prompt func(agent string) string
@@ -88,9 +91,6 @@ type Config struct {
 	// Report receives the outcome of each turn of a child session that
 	// ends, for its parent. It must not wait for the actor. nil: no report.
 	Report func(parent string, s eventlog.ChildSettled, text string)
-	// Agent are the file tools of a coding agent. A harness-loop turn gets
-	// them and read_tool_result, and retains each large result. nil: none.
-	Agent []turn.Tool
 	// Sync receives every durable record. nil: no replication.
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.

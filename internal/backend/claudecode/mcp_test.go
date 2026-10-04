@@ -45,7 +45,7 @@ func TestClaudeCodeGetsTheConfiguredMCPServers(t *testing.T) {
 		{name: "the CLI gets every configured server beside the bridge", offered: []string{"echo", hist},
 			want: map[string]map[string]any{"chrome-devtools": stdio, "gateway": remote}},
 		{name: "a restricted turn keeps the configured servers on the bridge", allowed: []string{"Read", "echo", "mcp__gateway__ping"},
-			env: []string{toolsInit, `["Read"]`}, offered: []string{"echo", hist, "mcp__gateway__ping"}, want: map[string]map[string]any{}},
+			env: []string{toolsInit, `["Read"]`}, offered: []string{"echo", "mcp__gateway__ping", hist}, want: map[string]map[string]any{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

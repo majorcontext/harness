@@ -41,14 +41,23 @@ type Source interface {
 	Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset
 }
 
-// Sources gives the tools of each Source in order, their prompts joined
-// by a blank line, and the hooks of the last Source that has any.
+// Fixed is a Source of tools that never change.
+type Fixed []Tool
+
+// Toolset implements Source: the tools that allowed keeps.
+func (f Fixed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, _ string) Toolset {
+	return Toolset{Tools: Restrict(f, allowed)}
+}
+
+// Sources gives the tools of each Source in order, their prompts joined by a
+// blank line, and the hooks of every Source that has any, chained in order.
 type Sources []Source
 
 // Toolset implements Source.
 func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) Toolset {
 	var out Toolset
 	var prompts []string
+	var hooks chain
 	for _, src := range s {
 		ts := src.Toolset(ctx, history, allowed, model)
 		out.Tools, out.Deferred = append(out.Tools, ts.Tools...), append(out.Deferred, ts.Deferred...)
@@ -56,20 +65,46 @@ func (s Sources) Toolset(ctx context.Context, history []eventlog.Message, allowe
 			prompts = append(prompts, ts.Prompt)
 		}
 		if ts.Hooks != nil {
-			out.Hooks = ts.Hooks
+			hooks = append(hooks, ts.Hooks)
 		}
 	}
 	out.Prompt = strings.Join(prompts, "\n\n")
+	switch len(hooks) {
+	case 0:
+	case 1:
+		out.Hooks = hooks[0]
+	default:
+		out.Hooks = hooks
+	}
 	return out
+}
+
+// chain runs each Hooks in order. A deny ends the chain.
+type chain []Hooks
+
+func (c chain) Before(ctx context.Context, call protocol.ToolCall) (protocol.ToolCall, string) {
+	for _, h := range c {
+		var deny string
+		if call, deny = h.Before(ctx, call); deny != "" {
+			return call, deny
+		}
+	}
+	return call, ""
+}
+
+func (c chain) After(ctx context.Context, call protocol.ToolCall, r protocol.ToolResult) protocol.ToolResult {
+	for _, h := range c {
+		r = h.After(ctx, call, r)
+	}
+	return r
 }
 
 // describe sets the tools, prompt, and Call of call and returns Call. all
 // describes every tool, for a backend that owns the loop.
-func describe(ctx context.Context, call *Request, tools []Tool, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
-	ts := Toolset{Tools: tools}
+func describe(ctx context.Context, call *Request, src Source, all bool) func(context.Context, protocol.ToolCall) protocol.ToolResult {
+	var ts Toolset
 	if src != nil {
-		more := src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
-		ts.Tools, ts.Deferred, ts.Prompt, ts.Hooks = append(slices.Clip(tools), more.Tools...), more.Deferred, more.Prompt, more.Hooks
+		ts = src.Toolset(ctx, call.History, call.AllowedTools, call.Model)
 	}
 	if all {
 		ts.Tools, ts.Deferred = append(slices.Clip(ts.Tools), ts.Deferred...), nil

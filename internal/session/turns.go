@@ -107,11 +107,11 @@ func (a *Actor) start(id string, inputIDs []string) {
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	tools, src := a.turnTools(r)
+	src := a.source(r)
 	t := &turnRun{a: a, r: r}
 	a.spawn(func() {
 		a.awaitWarm(r.ctx)
-		turn.Run(r.ctx, r.step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
+		turn.Run(r.ctx, r.step, a.cfg.Backend, req, src, t, a.cfg.Limits)
 	})
 }
 

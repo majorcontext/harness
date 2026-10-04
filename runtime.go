@@ -18,10 +18,8 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/internal/tool/builtin"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/tool/pluginsrc"
-	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
@@ -172,19 +170,16 @@ func New(opts Options) (*Runtime, error) {
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
-	names := map[string]bool{}
+	r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
-		name := t.Spec().Name
-		if name == "" || names[name] || r.taken(name) {
+		if name := t.Spec().Name; name == "" || r.known("", name) {
 			return nil, fmt.Errorf("%w: tool name %q is empty, repeated, or reserved", ErrInvalidRequest, name)
 		}
-		names[name] = true
 		r.tools = append(r.tools, t)
 	}
 	if r.owner == nil {
 		r.owner = newLocalOwner()
 	}
-	r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
 		return fmt.Sprintf("%s/%d", host, os.Getpid())
@@ -233,13 +228,10 @@ func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Sess
 }
 
 func (r *Runtime) create(ctx context.Context, id string, c eventlog.SessionCreated, first *eventlog.InputAdmitted) (*Session, error) {
-	if err := r.models.check(c.Model, r.unowned(c.AllowedTools), r.named()); err != nil {
+	if err := r.checkModel(c.Model, c.AllowedTools); err != nil {
 		return nil, err
 	}
-	return r.load(ctx, id, true, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
-		return session.Create(ctx, cfg, c, first)
-	})
+	return r.load(ctx, id, launch{create: true, created: c, first: first})
 }
 
 func newSuffix() string { return strings.ToLower(rand.Text()) }
@@ -250,24 +242,19 @@ func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) {
 	if err := checkName("session", id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return r.load(ctx, id, false, func(ctx context.Context, cfg session.Config) (*session.Actor, error) {
-		if c, err := r.created(ctx, id); err == nil {
-			cfg.Tools = sessionTools(cfg.Tools, c.ParentID)
-		}
-		return session.Open(ctx, cfg)
-	})
+	return r.load(ctx, id, launch{})
 }
 
-// sessionTools returns the tools of a session with parent. A child has no
-// goal tool, as no goal of an engine child ever ran.
-func sessionTools(tools []turn.Tool, parent string) []turn.Tool {
-	if parent == "" {
-		return tools
-	}
-	return slices.DeleteFunc(tools, func(t turn.Tool) bool { _, ok := t.(goalTool); return ok })
+// launch is how a load starts a session that this runtime does not run yet.
+type launch struct {
+	// create starts a new session with created and first. Otherwise the
+	// session opens from its log.
+	create  bool
+	created eventlog.SessionCreated
+	first   *eventlog.InputAdmitted
 }
 
-func (r *Runtime) load(ctx context.Context, id string, create bool, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, error) {
 	for {
 		r.mu.Lock()
 		if r.closed {
@@ -280,19 +267,19 @@ func (r *Runtime) load(ctx context.Context, id string, create bool, start func(c
 			r.sessions[id] = e
 			r.group.Add(1)
 			r.mu.Unlock()
-			e.s, e.err = r.start(ctx, id, e, start)
+			e.s, e.err = r.start(ctx, id, e, l)
 			if e.err != nil {
 				r.forget(id, e)
 			}
 			close(e.ready)
 			if e.err == nil {
-				r.run(id, e.s, create)
+				r.run(id, e.s, l.create)
 			}
 			r.group.Done()
 			return e.s, e.err
 		}
 		r.mu.Unlock()
-		if create {
+		if l.create {
 			return nil, fmt.Errorf("%w: %s", ErrSessionExists, id)
 		}
 		select {
@@ -337,7 +324,7 @@ func (r *Runtime) forget(id string, e *entry) {
 	}
 }
 
-func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(context.Context, session.Config) (*session.Actor, error)) (*Session, error) {
+func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
@@ -347,6 +334,13 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 	own, err := r.owner.Acquire(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	c := l.created
+	if !l.create {
+		if c, err = r.created(ctx, id); err != nil {
+			own.Release()
+			return nil, err
+		}
 	}
 	cfg := session.Config{
 		ID:              id,
@@ -358,10 +352,10 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Tools:           r.bind(id),
+		Source:          r.source(id, c.ParentID != ""),
+		Retain:          r.workDir != "",
 		Prompt:          r.instructions(),
 		Report:          r.report,
-		Agent:           r.agent(),
 		Sync:            r.sync,
 		Limits:          r.limits,
 		Threshold:       r.threshold,
@@ -369,40 +363,21 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Base:            r.base,
 		Go:              r.group.Go,
 		Done:            func() { r.forget(id, e) },
-	}
-	cfg.Check = func(from, to string, names []string) error {
-		return r.models.change(from, to, r.unowned(names), r.named())
-	}
-	var srcs turn.Sources
-	if r.mcp != nil {
-		srcs = append(srcs, mcpTools{r.mcp, r.models})
+		Check:           r.changeModel,
 	}
 	if r.plugins != nil {
-		p := r.plugins.Session(id)
-		srcs, cfg.Appended = append(srcs, p), p.Appended
+		cfg.Appended = r.plugins.Session(id).Appended
 	}
-	if srcs != nil {
-		cfg.Source = srcs
+	var a *session.Actor
+	if l.create {
+		a, err = session.Create(ctx, cfg, c, l.first)
+	} else {
+		a, err = session.Open(ctx, cfg)
 	}
-	a, err := start(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
 	return &Session{a: a, r: r, id: id, recovered: make(chan struct{})}, nil
-}
-
-// mcpTools gives the MCP tools to each turn whose backend does not connect
-// the servers itself.
-type mcpTools struct {
-	src     *mcpsrc.Source
-	backend turn.Backend
-}
-
-func (m mcpTools) Toolset(ctx context.Context, history []eventlog.Message, allowed []string, model string) turn.Toolset {
-	if allowed == nil && m.backend.Capabilities(model).OwnsMCP {
-		return turn.Toolset{}
-	}
-	return m.src.Toolset(ctx, history, allowed, model)
 }
 
 // instructions reads the system prompt of a session once and returns the
@@ -423,17 +398,6 @@ func (r *Runtime) instructions() func(agent string) string {
 		}
 		return p
 	}
-}
-
-// bind returns the tools of session id, with each session tool bound to id.
-func (r *Runtime) bind(id string) []turn.Tool {
-	tools := slices.Clone(r.tools)
-	for i, t := range tools {
-		if b, ok := t.(interface{ bind(string) turn.Tool }); ok {
-			tools[i] = b.bind(id)
-		}
-	}
-	return tools
 }
 
 // running returns session id when this runtime runs it, or nil.
@@ -574,23 +538,6 @@ func (r *Runtime) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// unowned returns the allowed names that the Options.Tools and the backend
-// do not own. The MCP source owns its names, which depend on the servers.
-func (r *Runtime) unowned(names []string) []string {
-	if r.mcp == nil {
-		return names
-	}
-	return slices.DeleteFunc(slices.Clone(names), mcpsrc.Reserved)
-}
-
-// named returns the Options.Tools and the plugin tools, for their names.
-func (r *Runtime) named() []turn.Tool {
-	if r.plugins == nil {
-		return r.tools
-	}
-	return append(slices.Clip(r.tools), r.plugins.Tools()...)
-}
-
 // hold adds one unit of the work that Close waits for, unless Close started.
 func (r *Runtime) hold() error {
 	r.mu.Lock()
@@ -616,28 +563,7 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
-	return r.plugins.Start(ctx, func(name string) bool {
-		return r.taken(name) || slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == name })
-	})
-}
-
-// agent returns the file tools of a new session. Each session gets its own:
-// the read guard of write_file belongs to one session. nil without a WorkDir.
-func (r *Runtime) agent() []turn.Tool {
-	if r.workDir == "" {
-		return nil
-	}
-	return builtin.Tools(r.workDir)
-}
-
-// taken reports whether name belongs to a tool that the runtime provides.
-func (r *Runtime) taken(name string) bool {
-	return name == turn.HistoryTool || r.mcp != nil && mcpsrc.Reserved(name) || r.builtin(name)
-}
-
-// builtin reports whether name is a built-in tool of the WorkDir.
-func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName)
+	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
 }
 
 // history returns the conversation of session id from the store.

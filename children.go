@@ -13,8 +13,6 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/internal/tool/mcpsrc"
-	"github.com/majorcontext/harness/internal/turn"
 )
 
 // spawn appends child.spawned to parent, then creates the child with task
@@ -71,18 +69,13 @@ func narrow(profile, parent []string) []string {
 	return slices.DeleteFunc(slices.Clone(profile), func(n string) bool { return !slices.Contains(parent, n) })
 }
 
-// available drops each name that neither a tool of r nor a built-in tool
-// of model has, because a profile can name the tools of every backend.
+// available drops each name that the child has no tool for, because a
+// profile can name the tools of every backend.
 func (r *Runtime) available(model string, names []string) []string {
 	if names == nil {
 		return nil
 	}
-	caps := r.models.Capabilities(model)
-	has := func(n string) bool {
-		return slices.Contains(caps.Tools, n) || !caps.OwnsLoop && r.builtin(n) || r.mcp != nil && mcpsrc.Reserved(n) ||
-			slices.ContainsFunc(r.tools, func(t turn.Tool) bool { return t.Spec().Name == n })
-	}
-	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !has(n) })
+	out := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !r.known(model, n) })
 	if len(out) == 0 && len(names) > 0 {
 		slog.Warn("harness: the child has no tool of its profile", "model", model, "tools", names)
 	}

@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -31,8 +33,9 @@ type Plugins struct {
 	opts    plugin.Options
 	workDir string
 
+	// host is set once, by the first successful Start.
+	host   atomic.Pointer[plugin.Host]
 	mu     sync.Mutex
-	host   *plugin.Host
 	closed bool
 }
 
@@ -52,7 +55,7 @@ func New(cfg config.Config, workDir string, history History) *Plugins {
 func (p *Plugins) Start(ctx context.Context, taken func(string) bool) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.host != nil {
+	if p.host.Load() != nil {
 		return nil
 	}
 	specs := make([]plugin.Spec, len(p.specs))
@@ -80,20 +83,21 @@ func (p *Plugins) Start(ctx context.Context, taken func(string) bool) error {
 	if err != nil {
 		return err
 	}
-	p.host = host
+	p.host.Store(host)
 	return nil
 }
 
-// Tools returns the tools of the started plugins, for their names. Call it
-// after Start.
-func (p *Plugins) Tools() []turn.Tool { return p.Session("").tools }
+// Has reports whether a started plugin has a tool named name.
+func (p *Plugins) Has(name string) bool {
+	h := p.host.Load()
+	return h != nil && slices.ContainsFunc(h.Tools(), func(d plugin.ToolDef) bool { return d.Name == name })
+}
 
 // Session returns the plugins of session id. Call it after Start.
 func (p *Plugins) Session(id string) *Session {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	s := &Session{id: id, host: p.host, workDir: p.workDir}
-	for _, d := range p.host.Tools() {
+	host := p.host.Load()
+	s := &Session{id: id, host: host, workDir: p.workDir}
+	for _, d := range host.Tools() {
 		s.tools = append(s.tools, tool{s, d})
 	}
 	return s
@@ -101,13 +105,12 @@ func (p *Plugins) Session(id string) *Session {
 
 // Info returns the state of each started plugin, or nil before Start.
 func (p *Plugins) Info() []protocol.Plugin {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.host == nil {
+	h := p.host.Load()
+	if h == nil {
 		return nil
 	}
 	var out []protocol.Plugin
-	for _, i := range p.host.Plugins() {
+	for _, i := range h.Plugins() {
 		out = append(out, protocol.Plugin{Name: i.Name, State: i.State, Tools: i.Tools, Hooks: i.Hooks})
 	}
 	return out
@@ -117,8 +120,8 @@ func (p *Plugins) Info() []protocol.Plugin {
 func (p *Plugins) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.host != nil && !p.closed {
-		p.host.Close()
+	if h := p.host.Load(); h != nil && !p.closed {
+		h.Close()
 	}
 	p.closed = true
 }
@@ -137,6 +140,16 @@ func (s *Session) Toolset(ctx context.Context, _ []eventlog.Message, allowed []s
 	ref, _ := message.ParseModelRef(model)
 	segs := s.host.SystemTransform(ctx, &plugin.SystemTransformRequest{SessionID: s.id, Model: ref})
 	return turn.Toolset{Tools: turn.Restrict(s.tools, allowed), Prompt: strings.Join(segs, "\n\n"), Hooks: s}
+}
+
+// Untransformed returns s as a Source that runs no system.transform, for a
+// backend that reads no system prompt of the harness.
+func (s *Session) Untransformed() turn.Source { return untransformed{s} }
+
+type untransformed struct{ s *Session }
+
+func (u untransformed) Toolset(_ context.Context, _ []eventlog.Message, allowed []string, _ string) turn.Toolset {
+	return turn.Toolset{Tools: turn.Restrict(u.s.tools, allowed), Hooks: u.s}
 }
 
 // Before runs the tool.execute.before chain and announces a call that runs.
