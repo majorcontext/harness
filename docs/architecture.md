@@ -106,6 +106,9 @@ type Options struct {
 	Store  Store         // required
 	Owner  Owner  // nil: the local process owns every session
 	Tools  []Tool // embedder tools, beside built-in, MCP, and plugin tools
+	// WorkDir is the directory of a coding agent. Empty: no file is read,
+	// and the system prompt is append_system_prompt alone.
+	WorkDir string
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
@@ -586,17 +589,22 @@ Agent profiles name a kind of child: `name`, `description`, `tools`, `model`, an
 
 ### prompt
 
-```go
-package prompt
+`internal/prompt.Build(cfg, workDir)` returns the system prompt of a session as segments. The runtime joins them with a blank line. It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call. The log never holds them, so the next `Open` reads the files again. Codex and Claude Code also read the prompt once at session start.
 
-type Provider interface {
-	Segment(ctx context.Context) (Segment, error)
-}
+With `Options.WorkDir` empty, the prompt is `append_system_prompt` alone, and no file is read. An embedder in the boxes control plane never gets the `AGENTS.md` of its process directory.
 
-type Memo[T any] struct{ /* once, value, err */ }
-```
+With a `WorkDir`, the segments are, in order:
 
-Each segment declares whether a load error fails the turn or degrades with a notice. A bad `SKILL.md` degrades. Ambient status stays a pinned message, through one `Ambient` provider.
+1. The base prompt of a coding agent. It ends with the working directory.
+2. The `append_system_prompt` entries.
+3. The `AGENTS.md` chain. Each directory from the git root down to `WorkDir` gives its `AGENTS.md`, or else its `AGENT.md`. Outside a repository, only `WorkDir` counts. `instructions: false` turns the chain off, and `instructions_path` replaces it with one file. Each file is cut at `instructions_max_bytes` (default 64 KiB), and a marker names the file and the byte counts. A negative value keeps the whole file.
+4. The skill list: each valid `SKILL.md` below `skills_dirs` (default `.agents/skills`), sorted by name, with its path.
+
+A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a skill that is not valid or repeats a name. The session starts without it. Each skip and each cut writes a WARN log line.
+
+A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
+
+There is no outline mode, no chain ceiling, and no ambient segment. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### config
 

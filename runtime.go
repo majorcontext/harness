@@ -13,6 +13,7 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -55,6 +56,10 @@ type Options struct {
 	ModelTransport func(provider string) http.RoundTripper
 	// Tools are the embedder tools. Each name must be unique.
 	Tools []Tool
+	// WorkDir is the directory of a coding agent. Each session reads its
+	// AGENTS.md chain and skills when it starts. Empty: the system prompt is
+	// Config.AppendSystemPrompt alone, and no file is read.
+	WorkDir string
 
 	backend turn.Backend
 }
@@ -69,6 +74,8 @@ type Runtime struct {
 	// models is nil when Options.backend runs every turn.
 	models  *models
 	retries int
+	// prompt reads the system prompt of a session.
+	prompt func() string
 	// threshold and keep are the compaction settings of each session.
 	threshold float64
 	keep      int
@@ -100,6 +107,7 @@ func New(opts Options) (*Runtime, error) {
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, backend: opts.backend,
 		retries: opts.Config.PromptRetriesValue(), sessions: map[string]*entry{},
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
+	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
 	names := map[string]bool{}
 	for _, t := range opts.Tools {
 		name := t.Spec().Name
@@ -113,7 +121,7 @@ func New(opts Options) (*Runtime, error) {
 		r.owner = newLocalOwner()
 	}
 	if r.backend == nil {
-		r.models = newModels(opts.Config, opts.ModelTransport)
+		r.models = newModels(opts.Config, opts.WorkDir, opts.ModelTransport)
 		r.backend = r.models
 	}
 	r.name = sync.OnceValue(func() string {
@@ -236,6 +244,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, start func(con
 		Owner:     r.name(),
 		Backend:   r.backend,
 		Tools:     r.tools,
+		Prompt:    r.prompt(),
 		Sync:      r.sync,
 		Retries:   r.retries,
 		Threshold: r.threshold,

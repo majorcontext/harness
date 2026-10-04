@@ -93,7 +93,7 @@ func TestEmbedderTools(t *testing.T) {
 			}
 			s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, callStep(tc.called),
 				harnesstest.Step{Name: "done", Match: harnesstest.LastToolResult(tc.called), Reply: harnesstest.Reply{Text: "done"}})
-			r, st, _ := codexRuntime(t, s, false, false, tools...)
+			r, st, _ := codexRuntime(t, s, false, false, "", tools...)
 			sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5", AllowedTools: tc.allowed})
 			if err != nil {
 				t.Fatal(err)
@@ -125,7 +125,7 @@ func TestEmbedderTools(t *testing.T) {
 func TestInterruptStopsARunningTool(t *testing.T) {
 	wait := newProbe("wait", true)
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, callStep("wait"))
-	r, st, _ := codexRuntime(t, s, false, false, wait)
+	r, st, _ := codexRuntime(t, s, false, false, "", wait)
 	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
 	if err != nil {
 		t.Fatal(err)

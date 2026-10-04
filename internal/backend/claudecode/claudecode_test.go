@@ -61,17 +61,17 @@ func fakeClaude(t *testing.T, mode string, env ...string) string {
 
 func claudeRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool) *harness.Runtime {
 	t.Helper()
-	return retryingRuntime(t, st, owner, mirror, 0)
+	return retryingRuntime(t, st, owner, mirror, 0, nil)
 }
 
-func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int, tools ...harness.Tool) *harness.Runtime {
+func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int, system []string, tools ...harness.Tool) *harness.Runtime {
 	t.Helper()
 	bin, err := fakeClaudeBin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: tools, Config: config.Config{PromptRetries: &retries,
-		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
+		AppendSystemPrompt: system, Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +148,16 @@ func TestClaudeCodeTurn(t *testing.T) {
 		allowed []string
 		want    []string
 		args    []string
+		system  []string
 	}{
 		{name: "a text turn records the assistant items", mode: "thinking",
 			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"}},
 		{name: "a tool use inside Claude Code appears as items", mode: "",
 			want: []string{"backend.state", "item.completed assistant Let me check that.", "item.completed assistant toolu_1",
 				"item.completed tool toolu_1 hi", "item.completed assistant Done — it printed hi.", "turn.ended completed"}},
+		{name: "append_system_prompt reaches the CLI as one value", mode: "thinking",
+			want:   []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "turn.ended completed"},
+			system: []string{"one", "two"}, args: []string{"--append-system-prompt", "one\n\ntwo"}},
 		{name: "a placeholder result of a queued notification does not end the turn", mode: "queued_empty_result",
 			want: []string{"backend.state", "item.completed assistant second", "turn.ended completed"}},
 		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
@@ -179,7 +183,7 @@ func TestClaudeCodeTurn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			argvLog := fakeClaude(t, tc.mode, tc.env...)
 			st := harness.NewMemStore()
-			r := claudeRuntime(t, st, nil, false)
+			r := retryingRuntime(t, st, nil, false, 0, tc.system)
 			defer closeRuntime(t, r)
 			s := createClaude(t, r, tc.allowed)
 			turnOf(t, s, text("a", "hi"))
@@ -193,6 +197,9 @@ func TestClaudeCodeTurn(t *testing.T) {
 			}
 			if tc.allowed == nil && slices.Contains(argv[0], "--tools") {
 				t.Errorf("argv = %q, want no --tools", argv[0])
+			}
+			if tc.system == nil && slices.Contains(argv[0], "--append-system-prompt") {
+				t.Errorf("argv = %q, want no --append-system-prompt", argv[0])
 			}
 		})
 	}
@@ -216,7 +223,7 @@ func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {
-			r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, lookup{})
+			r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, nil, lookup{})
 			defer closeRuntime(t, r)
 			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
 			if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -228,7 +235,7 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
 	for _, allowed := range [][]string{nil, {"Read"}} {
-		r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, newProbe("Read", false))
+		r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, nil, newProbe("Read", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -319,7 +326,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
 			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog)...)
 			st, echo := harness.NewMemStore(), newProbe("echo", false)
-			r := retryingRuntime(t, st, nil, false, 0, echo, newProbe("hidden", false))
+			r := retryingRuntime(t, st, nil, false, 0, nil, echo, newProbe("hidden", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
 			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
@@ -346,7 +353,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	mcpLog := filepath.Join(t.TempDir(), "mcp")
 	argvLog := fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
 	st, block := harness.NewMemStore(), newProbe("block", true)
-	r := retryingRuntime(t, st, nil, false, 0, block)
+	r := retryingRuntime(t, st, nil, false, 0, nil, block)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
@@ -497,7 +504,7 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 				t.Setenv("FAKE_CLAUDE_MODE", tc.next)
 				t.Setenv("FAKE_CLAUDE_MIRROR_HANG_AFTER", "")
 			}
-			r := retryingRuntime(t, st, nil, mirror, tc.retries)
+			r := retryingRuntime(t, st, nil, mirror, tc.retries, nil)
 			defer closeRuntime(t, r)
 			if tc.next == "" {
 				turnOf(t, createClaude(t, r, nil), text("a", "hi"))

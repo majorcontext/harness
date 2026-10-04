@@ -74,7 +74,7 @@ func wantEvents(t *testing.T, got []protocol.Event, want ...string) {
 func TestEventsStreamCodexDeltas(t *testing.T) {
 	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"hi": {Reasoning: []string{"plan"}}}},
 		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
-	r, _, _ := codexRuntime(t, s, false, false)
+	r, _, _ := codexRuntime(t, s, false, false, "")
 	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
 	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"hi": {Reasoning: []string{"plan"}}}},
 		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}},
 		harnesstest.Step{Name: "again", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}})
-	r, _, rec := codexRuntime(t, o, false, false)
+	r, _, rec := codexRuntime(t, o, false, false, "")
 	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
 	if err != nil {
 		t.Fatal(err)
