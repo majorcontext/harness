@@ -207,8 +207,9 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
 }
 
-// Update changes the settings of the session and returns its view. The next
-// turn uses them; a running turn keeps its own until a handoff resumes it.
+// Update changes the settings of the session and returns its view. A running
+// turn that owns no loop uses them from its next model call; a backend that
+// owns its loop uses them from its next run.
 // A model that no configured provider serves fails with ErrModelUnavailable.
 // A move to another provider fails with ErrInvalidRequest when either
 // backend owns its context.

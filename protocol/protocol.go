@@ -274,8 +274,8 @@ type Model struct {
 	ContextWindow int `json:"context_window"`
 }
 
-// SettingsPatch changes each non-nil setting of a session. The next turn
-// uses the new settings; a running turn keeps its own.
+// SettingsPatch changes each non-nil setting of a session. A running turn
+// uses the new settings from its next model call.
 type SettingsPatch struct {
 	Model       *string `json:"model,omitempty"`
 	Effort      *string `json:"effort,omitempty"`

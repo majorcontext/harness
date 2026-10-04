@@ -44,9 +44,10 @@ func (r *recorder) Steer() ([]eventlog.Message, error) {
 	r.steer = r.steer[1:]
 	return in, nil
 }
-func (*recorder) State(string) ([]byte, error)   { return nil, nil }
-func (*recorder) SaveState(string, []byte) error { return nil }
-func (*recorder) Compacted(string) error         { return nil }
+func (*recorder) Settings() (string, eventlog.Settings) { return "", eventlog.Settings{} }
+func (*recorder) State(string) ([]byte, error)          { return nil, nil }
+func (*recorder) SaveState(string, []byte) error        { return nil }
+func (*recorder) Compacted(string) error                { return nil }
 func (r *recorder) Status(f protocol.StatusFrame) {
 	r.statuses = append(r.statuses, string(f.Status))
 	if f.Status == protocol.StatusRetrying {

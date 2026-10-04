@@ -151,6 +151,9 @@ type Turn interface {
 	Sink
 	Started() string
 	Status(f protocol.StatusFrame)
+	// Settings returns the model and the settings that the session holds
+	// now, or "" when the turn does not run.
+	Settings() (string, eventlog.Settings)
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
@@ -191,6 +194,9 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 	for {
 		if step.Err() != nil {
 			return context.Cause(step)
+		}
+		if m, set := to.Settings(); m != "" {
+			req.Model, req.Settings = m, set
 		}
 		s, call := &sink{Turn: to}, req
 		runTool := describe(step, &call, tools, src, caps.OwnsLoop)
