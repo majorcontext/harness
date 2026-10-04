@@ -153,7 +153,8 @@ func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protoc
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
 	// Deliver returns the receiver's head on success and on a seq mismatch;
-	// the sender resends from Head+1. ErrStaleEpoch fires Ownership.Lost.
+	// the sender resends from Head+1. ErrStaleEpoch or ErrConflict stops the
+	// session and releases its Ownership.
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
 
@@ -520,7 +521,8 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - Only SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. A stale-epoch rejection fires `Ownership.Lost`. `harness.ApplySync` implements these receiver rules over any `Store`.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
+- The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch) and `ErrConflict` (different bytes at a seq) are final: a resend cannot change them. Either one stops the session with no further append and releases its `Ownership`. `Session.Release` then returns the `ErrConflict` rejection, and `ErrSessionNotOwned` after a stale epoch. Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, and its string command ID stays the workflow token.
 
 ### Errors
@@ -888,7 +890,7 @@ Boxes has its own re-architecture ("Boxes architecture") built on this one. The 
 | Durable head per session | `protocol.Session.HeadSeq` from `Session.View()` or `View.Session()` (Apply runs after a durable append) | 2 |
 | Open after a forced stop | the `crashed` cause | 2 |
 | `Models()` with no sessions | `New` does no I/O | 2 |
-| External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` fires `Lost` | 2 |
+| External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` stops the session and releases its `Ownership` | 2 |
 
 Combined sequence:
 

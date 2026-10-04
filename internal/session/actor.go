@@ -19,7 +19,8 @@ import (
 )
 
 var (
-	// ErrConflict reports an append whose expected seq is not the log head.
+	// ErrConflict reports an append whose expected seq is not the log head,
+	// or a SyncBatch whose records differ from the records of the receiver.
 	ErrConflict = errors.New("harness: append conflict")
 	// ErrNotFound reports a session with an empty log.
 	ErrNotFound = errors.New("harness: session not found")

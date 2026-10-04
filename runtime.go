@@ -644,11 +644,7 @@ type storeLog struct {
 func (l storeLog) Head(ctx context.Context) (uint64, error) { return l.st.Head(ctx, l.id) }
 
 func (l storeLog) Append(ctx context.Context, expectedSeq uint64, records ...[]byte) error {
-	err := l.st.Append(ctx, l.id, expectedSeq, records...)
-	if errors.Is(err, ErrConflict) {
-		return fmt.Errorf("%w: %w", session.ErrConflict, err)
-	}
-	return err
+	return l.st.Append(ctx, l.id, expectedSeq, records...)
 }
 
 func (l storeLog) Read(ctx context.Context, afterSeq uint64, limit int) ([]eventlog.Record, error) {

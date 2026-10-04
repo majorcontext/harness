@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/majorcontext/harness/internal/session"
 )
 
 // Store holds each session as an append-only log of opaque records.
@@ -32,8 +34,9 @@ type Record struct {
 	Data []byte
 }
 
-// ErrConflict reports an Append whose expectedSeq is not the session head.
-var ErrConflict = errors.New("harness: append conflict")
+// ErrConflict reports an Append whose expectedSeq is not the session head,
+// or a SyncBatch whose records differ from the records of the receiver.
+var ErrConflict = session.ErrConflict
 
 func checkName(kind, name string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
