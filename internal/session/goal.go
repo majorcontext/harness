@@ -25,6 +25,9 @@ Do not add any other text, headings, markdown, or code fences.`
 
 const (
 	sourceGoal = "goal"
+	// The evaluator is a classifier: it never reasons, and it answers in one line.
+	evaluatorEffort    = "off"
+	evaluatorMaxTokens = 256
 	// goalRetry is the first wait of a paused goal. Each later pause before
 	// a verdict doubles it, up to goalRetryMax.
 	goalRetry    = 30 * time.Second
@@ -119,10 +122,9 @@ func (a *Actor) ClearGoal(ctx context.Context) error {
 			return
 		}
 		err := a.append(append(a.withdrawGoal(), eventlog.GoalChanged{State: eventlog.GoalCleared})...)
-		_, turning := a.state.Turn()
-		if r := a.run; err == nil && g.State == eventlog.GoalActive && r != nil && (r.judge || turning) {
+		if r := a.run; err == nil && g.State == eventlog.GoalActive && r != nil && r.kind != kindCompaction {
 			r.cancel(errGoalCleared)
-			r.waiters = append(r.waiters, reply)
+			r.waiters = append(r.waiters, replyAppend(reply))
 			return
 		}
 		if err == nil && a.run == nil {
@@ -179,15 +181,15 @@ func (a *Actor) settle(check bool) error {
 
 // judge runs the evaluator on the session history as the run of the actor.
 func (a *Actor) judge(g eventlog.Goal) {
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	r := &running{id: newID("goal"), ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, judge: true}
+	r := a.newRun(kindJudge, newID("goal"))
 	a.run = r
 	turnID := a.state.LastEnded().TurnID
 	text := "GOAL CONDITION:\n" + g.Condition + "\n\nCONVERSATION TRANSCRIPT:\n" + transcript(a.state.History())
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: r.id, Model: a.cfg.Evaluator, Instructions: evaluatorPrompt,
+		Settings: eventlog.Settings{Effort: evaluatorEffort}, MaxTokens: evaluatorMaxTokens,
 		History: []eventlog.Message{{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}}}
 	a.spawn(func() {
-		answer, err := turn.Ask(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		answer, err := turn.Ask(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.judged(r, turnID, answer, err)
 			reply(struct{}{}, nil)
@@ -206,26 +208,22 @@ func (a *Actor) judged(r *running, turnID, answer string, err error) {
 	stopped := context.Cause(r.ctx)
 	r.cancel(nil)
 	g, _ := a.state.Goal()
-	var aerr error
+	var appendErr error
 	if stopped == nil && len(a.releasing) == 0 && g.State == eventlog.GoalActive && g.Evaluated != turnID {
 		events := append(a.withdrawGoal(), verdict(turnID, g, answer)...)
 		if err != nil {
 			events = a.goalStop(err)
 		}
-		aerr = a.append(events...)
-		a.retryLater()
+		appendErr = a.append(events...)
 	}
-	for _, w := range r.waiters {
-		w(struct{}{}, aerr)
-	}
+	var next func() error
 	switch {
-	case len(a.releasing) > 0:
-		a.stop(nil)
 	case stopped != nil:
-		_ = a.next(true)
-	case aerr == nil:
-		_ = a.settle(true)
+		next = func() error { return a.next(true) }
+	case appendErr == nil:
+		next = func() error { return a.settle(true) }
 	}
+	a.finishRun(r, err, appendErr, next)
 }
 
 func verdict(turnID string, g eventlog.Goal, answer string) []eventlog.Event {
@@ -289,7 +287,7 @@ func transcript(h []eventlog.Message) string {
 		blocks = append(blocks, b.String())
 	}
 	slices.Reverse(blocks)
-	return strings.Join(blocks, "\n")
+	return strings.TrimSuffix(strings.Join(blocks, "\n"), "\n")
 }
 
 // goalStop returns the goal change after err ended a goal turn or its

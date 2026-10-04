@@ -68,23 +68,70 @@ type Usage struct {
 	CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
 }
 
-// Session is a view of one session at HeadSeq.
+// Context is the context gauge of a session: the prompt size of the newest
+// model call that measured one, and the window of its model. Zero means unknown.
+type Context struct {
+	Tokens int64 `json:"tokens"`
+	Window int64 `json:"window"`
+}
+
+// LastTurn is the outcome of the newest turn that ended. StopReason is a
+// stop reason of the turn.ended record, and Error carries its cause or message.
+type LastTurn struct {
+	TurnID     string `json:"turn_id"`
+	StopReason string `json:"stop_reason"`
+	Error      string `json:"error,omitempty"`
+}
+
+// SubscriptionUsage is the subscription limit snapshot that a provider
+// reported with the newest model call that carried one. Provider is claude
+// or codex, and CapturedAt is in Unix seconds.
+type SubscriptionUsage struct {
+	Provider   string                    `json:"provider"`
+	Plan       string                    `json:"plan"`
+	Windows    []SubscriptionUsageWindow `json:"windows"`
+	Overage    *SubscriptionOverage      `json:"overage,omitempty"`
+	CapturedAt int64                     `json:"captured_at"`
+}
+
+// SubscriptionUsageWindow is one rate-limit window of a SubscriptionUsage.
+type SubscriptionUsageWindow struct {
+	Key         string  `json:"key"`
+	Label       string  `json:"label"`
+	UsedPercent float64 `json:"used_percent"`
+	ResetsAt    int64   `json:"resets_at"`
+}
+
+// SubscriptionOverage is the pay-as-you-go state of a subscription.
+type SubscriptionOverage struct {
+	InUse    bool   `json:"in_use"`
+	Status   string `json:"status"`
+	ResetsAt int64  `json:"resets_at"`
+}
+
+// Session is a view of one session at HeadSeq. Usage sums every model and
+// summary call, but no goal evaluator call. SubscriptionUsage is null until a
+// call carries a snapshot.
 type Session struct {
-	ID          string    `json:"id"`
-	ParentID    string    `json:"parent_id,omitempty"`
-	Origin      string    `json:"origin"`
-	Model       string    `json:"model"`
-	Effort      string    `json:"effort,omitempty"`
-	ServiceTier string    `json:"service_tier,omitempty"`
-	Status      string    `json:"status"`
-	TurnID      string    `json:"turn_id,omitempty"`
-	Queued      []string  `json:"queued,omitempty"`
-	Goal        *GoalView `json:"goal,omitempty"`
-	Usage       Usage     `json:"usage"`
-	HeadSeq     uint64    `json:"head_seq"`
-	SyncedSeq   uint64    `json:"synced_seq"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                string             `json:"id"`
+	ParentID          string             `json:"parent_id,omitempty"`
+	Origin            string             `json:"origin"`
+	Model             string             `json:"model"`
+	Effort            string             `json:"effort,omitempty"`
+	ServiceTier       string             `json:"service_tier,omitempty"`
+	Status            string             `json:"status"`
+	TurnID            string             `json:"turn_id,omitempty"`
+	Queued            []string           `json:"queued,omitempty"`
+	Goal              *GoalView          `json:"goal,omitempty"`
+	Usage             Usage              `json:"usage"`
+	Context           Context            `json:"context"`
+	LastTurn          *LastTurn          `json:"last_turn,omitempty"`
+	CompactionCount   int                `json:"compaction_count,omitempty"`
+	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage"`
+	HeadSeq           uint64             `json:"head_seq"`
+	SyncedSeq         uint64             `json:"synced_seq"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
 // Goal is a condition that the session works toward, turn after turn,
@@ -142,6 +189,16 @@ type Interrupt struct {
 // newest compaction_keep_turns when KeepTurns is nil. KeepTurns is at least 1.
 type Compact struct {
 	KeepTurns *int `json:"keep_turns,omitempty"`
+}
+
+// Compacted is the result of a compaction. Folded is false when the session
+// had too few turns to fold, and then nothing else is set. A compaction by
+// the backend of the session has only ByBackend and Folded.
+type Compacted struct {
+	FromSeq   uint64 `json:"from_seq,omitempty"`
+	ToSeq     uint64 `json:"to_seq,omitempty"`
+	ByBackend bool   `json:"by_backend,omitempty"`
+	Folded    bool   `json:"folded"`
 }
 
 // Event is one durable record of a session log, or an ephemeral frame of a

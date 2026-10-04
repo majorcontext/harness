@@ -1,7 +1,10 @@
 package claudecode
 
 import (
+	"cmp"
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -25,6 +28,42 @@ type envelope struct {
 	Tools           *[]string             `json:"tools,omitempty"`
 	FilePath        string                `json:"filePath,omitempty"`
 	Entries         []json.RawMessage     `json:"entries,omitempty"`
+	RateLimitInfo   *rateLimitInfo        `json:"rate_limit_info,omitempty"`
+}
+
+// rateLimitInfo is the subscription limit signal of a rate_limit_event frame.
+type rateLimitInfo struct {
+	OverageStatus   string                     `json:"overageStatus,omitempty"`
+	OverageResetsAt int64                      `json:"overageResetsAt,omitempty"`
+	IsUsingOverage  bool                       `json:"isUsingOverage,omitempty"`
+	UnifiedWindows  map[string]rateLimitWindow `json:"unifiedWindows,omitempty"`
+}
+
+// rateLimitWindow is one window of a rate_limit_event, as a share of 0 to 1.
+type rateLimitWindow struct {
+	Utilization float64 `json:"utilization"`
+	ResetsAt    int64   `json:"resetsAt"`
+}
+
+// windowLabels name the windows that the CLI sends. Another key is its own label.
+var windowLabels = map[string]string{"five_hour": "5-hour", "seven_day": "Weekly"}
+
+// subscription maps the event to a snapshot of the claude lane. The event
+// has no plan, and the actor stamps the capture time. Windows are sorted by
+// key, so a snapshot is the same from one turn to the next.
+func (i *rateLimitInfo) subscription() *eventlog.SubscriptionUsage {
+	if i == nil {
+		return nil
+	}
+	u := &eventlog.SubscriptionUsage{Provider: "claude", Windows: []eventlog.SubscriptionUsageWindow{}}
+	for _, k := range slices.Sorted(maps.Keys(i.UnifiedWindows)) {
+		w := i.UnifiedWindows[k]
+		u.Windows = append(u.Windows, eventlog.SubscriptionUsageWindow{Key: k, Label: cmp.Or(windowLabels[k], k), UsedPercent: w.Utilization * 100, ResetsAt: w.ResetsAt})
+	}
+	if i.IsUsingOverage || i.OverageStatus != "" {
+		u.Overage = &eventlog.SubscriptionOverage{InUse: i.IsUsingOverage, Status: i.OverageStatus, ResetsAt: i.OverageResetsAt}
+	}
+	return u
 }
 
 type modelUsage struct {

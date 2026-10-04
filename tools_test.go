@@ -183,8 +183,8 @@ func TestHandoffLetsARunningToolFinish(t *testing.T) {
 			}
 		}
 		h := next.req.History
-		if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || h[len(h)-2].Parts[0].CallID != "c1" {
-			t.Fatalf("resumed Request = %+v, want turn %s resumed with the result of c1", next.req, run.req.TurnID)
+		if next.req.TurnID != run.req.TurnID || h[len(h)-2].Parts[0].CallID != "c1" {
+			t.Fatalf("resumed Request = %+v, want turn %s again with the result of c1", next.req, run.req.TurnID)
 		}
 		next.emit(say("rest"))
 		next.end()
@@ -195,5 +195,35 @@ func TestHandoffLetsARunningToolFinish(t *testing.T) {
 			t.Errorf("tool runs = %q, want c1 once", got)
 		}
 		closeRuntime(t, r2)
+	})
+}
+
+func TestSteerInputJoinsANativeTurnAtTheNextItemBoundary(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, f, bash := harness.NewMemStore(), newFake(), newProbe("bash", true)
+		f.ownsLoop = false
+		r, err := harness.NewWithBackend(harness.Options{Store: st, Tools: []harness.Tool{bash}}, f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := create(t, r)
+		submit(t, s, text("a", "hi"))
+		run := <-f.runs
+		run.emit(callTool("c1"))
+		run.end()
+		<-bash.started
+		steer := text("s", "now")
+		steer.Delivery = protocol.DeliverySteer
+		submit(t, s, steer)
+		close(bash.release)
+		next := <-f.runs
+		if h := next.req.History; len(h) < 2 || h[len(h)-2].Parts[0].CallID != "c1" || h[len(h)-1].Role != "user" || h[len(h)-1].Parts[0].Text != "OPERATOR MESSAGES (address these, then continue the task):\n1. now\n" {
+			t.Fatalf("history of the next model call = %+v, want the result of c1, then the steer input", h)
+		}
+		next.emit(say("done"))
+		next.end()
+		wantLog(t, st, 4, "item.completed assistant c1", "input.admitted s", "item.completed tool c1 bash ran {}",
+			"input.promoted s", "item.completed assistant done", "turn.ended completed")
+		closeRuntime(t, r)
 	})
 }

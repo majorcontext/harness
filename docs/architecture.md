@@ -140,7 +140,7 @@ func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Re
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
-func (s *Session) Compact(ctx context.Context, req protocol.Compact) error
+func (s *Session) Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
 func (s *Session) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (s *Session) Release(ctx context.Context) error // hand off, flush Sync, release ownership
 
@@ -262,17 +262,17 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |
 | `turn.suspended` | `turn_id`, `cause` |
 | `turn.resumed` | `turn_id`, `count` |
-| `turn.ended` | `turn_id`, `stop_reason`, `error?`, `usage` |
+| `turn.ended` | `turn_id`, `stop_reason`, `error?` |
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
 | `goal.set` | `condition`, `max_turns`, `turns?` |
 | `goal.evaluated` | `turn_id`, `verdict`, `guidance?` |
 | `goal.changed` | `state`, `reason?`, `retry_at?` |
-| `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend` |
+| `compaction.applied` | `from_seq`, `to_seq`, `summary`, `by_backend`, `usage?` |
 | `child.spawned` | `child_id`, `agent?` |
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
 | `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
-| `context.measured` | `tokens`, `window`, `source` |
+| `context.measured` | `tokens`, `window`, `source`, `usage?`, `subscription_usage?` |
 | `backend.state` | `backend`, `blob_key` |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
 
@@ -285,6 +285,8 @@ func (s *State) Apply(r Record) error
 ```
 
 `Apply` is the only code that changes durable state. Live code appends, then applies the same record. Replay applies the whole log from seq 1. `State.History` holds the summary of the newest compaction and the messages after it, so the model sees the history from the newest compaction on. There is no other fold. The summary for `GET /sessions` is `State.Summary()`.
+
+Usage is part of the fold. Each model call that measures anything appends one `context.measured` record with its `usage`, its context reading, and the `subscription_usage` that the provider reported with it. A summary call adds its `usage` to the `compaction.applied` record that it produces. A summary that fails appends a `context.measured` record with its `usage` alone. A goal evaluator call adds none, as in the engine. `State.Usage()` sums both, so a handoff, a crash, and a restart keep it. A record with no prompt tokens changes no context reading, and the newest `subscription_usage` is the one that the view shows. A backend that reports usage once for a turn, as Claude Code does in its `result` frame, records it once, with the subscription snapshot that its `rate_limit_event` frame reported. The actor stamps `captured_at` of a snapshot that has none.
 
 ### Invariants enforced at append
 
@@ -343,7 +345,7 @@ Lifecycle:
 - `session.Create` and `session.Open` append and replay, but start no goroutine. They record the first turn, the resumed turn, or the next queued input. `Actor.Run` then starts the actor goroutine, the `Sync` sender, and that run. The runtime publishes the session before it calls `Run`, so a tool of the first run, such as `task` or `goal`, finds its own session.
 - When the actor stops, for any cause, it cancels its run, refuses every later command with `ErrNotOwned`, and waits until each turn, compaction, and evaluator goroutine has exited. Only then does it wait for `Sync`, release its `Ownership`, and close `Done`. A next owner therefore never runs beside a run of the earlier actor, such as an external harness in its grace after SIGINT.
 
-Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, head seq) and whether the actor stopped. At parity with the engine view, it also reports the context gauge, the last turn, and the subscription usage (finding F02).
+Reads use `atomic.Pointer[View]`. A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq) and whether the actor stopped. The gauge window is the window of the session model, or the window of the newest reading when the model reports none; `OpenView` has no backend and reads the window of the model from `modelmeta`.
 
 ### Ownership
 
@@ -383,6 +385,17 @@ Session status derives from the turn and the open requests:
 
 `retrying` is not a session status. A turn that waits for backoff sends an ephemeral `status` frame with `retrying`, `attempt`, and `next_at`, and the session stays `running`.
 
+The actor has one run at a time. A run is a turn, a compaction, or a goal evaluation, and all three end through one path that answers the waiters of the run and then starts the next work. Status derives from the turn alone, so `idle` also holds while a compaction or an evaluation runs, and `running` always has a `turn_id`. A command acts on each kind of run like this:
+
+| Command | Turn | Compaction | Evaluation |
+| --- | --- | --- | --- |
+| `Submit` | A `steer` input joins at the next item boundary; any other input waits | Waits | Waits |
+| `Interrupt` | Stops the turn | Stops it and appends nothing | Stops nothing |
+| `Compact` | `session_busy` | `session_busy` | `session_busy` |
+| `ClearGoal` | Stops the turn with `goal_cleared` while the goal is active | The compaction continues | Stops it with `goal_cleared` |
+| `Release` | Hands off the turn | Stops it and appends nothing | Stops it and appends nothing |
+| Typed control command | Refused unless `available_during_task` | Same | Same |
+
 Turn:
 
 ```
@@ -400,6 +413,8 @@ A turn ends early for one of five causes. A live owner carries the first three w
 | `provider_exhausted` | A usage limit of the provider: a spent quota, credit balance, or spend cap | Append `turn.ended{failed, provider_exhausted}`; keep the partial; queued inputs wait for the next input |
 | `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again. The session then starts the next queued input, or waits for input when none is queued. |
 
+After any other failed turn, the next queued input runs, as after a completed turn. Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule: it starts the next queued input when no turn is open, except after a turn that ended `provider_exhausted`.
+
 No tool call is ever re-run after a stop. This matches Codex, Claude Code, opencode, pi, and fx. The log stays strictly append-only, and a client hides output by cause if it wants to.
 
 Input:
@@ -409,7 +424,7 @@ admitted ─► promoted   (queue: next turn; steer: next item boundary)
 admitted ─► withdrawn
 ```
 
-A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
+A `steer` input that joins a running turn reaches the model as one user message, as the engine writes queued prompts that it injects after a tool call: `OPERATOR MESSAGES (address these, then continue the task):` and a numbered list of the inputs that join together. A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running. A `steer` input on an idle session starts a turn.
 
 Goal:
 
@@ -425,7 +440,7 @@ Goals follow Claude Code `/goal`. There is no deferred goal and no parked goal.
 - `SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated.
 - A new `SetGoal` replaces the goal and resets its turn count. `SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`.
 - After each turn that completes or is interrupted, the evaluator runs as the run of the actor, as a compaction does. It reads the condition and the history, and returns `met`, `not_met` with guidance, or `impossible`. Guidance is an input with `source: goal`. `met` yields `achieved`, and `impossible` yields `failed`. The evaluator skips leading markdown marks. A reply with no verdict is `not_met`, and the reply is the guidance.
-- The evaluator is `goal_evaluator_model`, resolved through `aliases`. `SetGoal` without it is an invalid request. Its prompt copies the engine prompt, with a third form for `impossible`.
+- The evaluator is `goal_evaluator_model`, resolved through `aliases`. Its request pins effort `off` and a 256-token response cap, as the engine does, and a summary call caps its response at 1024 tokens. `SetGoal` without it is an invalid request. Its prompt copies the engine prompt, with a third form for `impossible`.
 - A turn or an evaluation that fails on a retryable error or a usage limit yields `paused` with `retry_at`. The wait starts at 30 s and doubles with each pause before the next verdict, up to 30 min. At `retry_at`, the goal becomes `active` and judges the last turn again after an evaluator error, or admits an input that continues the goal. Any input resumes the goal at once. An error the user must fix yields `failed`.
 - `max_turns` bounds goal turns; 0 is unlimited. Reaching it yields `exhausted`. `goal.set` carries `turns`, the count that the goal starts at: 0 for a new goal, and the current count for an adjust.
 - With `goal_evaluator_model`, the runtime adds the `goal` tool to each session, as the engine does. `status` reports whether a goal is active or paused and its condition. `set` calls `StartGoal`: `SetGoal` with no turn limit, which fails while a goal is active or paused. `StartGoal` admits the condition as an input with `source: goal` even while a turn runs, and a new goal judges no turn while that input waits. So the turn that calls `set` is not judged; the condition runs as a turn of its own after it, as the engine posts the condition after the turn ends. `adjust` calls `AdjustGoal`: it replaces the condition of the active or paused goal, keeps `max_turns` and the turn count, and does nothing for the same condition. So the model cannot extend its own turn limit. There is no `clear` action; clearing stays with the operator. The tool copies the engine description and error wording. A child session has no `goal` tool: an engine child had the tool, but no goal of a child ever ran.
@@ -449,11 +464,11 @@ Compaction runs as the run of the actor, never beside a turn. It copies the engi
 - `to_seq` is the seq before the first kept message. The `input.admitted` record of a kept or queued input can have a lower seq, so a reader that hides `from_seq` through `to_seq` keeps each `input.admitted` record.
 - A backend without `OwnsContext` summarizes the folded messages with the session model and the engine compaction prompt. The actor appends `compaction.applied` with `by_backend: false`.
 - A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`.
-- `Compact()` fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
-- Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of its window. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
+- `Compact()` returns `protocol.Compacted`: the `from_seq` and `to_seq` of the new `compaction.applied`, `by_backend` for a backend with `OwnsContext`, and `folded`, which is false when the session has too few turns to fold and nothing else is set. It fails with `session_busy` while a turn runs or inputs wait. Its `keep_turns` replaces `compaction_keep_turns` for one call. A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`.
+- Before a queued input starts a turn, the actor compacts first when the newest `context.measured` reading is at or above `compaction_threshold` (default 0.8) of the window of the session model, or of the window of the reading when the model reports none. A setting at or below 0 is the default. A model call with no prompt tokens records no reading.
 - A failed summary appends nothing, and the turn starts on the full history. A handoff stops the summary and appends nothing.
 - A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history. When no turn can fold or the summary fails, the turn fails. With no new input in the turn, a second overflow fails it: the summary already holds every turn but the newest kept turns.
-- `Open` starts the next queued input when no turn is open. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
+- `Open` starts the next queued input when no turn is open, unless the last turn ended `provider_exhausted`. The next owner thus runs the input that waited for a stopped summary, and compacts first when the reading still passes the threshold.
 
 ### Children
 
@@ -462,7 +477,7 @@ A child is a session with `parent_id`. The `task` tool starts it in the backgrou
 - Spawn. The tool reads the agent profile (default `general-purpose`) and checks the tree limits. The parent actor appends `child.spawned`. Then the runtime creates the child in one append: `session.created` with `parent_id`, `agent`, the settings of the parent, the model of the parent unless the profile names a model, and the allowed tools of the parent narrowed by the profile; the task as an input with `source: parent`; and the `turn.started` of that input. The tool returns the child ID at once. A child that fails to start settles `failed` with no input, and the tool call fails.
 - Settle. When a turn of a child ends, the child reports to its parent: `done` for a completed turn, `failed` for a failed or crashed turn, `canceled` for a stopped turn. A completed turn with a queued input does not report; the next turn reports, as the engine runs a queued message before it notifies the parent. The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child, as the Task tool of Claude Code returns. The parent appends `child.settled`, with the child turn ID as `result_ref`, and the report as an input with `source: child`, in one append. An idle parent starts a turn with it; a busy parent queues it. A child settles once, so a later report changes nothing until a `send` of the `task` tool spawns it again. Each turn end of a child reports, and the runtime opens a parent that it does not run, so a later input to a settled child opens its parent again.
 - Crash and handoff. Each session follows its own rules. A child that a handoff suspended resumes when it opens. A crashed child turn ends `crashed` and settles `failed`. When a parent opens, it settles each unsettled child that has ended, because a crash can come between the `turn.ended` of the child and the `child.settled` of the parent. It settles a child with no log `failed` with no input, and opens each other child, which reports when its turn ends. No tool call runs again.
-- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned or opened: a child that a parent opens after a restart counts too, and so does a settled child that a `send` runs again. `max_tree_tokens` (default 0, no limit) is the token budget of a tree, as in the engine: a spawn fails once the root and its descendants have used that many tokens, input, output, and cache tokens summed. The sum reads the usage of the ended turns in each log of the tree, so it holds across a restart. Each spawn replays every log of the tree, so its cost grows with the size of the tree logs; the engine kept a running sum in memory. The budget is opt-in, so this cost is accepted. A spawn past any limit fails the tool call. `HARNESS_MAX_TASK_DEPTH`, `HARNESS_MAX_CONCURRENT_TASKS`, and `HARNESS_MAX_TREE_TOKENS` set the keys through `ApplyEnv`.
+- Limits. One supervisor in the runtime holds `max_task_depth` (default 3) and `max_concurrent_tasks` (default 20) for each root. A negative value fails `Validate`. The depth comes from the `session.created` records of the ancestors. The count is the unsettled children of the tree that this runtime spawned or opened: a child that a parent opens after a restart counts too, and so does a settled child that a `send` runs again. `max_tree_tokens` (default 0, no limit) is the token budget of a tree, as in the engine: a spawn fails once the root and its descendants have used that many tokens, input, output, and cache tokens summed. The sum reads the usage that each log of the tree records, so it holds across a restart. Each spawn replays every log of the tree, so its cost grows with the size of the tree logs; the engine kept a running sum in memory. The budget is opt-in, so this cost is accepted. A spawn past any limit fails the tool call. `HARNESS_MAX_TASK_DEPTH`, `HARNESS_MAX_CONCURRENT_TASKS`, and `HARNESS_MAX_TREE_TOKENS` set the keys through `ApplyEnv`.
 - Actions. The `task` tool keeps the engine actions and wording. `action` defaults to `spawn`. `cancel`, `status`, `send`, and `log` take a `session_id` that the caller spawned, directly or through its own children; the tool walks the `session.created` records of the target to check it. `status` reads the log of the target: its status (`running` until its last turn ends, then its outcome), parent, depth, children, agent, final text, failure, and usage. `log` returns the newest `tail` messages (default 20, at most 100) as text entries, each cut at 2000 runes, newest first within 20000 runes. `send` admits the text as a steer input with `source: parent`, so a running child takes it at its next item boundary and an idle child starts a turn. When the parent has settled the child, the parent appends `child.spawned` again first, with the agent of the child, so the child reports the new turn. A parent that this runtime opens for the send settles or opens its unsettled children before the send reads them. Two windows remain: a crash between the `child.spawned` and the input repeats the earlier report, and a child turn that ends just before a send can settle after the send reads the parent, so the turn of that send does not report. `cancel` withdraws the queued inputs of the target and of each of its descendants and stops their turns, as the engine cancel drops the queue of each canceled session, so a queued `send` never runs. The report of the target reaches its parent. The queued `send` note keeps the engine hedge that an interrupt leaves a queued message undelivered.
 - Tree interrupt. `interrupt {tree}` stops the turn of the session, then withdraws the queued inputs and stops the turn of each descendant that this runtime runs (`Cancel`). Before it stops a session, the walk silences the children of that session, so a descendant that ends during the walk settles with no report input and no parent inside the tree starts a turn. The walk outlives the request context. A stopped descendant settles `canceled` with no report input. At the switch, the `contract_children` rows are the oracle; the cancel-tree row matches the engine for the queued send, which is dropped, and changes by design in one way: a later send is not refused.
 
@@ -484,7 +499,7 @@ POST   /sessions/{id}/inputs                  submit
 GET    /sessions/{id}/inputs                  queued inputs
 DELETE /sessions/{id}/inputs/{input}          withdraw
 POST   /sessions/{id}/interrupt               {turn_id?, tree?}
-POST   /sessions/{id}/compact
+POST   /sessions/{id}/compact                  {keep_turns?}; 200 with {from_seq, to_seq, by_backend, folded}
 PUT    /sessions/{id}/goal                    {condition, max_turns}; 200 with the view
 DELETE /sessions/{id}/goal                    204
 POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}
@@ -561,7 +576,7 @@ Each code except `internal` and `payload_too_large` is a sentinel error and a `p
 - A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`, "/<name> is not available in this client".
 - A control command that is not `available_during_task` while a run is on: `refused`, "/<name> cannot run while a turn is running; send it again after the turn ends".
 - Any other control command records `accepted`, runs after `Admit` returns as work that `Runtime.Close` waits for, and records one more status. After `Close` starts, such a command fails with `draining` and records nothing. The statuses: `succeeded` ("/<name> succeeded", with the JSON result up to 16 KiB), `failed` (the error text of a sentinel error, or "/<name> failed: internal error", also for a panic of the operation), `refused` (a `session_busy` error), or `interrupted` (the runtime stopped).
-- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `from_seq` and `to_seq` of the new `compaction.applied`, or `by_backend: true` for a backend with `OwnsContext`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
+- The operations are the Go API: `abort` is `Interrupt`, `compact` is `Compact`, `goal` is `SetGoal`, `goal-clear` is `ClearGoal`, `model`, `thinking`, and `tier` are `Update`, `status` is `View`, `queue` is the queued input IDs, and `processes` is `Processes().List()`. `/compact [keep_turns]` passes `keep_turns` to `Compact`. Its result is the `protocol.Compacted` of `Compact`. A compaction with no turns to fold fails with "/compact did nothing: the session does not have enough turns yet to fold".
 - `<name>` is the name or alias that the user typed. The command never becomes an input, so the model never sees it.
 - A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`.
 - `Open` records `interrupted` for each command that an earlier owner accepted and never finished: "harness restarted before /<name> finished; it will not run again". No command runs again.
@@ -588,7 +603,7 @@ type Capabilities struct {
 	OwnsLoop      bool     // backend runs tools and multi-step turns
 	OwnsContext   bool     // backend compacts its own context
 	OwnsMCP       bool     // backend connects Config.MCPServers itself on an unrestricted turn
-	Steering      bool     // accepts input mid-turn
+	Steering      bool     // a backend with OwnsLoop takes steer input mid-turn through Sink.Steer
 	ContextWindow int      // 0 means the backend reports it
 	Tools         []string // built-in tools of a delegated backend
 }
@@ -607,16 +622,32 @@ type Sink interface {
 
 The `Sink` method that opens a request is added before the phase 4 switch.
 
-- A model API backend runs one model call per `Run`. The loop runs the tools.
+The turn loop reports through one `Turn`, which the actor binds to the turn. No method takes a turn ID, and a call after the turn is no longer the run of the actor fails with `turn mismatch`:
+
+```go
+type Turn interface {
+	Sink
+	Started() string               // announces an item and returns its ID; the next Item records under it
+	Status(f protocol.StatusFrame) // ephemeral frame
+	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
+	Ended(err error)
+}
+
+func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits)
+```
+
+`Delta` ignores the backend `itemID`: one harness item can join several backend items, such as reasoning and text. The first delta of each model call calls `Started`, which gives the item a harness ID; the next `Item` records the message under it. An item that a failed call streamed gets no `Item`, and the next `Started` replaces it.
+
+- A model API backend runs one model call per `Run`. The loop runs the tools, then takes the queued steer inputs through `Sink.Steer`, appends them to the history, and calls the backend again. This item boundary comes after the tool results of each response, on a path that calls the backend again. A response that ends the turn at its `max_tokens` stop, or fails it, takes no steer input: that input waits and runs as the next turn. A queued input joins no running turn. Every model API backend steers, because the loop does it, not the backend.
 - A delegated backend (`claudecode`) runs the whole turn and reports items.
 - `AllowedTools` holds tool names in one namespace. For a model API backend, they are the embedder tools. For a delegated backend, they are its built-in tools from `Capabilities.Tools` and the embedder tools, and any other name fails `Create`. An embedder tool with the name of a built-in tool also fails `Create`.
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.
-- A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again with backoff, up to `prompt_retries` times, when the call has recorded no item. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
+- A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times, when the call has recorded no item. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
 - The stall watchdog ends a model call that reports nothing for `stream_idle_timeout_s` (default 300, as Codex). A delta, an item, and `Sink.Alive` each reset it. `modelapi` calls `Alive` for each provider event with no delta, such as a keep-alive or a tool argument that still streams. The stall is retryable. A compaction summary has the same watchdog and no retry. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
 - `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
 - Private backend state is one `backend.state` event plus a blob, one blob key for each owner. The Claude Code transcript mirror is that blob. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
-- `Telemetry` carries usage and the context reading. Cost and subscription quota are not built yet.
+- `Telemetry` carries the usage of one model call, its context reading, and the subscription snapshot that the provider reported with it. Cost is not built yet.
 
 ### Model API backend
 

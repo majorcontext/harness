@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/majorcontext/harness/internal/eventlog"
-	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
 )
 
@@ -31,9 +30,9 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 		ran bool
 	}
 	r, err := call(ctx, a, func(reply func(result, error)) {
-		done := func(_ struct{}, err error) {
+		done := func(runErr, appendErr error) {
 			c, _ := a.state.Compaction()
-			reply(result{c, true}, err)
+			reply(result{c, true}, errors.Join(runErr, appendErr))
 		}
 		owns := a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
 		switch {
@@ -48,7 +47,9 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 				reply(result{}, err)
 				return
 			}
-			a.run.done = func(_ struct{}, err error) { reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, err) }
+			a.run.waiters = append(a.run.waiters, func(runErr, appendErr error) {
+				reply(result{eventlog.CompactionApplied{ByBackend: true}, true}, errors.Join(runErr, appendErr))
+			})
 		case !a.compact(cmp.Or(keep, a.cfg.KeepTurns), done):
 			reply(result{}, nil)
 		}
@@ -60,28 +61,33 @@ func (a *Actor) Compact(ctx context.Context, keep int) (c eventlog.CompactionApp
 func (a *Actor) autoCompact() bool { return a.overThreshold() && a.compact(a.cfg.KeepTurns, nil) }
 
 // overThreshold reports whether the newest context reading passes
-// Config.Threshold of its window, for a backend that does not own its context.
+// Config.Threshold of the window of the session model, or of the window of
+// the reading when the model reports none, for a backend that does not own
+// its context.
 func (a *Actor) overThreshold() bool {
-	c := a.state.Context()
-	over := c.Window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(c.Window)
-	return over && !a.cfg.Backend.Capabilities(a.state.Model()).OwnsContext
+	c, caps := a.state.Context(), a.cfg.Backend.Capabilities(a.state.Model())
+	window := contextWindow(caps.ContextWindow, c)
+	return window > 0 && float64(c.Tokens) >= a.cfg.Threshold*float64(window) && !caps.OwnsContext
 }
 
 // compact runs a summary of the turns before the newest keep as the run of
-// the actor, and reports false when no turn can fold. done receives the outcome.
-func (a *Actor) compact(keep int, done func(struct{}, error)) bool {
+// the actor, and reports false when no turn can fold. done, when it is not
+// nil, receives the outcome.
+func (a *Actor) compact(keep int, done func(runErr, appendErr error)) bool {
 	id := newID("compaction")
 	req, c, ok := a.fold(id, keep)
 	if !ok {
 		return false
 	}
 	metas := a.retained()
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	r := &running{id: id, ctx: ctx, cancel: cancel, step: ctx, handoff: cancel, done: done}
+	r := a.newRun(kindCompaction, id)
+	if done != nil {
+		r.waiters = append(r.waiters, done)
+	}
 	a.run = r
 	a.spawn(func() {
-		summary, err := turn.Summarize(ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
-		c.Summary = a.indexed(summary, metas)
+		summary, usage, err := turn.Summarize(r.ctx, a.cfg.Backend, req, a.cfg.Limits.Idle)
+		c.Summary, c.Usage = a.indexed(summary, metas), usage
 		_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
 			a.compacted(r, c, err)
 			reply(struct{}{}, nil)
@@ -105,66 +111,32 @@ func (a *Actor) fold(id string, keep int) (turn.Request, eventlog.CompactionAppl
 	return req, c, true
 }
 
-// CompactTurn folds the turns before the newest Config.KeepTurns into a
-// summary while turnID runs, and returns the new history. ok is false when
-// no turn can fold. When ctx ends, it appends nothing.
-func (a *Actor) CompactTurn(ctx context.Context, turnID string) ([]eventlog.Message, bool, error) {
-	type folding struct {
-		req   turn.Request
-		c     eventlog.CompactionApplied
-		ok    bool
-		metas []toolresult.Meta
+// recordUsage records the usage of a model call that produced no other
+// record. A call with no usage records nothing.
+func (a *Actor) recordUsage(u eventlog.Usage) error {
+	if u == (eventlog.Usage{}) {
+		return nil
 	}
-	f, err := call(ctx, a, func(reply func(folding, error)) {
-		if r := a.run; r == nil || r.id != turnID {
-			reply(folding{}, ErrTurnMismatch)
-			return
-		}
-		req, c, ok := a.fold(turnID, a.cfg.KeepTurns)
-		reply(folding{req, c, ok, a.retained()}, nil)
-	})
-	if err != nil || !f.ok {
-		return nil, false, err
-	}
-	summary, err := turn.Summarize(ctx, a.cfg.Backend, f.req, a.cfg.Limits.Idle)
-	if err != nil {
-		return nil, false, err
-	}
-	f.c.Summary = a.indexed(summary, f.metas)
-	h, err := call(ctx, a, func(reply func([]eventlog.Message, error)) {
-		if r := a.run; r == nil || r.id != turnID || ctx.Err() != nil {
-			reply(nil, cmp.Or(context.Cause(ctx), ErrTurnMismatch))
-			return
-		}
-		err := a.append(f.c)
-		reply(a.state.History(), err)
-	})
-	return h, err == nil, err
+	return a.append(eventlog.ContextMeasured{Usage: u})
 }
 
 // compacted appends the summary of run r, then starts the next queued
-// input with no new compaction. A failed summary appends nothing.
-func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, err error) {
+// input with no new compaction. A failed summary appends only its usage.
+func (a *Actor) compacted(r *running, c eventlog.CompactionApplied, runErr error) {
 	if a.run != r {
 		return
 	}
 	a.run = nil
 	r.cancel(nil)
-	if len(a.releasing) > 0 {
-		err = ErrNotOwned
+	var appendErr error
+	switch {
+	case len(a.releasing) > 0:
+		runErr = ErrNotOwned
+	case runErr == nil:
+		appendErr = a.append(c)
 	}
-	if err == nil {
-		err = a.append(c)
+	if runErr != nil {
+		appendErr = a.recordUsage(c.Usage)
 	}
-	for _, w := range r.waiters {
-		w(struct{}{}, nil)
-	}
-	if r.done != nil {
-		r.done(struct{}{}, err)
-	}
-	if len(a.releasing) > 0 {
-		a.stop(nil)
-		return
-	}
-	_ = a.settle(false)
+	a.finishRun(r, runErr, appendErr, func() error { return a.settle(false) })
 }

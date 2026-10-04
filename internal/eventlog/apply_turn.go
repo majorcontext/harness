@@ -131,7 +131,6 @@ func (s *State) applyEnded(e TurnEnded) error {
 	}
 	s.turn = Turn{}
 	s.lastEnded = e
-	s.usage = s.usage.Add(e.Usage)
 	return nil
 }
 

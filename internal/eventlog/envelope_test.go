@@ -12,13 +12,22 @@ import (
 )
 
 func TestEnvelopeWireShape(t *testing.T) {
-	got, err := Envelope{Seq: 42, Time: t0, Event: TurnEnded{TurnID: "t1", StopReason: StopCompleted, Usage: Usage{InputTokens: 1, OutputTokens: 2}}}.Encode()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"t1","stop_reason":"completed","usage":{"input_tokens":1,"output_tokens":2}}}`
-	if string(got) != want {
-		t.Fatalf("Encode =\n%s\nwant\n%s", got, want)
+	for _, tc := range []struct {
+		event Event
+		want  string
+	}{
+		{TurnEnded{TurnID: "t1", StopReason: StopCompleted},
+			`{"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"turn.ended","d":{"turn_id":"t1","stop_reason":"completed"}}`},
+		{ContextMeasured{Tokens: 7, Window: 100, Source: "m", Usage: Usage{InputTokens: 1, OutputTokens: 2}},
+			`{"v":1,"seq":42,"t":"2026-10-02T12:00:00Z","k":"context.measured","d":{"tokens":7,"window":100,"source":"m","usage":{"input_tokens":1,"output_tokens":2}}}`},
+	} {
+		got, err := Envelope{Seq: 42, Time: t0, Event: tc.event}.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Fatalf("Encode =\n%s\nwant\n%s", got, tc.want)
+		}
 	}
 }
 
@@ -67,7 +76,10 @@ func everyKind() []Event {
 		call("t1", "i1", "c1"), ask("r1", "i1"),
 		RequestResolved{RequestID: "r1", Resolution: ResolutionAnswered, Answer: json.RawMessage(`"yes"`)},
 		ItemCompleted{ItemID: "i2", TurnID: "t1", Message: Message{Role: RoleAssistant, Parts: []Part{{Type: PartText, Text: "done"}}}},
-		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider"},
+		ContextMeasured{Tokens: 900, Window: 1000, Source: "provider", Usage: Usage{InputTokens: 10, OutputTokens: 2},
+			SubscriptionUsage: &SubscriptionUsage{Provider: "codex", Plan: "plus", CapturedAt: 5,
+				Windows: []SubscriptionUsageWindow{{Key: "primary", Label: "5-hour", UsedPercent: 12.5, ResetsAt: 9}},
+				Overage: &SubscriptionOverage{InUse: true, Status: "allowed", ResetsAt: 11}}},
 		BackendState{Backend: "codex", BlobKey: "b1"},
 		ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
 		suspend("t1", CauseHandoff), resume("t1", 1),

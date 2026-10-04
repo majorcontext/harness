@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -58,22 +57,4 @@ func (a *Actor) frame(kind string, data any) {
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	a.live.send(protocol.Event{Seq: a.View().Session.HeadSeq, Time: time.Now(), Kind: kind, Data: d, Ephemeral: true})
-}
-
-// Started announces a new item of turnID and returns its ID.
-func (a *Actor) Started(turnID string) string {
-	id := newID("item")
-	a.frame(protocol.KindItemStarted, protocol.ItemFrame{ItemID: id, TurnID: turnID})
-	return id
-}
-
-// Delta sends a piece of item itemID of turnID.
-func (a *Actor) Delta(turnID, itemID string, d turn.Delta) {
-	a.frame(protocol.KindItemDelta, protocol.ItemFrame{ItemID: itemID, TurnID: turnID, Type: d.Type, Text: d.Text})
-}
-
-// Status sends the status of turnID.
-func (a *Actor) Status(turnID string, f protocol.StatusFrame) {
-	f.TurnID = turnID
-	a.frame(protocol.KindStatus, f)
 }

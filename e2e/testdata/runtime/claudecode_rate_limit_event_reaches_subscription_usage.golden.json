@@ -1,0 +1,78 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Here is my answer."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 9,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "overage": {
+            "in_use": false,
+            "resets_at": 1789000000,
+            "status": "allowed"
+          },
+          "plan": "",
+          "provider": "claude",
+          "windows": [
+            {
+              "key": "five_hour",
+              "label": "5-hour",
+              "resets_at": 1788785267,
+              "used_percent": 2
+            },
+            {
+              "key": "seven_day",
+              "label": "Weekly",
+              "resets_at": 1789200000,
+              "used_percent": 13
+            }
+          ]
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 9,
+          "output_tokens": 4
+        }
+      }
+    }
+  }
+}

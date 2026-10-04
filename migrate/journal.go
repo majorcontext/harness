@@ -59,8 +59,10 @@ func readJournal(dir, id string, model message.ModelRef) (old, error) {
 	if s.TaskParentID() != "" {
 		o.end = childEnd(recs, history)
 	}
-	o.end.Usage = usage(s.Usage())
 	o.tail = children(recs)
+	if u := usage(s.Usage()); u != (eventlog.Usage{}) {
+		o.tail = append([]eventlog.Event{eventlog.ContextMeasured{Usage: u, Source: "migrated"}}, o.tail...)
+	}
 	retained, err := retainedResults(dir, id, recs, o.blobs)
 	if err != nil {
 		return old{}, err

@@ -70,7 +70,7 @@ var taskActionRows = []struct {
 	{name: "an unknown action names the actions", child: done, args: onChild("stop"),
 		want: `task: unknown action "stop" (want one of: spawn, cancel, status, send, log)`},
 	{name: "a spawn past max_tree_tokens is refused", child: done, cfg: config.Config{MaxTreeTokens: 10},
-		args: map[string]any{"prompt": "child work"}, want: "task: max_tree_tokens 10: this session tree has used 24 tokens"},
+		args: map[string]any{"prompt": "child work"}, want: "task: max_tree_tokens 10: this session tree has used 30 tokens"},
 }
 
 func TestTaskActions(t *testing.T) {

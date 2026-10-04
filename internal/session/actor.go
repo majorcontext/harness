@@ -167,7 +167,7 @@ func Create(ctx context.Context, cfg Config, c eventlog.SessionCreated, first *e
 		return nil, err
 	}
 	if first != nil {
-		a.start(turnID, []string{first.InputID}, 0)
+		a.start(turnID, []string{first.InputID})
 	}
 	return a, nil
 }
@@ -224,17 +224,25 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 	case ok && t.Suspended:
 		err = a.appendCtx(ctx, eventlog.TurnResumed{TurnID: t.ID, Count: t.Resumes + 1})
 		if err == nil {
-			a.start(t.ID, t.InputIDs, t.Resumes+1)
+			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff, eventlog.Usage{})
+		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff)
 		if err == nil {
 			err = a.settle(true)
 		}
-	default:
+	case !a.waitsForInput():
 		err = a.settle(true)
 	}
 	return a, err
+}
+
+// waitsForInput reports whether the last turn failed at a usage limit of
+// the provider. Its queued inputs then wait for the next input, live and
+// after a restart.
+func (a *Actor) waitsForInput() bool {
+	last := a.state.LastEnded()
+	return last.StopReason == eventlog.StopFailed && eventlog.Cause(last.Error) == eventlog.CauseProviderExhausted
 }
 
 // fence appends owner.acquired at the head. An append of an earlier owner
@@ -374,7 +382,8 @@ func (a *Actor) Done() <-chan struct{} { return a.done }
 func (a *Actor) View() *View { return a.view.Load() }
 
 func (a *Actor) publish(stopped bool) {
-	next := &View{Session: Describe(a.cfg.ID, a.state), Stopped: stopped, changed: make(chan struct{})}
+	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
+	next := &View{Session: Describe(a.cfg.ID, a.state, window), Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()
 	close(a.view.Swap(next).changed)

@@ -178,6 +178,10 @@
     "get_session.kid": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 4,
         "id": "ses:kid",
@@ -185,6 +189,7 @@
         "origin": "task",
         "parent_id": "ses:a",
         "status": "running",
+        "subscription_usage": null,
         "synced_seq": 0,
         "turn_id": "turn#1",
         "updated_at": "\u003ctime\u003e",
@@ -197,13 +202,23 @@
     "get_session.kid#2": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 7,
         "id": "ses:kid",
+        "last_turn": {
+          "error": "stopped",
+          "stop_reason": "interrupted",
+          "turn_id": "turn#1"
+        },
         "model": "anthropic/claude-fable-5",
         "origin": "task",
         "parent_id": "ses:a",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

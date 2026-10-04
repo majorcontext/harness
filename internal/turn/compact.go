@@ -27,37 +27,50 @@ Do not transcribe tool-call arguments or outputs verbatim; describe what happene
 // refuse a conversation that ends with an assistant message.
 const summaryInstruction = "Summarize the conversation above, following the system prompt's instructions."
 
+// summaryMaxTokens caps the response of a summary call: a concise summary,
+// not another turn.
+const summaryMaxTokens = 1024
+
 var errEmptySummary = errors.New("turn: the compaction summary is empty")
 
 // Summarize makes one model call, with no tools, that summarizes
-// req.History, and returns the summary after SummaryBanner. A positive idle
-// bounds the silence of the call, as Limits.Idle does.
-func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
-	req.Instructions = summaryPrompt
+// req.History, and returns the summary after SummaryBanner and the usage of
+// the call. A positive idle bounds the silence of the call, as Limits.Idle
+// does.
+func Summarize(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
+	req.Instructions, req.MaxTokens = summaryPrompt, summaryMaxTokens
 	req.History = append(slices.Clone(req.History), eventlog.Message{Role: eventlog.RoleUser,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: summaryInstruction}}})
-	text, err := Ask(ctx, b, req, idle)
+	text, usage, err := ask(ctx, b, req, idle)
 	if err != nil {
-		return "", err
+		return "", usage, err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", errEmptySummary
+		return "", usage, errEmptySummary
 	}
-	return SummaryBanner + text, nil
+	return SummaryBanner + text, usage, nil
 }
 
 // Ask makes one model call of req with no tools and returns its text.
 func Ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, error) {
+	text, _, err := ask(ctx, b, req, idle)
+	return text, err
+}
+
+func ask(ctx context.Context, b Backend, req Request, idle time.Duration) (string, eventlog.Usage, error) {
 	req.Input, req.Tools, req.Call, req.Steered = nil, nil, nil, nil
 	var a answer
 	if _, err := watch(ctx, b, req, &a, idle); err != nil {
-		return "", err
+		return "", a.usage, err
 	}
-	return a.text.String(), nil
+	return a.text.String(), a.usage, nil
 }
 
-// answer is the Sink of Ask. It keeps only the text.
-type answer struct{ text strings.Builder }
+// answer is the Sink of ask. It keeps the text and the usage.
+type answer struct {
+	text  strings.Builder
+	usage eventlog.Usage
+}
 
 func (a *answer) Item(m eventlog.Message) error {
 	for _, p := range m.Parts {
@@ -68,9 +81,10 @@ func (a *answer) Item(m eventlog.Message) error {
 	return nil
 }
 
+func (a *answer) Telemetry(t Telemetry) { a.usage = a.usage.Add(t.Usage) }
+
 func (*answer) Delta(string, Delta)                {}
 func (*answer) Alive()                             {}
-func (*answer) Telemetry(Telemetry)                {}
 func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
 func (*answer) State(string) ([]byte, error)       { return nil, nil }
 func (*answer) SaveState(string, []byte) error     { return nil }

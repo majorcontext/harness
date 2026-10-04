@@ -229,12 +229,21 @@
     "get_session.a": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 12,
         "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
         "model": "anthropic/claude-fable-5",
         "origin": "",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -246,13 +255,23 @@
     "get_session.kid": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 7,
         "id": "ses:kid",
+        "last_turn": {
+          "error": "stopped",
+          "stop_reason": "interrupted",
+          "turn_id": "turn#1"
+        },
         "model": "anthropic/claude-fable-5",
         "origin": "task",
         "parent_id": "ses:a",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -264,13 +283,22 @@
     "get_session.kid#2": {
       "status": 200,
       "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
         "created_at": "\u003ctime\u003e",
         "head_seq": 12,
         "id": "ses:kid",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#3"
+        },
         "model": "anthropic/claude-fable-5",
         "origin": "task",
         "parent_id": "ses:a",
         "status": "idle",
+        "subscription_usage": null,
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

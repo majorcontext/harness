@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
@@ -16,24 +17,6 @@ const (
 )
 
 var errStopTurn = errors.New("harness: turn stopped")
-
-// running is a turn. An interrupt or a lost ownership ends ctx, which stops
-// the running tools. A handoff ends only step: running tools finish.
-type running struct {
-	id       string
-	ctx      context.Context
-	cancel   context.CancelCauseFunc
-	step     context.Context
-	handoff  context.CancelCauseFunc
-	steering bool
-	ownsLoop bool
-	steered  chan struct{}
-	judge    bool
-	usage    eventlog.Usage
-	waiters  []func(struct{}, error)
-	// done receives the outcome of a Compact that this run serves.
-	done func(struct{}, error)
-}
 
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
@@ -78,7 +61,7 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: []string{next}})...); err != nil {
 			return 0, err
 		}
-		a.start(id, []string{next}, 0)
+		a.start(id, []string{next})
 		return seq, nil
 	}
 	if err := a.append(events...); err != nil {
@@ -102,14 +85,12 @@ func sameJSON(x, y any) bool {
 	return errx == nil && erry == nil && string(bx) == string(by)
 }
 
-func (a *Actor) start(id string, inputIDs []string, resumed int) {
-	ctx, cancel := context.WithCancelCause(a.cfg.Base)
-	step, handoff := context.WithCancelCause(ctx)
+func (a *Actor) start(id string, inputIDs []string) {
+	r := a.newRun(kindTurn, id)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
-		History: a.state.History(), Resumed: resumed, AllowedTools: a.state.AllowedTools()}
+		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
 	caps := a.cfg.Backend.Capabilities(req.Model)
-	r := &running{id: id, ctx: ctx, cancel: cancel, step: step, handoff: handoff,
-		steering: caps.Steering, ownsLoop: caps.OwnsLoop}
+	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
 		r.steered = make(chan struct{}, 1)
 		req.Steered = r.steered
@@ -119,25 +100,19 @@ func (a *Actor) start(id string, inputIDs []string, resumed int) {
 		req.Input = append(req.Input, eventlog.Message{Role: eventlog.RoleUser, Parts: ev.Parts})
 	}
 	a.run = r
-	tools, src := a.turnTools(id, r.ownsLoop)
+	tools, src := a.turnTools(r)
+	t := &turnRun{a: a, r: r}
 	a.spawn(func() {
-		a.awaitWarm(ctx)
-		turn.Run(ctx, step, a.cfg.Backend, req, tools, src, a, a.cfg.Limits)
+		a.awaitWarm(r.ctx)
+		turn.Run(r.ctx, r.step, a.cfg.Backend, req, tools, src, t, a.cfg.Limits)
 	})
 }
 
-// Item records one completed message of turnID under itemID, or under a new
-// ID when itemID is empty. After a stop or a handoff starts, it admits no
-// new tool call, except from a backend that owns the loop: that backend has
-// already run the call.
-func (a *Actor) Item(turnID, itemID string, m eventlog.Message) error {
-	_, err := call(context.Background(), a, func(reply func(struct{}, error)) { reply(struct{}{}, a.item(turnID, itemID, m)) })
-	return err
-}
-
-func (a *Actor) item(turnID, itemID string, m eventlog.Message) error {
-	r := a.run
-	if r == nil || r.id != turnID {
+// item records m under itemID, or under a new ID when itemID is empty. After
+// a stop or a handoff starts, it admits no new tool call, except from a
+// backend that owns the loop: that backend has already run the call.
+func (a *Actor) item(r *running, itemID string, m eventlog.Message) error {
+	if a.run != r {
 		return ErrTurnMismatch
 	}
 	if err := context.Cause(r.step); err != nil && !r.ownsLoop && slices.ContainsFunc(m.Parts, isCall) {
@@ -146,43 +121,43 @@ func (a *Actor) item(turnID, itemID string, m eventlog.Message) error {
 	if itemID == "" {
 		itemID = newID("item")
 	}
-	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: turnID, Message: m})
+	return a.append(eventlog.ItemCompleted{ItemID: itemID, TurnID: r.id, Message: m})
 }
 
-// Telemetry adds the usage in t to turnID and records its context reading.
-func (a *Actor) Telemetry(turnID string, t turn.Telemetry) {
-	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-		var err error
-		if r := a.run; r != nil && r.id == turnID {
-			r.usage = r.usage.Add(t.Usage)
-			if t.Context != (eventlog.ContextMeasured{}) {
-				err = a.append(t.Context)
-			}
-		}
-		reply(struct{}{}, err)
-	})
+// telemetry records what a model call of r measured. A call that measured
+// nothing records nothing.
+func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
+	if a.run != r {
+		return nil
+	}
+	m := t.Context
+	m.Usage, m.SubscriptionUsage = t.Usage, t.SubscriptionUsage
+	if sub := m.SubscriptionUsage; sub != nil && sub.CapturedAt == 0 {
+		stamped := *sub
+		stamped.CapturedAt = time.Now().Unix()
+		m.SubscriptionUsage = &stamped
+	}
+	if m == (eventlog.ContextMeasured{}) {
+		return nil
+	}
+	return a.append(m)
 }
 
-// Steer promotes the queued steer inputs into turnID and returns them. A
-// backend without Steering, or a turn that is stopping, gets none.
-func (a *Actor) Steer(turnID string) ([]eventlog.Message, error) {
-	return call(context.Background(), a, func(reply func([]eventlog.Message, error)) { reply(a.steer(turnID)) })
-}
-
-func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
-	r := a.run
-	if r == nil || r.id != turnID {
+// steer promotes the queued steer inputs into r and returns them. A turn
+// that is stopping, or that takes no steer input, gets none.
+func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
+	if a.run != r {
 		return nil, ErrTurnMismatch
 	}
 	if !r.steering || r.step.Err() != nil {
 		return nil, nil
 	}
 	var events []eventlog.Event
-	var steered []eventlog.Message
+	var steered [][]eventlog.Part
 	for _, in := range a.state.Queue() {
 		if in.Delivery == eventlog.DeliverySteer {
-			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: turnID})
-			steered = append(steered, eventlog.Message{Role: eventlog.RoleUser, Parts: in.Parts})
+			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id})
+			steered = append(steered, in.Parts)
 		}
 	}
 	if len(events) == 0 {
@@ -191,25 +166,18 @@ func (a *Actor) steer(turnID string) ([]eventlog.Message, error) {
 	if err := a.append(events...); err != nil {
 		return nil, err
 	}
-	return steered, nil
+	return []eventlog.Message{eventlog.SteerMessage(steered)}, nil
 }
 
 func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }
 
-// Ended ends turnID by the cause of its stop, then starts the next queued
-// input after a normal end or a user interrupt.
-func (a *Actor) Ended(turnID string, runErr error) {
-	_, _ = call(context.Background(), a, func(reply func(struct{}, error)) {
-		a.ended(turnID, runErr)
-		reply(struct{}{}, nil)
-	})
-}
-
-func (a *Actor) ended(turnID string, runErr error) {
-	r := a.run
-	if r == nil || r.id != turnID {
+// ended ends r by the cause of its stop, then starts the next queued input
+// after a normal end or a user interrupt.
+func (a *Actor) ended(r *running, runErr error) {
+	if a.run != r {
 		return
 	}
+	turnID := r.id
 	a.run = nil
 	cause := context.Cause(r.step)
 	r.cancel(nil)
@@ -217,35 +185,27 @@ func (a *Actor) ended(turnID string, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted)
 		next = true
 	case errors.Is(cause, errGoalCleared):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted, r.usage)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted)
 		next = true
 	case errors.Is(runErr, turn.ErrExhausted):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, r.usage, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, a.goalStop(runErr)...)
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, r.usage, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, a.goalStop(runErr)...)
+		next = true
 	}
-	a.retryLater()
-	for _, w := range r.waiters {
-		w(struct{}{}, err)
-	}
-	if r.done != nil {
-		r.done(struct{}{}, errors.Join(runErr, err))
-	}
-	if len(a.releasing) > 0 {
-		a.stop(err)
-		return
-	}
+	var after func() error
 	if next && err == nil {
-		_ = a.settle(true)
+		after = func() error { return a.settle(true) }
 	}
+	a.finishRun(r, runErr, err, after)
 }
 
 // next starts the next queued input. With check, a compaction runs first
@@ -259,12 +219,12 @@ func (a *Actor) next(check bool) error {
 	if err := a.append(eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}}); err != nil {
 		return err
 	}
-	a.start(id, []string{q[0].InputID}, 0)
+	a.start(id, []string{q[0].InputID})
 	return nil
 }
 
-func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, u eventlog.Usage, after ...eventlog.Event) error {
-	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause, Usage: u})
+func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
+	events := append(a.closeOpen(turnID, text), eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
 	if err := a.appendCtx(ctx, append(events, after...)...); err != nil {
 		return err
 	}
@@ -327,7 +287,7 @@ func (a *Actor) Cancel(ctx context.Context) error {
 
 func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 	r := a.run
-	if r != nil && r.judge {
+	if r != nil && r.kind == kindJudge {
 		r = nil
 	}
 	switch {
@@ -337,7 +297,7 @@ func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
 		r.cancel(errStopTurn)
-		r.waiters = append(r.waiters, reply)
+		r.waiters = append(r.waiters, replyAppend(reply))
 	}
 }
 

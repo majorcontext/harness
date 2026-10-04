@@ -82,8 +82,8 @@ func TestHandoffSuspendsAtAnItemBoundary(t *testing.T) {
 				r2 := runtime(t, openStore(), f2)
 				open(t, r2)
 				next := <-f2.runs
-				if next.req.TurnID != run.req.TurnID || next.req.Resumed != 1 || next.req.Input[0].Parts[0].Text != "hi" {
-					t.Fatalf("resumed Request = %+v, want turn %s resumed once", next.req, run.req.TurnID)
+				if next.req.TurnID != run.req.TurnID || next.req.Input[0].Parts[0].Text != "hi" {
+					t.Fatalf("resumed Request = %+v, want turn %s again", next.req, run.req.TurnID)
 				}
 				next.emit(say("rest"))
 				next.end()
@@ -324,7 +324,7 @@ func TestSteerInput(t *testing.T) {
 		want           []string
 	}{
 		{"a steering backend folds the input in at the next item", true, false,
-			[]string{"input.promoted s", "item.completed assistant steered: now", "turn.ended completed"}},
+			[]string{"input.promoted s", "item.completed assistant steered: OPERATOR MESSAGES (address these, then continue the task):\n1. now", "turn.ended completed"}},
 		{"another backend runs the input as the next turn", false, false,
 			[]string{"turn.ended completed", "turn.started s", "turn.ended completed"}},
 		{"a steering backend that ends without taking the input runs it as the next turn", true, true,

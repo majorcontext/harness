@@ -182,7 +182,9 @@ type State struct {
 	goal       Goal
 	usage      Usage
 	context    ContextMeasured
+	subscribed *SubscriptionUsage
 	compaction CompactionApplied
+	compacted  int
 	children   map[string]Outcome
 	backends   map[string]string
 	retained   []ToolResultRetained
@@ -294,11 +296,18 @@ func (s *State) Unsettled() []string {
 // Children returns every spawned child, settled or not, sorted.
 func (s *State) Children() []string { return slices.Sorted(maps.Keys(s.children)) }
 
-// Usage returns the token usage summed over every ended turn.
+// Usage returns the token usage summed over every recorded model call and
+// every summary call. A goal evaluator call records none.
 func (s *State) Usage() Usage { return s.usage }
 
-// Context returns the newest context measurement.
+// Context returns the newest context measurement, with no usage.
 func (s *State) Context() ContextMeasured { return s.context }
+
+// SubscriptionUsage returns the newest subscription snapshot, or nil.
+func (s *State) SubscriptionUsage() *SubscriptionUsage { return s.subscribed }
+
+// CompactionCount returns the number of compactions, by the harness or by a backend.
+func (s *State) CompactionCount() int { return s.compacted }
 
 // Compaction returns the newest compaction. Replay of history starts there.
 func (s *State) Compaction() (CompactionApplied, bool) {
@@ -400,7 +409,7 @@ func (s *State) step(env Envelope) error {
 	case CommandRecorded:
 		return s.applyCommand(e, env.Seq)
 	case ContextMeasured:
-		s.context = e
+		s.applyMeasured(e)
 		return nil
 	case BackendState:
 		return s.applyBackendState(e)

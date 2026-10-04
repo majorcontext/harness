@@ -21,7 +21,7 @@ func (a *Actor) warm() {
 	}
 	req := turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(a.state.Agent()),
 		History: a.state.History(), AllowedTools: a.state.AllowedTools()}
-	tools, src := a.turnTools("", a.cfg.Backend.Capabilities(req.Model).OwnsLoop)
+	tools, src := a.turnTools(&running{ownsLoop: a.cfg.Backend.Capabilities(req.Model).OwnsLoop})
 	warming := make(chan struct{})
 	a.warming = warming
 	a.cfg.Go(func() {

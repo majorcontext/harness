@@ -41,7 +41,8 @@ type Capabilities struct {
 	OwnsContext bool
 	// OwnsMCP reports a backend that connects the configured MCP servers
 	// itself on a turn with no tool restriction.
-	OwnsMCP       bool
+	OwnsMCP bool
+	// Steering is a backend that owns the loop and calls Sink.Steer.
 	Steering      bool
 	ContextWindow int
 	// Tools names the built-in tools of a backend that owns the loop. A
@@ -72,13 +73,13 @@ type Request struct {
 	Tools []protocol.ToolSpec
 	// Call runs a call to one of Tools. A backend that owns the loop calls it.
 	Call func(ctx context.Context, c protocol.ToolCall) protocol.ToolResult
-	// Resumed counts the resumes of a turn suspended by a handoff; 0 for a new turn.
-	Resumed int
+	// MaxTokens caps the response of a call. Zero: the backend default.
+	MaxTokens int
 	// AllowedTools restricts the tools of the turn. nil keeps every tool;
 	// an empty, non-nil list keeps none.
 	AllowedTools []string
 	// Steered receives a value when a steer input waits for Sink.Steer. It
-	// is nil when the backend does not accept steering.
+	// is nil when the turn takes no steer input.
 	Steered <-chan struct{}
 }
 
@@ -89,11 +90,13 @@ type Delta struct {
 	Text string
 }
 
-// Telemetry is what a backend measured during a turn.
+// Telemetry is what a backend measured during one model call.
 type Telemetry struct {
 	Usage eventlog.Usage
 	// Context is a context reading; the zero value is none.
 	Context eventlog.ContextMeasured
+	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
+	SubscriptionUsage *eventlog.SubscriptionUsage
 }
 
 // Sink receives the items of a running turn.
@@ -135,28 +138,23 @@ type Limits struct {
 	Idle time.Duration
 }
 
-// Reporter takes no ctx, except CompactTurn: a backend reports items after
-// the turn's ctx ends.
-type Reporter interface {
-	// Item records m under itemID, or under a new ID when itemID is empty.
-	Item(turnID, itemID string, m eventlog.Message) error
-	// Started announces a new item to live subscribers and returns its ID.
-	Started(turnID string) string
-	Delta(turnID, itemID string, d Delta)
-	Status(turnID string, f protocol.StatusFrame)
-	Telemetry(turnID string, t Telemetry)
-	Steer(turnID string) ([]eventlog.Message, error)
-	State(turnID, backend string) ([]byte, error)
-	SaveState(turnID, backend string, blob []byte) error
-	Compacted(turnID, summary string) error
-	// CompactTurn folds the turns before the newest kept turns into a
-	// summary while turnID runs, and returns the new history. ok is false
-	// when no turn can fold.
-	CompactTurn(ctx context.Context, turnID string) (history []eventlog.Message, ok bool, err error)
-	Ended(turnID string, err error)
+// Turn is what a running turn reports through, bound to its turn. Started
+// announces an item and returns the ID that its Delta calls name and its Item
+// records; it replaces an item that a failed call streamed. CompactTurn
+// returns ok false when no turn can fold. Only CompactTurn takes a ctx.
+type Turn interface {
+	Sink
+	Started() string
+	Status(f protocol.StatusFrame)
+	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
+	Ended(err error)
 }
 
-const retryBackoff = 200 * time.Millisecond
+// A wait before a new attempt starts at retryBackoff and doubles up to retryBackoffMax.
+const (
+	retryBackoff    = time.Second
+	retryBackoffMax = 8 * time.Second
+)
 
 const (
 	// notRun is the result of each tool call of a response that max_tokens cut off.
@@ -167,18 +165,18 @@ const (
 // Run runs req on b and reports its items and its end to to. Only tools,
 // and the tools that src gives each model call, reach the model. When b
 // does not own the loop, Run runs the tool calls of each model call in
-// order, then calls b again, until a call asks for no tool. Model calls run
-// under step and tools under ctx: when only step ends, a running tool
-// finishes and no new tool starts.
-func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Reporter, lim Limits) {
-	to.Ended(req.TurnID, run(ctx, step, b, req, tools, src, to, lim))
+// order, takes the steer inputs, and calls b again until a call asks for no
+// tool. Model calls run under step and tools under ctx: when only step ends,
+// a running tool finishes and no new tool starts.
+func Run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) {
+	to.Ended(run(ctx, step, b, req, tools, src, to, lim))
 }
 
 // run compacts and calls the model again after a context overflow, when b
 // does not own its context. A response that max_tokens cut off runs
 // none of its tool calls, and the next call asks the model to continue, at
 // most lim.Continuations times.
-func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Reporter, lim Limits) error {
+func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src Source, to Turn, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
 		lim.Idle = 0
@@ -189,12 +187,12 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		s, call := &sink{turnID: req.TurnID, to: to}, req
+		s, call := &sink{Turn: to}, req
 		runTool := describe(step, &call, tools, src, caps.OwnsLoop)
 		call.History = append(slices.Clip(req.History), nudge...)
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
-			if h, ok, cerr := to.CompactTurn(step, req.TurnID); cerr == nil && ok {
+			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
 				req.History = h
 				continue
 			}
@@ -219,7 +217,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 				return context.Cause(ctx)
 			}
 			m := result(c, r)
-			if err := to.Item(req.TurnID, "", m); err != nil {
+			if err := to.Item(m); err != nil {
 				return err
 			}
 			req.History = append(req.History, m)
@@ -236,6 +234,11 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		default:
 			return fmt.Errorf("turn: the response reached max_tokens after %d continuations", continued)
 		}
+		in, err := to.Steer()
+		if err != nil {
+			return err
+		}
+		req.History = append(req.History, in...)
 	}
 }
 
@@ -288,62 +291,48 @@ func (w watched) Delta(itemID string, d Delta) {
 func (w watched) Alive() { w.alive() }
 
 func (s *sink) wait(ctx context.Context, attempt int) error {
-	d := retryBackoff << attempt
+	d := min(retryBackoff<<min(attempt, 3), retryBackoffMax)
 	d += rand.N(d/5) - d/10
-	s.to.Status(s.turnID, protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
+	s.Status(protocol.StatusFrame{Status: protocol.StatusRetrying, Attempt: attempt + 1, NextAt: time.Now().Add(d)})
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-t.C:
-		s.to.Status(s.turnID, protocol.StatusFrame{Status: protocol.StatusRunning})
+		s.Status(protocol.StatusFrame{Status: protocol.StatusRunning})
 		return nil
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
 }
 
-// sink keeps the items and steer inputs of one model call in order.
+// sink collects the items of one model call and reports the rest to its Turn.
 type sink struct {
-	turnID string
-	to     Reporter
-	items  []eventlog.Message
-	// item is the ID of the item that the deltas since the last Item build.
+	Turn
+	items []eventlog.Message
+	// item is the item that the deltas since the last Item build, or "".
 	item string
 }
 
+// Delta streams d into the next item. The backend item ID is not used: one
+// harness item can join several backend items, such as reasoning and text.
+func (s *sink) Delta(_ string, d Delta) {
+	if s.item == "" {
+		s.item = s.Started()
+	}
+	s.Turn.Delta(s.item, d)
+}
+
 func (s *sink) Item(m eventlog.Message) error {
-	id := s.item
 	s.item = ""
-	if err := s.to.Item(s.turnID, id, m); err != nil {
+	if err := s.Turn.Item(m); err != nil {
 		return err
 	}
 	s.items = append(s.items, m)
 	return nil
 }
 
-// Delta adds d to the next item. The backend item ID is not used: one
-// harness item can join several backend items, such as reasoning and text.
-func (s *sink) Delta(_ string, d Delta) {
-	if s.item == "" {
-		s.item = s.to.Started(s.turnID)
-	}
-	s.to.Delta(s.turnID, s.item, d)
-}
-
-func (*sink) Alive() {}
-
-func (s *sink) Telemetry(t Telemetry) { s.to.Telemetry(s.turnID, t) }
-
 func (s *sink) Steer() ([]eventlog.Message, error) {
-	in, err := s.to.Steer(s.turnID)
+	in, err := s.Turn.Steer()
 	s.items = append(s.items, in...)
 	return in, err
 }
-
-func (s *sink) State(backend string) ([]byte, error) { return s.to.State(s.turnID, backend) }
-
-func (s *sink) SaveState(backend string, blob []byte) error {
-	return s.to.SaveState(s.turnID, backend, blob)
-}
-
-func (s *sink) Compacted(summary string) error { return s.to.Compacted(s.turnID, summary) }

@@ -43,6 +43,7 @@ type fake struct {
 type fakeRun struct {
 	req   turn.Request
 	items chan<- eventlog.Message
+	tele  chan<- turn.Telemetry
 	state string
 }
 
@@ -53,8 +54,8 @@ func (f *fake) Capabilities(string) turn.Capabilities {
 }
 
 func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	items, run := make(chan eventlog.Message), fakeRun{req: req}
-	run.items = items
+	items, tele, run := make(chan eventlog.Message), make(chan turn.Telemetry), fakeRun{req: req}
+	run.items, run.tele = items, tele
 	if f.save != "" {
 		run.state = f.loadAndSave(out)
 	}
@@ -67,12 +68,13 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 		select {
 		case m, ok := <-items:
 			if !ok {
-				out.Telemetry(turn.Telemetry{Usage: eventlog.Usage{InputTokens: 3, OutputTokens: 1}})
 				return turn.Result{}, nil
 			}
 			if err := f.report(out, m); err != nil {
 				return turn.Result{}, err
 			}
+		case t := <-tele:
+			out.Telemetry(t)
 		case <-ctx.Done():
 			return f.stop(ctx, out)
 		}
@@ -118,6 +120,12 @@ func (f *fake) stop(ctx context.Context, out turn.Sink) (turn.Result, error) {
 
 func (r fakeRun) emit(m eventlog.Message) {
 	r.items <- m
+	synctest.Wait()
+}
+
+// measure reports the usage of one model call.
+func (r fakeRun) measure(u eventlog.Usage) {
+	r.tele <- turn.Telemetry{Usage: u}
 	synctest.Wait()
 }
 
@@ -282,7 +290,7 @@ func TestSubmitRunsATurn(t *testing.T) {
 		wantLog(t, st, 0, "session.created", "owner.acquired 1", "input.admitted a", "turn.started a",
 			"item.completed assistant hello", "turn.ended completed")
 		v := s.View()
-		if v.Status != protocol.StatusIdle || v.HeadSeq != 6 || v.Usage.InputTokens != 3 {
+		if v.Status != protocol.StatusIdle || v.HeadSeq != 6 {
 			t.Fatalf("View = %+v", v)
 		}
 		closeRuntime(t, r)
