@@ -27,11 +27,12 @@ const (
 	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
 	specCompactResult = "`Compact()` returns `protocol.Compacted`"
 	specChildResend   = "changes by design in one way: a later send is not refused"
+	specWaiting       = "| `waiting` | A turn ended `awaiting_input`; a request is open |"
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 
-	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
-	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
-	specOpenBanner       = "Does the switch keep the engine banner"
+	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
+	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
+	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -71,10 +72,10 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_error_result_fails_turn":                        pendingOn("F20"),
 	"claudecode_history_bridge_after_native_turn":               reGolden(specUpdate),
 	"claudecode_interrupt_mid_turn":                             pendingOn("F20"),
-	"claudecode_question_dismissed_by_compact":                  pendingOn("phase 5"),
-	"claudecode_question_dismissed_by_next_prompt":              pendingOn("phase 5"),
-	"claudecode_question_parks_then_answer_resumes":             pendingOn("phase 5"),
-	"claudecode_question_unknown_call_id_conflicts":             pendingOn("phase 5"),
+	"claudecode_question_dismissed_by_compact":                  pendingOn(specWaiting),
+	"claudecode_question_dismissed_by_next_prompt":              pendingOn(specWaiting),
+	"claudecode_question_parks_then_answer_resumes":             pendingOn(specWaiting, specOpenAnswerReceipt),
+	"claudecode_question_unknown_call_id_conflicts":             pendingOn(specWaiting, specErrors, specOpenAnswerReceipt),
 	"claudecode_queued_prompt_injected_mid_turn":                deletedBy(specQueue),
 	"claudecode_rate_limit_event_reaches_subscription_usage":    reGolden(specView),
 	"claudecode_resume_across_turns":                            sameAsServe(),
@@ -86,15 +87,15 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_http_reasoning_replays_on_tool_round_trip":           reGolden(specItems),
 	"codex_http_sse_text_turn":                                  reGolden(specItems),
 	"codex_http_sse_tool_round_trip_resends_history":            reGolden(specItems),
-	"codex_ws_chain_miss_resends_full_history":                  reGolden(specItems, specWarm, specOpenBanner),
-	"codex_ws_chains_two_turns":                                 reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_chain_miss_resends_full_history":                  reGolden(specItems, specWarm),
+	"codex_ws_chains_two_turns":                                 reGolden(specItems, specWarm),
 	"codex_ws_drop_mid_turn_resends_full_history":               pendingOn("phase 5"),
 	"codex_ws_effort_sets_reasoning_effort":                     pendingOn("phase 5"),
-	"codex_ws_prewarm_warms_first_turn":                         reGolden(specItems, specWarm, specOpenBanner),
-	"codex_ws_reasoning_chains_tool_round_trip":                 reGolden(specItems, specWarm, specOpenBanner),
-	"codex_ws_refused_falls_back_to_http":                       reGolden(specItems, specWarm, specOpenBanner),
-	"codex_ws_tool_round_trip":                                  reGolden(specItems, specWarm, specOpenBanner),
-	"codex_ws_uncoded_chain_miss_resends_full_history":          reGolden(specItems, specWarm, specOpenBanner),
+	"codex_ws_prewarm_warms_first_turn":                         reGolden(specItems, specWarm),
+	"codex_ws_reasoning_chains_tool_round_trip":                 reGolden(specItems, specWarm),
+	"codex_ws_refused_falls_back_to_http":                       reGolden(specItems, specWarm),
+	"codex_ws_tool_round_trip":                                  reGolden(specItems, specWarm),
+	"codex_ws_uncoded_chain_miss_resends_full_history":          reGolden(specItems, specWarm),
 	"codex_ws_usage_frame_reaches_session":                      pendingOn("phase 5"),
 	"codex_http_usage_headers_reach_session":                    reGolden(specView, specItems),
 	"compact_manual":                                            pendingOn("phase 4"),

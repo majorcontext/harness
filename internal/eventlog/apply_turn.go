@@ -20,8 +20,11 @@ func (s *State) applyStarted(e TurnStarted) error {
 		return illegal("turn.started has an empty turn_id")
 	case s.turnIDs[e.TurnID]:
 		return illegal("turn %s was used", e.TurnID)
-	case len(s.calls) > 0:
-		return illegal("turn %s starts with open tool call %s", e.TurnID, s.calls[0].CallID)
+	}
+	for _, c := range s.calls {
+		if !c.answered {
+			return illegal("turn %s starts with open tool call %s", e.TurnID, c.CallID)
+		}
 	}
 	for _, id := range e.InputIDs {
 		if err := s.inputIs(id, inputAdmitted); err != nil {
@@ -32,7 +35,8 @@ func (s *State) applyStarted(e TurnStarted) error {
 		s.takeInput(id, inputPromoted)
 	}
 	s.turn = Turn{ID: e.TurnID, InputIDs: e.InputIDs}
-	s.turnAt = len(s.history)
+	s.turnAt, s.turnBy, s.turnItems = len(s.history), providerOf(s.model), 0
+	s.turnN++
 	s.turnIDs[e.TurnID] = true
 	return nil
 }
@@ -65,6 +69,7 @@ func (s *State) applyItem(e ItemCompleted) error {
 		}
 	}
 	s.calls = calls
+	s.turnItems++
 	return nil
 }
 
@@ -133,6 +138,13 @@ func (s *State) applyEnded(e TurnEnded) error {
 	if err := s.unanswered(); err != nil {
 		return err
 	}
+	own := s.turnItems
+	if Cause(e.Error) == CauseCrashed {
+		own--
+	}
+	if own <= 0 {
+		s.unran = append(s.unran, s.turnN)
+	}
 	s.turn = Turn{}
 	s.lastEnded = e
 	return nil
@@ -158,13 +170,24 @@ func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 		return illegal("request %s has resolution %q", e.RequestID, e.Resolution)
 	}
 	item := s.requests[i].ItemID
-	open := func(c OpenToolCall) bool { return c.ItemID == item }
-	calls := slices.DeleteFunc(slices.Clone(s.calls), open)
-	if n := len(s.calls) - len(calls); n > 1 {
-		return illegal("request %s has %d open tool calls", e.RequestID, n)
+	var held []int
+	for k, c := range s.calls {
+		if c.ItemID == item {
+			held = append(held, k)
+		}
 	}
-	if k := slices.IndexFunc(s.calls, open); k >= 0 {
-		s.say(seq, requestResult(s.calls[k], e))
+	if len(held) > 1 {
+		return illegal("request %s has %d open tool calls", e.RequestID, len(held))
+	}
+	calls := slices.Clone(s.calls)
+	if len(held) == 1 {
+		k := held[0]
+		if e.Resolution == ResolutionAnswered {
+			calls[k].answered = true
+		} else {
+			s.say(seq, dismissal(calls[k]))
+			calls = slices.Delete(calls, k, k+1)
+		}
 	}
 	s.calls = calls
 	s.requests = slices.Delete(s.requests, i, i+1)

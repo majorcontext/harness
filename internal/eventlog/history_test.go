@@ -30,10 +30,9 @@ func TestHistory(t *testing.T) {
 		events []Event
 		want   []Message
 	}{
-		{"an answer is the result of the call", with(parked, choice),
-			[]Message{userText("hi"), callMsg, resultOf(`User has answered your questions: "Which cache?"="none", "Which database?"="SQLite". You can now continue with the user's answers in mind.`, false)}},
-		{"an answer that is not a map of choices is its JSON", with(parked, resolve("r1")),
-			[]Message{userText("hi"), callMsg, resultOf(`User answered: "yes"`, false)}},
+		{"an answer leaves its call open for the turn that it starts", with(parked, choice), []Message{userText("hi"), callMsg}},
+		{"the turn that an answer starts records the result of the call", with(parked, choice, start("t2"), result("t2", "i2", "c1")),
+			[]Message{userText("hi"), callMsg, {Role: RoleTool, Parts: []Part{{Type: PartToolResult, CallID: "c1", Text: "ok"}}}}},
 		{"a dismissal is an error result", with(parked, dismiss("r1")),
 			[]Message{userText("hi"), callMsg, resultOf("The user dismissed this question without answering.", true)}},
 		{"a queued input is not history until a turn takes it", with(base, says("a", DeliveryQueue, "one")), nil},

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/majorcontext/harness/internal/backend/external"
@@ -357,9 +356,6 @@ func (r *run) assistant(env envelope) error {
 
 func (r *run) toolResults(env envelope) error {
 	parts := toolResults(decodeMessage(env.Message), r.names)
-	if r.resolution != nil {
-		parts = slices.DeleteFunc(parts, func(p eventlog.Part) bool { return p.CallID == r.resolution.callID })
-	}
 	if len(parts) == 0 {
 		return nil
 	}

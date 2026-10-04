@@ -19,7 +19,11 @@ const askInput = `{"questions":[{"question":"Which database?","options":[{"label
 // tool and parks it as a question; any other turn reports the Request it got
 // and the resolution of the question that it parked.
 type parker struct {
-	runs chan turn.Request
+	// sibling holds a second open call on the item of the question.
+	sibling bool
+	// silent never records a result for an answered call.
+	silent bool
+	runs   chan turn.Request
 	// resolved receives the resolution that the backend reads for call c1.
 	resolved chan eventlog.RequestResolved
 }
@@ -35,6 +39,9 @@ func (p *parker) Run(_ context.Context, req turn.Request, out turn.Sink) (turn.R
 	if len(req.Input) > 0 && req.Input[0].Parts[0].Text == "ask" {
 		call := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{
 			{Type: eventlog.PartToolCall, CallID: "c1", Name: "AskUserQuestion", Arguments: json.RawMessage(askInput)}}}
+		if p.sibling {
+			call.Parts = append(call.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: "c0", Name: "Bash", Arguments: json.RawMessage(`{}`)})
+		}
 		if err := out.Item(call); err != nil {
 			return turn.Result{}, err
 		}
@@ -42,6 +49,12 @@ func (p *parker) Run(_ context.Context, req turn.Request, out turn.Sink) (turn.R
 	}
 	if r, ok := out.Resolution("c1"); ok {
 		p.resolved <- r
+		if r.Resolution == eventlog.ResolutionAnswered && !p.silent {
+			got := eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{{Type: eventlog.PartToolResult, CallID: "c1", Name: "AskUserQuestion", Text: string(r.Answer)}}}
+			if err := out.Item(got); err != nil {
+				return turn.Result{}, err
+			}
+		}
 	}
 	return turn.Result{}, out.Item(say("done"))
 }
@@ -99,13 +112,13 @@ func TestAnAnswerRunsATurnWithNoInput(t *testing.T) {
 		}
 		synctest.Wait()
 		req := <-p.runs
-		if len(req.Input) != 0 || len(req.History) != 3 || req.History[2].Role != eventlog.RoleTool {
-			t.Errorf("Request after the answer = %d inputs, %d history messages, want no input and the answered call last", len(req.Input), len(req.History))
+		if len(req.Input) != 0 || len(req.History) != 2 || req.History[1].Role != eventlog.RoleAssistant {
+			t.Errorf("Request after the answer = %d inputs, %d history messages, want no input and the asked call last", len(req.Input), len(req.History))
 		}
 		if got := <-p.resolved; got.Resolution != eventlog.ResolutionAnswered || string(got.Answer) != string(answer) {
 			t.Errorf("resolution read by the backend = %+v, want the answer", got)
 		}
-		wantLog(t, st, 7, "request.resolved", "turn.started", "item.completed assistant done", "turn.ended completed")
+		wantLog(t, st, 7, "request.resolved", "turn.started", "item.completed tool c1 "+string(answer), "item.completed assistant done", "turn.ended completed")
 		if s.View().Status != protocol.StatusIdle {
 			t.Errorf("status after the answered turn = %s, want idle", s.View().Status)
 		}
@@ -160,6 +173,9 @@ func TestResolveRefusesWhatNoRequestOrBodyAllows(t *testing.T) {
 			{"an answer and a dismissal", "c1", protocol.Resolution{Answer: json.RawMessage(`{"a":"b"}`), Dismiss: true}, harness.ErrInvalidRequest},
 			{"neither", "c1", protocol.Resolution{}, harness.ErrInvalidRequest},
 			{"an empty answer", "c1", protocol.Resolution{Answer: json.RawMessage(`{}`)}, harness.ErrInvalidRequest},
+			{"an empty answer with space", "c1", protocol.Resolution{Answer: json.RawMessage(`{ }`)}, harness.ErrInvalidRequest},
+			{"an answer that is not a map", "c1", protocol.Resolution{Answer: json.RawMessage(`["SQLite"]`)}, harness.ErrInvalidRequest},
+			{"a choice that is not text", "c1", protocol.Resolution{Answer: json.RawMessage(`{"Which database?":1}`)}, harness.ErrInvalidRequest},
 		} {
 			if err := s.Resolve(bg, tc.id, tc.res); !errors.Is(err, tc.want) {
 				t.Errorf("%s: Resolve = %v, want %v", tc.name, err, tc.want)
@@ -188,4 +204,33 @@ func TestOnlyAnEmbedderThatAnswersGetsQuestions(t *testing.T) {
 			closeRuntime(t, r)
 		})
 	}
+}
+
+func TestACallThatTheBackendNeverResultedGetsACutOffResultAfterAnAnswer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, p := harness.NewMemStore(), newParker()
+		p.silent = true
+		r, s := parked(t, st, p)
+		if err := s.Resolve(bg, "c1", protocol.Resolution{Answer: json.RawMessage(`{"Which database?":"SQLite"}`)}); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		<-p.runs
+		wantLog(t, st, 7, "request.resolved", "turn.started", "item.completed assistant done",
+			"item.completed tool c1 cut off before a result was recorded; check whether it took effect before running it again", "turn.ended completed")
+		closeRuntime(t, r)
+	})
+}
+
+func TestASiblingOfTheQuestionGetsAResultWhenTheTurnParks(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st, p := harness.NewMemStore(), newParker()
+		p.sibling = true
+		r, s := parked(t, st, p)
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "item.completed assistant c1 c0", "request.opened",
+			"item.completed tool c0 cut off before a result was recorded; check whether it took effect before running it again", "turn.ended awaiting_input")
+		submit(t, s, text("b", "never mind"))
+		<-p.runs
+		closeRuntime(t, r)
+	})
 }

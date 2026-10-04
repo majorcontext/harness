@@ -249,7 +249,8 @@ func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.Stop
 }
 
 // closeOpen dismisses every open request unless keep is set, which closes its
-// tool call, and gives every other open tool call a result with text.
+// tool call, and gives every other open tool call a result with text. A kept
+// request holds only its own call open.
 func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
 	var events []eventlog.Event
 	if !keep {
@@ -257,10 +258,10 @@ func (a *Actor) closeOpen(turnID, text string, keep bool) []eventlog.Event {
 	}
 	asked := map[string]bool{}
 	for _, r := range a.state.Requests() {
-		asked[r.ItemID] = true
+		asked[r.RequestID] = true
 	}
 	for _, c := range a.state.OpenToolCalls() {
-		if asked[c.ItemID] {
+		if asked[c.CallID] {
 			continue
 		}
 		part := eventlog.Part{Type: eventlog.PartToolResult, CallID: c.CallID, Name: c.Name, Text: text, IsError: true}

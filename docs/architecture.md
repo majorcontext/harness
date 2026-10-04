@@ -459,7 +459,7 @@ Request:
 pending ─► answered | dismissed
 ```
 
-A backend opens a request with `Sink.Ask` on an open tool call of its turn, with the call ID as the request ID. The turn then ends `awaiting_input`, keeps the call open, and the session reads `waiting`. `Resolve` closes the request. `request.resolved` is the result of the call: the history holds it as a tool result, and `Sink.Resolution` returns the record. An answer starts a turn with no input; a dismissal starts none. An input admitted while a request is open dismisses it first, and so does a queued input that starts after the turn. Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal. The Codex CLI approvals come with phase 5.
+A backend opens a request with `Sink.Ask` on an open tool call of its turn, with the call ID as the request ID. The turn then ends `awaiting_input`, keeps the call open, and the session reads `waiting`. `Resolve` closes the request. A dismissal closes the call with an error result that says the user dismissed the question. An answer leaves the call open, and the turn that it starts records the result. That turn has no input; a dismissal starts none. A question takes an answer that maps each question to text. An input admitted while a request is open dismisses it first, and so does a queued input that starts after the turn. Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal. The Codex CLI approvals come with phase 5.
 
 ### Compaction
 
@@ -622,10 +622,10 @@ type Sink interface {
 	State(backend string) ([]byte, error)
 	SaveState(backend string, blob []byte) error
 	Compacted(summary string) error
+	Ask(callID, kind string, payload json.RawMessage) error // open a request on an open tool call
+	Resolution(id string) (eventlog.RequestResolved, bool)  // the record that closed it
 }
 ```
-
-The `Sink` method that opens a request is added before the phase 4 switch.
 
 The turn loop reports through one `Turn`, which the actor binds to the turn. No method takes a turn ID, and a call after the turn is no longer the run of the actor fails with `turn mismatch`:
 
@@ -634,6 +634,7 @@ type Turn interface {
 	Sink
 	Started() string               // announces an item and returns its ID; the next Item records under it
 	Status(f protocol.StatusFrame) // ephemeral frame
+	Settings() (string, eventlog.Settings) // the model and settings that the session holds now; "" after the turn stops
 	CompactTurn(ctx context.Context) (history []eventlog.Message, ok bool, err error)
 	Ended(err error)
 }
@@ -685,9 +686,9 @@ Delegating a turn to another agent harness is permanent. Claude Code is built, a
 
 `internal/backend/external` holds what every adapter shares: process supervision, the line-protocol transport, the mirror writer, and the MCP bridge. `internal/backend/claudecode`, and `internal/backend/codexcli` in phase 5, hold only the mapping in the table.
 
-- History bridge. A session may move between a backend that owns its loop and any other backend. A stream-json input cannot seed prior history, so each turn of such a backend has the harness tool `get_conversation_history`, which reads the live history page by page and which no `AllowedTools` list hides. `State.Foreign` reports, from the log alone, a message that another provider recorded after the newest message of this provider before the current turn: each history entry names the provider of the session model when it was recorded. Then the backend adds one line to its single `--append-system-prompt` value that tells the CLI to call the tool before it answers. A turn after a turn of the same provider adds none, and nothing is stored.
+- History bridge. A session may move between a backend that owns its loop and any other backend. A stream-json input cannot seed prior history, so each turn of such a backend has the harness tool `get_conversation_history`, which reads the live history page by page and which no `AllowedTools` list hides. When another provider recorded a message after the newest message that this backend saw, the backend adds one line to its single `--append-system-prompt` value that tells the CLI to call the tool before it answers. A turn belongs to the provider of its model at its start, even when a settings change moves the model in the middle of it. A turn that recorded no item showed its backend nothing. A turn after a turn of the same provider adds none, and nothing is stored.
 - Subagent frames. Claude Code runs with `--forward-subagent-text`. The text, the tool calls, and the tool results of a subagent become items, and `Message.ParentCallID` names the tool call that started the subagent, so a client nests them. History hands the model the parts alone.
-- Questions. A defer hook parks each `AskUserQuestion` call and the CLI answers its result with `stop_reason: tool_deferred`; the backend opens the request and keeps the call ID in its `backend.state` blob. The next run reads the resolution through `Sink.Resolution`. An answer with no input answers the call over the control channel, with the answers added to the tool input, and the run skips the CLI result of that call, which the log already holds. Any other resolution denies the call with an interrupt in a run of its own, which records nothing, before the prompt runs.
+- Questions. A defer hook parks each `AskUserQuestion` call and the CLI answers its result with `stop_reason: tool_deferred`; the backend opens the request. An answer with no input answers the call over the control channel, with the answers added to the tool input, and the result of the CLI for that call is the result item. Any other resolution denies the call with an interrupt in a run of its own, which records nothing, before the prompt runs.
 
 ### Warm-up
 
@@ -794,7 +795,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. The actor pins that place, so each request is a prefix of the next, and a compaction can only move it earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 
@@ -966,6 +967,7 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 
 - Does the switch wrap the messages that the engine writes for the model in `<harness-engine-context>` tags? Serve wraps the `[continuation: …]` message of a max_tokens turn, so the model reads it as engine text. The runtime sends it as plain user text.
 - Does `GET /sessions` keep creation order? It lists in ID order, and a minted ID has a random suffix. Serve listed in creation order.
+- Does the answer route keep the serve receipt `202 {seq, status}`? The runtime answers `204`.
 
 ## Closed parity questions
 

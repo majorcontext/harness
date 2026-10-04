@@ -140,7 +140,11 @@ func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Re
 	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !answered || len(res.Answer) > 0 && !json.Valid(res.Answer) {
 		return fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
 	}
-	return s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
+	err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
+	if errors.Is(err, session.ErrBadAnswer) {
+		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	return err
 }
 
 // SetGoal replaces the goal of the session, as Claude Code /goal does. An

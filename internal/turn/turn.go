@@ -213,7 +213,7 @@ func run(ctx, step context.Context, b Backend, req Request, tools []Tool, src So
 		res, err := callModel(step, b, call, s, lim)
 		if errors.Is(err, ErrContextOverflow) && !caps.OwnsContext && len(s.items) == 0 {
 			if h, ok, cerr := to.CompactTurn(step); cerr == nil && ok {
-				req.History = h
+				req.History, req.BannerAt = h, min(req.BannerAt, len(h))
 				continue
 			}
 		}

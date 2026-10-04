@@ -11,7 +11,7 @@ import (
 
 const (
 	askTool  = "AskUserQuestion"
-	askKind  = "question"
+	askKind  = eventlog.RequestQuestion
 	planMode = ",EnterPlanMode,ExitPlanMode"
 	// deferHook parks an AskUserQuestion call: the turn ends with stop_reason
 	// tool_deferred, and the CLI runs the call again on the next --resume.

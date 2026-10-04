@@ -3,10 +3,8 @@ package e2e
 import (
 	"cmp"
 	"encoding/json"
-	"maps"
 	"slices"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -104,8 +102,11 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 				Resolution string          `json:"resolution"`
 				Answer     json.RawMessage `json:"answer"`
 			}](t, ev)
+			if r.Resolution == "answered" {
+				break
+			}
 			call := callOf[itemOf[r.RequestID]]
-			part := logPart{Type: "tool_result", CallID: call.CallID, Name: call.Name, Text: resolutionText(r.Resolution, r.Answer), IsError: r.Resolution == "dismissed"}
+			part := logPart{Type: "tool_result", CallID: call.CallID, Name: call.Name, Text: dismissalText, IsError: true}
 			say(ev.Seq, "msg_resolved_"+r.RequestID, "tool", []logPart{part})
 		case "compaction.applied":
 			c := decodeEvent[struct {
@@ -170,18 +171,5 @@ func journalOfLog(t *testing.T, evs []protocol.Event) []journalEntry {
 	return out
 }
 
-// resolutionText is the result that the model reads for a resolved request.
-func resolutionText(resolution string, answer json.RawMessage) string {
-	var choices map[string]string
-	if resolution == "dismissed" {
-		return "The user dismissed this question without answering."
-	}
-	if json.Unmarshal(answer, &choices) != nil {
-		return "User answered: " + string(answer)
-	}
-	var parts []string
-	for _, q := range slices.Sorted(maps.Keys(choices)) {
-		parts = append(parts, strconv.Quote(q)+"="+strconv.Quote(choices[q]))
-	}
-	return "User has answered your questions: " + strings.Join(parts, ", ") + ". You can now continue with the user's answers in mind."
-}
+// dismissalText is the result that the model reads for a dismissed request.
+const dismissalText = "The user dismissed this question without answering."

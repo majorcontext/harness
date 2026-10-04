@@ -143,6 +143,9 @@ type TurnEnded struct {
 	Error      string     `json:"error,omitempty"`
 }
 
+// RequestQuestion is the kind of a request that asks the user to choose.
+const RequestQuestion = "question"
+
 // RequestOpened asks the client for an answer about an item.
 type RequestOpened struct {
 	RequestID   string          `json:"request_id"`
@@ -151,7 +154,7 @@ type RequestOpened struct {
 	Payload     json.RawMessage `json:"payload,omitempty"`
 }
 
-// RequestResolved closes an open request. It is the result of the tool call of the request item.
+// RequestResolved closes an open request; an answer leaves its tool call open.
 type RequestResolved struct {
 	RequestID  string          `json:"request_id"`
 	Resolution Resolution      `json:"resolution"`

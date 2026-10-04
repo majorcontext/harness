@@ -127,6 +127,9 @@ type OpenToolCall struct {
 	CallID string
 	ItemID string
 	Name   string
+	// answered is set when the user answered its request: the turn that the
+	// answer starts records the result.
+	answered bool
 }
 
 // Summary is the list entry of a session.
@@ -193,6 +196,13 @@ type State struct {
 	history    []entry
 	// turnAt is the length of history when the current turn started.
 	turnAt int
+	// turnBy is the provider of the model when the newest turn started, turnN
+	// counts the turns that started, and turnItems counts the items of the
+	// current turn. unran lists the turns that ended with no item of their own.
+	turnBy    string
+	turnN     int
+	turnItems int
+	unran     []int
 }
 
 func (s *State) clone() *State {
@@ -208,6 +218,7 @@ func (s *State) clone() *State {
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
 	c.retained = slices.Clip(s.retained)
+	c.unran = slices.Clip(s.unran)
 	return &c
 }
 

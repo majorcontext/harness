@@ -69,7 +69,9 @@ func TestClaudeCodeAnswerResumesTheParkedCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	await(t, s, after, "turn.ended")
-	wantLog(t, st, after, "request.resolved", "turn.started", "item.completed assistant Noted.", "backend.state", "turn.ended completed")
+	wantLog(t, st, after, "request.resolved", "turn.started",
+		`item.completed tool toolu_q {"response":{"request_id":"req-1","response":{"behavior":"allow","updatedInput":{"answers":{"Which database?":"SQLite"},"questions":[{"header":"DB","multiSelect":false,"options":[{"description":"a","label":"PostgreSQL"},{"description":"b","label":"SQLite"}],"question":"Which database?"}]}},"subtype":"success"},"type":"control_response"}`,
+		"item.completed assistant Noted.", "backend.state", "turn.ended completed")
 	argv := jsonLines[[]string](t, argvLog)
 	if len(argv) != 2 || !hasArgs(argv[1], "--resume", "fake-session-1") || !strings.Contains(argValue(argv[1], "--settings"), "toolu_q") {
 		t.Fatalf("argv = %q, want a resumed run whose hook passes toolu_q", argv)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -11,6 +12,21 @@ import (
 
 // ErrRequestNotPending reports a request that is not open.
 var ErrRequestNotPending = errors.New("harness: request not pending")
+
+// ErrBadAnswer reports an answer that the kind of its request does not take.
+var ErrBadAnswer = errors.New("harness: bad answer")
+
+// checkAnswer accepts for a question only a non-empty map of text.
+func checkAnswer(kind string, answer json.RawMessage) error {
+	if kind != eventlog.RequestQuestion {
+		return nil
+	}
+	var choices map[string]string
+	if err := json.Unmarshal(answer, &choices); err != nil || len(choices) == 0 {
+		return fmt.Errorf("%w: a question takes a map of questions to text", ErrBadAnswer)
+	}
+	return nil
+}
 
 // questions reports whether the turn that starts now may ask the user a
 // question: the embedder answers them, and a child or a goal supervised
@@ -25,9 +41,16 @@ func (a *Actor) questions() bool {
 // next turn tells the backend.
 func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, dismiss bool) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		if !slices.ContainsFunc(a.state.Requests(), func(r eventlog.RequestOpened) bool { return r.RequestID == id }) {
+		i := slices.IndexFunc(a.state.Requests(), func(r eventlog.RequestOpened) bool { return r.RequestID == id })
+		if i < 0 {
 			reply(struct{}{}, ErrRequestNotPending)
 			return
+		}
+		if !dismiss {
+			if err := checkAnswer(a.state.Requests()[i].RequestKind, answer); err != nil {
+				reply(struct{}{}, err)
+				return
+			}
 		}
 		ev := eventlog.RequestResolved{RequestID: id, Resolution: eventlog.ResolutionDismissed}
 		if !dismiss {
