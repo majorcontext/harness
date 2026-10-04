@@ -163,7 +163,7 @@ func runCodexScenarios(t *testing.T, table []codexScenario) {
 	skipShort(t)
 	for _, sc := range table {
 		t.Run(sc.name, func(t *testing.T) {
-			t.Parallel()
+			parallelUnlessUpdating(t)
 			compareGolden(t, sc.name, runCodexScenario(t, sc, serveHost))
 		})
 	}

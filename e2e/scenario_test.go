@@ -318,12 +318,21 @@ func runScenarios(t *testing.T, table []scenario) {
 	skipShort(t)
 	for _, sc := range table {
 		t.Run(sc.name, func(t *testing.T) {
-			t.Parallel()
+			parallelUnlessUpdating(t)
 			compareGolden(t, sc.name, runScenario(t, sc, serveHost))
 		})
 	}
 	onRuntime(t, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
 		func(t *testing.T, sc scenario) observation { return runScenario(t, sc, runtimeHost) })
+}
+
+// parallelUnlessUpdating keeps a serve row synchronous under -update, so the
+// runtime same rows read the goldens after it rewrites them.
+func parallelUnlessUpdating(t *testing.T) {
+	t.Helper()
+	if !*updateGoldens {
+		t.Parallel()
+	}
 }
 
 func mustJSON(t *testing.T, v any) []byte {
