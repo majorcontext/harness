@@ -1,0 +1,68 @@
+package e2e
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"slices"
+	"sync"
+	"testing"
+
+	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
+)
+
+// recordSync acknowledges each batch and keeps its blobs.
+type recordSync struct {
+	mu    sync.Mutex
+	blobs map[string][]byte
+}
+
+func (s *recordSync) Deliver(_ context.Context, b protocol.SyncBatch) (protocol.SyncAck, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range b.Blobs {
+		s.blobs[k] = v
+	}
+	return protocol.SyncAck{Head: b.FromSeq + uint64(len(b.Records)) - 1}, nil
+}
+
+// A Sync receiver builds the history of a session from the batches alone, so
+// the batch of an input must carry the bytes of its attachments.
+func TestSyncCarriesTheAttachmentOfAnInput(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_KEY", "k")
+	fake := harnesstest.NewChat(t, harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: "seen"}})
+	rec := &recordSync{blobs: map[string][]byte{}}
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Sync: rec, Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf := rowAttachments()[1].data
+	in := protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "read it"}, {Type: protocol.PartBlob, MediaType: "application/pdf", Data: pdf}}}
+	if _, err := s.Submit(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" {
+			break
+		}
+	}
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(pdf)
+	if got := rec.blobs["attachment-"+hex.EncodeToString(sum[:])]; !slices.Equal(got, pdf) {
+		t.Errorf("receiver blob = %q, want the attachment", got)
+	}
+}

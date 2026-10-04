@@ -21,6 +21,8 @@ import (
 type driver interface {
 	Create(t *testing.T) string
 	Submit(t *testing.T, id, text string)
+	// Attach submits text with the attachments after it.
+	Attach(t *testing.T, id, text string, atts []attachment)
 	Enqueue(t *testing.T, id, text string)
 	WaitIdle(t *testing.T, id string)
 	Interrupt(t *testing.T, id string)
@@ -55,6 +57,26 @@ type driver interface {
 	Child(t *testing.T, parentID string, nth int) string
 	Command(t *testing.T, id, text string) callResult
 	Commands(t *testing.T) callResult
+}
+
+// promptParts sends text and then each attachment as one prompt.
+func (p *serveProc) promptParts(id, text string, atts []attachment) {
+	p.t.Helper()
+	parts := []map[string]any{{"type": "text", "text": text}}
+	for _, a := range atts {
+		parts = append(parts, map[string]any{"type": "blob", "media_type": a.mediaType, "data": a.data})
+	}
+	body := map[string]any{"parts": parts}
+	resp, data := p.do(http.MethodPost, "/session/"+id+"/prompt_async", body)
+	if resp.StatusCode != http.StatusAccepted {
+		p.t.Fatalf("prompt_async: status %d body %s", resp.StatusCode, data)
+	}
+}
+
+// attachment is a file of a prompt.
+type attachment struct {
+	mediaType string
+	data      []byte
 }
 
 // callResult is what a driver reports for a call: the status and the decoded
@@ -132,6 +154,11 @@ func (d *httpDriver) Create(t *testing.T) string {
 func (d *httpDriver) Submit(t *testing.T, id, text string) {
 	t.Helper()
 	d.p.prompt(id, text)
+}
+
+func (d *httpDriver) Attach(t *testing.T, id, text string, atts []attachment) {
+	t.Helper()
+	d.p.promptParts(id, text, atts)
 }
 
 func (d *httpDriver) Enqueue(t *testing.T, id, text string) {

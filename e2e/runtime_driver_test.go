@@ -42,12 +42,18 @@ var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codex
 
 func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver {
 	t.Helper()
+	return newRuntimeDriverIn(t, configPath, ask, t.TempDir())
+}
+
+// newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
+func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir string) *runtimeDriver {
+	t.Helper()
 	runtimeKey()
 	c, err := config.Load(configPath)
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: t.TempDir(), cfg: *c, ask: ask}
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -220,6 +226,17 @@ func (d *runtimeDriver) input(id, text, delivery, source string) (string, map[st
 func (d *runtimeDriver) Submit(t *testing.T, id, text string) {
 	t.Helper()
 	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
+}
+
+func (d *runtimeDriver) Attach(t *testing.T, id, text string, atts []attachment) {
+	t.Helper()
+	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	parts := body["parts"].([]protocol.Part)
+	for _, a := range atts {
+		parts = append(parts, protocol.Part{Type: protocol.PartBlob, MediaType: a.mediaType, Data: a.data})
+	}
+	body["parts"] = parts
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 

@@ -338,14 +338,7 @@ func (p *serveProc) createSession() string {
 }
 
 // prompt fires an async prompt (expects 202).
-func (p *serveProc) prompt(id, text string) {
-	p.t.Helper()
-	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": text}}}
-	resp, data := p.do(http.MethodPost, "/session/"+id+"/prompt_async", body)
-	if resp.StatusCode != http.StatusAccepted {
-		p.t.Fatalf("prompt_async: status %d body %s", resp.StatusCode, data)
-	}
-}
+func (p *serveProc) prompt(id, text string) { p.promptParts(id, text, nil) }
 
 type apiMessage struct {
 	ID        string `json:"id"`
