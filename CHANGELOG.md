@@ -55,6 +55,7 @@ First tagged release.
 - **Engine banner** (`harness`) — with `Options.Version`, each model call of a harness-loop turn sends the status line `[engine: harness <version> · session_sync=<mode> · engine started <time>]` as engine context, as `harness serve` does. The first request of a session pins it after the newest message of the history, and each later request keeps it there, so the request prefix stays the same. A turn of a backend that owns its loop, such as Claude Code, gets none. Empty: no banner.
 - **Crash marker** (`harness`) — `Open` ends a crashed turn with the assistant item `[harness: this turn was interrupted by a process restart and could not complete]` before `turn.ended`, as the engine did, so the next user message no longer joins the crashed one on the wire.
 - **MCP connect reasons** (`harness`) — `mcp(action="connect")` names the class of a failed connect, as the engine did: `initialize timed out`, `initialize cancelled`, `connection refused`, `connection failed`, or `initialize failed`. It never names the endpoint URL or a response body.
+- **Plugin inventory** (`harness`, `protocol`) — `protocol.Session.Plugins` lists each configured plugin of the runtime with its name, its state (`not-spawned`, `running`, or `errored`), its tool names, and its hook names, as the `harness serve` session view did. `Session.View` and `Runtime.List` read the state live; a session log does not hold it.
 
 ### Changed
 

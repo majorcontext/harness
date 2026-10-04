@@ -29,6 +29,7 @@ func (s *Session) View() protocol.Session {
 	synced := s.a.Synced()
 	v := detach(s.a.View().Session)
 	v.SyncedSeq = synced
+	v.Plugins = s.r.pluginInfo()
 	return v
 }
 

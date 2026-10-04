@@ -492,6 +492,14 @@ func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.S
 	return page, nil
 }
 
+// pluginInfo returns the state of each plugin, or nil without plugins.
+func (r *Runtime) pluginInfo() []protocol.Plugin {
+	if r.plugins == nil {
+		return nil
+	}
+	return r.plugins.Info()
+}
+
 func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, error) {
 	r.mu.Lock()
 	e := r.sessions[id]
@@ -509,7 +517,9 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 	if err != nil {
 		return protocol.Session{}, err
 	}
-	return v.Session(), nil
+	out := v.Session()
+	out.Plugins = r.pluginInfo()
+	return out, nil
 }
 
 // Close hands off every session, waits for every goroutine of the runtime,

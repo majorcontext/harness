@@ -395,6 +395,25 @@
         "id": "ses:a",
         "model": "anthropic/claude-fable-5",
         "origin": "",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "not-spawned",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,
@@ -421,6 +440,25 @@
         },
         "model": "anthropic/claude-fable-5",
         "origin": "",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "running",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
         "status": "idle",
         "subscription_usage": null,
         "synced_seq": 0,

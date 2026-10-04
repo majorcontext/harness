@@ -30,7 +30,6 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 
 	specOpenContinuation = "Does the switch wrap the messages that the engine writes for the model"
-	specOpenPlugins      = "Does the switch keep the plugin inventory?"
 	specOpenListOrder    = "Does `GET /sessions` keep creation order?"
 	specOpenBanner       = "Does the switch keep the engine banner"
 )
@@ -161,11 +160,11 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_after_hook_sees_output":                             sameAsServe(),
 	"plugin_before_hook_rewrites_and_blocks":                    sameAsServe(),
 	"plugin_boxes_style_command_and_dir":                        sameAsServe(),
-	"plugin_crash_mid_call_session_continues":                   reGolden(specView, specOpenPlugins),
+	"plugin_crash_mid_call_session_continues":                   reGolden(specView),
 	"plugin_event_and_after_hook_payloads":                      sameAsServe(),
 	"plugin_system_segment_in_every_request":                    sameAsServe(),
 	"plugin_system_transform_reads_session_messages":            sameAsServe(),
-	"plugin_tools_listed_and_run":                               reGolden(specView, specOpenPlugins),
+	"plugin_tools_listed_and_run":                               reGolden(specView),
 	"provider_429_then_ok":                                      reGolden(specView),
 	"provider_5xx_then_ok":                                      reGolden(specView),
 	"queue_delete_while_busy":                                   pendingOn("phase 4"),

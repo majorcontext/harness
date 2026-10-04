@@ -111,7 +111,8 @@ type SubscriptionOverage struct {
 
 // Session is a view of one session at HeadSeq. Usage sums every model and
 // summary call, but no goal evaluator call. SubscriptionUsage is null until a
-// call carries a snapshot.
+// call carries a snapshot. Plugins lists each configured plugin as the runtime
+// that serves the view knows it; the log does not hold it.
 type Session struct {
 	ID                string             `json:"id"`
 	ParentID          string             `json:"parent_id,omitempty"`
@@ -128,10 +129,20 @@ type Session struct {
 	LastTurn          *LastTurn          `json:"last_turn,omitempty"`
 	CompactionCount   int                `json:"compaction_count,omitempty"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage"`
+	Plugins           []Plugin           `json:"plugins,omitempty"`
 	HeadSeq           uint64             `json:"head_seq"`
 	SyncedSeq         uint64             `json:"synced_seq"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+// Plugin is a configured plugin. State is "not-spawned" until its first hook
+// or tool call, then "running" while its process lives.
+type Plugin struct {
+	Name  string   `json:"name"`
+	State string   `json:"state"`
+	Tools []string `json:"tools"`
+	Hooks []string `json:"hooks"`
 }
 
 // Goal is a condition that the session works toward, turn after turn,
