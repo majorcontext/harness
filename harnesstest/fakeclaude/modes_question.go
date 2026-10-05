@@ -12,6 +12,7 @@ var preInitModes = map[string]func(f *fake) bool{
 	"crash_before_init":         crashBeforeInit,
 	"compact_turn":              compactTurn,
 	"compact_after_tokens":      compactAfterTokens,
+	"compact_after_window":      compactAfterTokens,
 	"queued_empty_result":       queuedEmptyResult,
 	"queued_empty_result_error": queuedEmptyResult,
 	"question":                  question,

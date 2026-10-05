@@ -36,7 +36,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 		v.Queued = append(v.Queued, in.InputID)
 	}
 	c := s.Context()
-	if c.Tokens == 0 {
+	if c.Tokens == 0 && c.Source == "" {
 		c = eventlog.ContextMeasured{}
 	}
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c)}

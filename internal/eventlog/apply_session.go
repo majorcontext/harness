@@ -27,6 +27,9 @@ func (s *State) applySettings(e SettingsChanged) error {
 		return illegal("settings.changed has an empty model")
 	}
 	if e.Model != nil {
+		if *e.Model != s.model {
+			s.context.Window = 0
+		}
 		s.model = *e.Model
 	}
 	if e.Effort != nil {
@@ -51,7 +54,11 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 func (s *State) applyMeasured(e ContextMeasured) {
 	s.usage = s.usage.Add(e.Usage)
 	if e.Tokens > 0 || e.Source != "" {
-		s.context = ContextMeasured{Tokens: e.Tokens, Window: e.Window, Source: e.Source}
+		window := e.Window
+		if window == 0 && e.Source != "" && e.Source == s.context.Source {
+			window = s.context.Window
+		}
+		s.context = ContextMeasured{Tokens: e.Tokens, Window: window, Source: e.Source}
 	}
 	if e.SubscriptionUsage != nil {
 		s.subscribed = e.SubscriptionUsage

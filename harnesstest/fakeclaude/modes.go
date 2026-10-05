@@ -107,6 +107,7 @@ func hang(f *fake) {
 // fail a complete turn.
 var basicModes = map[string]mode{
 	"per_call_usage":              perCallUsage,
+	"compact_after_window":        perCallUsage,
 	"compact_boundary":            compactBoundary,
 	"rate_limit_event":            rateLimitTurn(true),
 	"rate_limit_event_no_overage": rateLimitTurn(false),

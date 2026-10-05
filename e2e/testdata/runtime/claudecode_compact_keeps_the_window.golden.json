@@ -1,0 +1,95 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "This session is being continued from a previous conversation ..."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "by_backend": true,
+        "folded": true
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 15989,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 12,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 41896,
+          "cache_write_tokens": 5753,
+          "input_tokens": 6,
+          "output_tokens": 187
+        }
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "compaction_count": 1,
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 17,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "cache_read_tokens": 41896,
+          "cache_write_tokens": 5753,
+          "input_tokens": 6,
+          "output_tokens": 187
+        }
+      }
+    }
+  }
+}
