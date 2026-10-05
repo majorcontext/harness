@@ -447,6 +447,7 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 			actions: append(append([]action{}, oneTurn...),
 				expectSystem{req: 1, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts."}},
+				expectSystem{req: 2, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts."}, sameAs: 1},
 				expectSystem{req: 3, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts."}, sameAs: 1},
 			),
 		},

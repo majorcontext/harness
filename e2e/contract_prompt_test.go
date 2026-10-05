@@ -88,6 +88,11 @@ func (a systemTail) run(t *testing.T, r *run) {
 // inTree is the driver of a scenario whose work dir is sub of a tree that
 // holds files.
 func inTree(files map[string]string, sub string) func(*testing.T, host, string) driver {
+	return inTreeWith(files, sub, nil)
+}
+
+// inTreeWith is inTree with keys in the user config of the host.
+func inTreeWith(files map[string]string, sub string, config map[string]any) func(*testing.T, host, string) driver {
 	return func(t *testing.T, h host, modelURL string) driver {
 		t.Helper()
 		base := resolved(t.TempDir())
@@ -100,7 +105,7 @@ func inTree(files map[string]string, sub string) func(*testing.T, host, string) 
 				t.Fatal(err)
 			}
 		}
-		cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(nil))
+		cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(config))
 		workDir := filepath.Join(base, sub)
 		if h.runtime {
 			return newRuntimeDriverIn(t, cfg, false, workDir)
@@ -242,18 +247,19 @@ func TestContractPromptInstructions(t *testing.T) {
 
 func TestContractPromptSystemOrder(t *testing.T) {
 	runScenarios(t, []scenario{{
-		name:   "system_segments_order_append_layers_then_instructions_then_skills",
-		config: map[string]any{"append_system_prompt": []string{"USER-LAYER", "PROJECT-LAYER"}},
-		model:  textReply("ok"),
-		actions: inDir(map[string]string{
+		name:  "system_segments_order_append_layers_then_instructions_then_skills",
+		model: textReply("ok"),
+		driver: inTreeWith(map[string]string{
 			"AGENTS.md":                        "be brief\n",
+			".harness.json":                    `{"append_system_prompt": ["PROJECT-LAYER"]}`,
 			".agents/skills/demo/SKILL.md":     skillFile("demo", "Demo.", "x"),
 			".agents/skills/zeta-two/SKILL.md": skillFile("zeta-two", "Zeta.", "x"),
-		}, append(slices.Clone(oneTurn), systemTail{parts: []string{
+		}, "", map[string]any{"append_system_prompt": []string{"USER-LAYER"}}),
+		actions: append(slices.Clone(oneTurn), systemTail{parts: []string{
 			"USER-LAYER", "PROJECT-LAYER",
 			instructionOf + "be brief\n",
 			skillHeader + "\ndemo — Demo. (path: <workdir>/.agents/skills/demo/SKILL.md)\nzeta-two — Zeta. (path: <workdir>/.agents/skills/zeta-two/SKILL.md)",
-		}})...),
+		}}),
 	}})
 }
 
