@@ -62,7 +62,7 @@ func (f *family) last(session, prefix string) (turn.Request, string) {
 	defer f.mu.Unlock()
 	for _, req := range slices.Backward(f.reqs) {
 		m := req.History[len(req.History)-1]
-		if p := strings.TrimPrefix(m.Parts[len(m.Parts)-1].Text, "OPERATOR MESSAGES (address these, then continue the task):\n1. "); (session == "" || req.SessionID == session) && strings.HasPrefix(p, prefix) {
+		if p := strings.TrimSuffix(strings.TrimPrefix(m.Parts[len(m.Parts)-1].Text, "OPERATOR MESSAGES (address these, then continue the task):\n1. "), "\n"); (session == "" || req.SessionID == session) && strings.HasPrefix(p, prefix) {
 			return req, p
 		}
 	}
