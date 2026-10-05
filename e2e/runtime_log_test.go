@@ -77,7 +77,7 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 			for _, id := range decodeEvent[struct {
 				InputIDs []string `json:"input_ids"`
 			}](t, ev).InputIDs {
-				say(ev.Seq, "msg_"+id, "user", inputs[id])
+				say(ev.Seq, "msg_"+id, "user", slices.DeleteFunc(slices.Clone(inputs[id]), func(p logPart) bool { return p.Type == eventlog.PartTaskReport }))
 			}
 		case "input.promoted":
 			id := decodeEvent[logInput](t, ev).InputID
@@ -138,8 +138,11 @@ func steerParts(inputs [][]logPart) []transcriptPart {
 		}
 		in = append(in, ps)
 	}
-	m := eventlog.SteerMessage(in)
-	return []transcriptPart{{Type: m.Parts[0].Type, Text: m.Parts[0].Text}}
+	var out []transcriptPart
+	for _, p := range eventlog.SteerMessage(in).Parts {
+		out = append(out, transcriptPart{Type: p.Type, Text: p.Text})
+	}
+	return out
 }
 
 func transcriptParts(parts []logPart) []transcriptPart {

@@ -136,7 +136,7 @@ func flatten(b *strings.Builder, m eventlog.Message, names map[string]string) {
 func textOf(m eventlog.Message) string {
 	var b strings.Builder
 	for _, p := range m.Parts {
-		if p.Type == eventlog.PartText {
+		if p.Type == eventlog.PartText || p.Type == eventlog.PartEngineContext {
 			if b.Len() > 0 {
 				b.WriteByte('\n')
 			}

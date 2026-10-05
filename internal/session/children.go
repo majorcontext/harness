@@ -32,19 +32,18 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.Sessio
 	})
 }
 
-// Settle appends the outcome of an unsettled child, and admits text as an
-// input with source child when text is not empty. A child that is not
+// Settle appends the outcome of an unsettled child, and admits report as an
+// input with source child when report is not empty. A child that is not
 // unsettled changes nothing, so a repeated report is safe.
-func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, text string) error {
+func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, report []eventlog.Part) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		switch {
 		case !slices.Contains(a.state.Unsettled(), s.ChildID):
 			reply(struct{}{}, nil)
-		case text == "":
+		case len(report) == 0:
 			reply(struct{}{}, a.append(s))
 		default:
-			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliverySteer, Source: sourceChild,
-				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
+			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliverySteer, Source: sourceChild, Parts: report}
 			_, err := a.admit(in, "", append(a.resumed(), s)...)
 			reply(struct{}{}, err)
 		}
@@ -53,15 +52,17 @@ func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, text string
 }
 
 // Settlement returns the outcome of the last ended turn of child session
-// id, and the text that reports it to the parent: the last assistant text,
-// as the Task tool of Claude Code returns. ok is false while a turn runs,
-// is suspended, or waits for an answer, and after a completed turn while
-// an input waits: the next turn reports.
-func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, string, bool) {
+// id, and the parts that report it to the parent: the text for a parent that
+// starts a turn with it, which holds the last assistant text as the Task tool
+// of Claude Code returns, and the task line for a parent that takes it in a
+// running turn. ok is false while a turn runs, is suspended, or waits for an
+// answer, and after a completed turn while an input waits: the next turn
+// reports.
+func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, []eventlog.Part, bool) {
 	last := s.LastEnded()
 	_, busy := s.Turn()
 	if busy || last.TurnID == "" || last.StopReason == eventlog.StopAwaitingInput || last.StopReason == eventlog.StopCompleted && len(s.Queue()) > 0 {
-		return eventlog.ChildSettled{}, "", false
+		return eventlog.ChildSettled{}, nil, false
 	}
 	out := eventlog.OutcomeDone
 	switch {
@@ -75,10 +76,28 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, string, bo
 	if d := last.Detail(); d != "" {
 		b.WriteString(": " + d)
 	}
-	if text := LastText(s.History()); text != "" {
+	text := LastText(s.History())
+	if text != "" {
 		b.WriteString("\n\n" + text)
 	}
-	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, b.String(), true
+	report := []eventlog.Part{{Type: eventlog.PartText, Text: b.String()}, {Type: eventlog.PartTaskReport, Text: taskLine(id, s, out, last.Detail(), text)}}
+	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, report, true
+}
+
+// taskLine is the line of a child in the task segment: its agent, its outcome
+// word, its result or its error, and its token usage. A newline in the text
+// of the child becomes a space, so the child cannot start a line of its own.
+func taskLine(id string, s *eventlog.State, out eventlog.Outcome, detail, text string) string {
+	word, body := "done", text
+	switch out {
+	case eventlog.OutcomeFailed:
+		word, body = "failed", detail
+	case eventlog.OutcomeCanceled:
+		word, body = "failed", "canceled"
+	}
+	body = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(body)
+	u := s.Usage()
+	return fmt.Sprintf("%s (agent=%s) %s: %s (usage: %d in / %d out)", id, s.Agent(), word, body, u.InputTokens, u.OutputTokens)
 }
 
 // LastText returns the text of the newest assistant message with text in h.

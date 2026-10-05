@@ -1,2 +1,3 @@
 migrate/migrate_test.go the journal converter is a pure codec with one row per journal shape, and no contract row reads an engine journal
 tools_test.go an embedder tool name cannot be written in the serve config, so no contract row reaches the New collision with a built-in name
+internal/session/children_test.go Settlement is a pure function of one log State, and no serve row reaches a crashed child that reports to a busy parent

@@ -19,11 +19,13 @@ type Settings struct {
 
 // Part types.
 const (
-	PartText       = "text"
-	PartReasoning  = "reasoning"
-	PartToolCall   = "tool_call"
-	PartToolResult = "tool_result"
-	PartBlob       = "blob"
+	PartText          = "text"
+	PartReasoning     = "reasoning"
+	PartToolCall      = "tool_call"
+	PartToolResult    = "tool_result"
+	PartBlob          = "blob"
+	PartTaskReport    = "task_report"
+	PartEngineContext = "engine_context"
 )
 
 // Part is one piece of message or input content.

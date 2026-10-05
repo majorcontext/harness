@@ -58,7 +58,7 @@ func renderEntry(m eventlog.Message) logEntry {
 	var lines []string
 	for _, p := range m.Parts {
 		switch {
-		case p.Type == eventlog.PartText && p.Text != "":
+		case (p.Type == eventlog.PartText || p.Type == eventlog.PartEngineContext) && p.Text != "":
 			lines = append(lines, capped(p.Text, logEntryCap))
 		case p.Type == eventlog.PartReasoning && p.Text != "":
 			lines = append(lines, "[reasoning] "+capped(p.Text, logEntryCap))

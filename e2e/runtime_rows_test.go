@@ -12,7 +12,7 @@ const (
 	specTaskInputs    = "Task notifications become inputs"
 	specChildReport   = "The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child"
 	specChildNoGoal   = "A child session has no `goal` tool"
-	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine?"
+	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
 	specAnswerNoSteer = "A run that answers a question takes no steer input"
 	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
@@ -45,6 +45,8 @@ const (
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
 	specOpenGauge         = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
 	specOpenRetry         = "Does a failed Claude Code turn run again?"
+	specOpenChildFailure  = "Does a failed child, an exhausted child, or a long result in a report to a busy parent keep the engine text?"
+	specOpenChildParts    = "Does the log keep a `task_report` part and an `engine_context` part?"
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -80,7 +82,8 @@ var runtimeRows = map[string]runtimeRow{
 	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
 	"child_usage_limit_delivered":                                 reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
-	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording),
+	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording, specOpenChildParts),
+	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildWording, specOpenChildFailure, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),
