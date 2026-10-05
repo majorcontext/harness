@@ -384,8 +384,8 @@ func (a *Actor) finish() {
 	a.runs.Wait()
 	<-a.flushed
 	a.cfg.Ownership.Release()
-	close(a.done)
 	a.cfg.Done()
+	close(a.done)
 }
 
 // Done closes after the actor stops, each of its runs exits, Sync

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
@@ -13,9 +14,13 @@ import (
 // ErrStaleEpoch reports a SyncBatch whose epoch is older than the receiver's.
 var ErrStaleEpoch = errors.New("harness: stale epoch")
 
+// ErrRejected reports a SyncBatch that the receiver refuses for a reason that
+// a resend cannot change, such as a malformed or oversized batch.
+var ErrRejected = errors.New("harness: the Sync receiver rejected the batch")
+
 // Sync replicates the records of a session elsewhere, in seq order. An
-// error that matches ErrStaleEpoch or ErrConflict rejects the batch for
-// good: a resend cannot change the answer. Any other error is retried.
+// error that matches ErrStaleEpoch, ErrConflict, or ErrRejected rejects the
+// batch for good: a resend cannot change the answer. Any other error is retried.
 type Sync interface {
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
@@ -29,7 +34,8 @@ const (
 // delivery resends the same batch, so a lost ack meets a duplicate. It
 // returns nil after the last record of a stopped actor is acknowledged, and
 // ErrNotOwned when the ownership ends first. A rejection stops the actor:
-// ErrStaleEpoch returns ErrNotOwned, and ErrConflict returns the rejection.
+// ErrStaleEpoch returns ErrNotOwned; ErrConflict and ErrRejected return the
+// rejection.
 func (a *Actor) replicate() error {
 	ctx, cancel := context.WithCancel(a.cfg.Base)
 	defer cancel()
@@ -63,8 +69,9 @@ func (a *Actor) replicate() error {
 			close(a.rejected)
 			return ErrNotOwned
 		}
-		if errors.Is(err, ErrConflict) {
+		if final(err) {
 			close(a.rejected)
+			slog.Error("harness: sync stopped for a session", "session", a.cfg.ID, "from_seq", b.FromSeq, "err", err)
 			return fmt.Errorf("harness: the Sync receiver rejected seq %d of session %s: %w", b.FromSeq, a.cfg.ID, err)
 		}
 		if err != nil {
@@ -80,30 +87,106 @@ func (a *Actor) replicate() error {
 	return ErrNotOwned
 }
 
+// final reports whether err rejects a batch for good, other than a stale epoch.
+func final(err error) bool {
+	return errors.Is(err, ErrConflict) || errors.Is(err, ErrRejected)
+}
+
 func (a *Actor) batch(from, head uint64) (*protocol.SyncBatch, error) {
-	recs, err := a.cfg.Store.Read(a.cfg.Base, from-1, int(min(head-from+1, page)))
+	return batch(a.cfg.Base, a.cfg.Store, a.cfg.Ownership.Epoch(), a.cfg.ID, from, head)
+}
+
+// maxBatchBytes bounds the JSON body of a SyncBatch. A receiver answers 413
+// above it, so a sender never builds a larger batch from more than one record.
+const maxBatchBytes = 32 << 20
+
+// batch reads the records from..head of session id, at most one page and
+// under maxBatchBytes, with the blobs that they name. It always returns the
+// first record, so one record that is over the bound is the receiver's to
+// refuse.
+func batch(ctx context.Context, st Storage, epoch uint64, id string, from, head uint64) (*protocol.SyncBatch, error) {
+	recs, err := st.Read(ctx, from-1, int(min(head-from+1, page)))
 	if err != nil {
 		return nil, err
 	}
 	if len(recs) == 0 {
 		return nil, errors.New("harness: log ends before the published head")
 	}
-	b := &protocol.SyncBatch{Epoch: a.cfg.Ownership.Epoch(), Session: a.cfg.ID, FromSeq: from}
+	b := &protocol.SyncBatch{Epoch: epoch, Session: id, FromSeq: from}
+	size := jsonOverhead + len(id)*6
 	for _, r := range recs {
-		b.Records = append(b.Records, r.Data)
-		if err := a.attachBlob(b, r); err != nil {
+		blobs, err := recordBlobs(ctx, st, r)
+		if err != nil {
 			return nil, err
+		}
+		cost := base64Len(len(r.Data))
+		for k, v := range blobs {
+			cost += len(k) + base64Len(len(v)) + jsonOverhead
+		}
+		if len(b.Records) > 0 && size+cost > maxBatchBytes {
+			break
+		}
+		size += cost
+		b.Records = append(b.Records, r.Data)
+		for k, v := range blobs {
+			if b.Blobs == nil {
+				b.Blobs = map[string][]byte{}
+			}
+			b.Blobs[k] = v
 		}
 	}
 	return b, nil
 }
 
-// attachBlob adds each blob that r points to. A later save under the same
-// key overwrites the blob, so the batch carries its newest content.
-func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
-	env, err := eventlog.Decode(r.Data)
+// jsonOverhead covers the quotes, colon, and comma that one JSON entry adds,
+// with room for the envelope of the batch.
+const jsonOverhead = 64
+
+func base64Len(n int) int { return (n+2)/3*4 + jsonOverhead }
+
+// CatchUp delivers the whole log of a stored session to sy, in pages from seq
+// 1; each acknowledgement moves the next page to the head that sy reports. It
+// appends nothing. It returns nil once sy holds every
+// record, ErrStaleEpoch, ErrConflict, or ErrRejected when sy rejects a batch for good, and
+// ctx.Err() when ctx ends first. Any other delivery error is resent with
+// backoff.
+func CatchUp(ctx context.Context, st Storage, sy Sync, epoch uint64, id string) error {
+	head, err := st.Head(ctx)
 	if err != nil {
 		return err
+	}
+	next, wait := uint64(1), minBackoff
+	for next <= head {
+		b, err := batch(ctx, st, epoch, id, next, head)
+		if err != nil {
+			return err
+		}
+		ack, err := sy.Deliver(ctx, *b)
+		switch {
+		case errors.Is(err, ErrStaleEpoch), final(err):
+			return err
+		case err != nil:
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+				t.Stop()
+				return ctx.Err()
+			}
+			wait = min(wait*2, maxBackoff)
+			continue
+		}
+		next, wait = ack.Head+1, minBackoff
+	}
+	return nil
+}
+
+// recordBlobs reads each blob that r points to. A later save under the same
+// key overwrites the blob, so the batch carries its newest content.
+func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][]byte, error) {
+	env, err := eventlog.Decode(r.Data)
+	if err != nil {
+		return nil, err
 	}
 	var keys []string
 	switch e := env.Event.(type) {
@@ -118,17 +201,18 @@ func (a *Actor) attachBlob(b *protocol.SyncBatch, r eventlog.Record) error {
 			}
 		}
 	}
+	var blobs map[string][]byte
 	for _, key := range keys {
-		data, err := a.blob(a.cfg.Base, key)
+		data, err := readBlob(ctx, st, key)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if b.Blobs == nil {
-			b.Blobs = map[string][]byte{}
+		if blobs == nil {
+			blobs = map[string][]byte{}
 		}
-		b.Blobs[key] = data
+		blobs[key] = data
 	}
-	return nil
+	return blobs, nil
 }
 
 // await waits for ch or for the ownership to end.

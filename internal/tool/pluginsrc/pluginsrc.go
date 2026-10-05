@@ -44,12 +44,13 @@ type Plugins struct {
 }
 
 // New returns the Plugins of cfg.Plugins, or nil when it is empty. It does no I/O.
-func New(cfg config.Config, workDir string, history History, blob Blob) *Plugins {
+func New(cfg config.Config, workDir string, history History, blob Blob, serveURL, runToken string) *Plugins {
 	if len(cfg.Plugins) == 0 {
 		return nil
 	}
 	return &Plugins{specs: cfg.Plugins, workDir: workDir,
-		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob}}}
+		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob},
+			ServeURL: serveURL, RunToken: runToken}}
 }
 
 // Start reads the manifest of each plugin with one bounded probe, once. The

@@ -122,12 +122,12 @@ type Config struct {
 	// configures no processes. Merge rules mirror MCPServers: keys merge,
 	// but a same-name project entry replaces the user entry wholesale.
 	Processes map[string]ProcessSpec `json:"processes,omitempty"`
-	// EventSink, when set, forwards every durable journal record to an
-	// HTTP endpoint (see server.Options.EventSink). A POINTER so an absent
-	// block ("no sink") is distinguishable from a present one with an empty
-	// URL, which is a configuration error rather than a silent no-op. A
-	// non-nil project block replaces the user block wholesale.
+	// EventSink forwards each durable journal record; a project block replaces the user block.
 	EventSink *EventSinkSpec `json:"event_sink,omitempty"`
+	// OwnerEpoch is the epoch of the grant of each session. 0 keeps epoch 1.
+	OwnerEpoch int `json:"owner_epoch,omitempty"`
+	// Sync posts each record to a control plane. Only the user file sets it.
+	Sync *SyncSpec `json:"sync,omitempty"`
 	// ContextWindowTokens sets engine.Config.ContextWindowTokens for every
 	// session this process creates: the model's context window size, in
 	// tokens. This is an EXPLICIT OVERRIDE, not the only way compaction gets
