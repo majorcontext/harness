@@ -1,0 +1,34 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "process_explode.dev": {
+      "status": 404,
+      "body": "404 page not found"
+    },
+    "process_logs.nope": {
+      "status": 404,
+      "body": {
+        "error": "no such process"
+      }
+    },
+    "process_restart.nope": {
+      "status": 404,
+      "body": {
+        "error": "no such process"
+      }
+    },
+    "process_start.nope": {
+      "status": 404,
+      "body": {
+        "error": "no such process"
+      }
+    },
+    "process_stop.nope": {
+      "status": 404,
+      "body": {
+        "error": "no such process"
+      }
+    }
+  }
+}

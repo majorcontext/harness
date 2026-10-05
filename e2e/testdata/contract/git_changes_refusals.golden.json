@@ -1,0 +1,42 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes": {
+      "status": 400,
+      "body": {
+        "error": "workdir \"/nonexistent\" is not under an allowed workspace root"
+      }
+    },
+    "workspace_changes#2": {
+      "status": 400,
+      "body": {
+        "error": "dir \"\u003cworkdir\u003e/missing\": stat \u003cworkdir\u003e/missing: no such file or directory"
+      }
+    },
+    "workspace_changes#3": {
+      "status": 409,
+      "body": {
+        "error": "no_base: HEAD has no commit yet"
+      }
+    },
+    "workspace_changes#4": {
+      "status": 409,
+      "body": {
+        "error": "no_base: no default branch found (checked origin/HEAD, origin/main, origin/master)"
+      }
+    },
+    "workspace_changes.bogus": {
+      "status": 400,
+      "body": {
+        "error": "scope \"bogus\" must be \"branch\" or \"uncommitted\""
+      }
+    },
+    "workspace_changes.uncommitted": {
+      "status": 409,
+      "body": {
+        "error": "not_a_git_repo: \"\u003cworkdir\u003e/plain\" is not a git work tree"
+      }
+    }
+  }
+}

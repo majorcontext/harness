@@ -92,38 +92,6 @@ var changeRows = []struct {
 	patch    []string
 	check    func(t *testing.T, dir string, c protocol.WorkspaceChanges)
 }{
-	{name: "uncommitted reports modified, deleted, and untracked files", scope: protocol.ScopeUncommitted,
-		setup: func(t *testing.T, dir string) {
-			write(t, dir, "seed.txt", "SEED!\n")
-			write(t, dir, "new.txt", "n\n")
-			if err := os.Remove(filepath.Join(dir, "gone.txt")); err != nil {
-				t.Fatal(err)
-			}
-		},
-		files: "gone.txt deleted +0 -1; new.txt added +1 -0; seed.txt modified +1 -1",
-		patch: []string{"-seed\n+SEED!\n", "deleted file mode", "diff --git a/new.txt b/new.txt"},
-		check: func(t *testing.T, dir string, c protocol.WorkspaceChanges) {
-			if c.Branch != "main" || c.Head != git(t, dir, "rev-parse", "HEAD") || c.Base != nil || c.Truncated {
-				t.Errorf("changes = branch %q head %q base %v truncated %v, want main at HEAD with no base", c.Branch, c.Head, c.Base, c.Truncated)
-			}
-			if st := git(t, dir, "status", "--porcelain"); !strings.Contains(st, "?? new.txt") {
-				t.Errorf("status = %q, want new.txt still untracked", st)
-			}
-		}},
-	{name: "branch diffs the work tree against the merge base", scope: protocol.ScopeBranch,
-		setup: func(t *testing.T, dir string) {
-			git(t, dir, "checkout", "-q", "-b", "feat")
-			write(t, dir, "seed.txt", "SEED!\n")
-			git(t, dir, "commit", "-q", "-am", "feat")
-			write(t, dir, "new.txt", "n\n")
-		},
-		files: "new.txt added +1 -0; seed.txt modified +1 -1",
-		check: func(t *testing.T, dir string, c protocol.WorkspaceChanges) {
-			base := git(t, dir, "rev-parse", "origin/main")
-			if c.Branch != "feat" || c.Base == nil || *c.Base != (protocol.BaseRef{Ref: "origin/main", SHA: base}) {
-				t.Errorf("changes = branch %q base %v, want feat on origin/main at %s", c.Branch, c.Base, base)
-			}
-		}},
 	{name: "a rename keeps the old path", scope: protocol.ScopeUncommitted,
 		setup: func(t *testing.T, dir string) { git(t, dir, "mv", "seed.txt", "moved.txt") },
 		files: "moved.txt renamed +0 -0 from seed.txt"},
@@ -386,16 +354,6 @@ func fileStamp(t *testing.T, path string) string {
 
 func TestChangesRefusals(t *testing.T) {
 	root := t.TempDir()
-	plain := filepath.Join(root, "plain")
-	unborn := filepath.Join(root, "unborn")
-	nobase := filepath.Join(root, "nobase")
-	for _, d := range []string{plain, unborn, nobase} {
-		write(t, d, "x.txt", "x\n")
-	}
-	git(t, unborn, "init", "-q", "-b", "main")
-	git(t, nobase, "init", "-q", "-b", "main")
-	git(t, nobase, "add", ".")
-	git(t, nobase, "commit", "-q", "-m", "only")
 	if err := os.Symlink(t.TempDir(), filepath.Join(root, "escape")); err != nil {
 		t.Fatal(err)
 	}
@@ -427,14 +385,8 @@ func TestChangesRefusals(t *testing.T) {
 		err                    error
 		msg                    string
 	}{
-		{"unknown scope", root, "", "bogus", nil, workspace.ErrInvalid, `invalid request: scope "bogus" must be "branch" or "uncommitted"`},
-		{"dir outside the root", root, "/nonexistent", "", nil, workspace.ErrInvalid, `invalid request: workdir "/nonexistent" is not under an allowed workspace root`},
-		{"missing dir", root, "missing", "", nil, workspace.ErrInvalid, `invalid request: dir "` + root + `/missing": stat ` + root + `/missing: no such file or directory`},
 		{"symlink out of the root", root, "escape", "", nil, workspace.ErrInvalid, `invalid request: dir "` + root + `/escape" escapes every allowed workspace root`},
-		{"not a work tree", root, "plain", protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_git_repo: "` + plain + `" is not a git work tree`},
 		{"a colon in the root does not reach an outer repository", inner, inner, protocol.ScopeUncommitted, nil, workspace.ErrNotRepo, `not_a_git_repo: "` + inner + `" is not a git work tree`},
-		{"branch scope with no commit", root, "unborn", "", nil, workspace.ErrNoBase, "no_base: HEAD has no commit yet"},
-		{"branch scope with no default branch", root, "nobase", "", nil, workspace.ErrNoBase, "no_base: no default branch found (checked origin/HEAD, origin/main, origin/master)"},
 		{"branch scope with no common ancestor", root, "unrelated", "", nil, workspace.ErrNoBase, "no_base: HEAD and origin/main share no common ancestor"},
 		{"an ended deadline", filters, "", protocol.ScopeUncommitted, canceled, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
 		{"a flood of filter drivers", filters, "", protocol.ScopeUncommitted, nil, workspace.ErrTooManyChanges, "too_many_changes: request exceeded its time budget diffing a large change set"},
@@ -448,15 +400,5 @@ func TestChangesRefusals(t *testing.T) {
 		if !errors.Is(err, row.err) || err.Error() != row.msg {
 			t.Errorf("%s: Changes = %v, want %v: %s", row.name, err, row.err, row.msg)
 		}
-	}
-}
-
-func TestChangesOfAnUnbornRepository(t *testing.T) {
-	dir := t.TempDir()
-	git(t, dir, "init", "-q", "-b", "main")
-	write(t, dir, "first.txt", "1\n")
-	c, err := workspace.Changes(context.Background(), dir, "", protocol.ScopeUncommitted)
-	if err != nil || c.Head != "" || c.Branch != "main" || files(c) != "first.txt added +1 -0" {
-		t.Errorf("Changes = %+v, %v; want first.txt added on unborn main", c, err)
 	}
 }

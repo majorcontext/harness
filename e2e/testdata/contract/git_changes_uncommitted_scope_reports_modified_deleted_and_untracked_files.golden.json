@@ -1,0 +1,63 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "git_status": {
+      "status": 200,
+      "body": {
+        "porcelain": "M a.txt\n D gone.txt\n?? new.txt\n?? page.html"
+      }
+    },
+    "workspace_changes.uncommitted": {
+      "status": 200,
+      "body": {
+        "branch": "main",
+        "dir": "\u003cworkdir\u003e",
+        "files": [
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 1,
+            "large": false,
+            "path": "a.txt",
+            "status": "modified"
+          },
+          {
+            "additions": 0,
+            "binary": false,
+            "deletions": 1,
+            "large": false,
+            "path": "gone.txt",
+            "status": "deleted"
+          },
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 0,
+            "large": false,
+            "path": "new.txt",
+            "status": "added"
+          },
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 0,
+            "large": false,
+            "path": "page.html",
+            "status": "added"
+          }
+        ],
+        "head": "cf686f8b2ac22b3497316ff6dcd647810280e840",
+        "patch": "diff --git a/a.txt b/a.txt\nindex 814f4a4..293712b 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO!\ndiff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\nindex b023018..0000000\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..8ba3a16\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+n\ndiff --git a/page.html b/page.html\nnew file mode 100644\nindex 0000000..6c2d54d\n--- /dev/null\n+++ b/page.html\n@@ -0,0 +1 @@\n+\u003cb\u003e\u0026\u003c/b\u003e\n",
+        "scope": "uncommitted",
+        "truncated": false
+      }
+    },
+    "workspace_changes_wire.uncommitted": {
+      "status": 200,
+      "body": {
+        "patch_is_html_escaped": false
+      }
+    }
+  }
+}

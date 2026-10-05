@@ -1,0 +1,66 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: workdir \"/nonexistent\" is not under an allowed workspace root"
+        }
+      }
+    },
+    "workspace_changes#2": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: dir \"\u003cworkdir\u003e/missing\": stat \u003cworkdir\u003e/missing: no such file or directory"
+        }
+      }
+    },
+    "workspace_changes#3": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "no_base",
+          "details": {},
+          "message": "no_base: HEAD has no commit yet"
+        }
+      }
+    },
+    "workspace_changes#4": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "no_base",
+          "details": {},
+          "message": "no_base: no default branch found (checked origin/HEAD, origin/main, origin/master)"
+        }
+      }
+    },
+    "workspace_changes.bogus": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: scope \"bogus\" must be \"branch\" or \"uncommitted\""
+        }
+      }
+    },
+    "workspace_changes.uncommitted": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "not_a_git_repo",
+          "details": {},
+          "message": "not_a_git_repo: \"\u003cworkdir\u003e/plain\" is not a git work tree"
+        }
+      }
+    }
+  }
+}

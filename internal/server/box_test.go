@@ -2,14 +2,8 @@ package server_test
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -44,48 +38,6 @@ func boxWith(t *testing.T, workDir string, dev config.ProcessSpec) (*harness.Run
 		srv.Close()
 	})
 	return r, srv.URL
-}
-
-func status(t *testing.T, method, url string) process.Status {
-	t.Helper()
-	var st process.Status
-	if code := call(t, method, url, "", &st); code != http.StatusOK {
-		t.Fatalf("%s %s = %d", method, url, code)
-	}
-	return st
-}
-
-func TestProcessRoutes(t *testing.T) {
-	url := serveBox(t, t.TempDir())
-	var list []process.Info
-	want(t, "list status", call(t, "GET", url+"/processes", "", &list), http.StatusOK)
-	if len(list) != 1 || list[0].Name != "dev" || list[0].Origin != process.OriginConfig || list[0].Status.State != "" {
-		t.Errorf("list = %+v, want dev from config, never started", list)
-	}
-	started := status(t, "POST", url+"/processes/dev/start")
-	if started.State != process.StateReady || started.PID == 0 {
-		t.Errorf("start = %+v, want ready", started)
-	}
-	want(t, "pid of a second start", status(t, "POST", url+"/processes/dev/start").PID, started.PID)
-	var logs struct {
-		Content string         `json:"content"`
-		Status  process.Status `json:"status"`
-	}
-	want(t, "logs status", call(t, "GET", url+"/processes/dev/logs?tail=1", "", &logs), http.StatusOK)
-	if logs.Content != "two" || logs.Status.PID != started.PID {
-		t.Errorf("logs = %+v, want the last line and the status", logs)
-	}
-	if restarted := status(t, "POST", url+"/processes/dev/restart"); restarted.State != process.StateReady || restarted.PID == started.PID {
-		t.Errorf("restart = %+v, want ready with a new pid", restarted)
-	}
-	want(t, "stop", status(t, "POST", url+"/processes/dev/stop").State, process.StateStopped)
-	errorRows(t, url, []errorRow{
-		{"POST", "/processes/nope/start", http.StatusNotFound, protocol.CodeProcessNotFound},
-		{"POST", "/processes/nope/stop", http.StatusNotFound, protocol.CodeProcessNotFound},
-		{"POST", "/processes/nope/restart", http.StatusNotFound, protocol.CodeProcessNotFound},
-		{"GET", "/processes/nope/logs", http.StatusNotFound, protocol.CodeProcessNotFound},
-		{"POST", "/processes/dev/explode", http.StatusNotFound, protocol.CodeInvalidRequest},
-	})
 }
 
 func TestProcessActionsAfterCloseAreDraining(t *testing.T) {
@@ -132,39 +84,4 @@ func errorRows(t *testing.T, url string, rows []errorRow) {
 			t.Errorf("%s %s = %d %+v, want %d %s", row.method, row.path, code, got.Error, row.status, row.code)
 		}
 	}
-}
-
-func TestWorkspaceChanges(t *testing.T) {
-	dir := t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(dir, "a.html"), []byte("<b>&</b>\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	url := serveBox(t, dir)
-	resp, err := http.Get(url + "/workspace/changes?scope=uncommitted")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	var got protocol.WorkspaceChanges
-	if err := json.Unmarshal(body, &got); err != nil || resp.StatusCode != http.StatusOK || len(got.Files) != 1 || got.Files[0].Path != "a.html" {
-		t.Fatalf("GET /workspace/changes = %d %s, want a.html added", resp.StatusCode, body)
-	}
-	if !strings.Contains(string(body), "+<b>&</b>") {
-		t.Errorf("body escapes the patch as HTML: %s", body)
-	}
-	errorRows(t, url, []errorRow{
-		{"GET", "/workspace/changes?scope=bogus", http.StatusBadRequest, protocol.CodeInvalidRequest},
-		{"GET", "/workspace/changes?dir=/nonexistent", http.StatusBadRequest, protocol.CodeInvalidRequest},
-		{"GET", "/workspace/changes", http.StatusConflict, protocol.CodeNoBase},
-	})
-	plain := serveBox(t, t.TempDir())
-	errorRows(t, plain, []errorRow{{"GET", "/workspace/changes?dir=.", http.StatusConflict, protocol.CodeNotAGitRepo}})
 }

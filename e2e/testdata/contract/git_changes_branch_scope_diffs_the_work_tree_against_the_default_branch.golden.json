@@ -1,0 +1,45 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "workspace_changes": {
+      "status": 200,
+      "body": {
+        "base": {
+          "ref": "origin/main",
+          "sha": "cf686f8b2ac22b3497316ff6dcd647810280e840"
+        },
+        "branch": "feat",
+        "dir": "\u003cworkdir\u003e",
+        "files": [
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 1,
+            "large": false,
+            "path": "a.txt",
+            "status": "modified"
+          },
+          {
+            "additions": 1,
+            "binary": false,
+            "deletions": 0,
+            "large": false,
+            "path": "new.txt",
+            "status": "added"
+          }
+        ],
+        "head": "62acc465ff3997a60c9f6ff753f406a75d8cfeb9",
+        "patch": "diff --git a/a.txt b/a.txt\nindex 814f4a4..293712b 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO!\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..8ba3a16\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+n\n",
+        "scope": "branch",
+        "truncated": false
+      }
+    },
+    "workspace_changes_wire": {
+      "status": 200,
+      "body": {
+        "patch_is_html_escaped": false
+      }
+    }
+  }
+}
