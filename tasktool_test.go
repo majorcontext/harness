@@ -2,7 +2,6 @@ package harness_test
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -74,11 +73,6 @@ var taskActionRows = []struct {
 		args: map[string]any{"prompt": "child work"}, want: "task: max_tree_tokens 10: this session tree has used N tokens"},
 }
 
-// usedTokens matches the token count of a refused spawn. A report that
-// reaches the parent in the middle of its turn costs one model call fewer than
-// a report that starts a turn, and which one happens is a race.
-var usedTokens = regexp.MustCompile(`used \d+ tokens`)
-
 func TestTaskActions(t *testing.T) {
 	for _, tc := range taskActionRows {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,7 +118,8 @@ func TestTaskActions(t *testing.T) {
 				free()
 				synctest.Wait()
 				res := f.results("s1")
-				if got := usedTokens.ReplaceAllString(strings.ReplaceAll(res[len(res)-1], kid, "KID"), "used N tokens"); got != tc.want {
+				// A report that joins a running turn costs the parent one model call less, so the token count races.
+				if got := strings.NewReplacer(kid, "KID", "used 24 tokens", "used N tokens", "used 30 tokens", "used N tokens").Replace(res[len(res)-1]); got != tc.want {
 					t.Errorf("result\n%s\nwant\n%s", got, tc.want)
 				}
 				if _, got := f.last("s1", report); !strings.Contains(got, tc.report) {

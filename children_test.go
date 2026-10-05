@@ -56,8 +56,7 @@ func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 }
 
 // last returns the last part of the newest request that session sent with
-// a last part that starts with prefix, or "". A report that joined a running
-// turn counts without its steer heading.
+// a last part that starts with prefix, or "". A steer heading does not count.
 func (f *family) last(session, prefix string) (turn.Request, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
