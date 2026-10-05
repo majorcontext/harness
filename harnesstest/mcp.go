@@ -278,11 +278,15 @@ type MCPServer struct {
 	ready    bool
 }
 
-// NewMCPServer starts a server that serves spec until t ends.
+// NewMCPServer starts a server that serves spec until t ends. It closes each
+// connection after its response, so a client has no pooled connection to
+// reuse once Close ran.
 func NewMCPServer(t testing.TB, spec MCPSpec) *MCPServer {
 	t.Helper()
 	s := &MCPServer{h: &mcpHandler{spec: spec}}
-	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
+	s.srv = httptest.NewUnstartedServer(http.HandlerFunc(s.serve))
+	s.srv.Config.SetKeepAlivesEnabled(false)
+	s.srv.Start()
 	t.Cleanup(s.srv.Close)
 	return s
 }

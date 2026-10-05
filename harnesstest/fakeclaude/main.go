@@ -32,7 +32,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -44,14 +43,23 @@ type fake struct {
 	sessionID string
 	out       *bufio.Writer
 	stdin     *bufio.Reader
+	held      []byte
 }
 
 func (f *fake) emit(frames ...obj) {
+	buf := f.held
+	f.held = nil
 	for _, v := range frames {
 		b, _ := json.Marshal(v)
-		_, _ = fmt.Fprintln(f.out, string(b))
-		_ = f.out.Flush()
+		buf = append(append(buf, b...), '\n')
 	}
+	_, _ = f.out.Write(buf)
+	_ = f.out.Flush()
+}
+
+func (f *fake) hold(v obj) {
+	b, _ := json.Marshal(v)
+	f.held = append(append(f.held, b...), '\n')
 }
 
 func (f *fake) readLine() (string, bool) {
@@ -118,11 +126,12 @@ func main() {
 		init["model"] = "claude-opus-5-5[1m]"
 	}
 	initExtras(init)
-	f.emit(init)
+	f.hold(init)
 	if h, ok := modes[mode]; ok {
 		h(f)
 	} else {
 		normalTurn(f)
 	}
+	f.emit()
 	callHostedTool(f)
 }

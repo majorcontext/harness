@@ -92,7 +92,10 @@ func compactBoundary(f *fake) {
 	)
 }
 
-func hang(*fake) { time.Sleep(time.Hour) }
+func hang(f *fake) {
+	f.emit()
+	time.Sleep(time.Hour)
+}
 
 // basicModes cover result classification and process exit. The retry class
 // comes from the result subtype and text: "rate_limit_error" and

@@ -247,7 +247,7 @@ func TestCleanupSendsSIGTERMBeforeSIGKILL(t *testing.T) {
 	skipShort(t)
 	marker := filepath.Join(t.TempDir(), "got-term")
 	t.Run("body", func(t *testing.T) {
-		shellGroup(t, "trap 'touch "+marker+"; exit 0' TERM; sleep 600 & echo $!; wait")
+		shellGroup(t, "trap 'touch "+marker+"; exit 0' TERM; sleep 600 & echo $!; while :; do sleep 0.01; done")
 	})
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("process did not see SIGTERM at test cleanup: %v", err)

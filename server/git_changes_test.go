@@ -391,7 +391,7 @@ func TestHandleGitChangesUncommitted(t *testing.T) {
 func TestHandleGitChangesBranchScopeMergeBase(t *testing.T) {
 	dir := newGitRepo(t)
 	bare := t.TempDir()
-	runTestGit(t, bare, "init", "-q", "--bare")
+	runTestGit(t, bare, "init", "-q", "--bare", "-b", "master")
 	runTestGit(t, dir, "remote", "add", "origin", bare)
 	runTestGit(t, dir, "push", "-q", "origin", "HEAD:master")
 	runTestGit(t, dir, "remote", "set-head", "origin", "-a")
@@ -1072,7 +1072,7 @@ func TestHandleGitChangesUnbornHEAD(t *testing.T) {
 func TestHandleGitChangesStaleOriginHEADFallsThrough(t *testing.T) {
 	dir := newGitRepo(t)
 	bare := t.TempDir()
-	runTestGit(t, bare, "init", "-q", "--bare")
+	runTestGit(t, bare, "init", "-q", "--bare", "-b", "master")
 	runTestGit(t, dir, "remote", "add", "origin", bare)
 	runTestGit(t, dir, "push", "-q", "origin", "HEAD:master")
 	runTestGit(t, dir, "remote", "set-head", "origin", "-a") // symref -> refs/remotes/origin/master
