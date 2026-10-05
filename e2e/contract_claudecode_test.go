@@ -189,6 +189,7 @@ func TestContractClaudeCodeSettings(t *testing.T) {
 			setModel{as: "a", model: "claude-code/sonnet"},
 			release{step: "call"},
 			waitIdle{as: "a"},
+			getSession{as: "a"},
 			submit{as: "a", text: "again"},
 			waitIdle{as: "a"},
 			claudeSession{as: "a"},

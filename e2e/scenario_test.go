@@ -232,7 +232,7 @@ type command struct {
 }
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
-// listSessions needs at most one resident session: the server lists them in map order.
+// listSessions lists every session in creation order.
 type listSessions struct{}
 type getSession struct{ as string }
 type sessionStatus struct{}

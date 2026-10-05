@@ -54,6 +54,7 @@ const (
 
 	specContinuation   = "in `<harness-engine-context>` tags, so the model reads it as engine text"
 	specListOrder      = "list in creation order"
+	specStatusRoute    = "| `/wait`, `/request`, `/session/status`, `/event/tip` | Delete; the new API covers them |"
 	specAnswerReceipt  = "an answer replies 202 {seq, status}, a dismissal 204"
 	specOpenGauge      = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
 	specOpenRetry      = "Does a failed Claude Code turn run again?"
@@ -138,7 +139,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_context_overflow":                                    reGolden(specView, specOverflowFails),
 	"bifrost_goal_met_first_turn":                                 reGolden(specItems),
 	"bifrost_goal_not_met_then_met":                               reGolden(specItems),
-	"bifrost_max_tokens_continuation":                             reGolden(specView, specContinuation),
+	"bifrost_max_tokens_continuation":                             reGolden(specView, specItems, specContinuation),
 	"bifrost_prompt_attachments":                                  reGolden(specItems),
 	"bifrost_reasoning_and_effort":                                reGolden(specItems, specUpdate),
 	"bifrost_text_reply":                                          reGolden(specItems),
@@ -299,7 +300,7 @@ var runtimeRows = map[string]runtimeRow{
 	"sse_resume_after_kill":                                       reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                           reGolden(specCursor, specBoxGlobal),
 	"list_sessions_in_creation_order":                             reGolden(specView, specListOrder),
-	"status_and_list_cold_after_restart":                          reGolden(specView, specListOrder),
+	"status_and_list_cold_after_restart":                          reGolden(specView, specListOrder, specStatusRoute),
 	"steer_joins_the_turn_at_the_tool_boundary":                   sameAsServe(),
 	"stream_stall":                                                reGolden(specView),
 	"task_child_result_reaches_parent":                            reGolden(specTaskInputs, specChildReport, specChildNoGoal),

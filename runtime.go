@@ -128,6 +128,7 @@ type Runtime struct {
 	threshold float64
 	keep      int
 	name      func() string
+	births    births
 	base      context.Context
 	cancel    context.CancelFunc
 	group     sync.WaitGroup
@@ -372,11 +373,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		own.Release()
 		return nil, err
 	}
-	profile, err := r.profile(c.Agent, l.profile)
-	if err != nil {
-		own.Release()
-		return nil, err
-	}
+	profile := r.profile(c.Agent, l.profile)
 	var plug *pluginsrc.Session
 	if r.plugins != nil {
 		plug = r.plugins.Session(id)
@@ -417,16 +414,17 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 }
 
 // profile returns the agent profile of a session: read, or read from the
-// WorkDir now. The zero profile is no profile.
-func (r *Runtime) profile(agent string, read *prompt.Profile) (prompt.Profile, error) {
+// WorkDir now. The zero profile is no profile. A repeated agent name fails a
+// spawn, not the open of a session that exists.
+func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	switch {
 	case read != nil:
-		return *read, nil
+		return *read
 	case agent == "":
-		return prompt.Profile{}, nil
+		return prompt.Profile{}
 	}
-	profiles, err := prompt.Profiles(r.agentDirs)
-	return profiles[agent], err
+	profiles, _ := prompt.Profiles(r.agentDirs)
+	return profiles[agent]
 }
 
 // appended gives the events of session id to its plugins, and reports the

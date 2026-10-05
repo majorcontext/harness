@@ -52,11 +52,13 @@ var profileKeys = []string{"name", "description", "tools", "model", "color"}
 // the agent format of Claude Code, by name. A file replaces a built-in
 // profile of its name. A file that is not valid is skipped with a WARN log
 // line. A file that repeats the name of an earlier file, in one directory or
-// across dirs, fails the load, and the error names both files.
+// across dirs, is left out, and the load returns the profiles of the other
+// files with an error that names both files of the first repeat.
 func Profiles(dirs []string) (map[string]Profile, error) {
 	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
 	source := map[string]string{}
 	read := map[string]bool{}
+	var repeated error
 	for _, dir := range dirs {
 		if dir = filepath.Clean(dir); read[dir] {
 			continue
@@ -74,13 +76,16 @@ func Profiles(dirs []string) (map[string]Profile, error) {
 				continue
 			}
 			if first, ok := source[p.Name]; ok {
-				return nil, fmt.Errorf("agent definition %s: name %q already defined in %s", path, p.Name, first)
+				if repeated == nil {
+					repeated = fmt.Errorf("agent definition %s: name %q already defined in %s", path, p.Name, first)
+				}
+				continue
 			}
 			source[p.Name] = path
 			out[p.Name] = p
 		}
 	}
-	return out, nil
+	return out, repeated
 }
 
 var errFields = errors.New("name and description are required")

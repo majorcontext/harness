@@ -57,6 +57,19 @@ func TestContractTaskRepeatedProfileNames(t *testing.T) {
 				writeFile{path: "team/reader.md", body: other},
 			}, attempt),
 		},
+		{
+			name:       "session_of_a_child_opens_after_an_agent_name_is_repeated",
+			concurrent: true,
+			model:      delegation("general-purpose", childDone),
+			actions: slices.Concat(spawned, []action{
+				writeFile{path: ".agents/reader.md", body: readerProfile},
+				writeFile{path: ".agents/reader_again.md", body: other},
+				restart{},
+				sendToSession{as: "kid", text: "more work"},
+				waitIdle{as: "kid"},
+				getSession{as: "kid"},
+			}),
+		},
 	})
 }
 
