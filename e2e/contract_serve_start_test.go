@@ -105,12 +105,7 @@ func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 	first.proc.terminate(t)
 
 	receiver := newSyncReceiver(t, nil)
-	tokenFile := filepath.Join(t.TempDir(), "sync-token")
-	if err := os.WriteFile(tokenFile, []byte(syncToken+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg := writeGoalConfigWith(t, fake.URL(), scenarioConfig(map[string]any{"owner_epoch": 7,
-		"sync": map[string]any{"url": receiver.srv.URL + syncPath, "token_file": tokenFile}}))
+	cfg := serveSyncConfig(t, fake, receiver.srv.URL)
 	second := &runtimeDriver{store: first.store, workDir: first.workDir, serve: true, configPath: cfg, client: first.client,
 		lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	second.start(t)

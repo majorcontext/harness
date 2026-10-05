@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -89,6 +90,9 @@ func serveCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := removeStopReport(dir); err != nil {
+		return err
+	}
 	store := newObservedStore(harness.NewDiskStore(dir), logger)
 	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, AskUserQuestion: o.ask,
 		ServeURL: serveURLForAddr(o.addr), RunToken: token})
@@ -108,24 +112,29 @@ func serveCmd(args []string) error {
 	httpSrv := &http.Server{Handler: corsHandler(bearer(rt.Handler(), token, unauthenticated), o.corsOrigin)}
 	errc := make(chan error, 1)
 	go func() { errc <- httpSrv.Serve(ln) }()
+	var caughtUp atomic.Bool
 	resumed := make(chan struct{})
 	go func() {
 		defer close(resumed)
-		startWork(ctx, rt, store, logger)
+		startWork(ctx, rt, store, logger, &caughtUp)
 	}()
+	replicated := func() bool { return cfg.Sync != nil && caughtUp.Load() }
 	logger.Info("serve start", "addr", o.addr, "version", version)
 	select {
 	case err := <-errc:
 		stop()
 		<-resumed
-		return errors.Join(err, closeRuntime(rt))
+		closeErr := closeRuntime(rt)
+		return errors.Join(err, closeErr, writeStopReport(dir, closeErr, replicated()))
 	case <-ctx.Done():
 		<-resumed
 		budget, cancel := context.WithTimeout(context.Background(), serveBudget)
 		defer cancel()
 		closed := make(chan error, 1)
 		go func() { closed <- rt.Close(budget) }()
-		return errors.Join(httpSrv.Shutdown(budget), <-closed)
+		shutErr := httpSrv.Shutdown(budget)
+		closeErr := <-closed
+		return errors.Join(shutErr, closeErr, writeStopReport(dir, closeErr, replicated()))
 	}
 }
 
@@ -147,10 +156,12 @@ func serveURLForAddr(addr string) string {
 // every stored session through Sync, and opens each session that has work to
 // resume. A session that does not replay, or does not open, stays as it is
 // and is logged; it never stops serve.
-func startWork(ctx context.Context, rt *harness.Runtime, store harness.Store, logger *slog.Logger) {
+func startWork(ctx context.Context, rt *harness.Runtime, store harness.Store, logger *slog.Logger, caughtUp *atomic.Bool) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		if err := rt.CatchUp(ctx); err != nil && !errors.Is(err, harness.ErrDraining) && ctx.Err() == nil {
+		err := rt.CatchUp(ctx)
+		caughtUp.Store(err == nil)
+		if err != nil && !errors.Is(err, harness.ErrDraining) && ctx.Err() == nil {
 			logger.Error("catch up stored sessions", "error", err.Error())
 		}
 	})
