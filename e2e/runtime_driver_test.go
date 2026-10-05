@@ -31,6 +31,8 @@ type runtimeDriver struct {
 	rt             *harness.Runtime
 	srv            *httptest.Server
 	inputs         int
+	lastInput      map[string]string
+	lastTyped      map[string]string
 }
 
 // runtimeVersion is the build version that serve reports in its engine banner.
@@ -53,7 +55,7 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask}
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, cfg: *c, ask: ask, lastInput: map[string]string{}, lastTyped: map[string]string{}}
 	d.start(t)
 	t.Cleanup(func() { d.stop(t, context.Background()) })
 	return d
@@ -215,7 +217,16 @@ func (d *runtimeDriver) Create(t *testing.T) string {
 // turn at the next tool boundary, and so does a steer input.
 func (d *runtimeDriver) input(id, text, delivery, source string) (string, map[string]any) {
 	d.inputs++
-	body := map[string]any{"id": fmt.Sprintf("in%d", d.inputs),
+	d.lastInput[id] = fmt.Sprintf("in%d", d.inputs)
+	if source == protocol.SourceTyped {
+		d.lastTyped[id] = d.lastInput[id]
+	}
+	return d.inputAs(id, d.lastInput[id], text, delivery, source)
+}
+
+// inputAs is input with the id of the input given.
+func (d *runtimeDriver) inputAs(id, inputID, text, delivery, source string) (string, map[string]any) {
+	body := map[string]any{"id": inputID,
 		"parts": []protocol.Part{{Type: protocol.PartText, Text: text}}}
 	if delivery != "" {
 		body["delivery"] = delivery
@@ -259,6 +270,102 @@ func (d *runtimeDriver) Command(t *testing.T, id, text string) callResult {
 	t.Helper()
 	path, body := d.input(id, text, protocol.DeliveryQueue, protocol.SourceTyped)
 	return d.call(t, http.MethodPost, path, body)
+}
+
+func (d *runtimeDriver) CreateModel(t *testing.T, model string) callResult {
+	t.Helper()
+	body := map[string]any{}
+	if model != "" {
+		body["model"] = model
+	}
+	return d.call(t, http.MethodPost, "/sessions", body)
+}
+
+func (d *runtimeDriver) PostInput(t *testing.T, id, text string) callResult {
+	t.Helper()
+	return d.Send(t, id, text)
+}
+
+func (d *runtimeDriver) Repeat(t *testing.T, id, text string, typed bool) callResult {
+	t.Helper()
+	delivery, source, inputID := "", "", d.lastInput[id]
+	if typed {
+		delivery, source, inputID = protocol.DeliveryQueue, protocol.SourceTyped, d.lastTyped[id]
+	}
+	path, body := d.inputAs(id, inputID, text, delivery, source)
+	return d.call(t, http.MethodPost, path, body)
+}
+
+func (d *runtimeDriver) SteerOtherTurn(t *testing.T, id, text string) callResult {
+	t.Helper()
+	d.inputs++
+	path, body := d.inputAs(id, fmt.Sprintf("in%d", d.inputs), text, protocol.DeliverySteer, "")
+	body["expected_turn_id"] = "turn_other"
+	return d.call(t, http.MethodPost, path, body)
+}
+
+// commandList reads the newest status of each typed command of a session from
+// its log, in the order of the first record of each, with the head seq that it
+// read, and reports whether one still runs.
+func (d *runtimeDriver) commandList(t *testing.T, id string) (recs []any, head uint64, running bool) {
+	t.Helper()
+	type record struct {
+		InputID string          `json:"input_id"`
+		Line    string          `json:"line"`
+		Name    string          `json:"name"`
+		Status  string          `json:"status"`
+		Text    string          `json:"text"`
+		Result  json.RawMessage `json:"result"`
+	}
+	var order []string
+	newest := map[string]record{}
+	for _, ev := range d.events(t, id) {
+		head = ev.Seq
+		if ev.Kind != "command.recorded" {
+			continue
+		}
+		r := decodeEvent[record](t, ev)
+		if _, ok := newest[r.InputID]; !ok {
+			order = append(order, r.InputID)
+		}
+		newest[r.InputID] = r
+	}
+	recs = []any{}
+	for _, in := range order {
+		r := newest[in]
+		rec := map[string]any{"line": r.Line, "name": r.Name, "status": r.Status}
+		if r.Text != "" {
+			rec["text"] = r.Text
+		}
+		if len(r.Result) > 0 {
+			rec["result"] = decodeBody(t, "command result", r.Result)
+		}
+		running = running || r.Status == protocol.CommandAccepted
+		recs = append(recs, rec)
+	}
+	return recs, head, running
+}
+
+func (d *runtimeDriver) AwaitCommands(t *testing.T, id string) {
+	t.Helper()
+	for {
+		_, head, running := d.commandList(t, id)
+		if !running {
+			return
+		}
+		d.stream(t, id, head, false, func(_ string, ev protocol.Event) bool { return ev.Kind == "command.recorded" })
+	}
+}
+
+func (d *runtimeDriver) CommandRecords(t *testing.T, id string) callResult {
+	t.Helper()
+	recs, _, _ := d.commandList(t, id)
+	return callResult{Status: http.StatusOK, Body: recs}
+}
+
+func (d *runtimeDriver) Models(t *testing.T) callResult {
+	t.Helper()
+	return d.call(t, http.MethodGet, "/models", nil)
 }
 
 func (d *runtimeDriver) Interrupt(t *testing.T, id string) {
@@ -314,6 +421,12 @@ func (d *runtimeDriver) SetThinking(t *testing.T, id, level string) callResult {
 func (d *runtimeDriver) SetServiceTier(t *testing.T, id, tier string) callResult {
 	t.Helper()
 	return d.patch(t, id, "service_tier", tier)
+}
+
+// notInEngine is the result of a call whose route or field only the runtime
+// has. Serve never receives it.
+func notInEngine(what string) callResult {
+	return callResult{Body: map[string]any{"not_in_engine": what}}
 }
 
 // notServed fails a row that reaches a route that Runtime.Handler does not

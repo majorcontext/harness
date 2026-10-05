@@ -31,7 +31,8 @@ type action interface{ run(t *testing.T, r *run) }
 
 type create struct {
 	as          string
-	staysActive bool // the session never reads idle, so the final waitIdle skips it
+	model       string // empty takes the model of the config
+	staysActive bool   // the session never reads idle, so the final waitIdle skips it
 }
 type submit struct{ as, text string }
 type enqueue struct{ as, text string }
@@ -103,10 +104,27 @@ func (a create) run(t *testing.T, r *run) {
 	if _, dup := r.ids[a.as]; dup {
 		t.Fatalf("alias %q created twice", a.as)
 	}
-	r.ids[a.as] = r.drv.Create(t)
+	r.ids[a.as] = createdID(t, r.drv, a.model)
 	r.aliases = append(r.aliases, a.as)
 	r.noIdle[a.as] = a.staysActive
 }
+
+// createdID creates a session that names model, or takes the model of the
+// config when model is empty.
+func createdID(t *testing.T, d driver, model string) string {
+	t.Helper()
+	if model == "" {
+		return d.Create(t)
+	}
+	res := d.CreateModel(t, model)
+	body, _ := res.Body.(map[string]any)
+	id, _ := body["id"].(string)
+	if res.Status/100 != 2 || id == "" {
+		t.Fatalf("create with model %s = %d %v", model, res.Status, res.Body)
+	}
+	return id
+}
+
 func (a submit) run(t *testing.T, r *run) { r.drv.Submit(t, r.id(t, a.as), a.text) }
 func (a submitAttachments) run(t *testing.T, r *run) {
 	r.drv.Attach(t, r.id(t, a.as), a.text, rowAttachments())
@@ -151,6 +169,35 @@ type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
 type endSession struct{ as string }
 type sendToSession struct{ as, text string }
+
+// tryCreate creates a session that names model and records the response. It binds no alias.
+type tryCreate struct{ model string }
+
+// postInput admits an input and records the receipt.
+type postInput struct{ as, text string }
+
+// repeatInput sends the newest input of the session again under its id, with
+// text as the body, and records the receipt. A typed repeat sends the newest
+// typed input again.
+type repeatInput struct {
+	as, text string
+	typed    bool
+}
+
+// steerOtherTurn steers a turn that is not running and records the response.
+type steerOtherTurn struct{ as, text string }
+
+// writeFile writes a file into the work dir of the host.
+type writeFile struct{ path, body string }
+
+// models lists the models of the host and records the response.
+type models struct{}
+
+// awaitCommands waits until no typed command of the session is running.
+type awaitCommands struct{ as string }
+
+// commandRecords records the newest status of each typed command of the session.
+type commandRecords struct{ as string }
 type cancelTree struct{ as string }
 type deleteQueued struct{ as string }
 type updateGoal struct{ as, condition string }
@@ -212,6 +259,36 @@ func (a endSession) run(t *testing.T, r *run) {
 func (a sendToSession) run(t *testing.T, r *run) {
 	r.record(t, "send", a.as, r.drv.Send(t, r.id(t, a.as), a.text))
 }
+func (a tryCreate) run(t *testing.T, r *run) {
+	name := a.model
+	if name == "" {
+		name = "(default)"
+	}
+	r.record(t, "create", name, r.drv.CreateModel(t, a.model))
+}
+func (a postInput) run(t *testing.T, r *run) {
+	r.record(t, "input", a.as, r.drv.PostInput(t, r.id(t, a.as), a.text))
+}
+func (a repeatInput) run(t *testing.T, r *run) {
+	r.record(t, "repeat_input", a.as, r.drv.Repeat(t, r.id(t, a.as), a.text, a.typed))
+}
+func (a steerOtherTurn) run(t *testing.T, r *run) {
+	r.record(t, "steer_other_turn", a.as, r.drv.SteerOtherTurn(t, r.id(t, a.as), a.text))
+}
+func (a writeFile) run(t *testing.T, r *run) {
+	path := filepath.Join(r.drv.Workdir(), a.path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(a.body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+func (a awaitCommands) run(t *testing.T, r *run) { r.drv.AwaitCommands(t, r.id(t, a.as)) }
+func (a commandRecords) run(t *testing.T, r *run) {
+	r.record(t, "command_records", a.as, r.drv.CommandRecords(t, r.id(t, a.as)))
+}
+func (models) run(t *testing.T, r *run) { r.record(t, "models", "", r.drv.Models(t)) }
 func (a cancelTree) run(t *testing.T, r *run) {
 	r.record(t, "cancel_tree", a.as, r.drv.CancelTree(t, r.id(t, a.as)))
 }

@@ -44,6 +44,14 @@ func TestContractTurns(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name: "unknown_tool_call_gets_an_error_result",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "toolu_1", Name: "no_such_tool", Input: map[string]any{}}}}},
+				{Name: "after", Match: harnesstest.LastToolResult("no_such_tool"), Reply: text("noted")},
+			},
+			actions: oneTurn,
+		},
+		{
 			name: "two_turns_keep_history",
 			model: []harnesstest.Step{
 				{Name: "one", Match: harnesstest.LastUserText("one"), Reply: text("1")},

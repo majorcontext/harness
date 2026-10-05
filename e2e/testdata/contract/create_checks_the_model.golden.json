@@ -1,0 +1,158 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create.(default)": {
+      "status": 400,
+      "body": {
+        "error": "engine: no context window configured for model: unknown model \"nope/gpt-5\": refusing to run without a context window (set context_window_tokens for this model, or context_window_required=false to allow it)"
+      }
+    },
+    "create.anthropic/claude-opus-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#1",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "anthropic/claude-opus-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "create.anthropic/no-such-model": {
+      "status": 400,
+      "body": {
+        "error": "engine: no context window configured for model: unknown model \"anthropic/no-such-model\": refusing to run without a context window (set context_window_tokens for this model, or context_window_required=false to allow it)"
+      }
+    },
+    "create.bifrost/fireworks/accounts/fireworks/routers/firerouter": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#4",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "bifrost/fireworks/accounts/fireworks/routers/firerouter",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "create.codex/gpt-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 400000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#2",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "codex/gpt-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "create.codex/no-such-model": {
+      "status": 400,
+      "body": {
+        "error": "engine: no context window configured for model: unknown model \"codex/no-such-model\": refusing to run without a context window (set context_window_tokens for this model, or context_window_required=false to allow it)"
+      }
+    },
+    "create.fast": {
+      "status": 400,
+      "body": {
+        "error": "message: model ref \"fast\" is not of the form \"provider/model\""
+      }
+    },
+    "create.gpt-5": {
+      "status": 400,
+      "body": {
+        "error": "message: model ref \"gpt-5\" is not of the form \"provider/model\""
+      }
+    },
+    "create.nope/gpt-5": {
+      "status": 400,
+      "body": {
+        "error": "engine: no context window configured for model: unknown model \"nope/gpt-5\": refusing to run without a context window (set context_window_tokens for this model, or context_window_required=false to allow it)"
+      }
+    },
+    "create.openai/gpt-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 400000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#3",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "openai/gpt-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

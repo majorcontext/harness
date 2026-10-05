@@ -1,0 +1,310 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "say done"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\nworking"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "say done"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "working"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: more\n\nKeep working until the goal is fully satisfied, then stop."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "say done"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "working"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: more\n\nKeep working until the goal is fully satisfied, then stop."
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "goal",
+              "tool_input": {
+                "action": "adjust",
+                "condition": "say done now"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"active\":true,\"condition\":\"say done now\"}",
+              "tool_name": "goal",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": true,
+      "model": "eval-model",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "GOAL CONDITION:\nsay done\n\nCONVERSATION TRANSCRIPT:\nUSER:\nsay done\n\nASSISTANT:\nworking\n\nUSER:\nThe goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: more\n\nKeep working until the goal is fully satisfied, then stop.\n\nASSISTANT:\n[tool call goal] {\"action\":\"adjust\",\"condition\":\"say done now\"}\n\nTOOL:\n[tool result] {\"active\":true,\"condition\":\"say done now\"}\n\nASSISTANT:\nworking"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "say done"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "working"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "The goal has not been met yet.\n\nGOAL: say done\n\nEVALUATOR FEEDBACK: more\n\nKeep working until the goal is fully satisfied, then stop."
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "goal",
+            "arguments": {
+              "action": "adjust",
+              "condition": "say done now"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"active\":true,\"condition\":\"say done now\"}"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "working"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "goal": {
+          "active": false,
+          "condition": "say done now",
+          "last_reason": "more",
+          "turns": 1
+        },
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "max_turns_exceeded"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 6,
+        "model": "anthropic/claude-fable-5",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 15,
+          "last_input_tokens": 5,
+          "messages": 6,
+          "output_tokens": 9
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

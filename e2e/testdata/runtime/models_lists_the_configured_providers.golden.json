@@ -1,0 +1,90 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create.claude-code/sonnet": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#2",
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "create.codex/gpt-6-luna": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#1",
+        "model": "codex/gpt-6-luna",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "models": {
+      "status": 200,
+      "body": [
+        {
+          "context_window": 0,
+          "id": "claude-code/fable",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "id": "claude-code/haiku",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "id": "claude-code/opus",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 0,
+          "id": "claude-code/sonnet",
+          "provider": "claude-code"
+        },
+        {
+          "context_window": 1000000,
+          "id": "codex/gpt-6-astra",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "id": "codex/gpt-6-luna",
+          "provider": "codex"
+        },
+        {
+          "context_window": 1000000,
+          "id": "codex/gpt-6-sol",
+          "provider": "codex"
+        }
+      ]
+    }
+  }
+}

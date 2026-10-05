@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -67,6 +68,86 @@ func TestContractGoal(t *testing.T) {
 				setGoal{as: "a", condition: "say done", maxTurns: 2},
 				awaitGoalExhausted{},
 				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}
+
+// goalChain scripts one goal tool call per model request of the turn that
+// starts with "go", then a final text reply. The evaluator is never matched.
+func goalChain(calls ...map[string]any) []harnesstest.Step {
+	steps := make([]harnesstest.Step, 0, len(calls)+1)
+	for i, c := range calls {
+		steps = append(steps, harnesstest.Step{
+			Name:  fmt.Sprintf("goal%d", i+1),
+			Match: pluginMatchAll(notEvaluator, harnesstest.LastUserText("go"), assistantTurns(i)),
+			Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: fmt.Sprintf("toolu_%d", i+1), Name: "goal", Input: c}}},
+		})
+	}
+	return append(steps, harnesstest.Step{Name: "went", Match: pluginMatchAll(notEvaluator, assistantTurns(len(calls))), Reply: harnesstest.Reply{Text: "went"}})
+}
+
+func TestContractGoalTool(t *testing.T) {
+	status := ftArgs("action", "status")
+	set := func(c string) map[string]any { return ftArgs("action", "set", "condition", c) }
+	adjust := func(c string) map[string]any { return ftArgs("action", "adjust", "condition", c) }
+	runScenarios(t, []scenario{
+		{
+			name: "goal_tool_actions_report_and_refuse",
+			model: append([]harnesstest.Step{evaluatorStep("judge", "MET: ok", true)}, append(goalChain(
+				status, set(" tests pass "), status, set("b"),
+			), agentStep("condition", "ok", true))...),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name: "goal_tool_refusals_copy_the_engine_wording",
+			model: append([]harnesstest.Step{evaluatorStep("judge", "MET: ok", true)}, append(goalChain(
+				adjust("x"), set(" "), ftArgs("action", "clear"),
+			), agentStep("condition", "ok", true))...),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name: "goal_tool_adjust_after_set_runs_the_adjusted_condition",
+			model: append([]harnesstest.Step{evaluatorStep("judge", "MET: ok", true)}, append(goalChain(set("b"), adjust("c")),
+				agentStep("condition", "ok", true))...),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name: "goal_tool_set_runs_the_condition_as_its_own_turn",
+			model: append([]harnesstest.Step{evaluatorStep("judge", "MET: ok", true)}, append(goalChain(set("say done")),
+				agentStep("condition", "ok", true))...),
+			actions: []action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}, getSession{as: "a"}},
+		},
+		{
+			name: "goal_tool_adjust_keeps_the_turn_limit",
+			model: []harnesstest.Step{
+				evaluatorStep("judge", "NOT MET: more", true),
+				{Name: "first", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working"}},
+				{Name: "adjust", Match: pluginMatchAll(notEvaluator, harnesstest.LastUserText("The goal has not been met yet")), Reply: harnesstest.Reply{
+					ToolCalls: []harnesstest.ToolCall{{ID: "toolu_adjust", Name: "goal", Input: adjust("say done now")}}}},
+				{Name: "after", Match: harnesstest.LastToolResult("goal"), Reply: harnesstest.Reply{Text: "working"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				setGoal{as: "a", condition: "say done", maxTurns: 2},
+				awaitGoalExhausted{},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+		{
+			name:   "no_goal_evaluator_means_no_goal",
+			config: map[string]any{"goal_evaluator_model": ""},
+			model:  []harnesstest.Step{{Name: "ok", Reply: harnesstest.Reply{Text: "ok"}}},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "hi"},
+				waitIdle{as: "a"},
+				updateGoal{as: "a", condition: "say done"},
+				command{as: "a", text: "/goal ship it"},
+				awaitCommands{as: "a"},
+				commandRecords{as: "a"},
 				getSession{as: "a"},
 			},
 		},

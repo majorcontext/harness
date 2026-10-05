@@ -20,6 +20,19 @@ import (
 
 type driver interface {
 	Create(t *testing.T) string
+	// CreateModel creates a session that names model and reports the response.
+	CreateModel(t *testing.T, model string) callResult
+	// PostInput admits an input with a new id and reports the receipt.
+	PostInput(t *testing.T, id, text string) callResult
+	// Repeat sends the newest input of the session again, under its id, with text as its body.
+	Repeat(t *testing.T, id, text string, typed bool) callResult
+	// SteerOtherTurn steers with an expected turn that is not running.
+	SteerOtherTurn(t *testing.T, id, text string) callResult
+	Models(t *testing.T) callResult
+	// AwaitCommands returns once no typed command of the session is still running.
+	AwaitCommands(t *testing.T, id string)
+	// CommandRecords lists the newest status of each typed command of the session.
+	CommandRecords(t *testing.T, id string) callResult
 	Submit(t *testing.T, id, text string)
 	// Attach submits text with the attachments after it.
 	Attach(t *testing.T, id, text string, atts []attachment)
@@ -167,6 +180,82 @@ func (d *httpDriver) Enqueue(t *testing.T, id, text string) {
 	if status, _ := d.p.enqueue(id, text, d.enqSeq[id]); status != http.StatusAccepted {
 		t.Fatalf("enqueue on %s: status %d, want %d\nstderr:\n%s", id, status, http.StatusAccepted, d.Stderr())
 	}
+}
+
+func (d *httpDriver) CreateModel(t *testing.T, model string) callResult {
+	t.Helper()
+	body := map[string]any{}
+	if model != "" {
+		body["model"] = model
+	}
+	return withoutSeq(d.call(t, http.MethodPost, "/session", body))
+}
+
+func (d *httpDriver) enqueueCall(t *testing.T, id, text string, seq int64) callResult {
+	t.Helper()
+	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": text}}, "seq": seq}
+	return d.call(t, http.MethodPost, "/session/"+id+"/enqueue", body)
+}
+
+func (d *httpDriver) PostInput(t *testing.T, id, text string) callResult {
+	t.Helper()
+	d.enqSeq[id]++
+	return d.enqueueCall(t, id, text, d.enqSeq[id])
+}
+
+func (d *httpDriver) Repeat(t *testing.T, id, text string, typed bool) callResult {
+	t.Helper()
+	if typed {
+		return d.Command(t, id, text)
+	}
+	if d.enqSeq[id] == 0 {
+		return notInEngine("an input id that another input holds")
+	}
+	return d.enqueueCall(t, id, text, d.enqSeq[id])
+}
+
+func (d *httpDriver) SteerOtherTurn(t *testing.T, id, text string) callResult {
+	t.Helper()
+	return notInEngine("steer with expected_turn_id")
+}
+
+// commandList reads the typed commands of a session as the bootstrap lists
+// them, and reports whether one still runs.
+func (d *httpDriver) commandList(t *testing.T, id string) (recs []any, running bool) {
+	t.Helper()
+	body, _ := d.Bootstrap(t, id, 0).Body.(map[string]any)
+	list, _ := body["commands"].([]any)
+	recs = []any{}
+	for _, c := range list {
+		m, _ := c.(map[string]any)
+		rec := map[string]any{}
+		for _, k := range []string{"line", "name", "status", "text", "result"} {
+			if v, ok := m[k]; ok {
+				rec[k] = v
+			}
+		}
+		running = running || m["status"] == "accepted"
+		recs = append(recs, rec)
+	}
+	return recs, running
+}
+
+func (d *httpDriver) AwaitCommands(t *testing.T, id string) {
+	t.Helper()
+	if !testpoll.UntilNoT(waitBound, func() bool { _, running := d.commandList(t, id); return !running }, 15*time.Millisecond) {
+		t.Fatalf("a typed command of %s still runs\nstderr:\n%s", id, d.Stderr())
+	}
+}
+
+func (d *httpDriver) CommandRecords(t *testing.T, id string) callResult {
+	t.Helper()
+	recs, _ := d.commandList(t, id)
+	return callResult{Status: http.StatusOK, Body: recs}
+}
+
+func (d *httpDriver) Models(t *testing.T) callResult {
+	t.Helper()
+	return notInEngine("GET /models")
 }
 
 func (d *httpDriver) Stderr() string { return d.p.stderr.String() }

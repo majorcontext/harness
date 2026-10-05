@@ -82,3 +82,26 @@ func TestContractDurability(t *testing.T) {
 		},
 	})
 }
+
+func TestContractDurabilityHandoff(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name: "restart_lets_a_running_tool_finish_and_cuts_the_next_call",
+			model: []harnesstest.Step{
+				{Name: "calls", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_slow", Name: "bash", Input: map[string]any{"command": "touch tool-running; sleep 1"}},
+					{ID: "toolu_next", Name: "bash", Input: map[string]any{"command": "echo two"}},
+				}}},
+				{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done"}, Repeat: true},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "run"},
+				awaitFile{path: "tool-running"},
+				restart{},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}

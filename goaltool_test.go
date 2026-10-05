@@ -1,7 +1,6 @@
 package harness_test
 
 import (
-	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -12,37 +11,6 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
-
-// calls is one assistant message that calls tool once for each argument set.
-func calls(tool string, args ...map[string]any) eventlog.Message {
-	m := eventlog.Message{Role: eventlog.RoleAssistant}
-	for i, a := range args {
-		raw, _ := json.Marshal(a)
-		m.Parts = append(m.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: "g" + string(rune('0'+i)), Name: tool, Arguments: raw})
-	}
-	return m
-}
-
-// results returns the tool results in the newest request of session that has any.
-func (f *family) results(session string) []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []string
-	for _, req := range f.reqs {
-		var got []string
-		for _, m := range req.History {
-			for _, p := range m.Parts {
-				if p.Type == eventlog.PartToolResult && req.SessionID == session {
-					got = append(got, p.Text)
-				}
-			}
-		}
-		if len(got) > 0 {
-			out = got
-		}
-	}
-	return out
-}
 
 func goalRuntime(t *testing.T, f *family, evaluator string) *harness.Runtime {
 	t.Helper()
@@ -92,48 +60,6 @@ func TestGoalTool(t *testing.T) {
 				submit(t, create(t, r), text("a", "go"))
 				if got := f.results("s1"); !slices.Equal(got, tc.want) {
 					t.Errorf("results =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(tc.want, "\n"))
-				}
-				closeRuntime(t, r)
-			})
-		})
-	}
-}
-
-func TestGoalToolIsOffered(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		evaluator string
-		// child checks the first request of the child, after a restart with restart.
-		child, restart bool
-		want           bool
-	}{
-		{name: "a runtime with no goal_evaluator_model offers no goal tool"},
-		{name: "a root session gets the goal tool", evaluator: "fake/eval", want: true},
-		{name: "a child gets no goal tool", evaluator: "fake/eval", child: true},
-		{name: "a child opened after a restart gets no goal tool", evaluator: "fake/eval", child: true, restart: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				st, dir, cfg := harness.NewMemStore(), t.TempDir(), config.Config{GoalEvaluatorModel: tc.evaluator}
-				f := &family{answer: delegation("general-purpose", 1, block)}
-				r := familyRuntime(t, st, f, nil, cfg, dir)
-				submit(t, create(t, r), text("a", "delegate"))
-				id, prompt := "s1", "delegate"
-				if tc.child {
-					id, prompt = children(t, r)[0].ID, "child work"
-				}
-				if tc.restart {
-					closeRuntime(t, r)
-					f = &family{answer: f.answer}
-					r = familyRuntime(t, st, f, nil, cfg, dir)
-					if _, err := r.Open(bg, "s1"); err != nil {
-						t.Fatal(err)
-					}
-					synctest.Wait()
-				}
-				req, _ := f.last(id, prompt)
-				if got := slices.ContainsFunc(req.Tools, func(s protocol.ToolSpec) bool { return s.Name == "goal" }); got != tc.want || req.SessionID == "" {
-					t.Errorf("request %s offers the goal tool: %v, want %v", req.SessionID, got, tc.want)
 				}
 				closeRuntime(t, r)
 			})

@@ -2,7 +2,6 @@ package harness_test
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -114,77 +113,4 @@ func TestEventsLiveFrames(t *testing.T) {
 		}
 		closeRuntime(t, r)
 	})
-}
-
-func TestUpdateAppliesToTheNextTurn(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		st, f := harness.NewMemStore(), newFake()
-		r := runtime(t, st, f)
-		s := create(t, r)
-		submit(t, s, text("a", "one"))
-		run := <-f.runs
-		p := protocol.SettingsPatch{Model: new("fake/other"), Effort: new("high")}
-		v, err := s.Update(bg, p)
-		if err != nil || v.Model != "fake/other" || v.Effort != "high" || v.Status != protocol.StatusRunning {
-			t.Fatalf("Update = %+v, %v", v, err)
-		}
-		if again, err := s.Update(bg, p); err != nil || again.HeadSeq != v.HeadSeq {
-			t.Fatalf("unchanged Update = head %d, %v, want head %d", again.HeadSeq, err, v.HeadSeq)
-		}
-		submit(t, s, text("b", "two"))
-		run.end()
-		next := <-f.runs
-		next.end()
-		if run.req.Model != "fake/model" || next.req.Model != "fake/other" || next.req.Settings.Effort != "high" {
-			t.Fatalf("models = %s then %s %+v, want fake/model then fake/other high", run.req.Model, next.req.Model, next.req.Settings)
-		}
-		wantLog(t, st, 4, "settings.changed", "input.admitted b", "turn.ended completed", "turn.started b", "turn.ended completed")
-		closeRuntime(t, r)
-	})
-}
-
-func TestUpdateSwitchesTheCodexProvider(t *testing.T) {
-	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"hi": {Reasoning: []string{"plan"}}}},
-		harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}},
-		harnesstest.Step{Name: "again", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{Text: "ok"}})
-	r, _, rec := codexRuntime(t, o, false, false, "")
-	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	converse(t, s, "hi")
-	for p, want := range map[protocol.SettingsPatch]error{{Model: new("codex/no-such-model")}: harness.ErrModelUnavailable,
-		{Model: new("nope/gpt-5")}: harness.ErrModelUnavailable, {Effort: new("hard")}: harness.ErrInvalidRequest,
-		{Model: new("openai/gpt-5"), Effort: new("high")}: nil} {
-		if _, err := s.Update(bg, p); !errors.Is(err, want) {
-			t.Errorf("Update(%v) = %v, want %v", p, err, want)
-		}
-	}
-	cc, err := r.Create(bg, protocol.CreateSession{ID: "s2", Model: "claude-code/opus"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for m, want := range map[string]error{"codex/gpt-5": nil, "claude-code/sonnet": nil} {
-		if _, err := cc.Update(bg, protocol.SettingsPatch{Model: new(m)}); !errors.Is(err, want) {
-			t.Errorf("claude-code Update(%s) = %v, want %v", m, err, want)
-		}
-	}
-	watch(t, s, s.View().HeadSeq-1, s.View().HeadSeq, text("b", "again"), false)
-	if got, want := transcript(o.Requests()[1]), []string{"user text :hi", "assistant text :hello", "user text :again"}; !slices.Equal(got, want) {
-		t.Errorf("request after the switch = %q, want %q", got, want)
-	}
-	if calls, e := rec.Calls(), o.WireEvents()[1].ReasoningEffort; e != "high" || !slices.Equal(calls, []string{codexPost, "openai POST /backend-api/codex/responses"}) {
-		t.Errorf("transport calls = %q, effort = %q, want codex then openai, high", calls, e)
-	}
-}
-
-func TestSetGoalNeedsAnEvaluator(t *testing.T) {
-	r, _, _ := codexRuntime(t, harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}), false, false, "")
-	s, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "claude-code/opus"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetGoal(bg, protocol.Goal{Condition: "say done"}); !errors.Is(err, harness.ErrInvalidRequest) || s.View().Goal != nil {
-		t.Errorf("SetGoal with no goal_evaluator_model = %v, goal %v, want %v and no goal", err, s.View().Goal, harness.ErrInvalidRequest)
-	}
 }

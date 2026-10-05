@@ -204,6 +204,9 @@ func (n *normalizer) value(key string, v any) any {
 		if key == "workdir" {
 			return "<workdir>"
 		}
+		if key == "code" {
+			return x
+		}
 		return n.str(x)
 	}
 	return v
