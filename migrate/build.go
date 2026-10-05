@@ -3,6 +3,8 @@ package migrate
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -64,7 +66,7 @@ func build(o old) ([][]byte, int, error) {
 		return nil, 0, err
 	}
 	for i, m := range h {
-		msg := convertMessage(m, b.names)
+		msg := convertMessage(m, b.names, o.blobs)
 		want = append(want, msg)
 		if err := b.message(i, m, msg); err != nil {
 			return nil, 0, err
@@ -206,16 +208,16 @@ func summaryText(m message.Message) string {
 
 // convertMessage returns m as the event log holds it. names maps each call
 // ID that it has seen to its tool name. An engine-context part is
-// request-only and is dropped. An attachment becomes a note, because a log
-// message holds text only.
-func convertMessage(m message.Message, names map[string]string) eventlog.Message {
+// request-only and is dropped. An attachment becomes a blob part, and its
+// bytes go into blobs under the key of the part.
+func convertMessage(m message.Message, names map[string]string, blobs map[string][]byte) eventlog.Message {
 	out := eventlog.Message{Role: string(m.Role), Parts: []eventlog.Part{}, ParentCallID: m.ParentToolUseID}
 	for _, p := range m.Parts {
 		switch p := p.(type) {
 		case *message.Text:
 			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartText, Text: p.Text})
 		case *message.Blob:
-			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartText, Text: blobText(p)})
+			out.Parts = append(out.Parts, attachment(p, blobs))
 		case *message.Reasoning:
 			out.Parts = append(out.Parts, eventlog.Part{Type: eventlog.PartReasoning, Text: p.Text, ProviderData: p.ProviderData})
 		case *message.ToolCall:
@@ -251,6 +253,19 @@ func resultText(parts message.Parts) string {
 		out = append(out, s...)
 	}
 	return string(out)
+}
+
+// attachment returns the part that holds b and stores its bytes in blobs
+// under the key of the part, so equal bytes share one blob. An attachment
+// with no inline bytes has nothing to keep, so it becomes a note.
+func attachment(b *message.Blob, blobs map[string][]byte) eventlog.Part {
+	if len(b.Data) == 0 {
+		return eventlog.Part{Type: eventlog.PartText, Text: blobText(b)}
+	}
+	sum := sha256.Sum256(b.Data)
+	key := "attachment-" + hex.EncodeToString(sum[:])
+	blobs[key] = b.Data
+	return eventlog.Part{Type: eventlog.PartBlob, MediaType: b.MediaType, BlobKey: key, Bytes: len(b.Data)}
 }
 
 func blobText(b *message.Blob) string {
