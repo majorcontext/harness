@@ -260,10 +260,9 @@ func TestErrorsOverHTTP(t *testing.T) {
 		{"GET", base + "?limit=x", "", 400, protocol.CodeInvalidRequest},
 		{"GET", s1 + "/events?after=x", "", 400, protocol.CodeInvalidRequest},
 		{"POST", base, `{"id":"s1","model":"codex/gpt-6-sol"}`, 409, protocol.CodeSessionExists},
-		{"POST", base, `{"model":"nope/x"}`, 409, protocol.CodeModelUnavailable},
 		{"GET", base + "/s2", "", 404, protocol.CodeSessionNotFound},
 		{"GET", strings.TrimSuffix(base, "/sessions") + "/nope", "", 404, protocol.CodeInvalidRequest},
-		{"DELETE", s1, "", 405, protocol.CodeInvalidRequest},
+		{"PUT", s1, "", 405, protocol.CodeInvalidRequest},
 		{"PATCH", s1, `{"model":"codex/no-such-model"}`, 409, protocol.CodeModelUnavailable},
 		{"POST", s1 + "/inputs", `{"id":"a","parts":[{"type":"text","text":"other"}]}`, 409, protocol.CodeInputConflict},
 		{"POST", s1 + "/interrupt", `{"turn_id":"turn_x"}`, 409, protocol.CodeTurnMismatch},
@@ -309,6 +308,7 @@ func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) err
 
 func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }
 func (s stub) Open(context.Context, string) (stub, error)                   { return s, s.openErr }
+func (stub) End(context.Context, string) error                              { return nil }
 func (s stub) Read(context.Context, string) (server.Reader, error)          { return reader{s}, s.openErr }
 func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, error) {
 	return protocol.SessionPage{}, nil

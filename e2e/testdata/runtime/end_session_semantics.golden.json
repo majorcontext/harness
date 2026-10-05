@@ -135,13 +135,21 @@
     "end_missing_session": {
       "status": 404,
       "body": {
-        "error": "no such session"
+        "error": {
+          "code": "session_not_found",
+          "details": {},
+          "message": "harness: session not found: missing"
+        }
       }
     },
     "end_session.a": {
       "status": 409,
       "body": {
-        "error": "session is busy; abort it before ending it"
+        "error": {
+          "code": "session_busy",
+          "details": {},
+          "message": "harness: session busy"
+        }
       }
     },
     "end_session.a#2": {
@@ -154,114 +162,140 @@
       "status": 200,
       "body": {
         "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
+          "tokens": 5,
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
+        "head_seq": 7,
         "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "outcome": "completed"
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
         },
-        "messages": 2,
         "model": "anthropic/claude-fable-5",
-        "plugins": [],
-        "queued": 0,
-        "state": "idle",
+        "origin": "",
         "status": "idle",
         "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 5,
-          "last_input_tokens": 5,
-          "messages": 2,
           "output_tokens": 3
-        },
-        "workdir": "\u003cworkdir\u003e"
+        }
       }
     },
     "get_session.a#2": {
       "status": 200,
       "body": {
         "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
+          "tokens": 5,
+          "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
         "effort": "high",
+        "head_seq": 14,
         "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "outcome": "completed"
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
         },
-        "lineage": {
-          "children": [],
-          "status": "idle"
-        },
-        "messages": 4,
         "model": "anthropic/claude-fable-5",
-        "plugins": [],
-        "queued": 0,
-        "state": "idle",
+        "origin": "",
         "status": "idle",
         "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
         "usage": {
           "input_tokens": 10,
-          "last_input_tokens": 5,
-          "messages": 4,
           "output_tokens": 6
-        },
-        "workdir": "\u003cworkdir\u003e"
+        }
       }
     },
     "list_sessions": {
       "status": 200,
-      "body": [
-        {
-          "context": {
-            "used_tokens": 5,
-            "window_tokens": 1000000
-          },
-          "created_at": "\u003ctime\u003e",
-          "id": "ses:a",
-          "last_activity_at": "\u003ctime\u003e",
-          "last_turn": {
-            "outcome": "completed"
-          },
-          "messages": 2,
-          "model": "anthropic/claude-fable-5",
-          "plugins": [],
-          "queued": 0,
-          "state": "idle",
-          "status": "idle",
-          "subscription_usage": null,
-          "usage": {
-            "input_tokens": 5,
-            "last_input_tokens": 5,
-            "messages": 2,
-            "output_tokens": 3
-          },
-          "workdir": "\u003cworkdir\u003e"
-        }
-      ]
+      "body": {
+        "sessions": [
+          {
+            "context": {
+              "tokens": 5,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "head_seq": 7,
+            "id": "ses:a",
+            "last_turn": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 5,
+              "output_tokens": 3
+            }
+          }
+        ]
+      }
     },
     "send.a": {
-      "status": 202,
+      "status": 201,
       "body": {
-        "message_id": "msg#3",
-        "session_id": "ses:a",
-        "status": "sent"
+        "input_id": "in2",
+        "seq": 9
       }
     },
     "set_model.a": {
       "status": 200,
       "body": {
-        "model": "anthropic/claude-fable-5"
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 4,
+        "id": "ses:a",
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "running",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "turn_id": "turn#1",
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
       }
     },
     "set_thinking.a": {
       "status": 200,
       "body": {
-        "effort": "high"
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 14,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 6
+        }
       }
     }
   }

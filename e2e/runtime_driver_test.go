@@ -445,7 +445,7 @@ func notServed(t *testing.T, route, phase string) callResult {
 
 func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
 	t.Helper()
-	return notServed(t, "DELETE /sessions/{id}", "phase 4")
+	return d.call(t, http.MethodDelete, "/sessions/"+id, nil)
 }
 
 // DeleteQueued withdraws each queued input, as serve cleared the queue in one

@@ -24,7 +24,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "delegate"
             },
             {
               "kind": "text",
@@ -58,7 +58,11 @@
           "parts": [
             {
               "kind": "text",
-              "text": "first"
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -66,8 +70,13 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "text",
-              "text": "partial"
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work"
+              },
+              "tool_use_id": "toolu#1"
             }
           ]
         },
@@ -75,8 +84,40 @@
           "role": "user",
           "parts": [
             {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
               "kind": "text",
-              "text": "after end"
+              "text": "child work"
             },
             {
               "kind": "text",
@@ -95,7 +136,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "first"
+            "text": "delegate"
           }
         ]
       },
@@ -104,18 +145,24 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "partial"
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "prompt": "child work"
+            }
           }
         ]
       },
       {
         "id": "msg#3",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "after end"
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
@@ -125,29 +172,26 @@
         "parts": [
           {
             "type": "text",
-            "text": "ok"
+            "text": "waiting"
+          }
+        ]
+      }
+    ],
+    "kid": [
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child work"
           }
         ]
       }
     ]
   },
   "calls": {
-    "end_missing_session": {
-      "status": 404,
-      "body": {
-        "error": "no such session"
-      }
-    },
     "end_session.a": {
-      "status": 409,
-      "body": {
-        "error": "session is busy; abort it before ending it"
-      }
-    },
-    "end_session.a#2": {
-      "status": 204
-    },
-    "end_session.a#3": {
       "status": 204
     },
     "get_session.a": {
@@ -163,39 +207,11 @@
         "last_turn": {
           "outcome": "completed"
         },
-        "messages": 2,
-        "model": "anthropic/claude-fable-5",
-        "plugins": [],
-        "queued": 0,
-        "state": "idle",
-        "status": "idle",
-        "subscription_usage": null,
-        "usage": {
-          "input_tokens": 5,
-          "last_input_tokens": 5,
-          "messages": 2,
-          "output_tokens": 3
-        },
-        "workdir": "\u003cworkdir\u003e"
-      }
-    },
-    "get_session.a#2": {
-      "status": 200,
-      "body": {
-        "context": {
-          "used_tokens": 5,
-          "window_tokens": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "effort": "high",
-        "id": "ses:a",
-        "last_activity_at": "\u003ctime\u003e",
-        "last_turn": {
-          "outcome": "completed"
-        },
         "lineage": {
-          "children": [],
-          "status": "idle"
+          "children": [
+            "ses:kid"
+          ],
+          "status": "canceled"
         },
         "messages": 4,
         "model": "anthropic/claude-fable-5",
@@ -213,55 +229,37 @@
         "workdir": "\u003cworkdir\u003e"
       }
     },
-    "list_sessions": {
-      "status": 200,
-      "body": [
-        {
-          "context": {
-            "used_tokens": 5,
-            "window_tokens": 1000000
-          },
-          "created_at": "\u003ctime\u003e",
-          "id": "ses:a",
-          "last_activity_at": "\u003ctime\u003e",
-          "last_turn": {
-            "outcome": "completed"
-          },
-          "messages": 2,
-          "model": "anthropic/claude-fable-5",
-          "plugins": [],
-          "queued": 0,
-          "state": "idle",
-          "status": "idle",
-          "subscription_usage": null,
-          "usage": {
-            "input_tokens": 5,
-            "last_input_tokens": 5,
-            "messages": 2,
-            "output_tokens": 3
-          },
-          "workdir": "\u003cworkdir\u003e"
-        }
-      ]
-    },
-    "send.a": {
-      "status": 202,
-      "body": {
-        "message_id": "msg#3",
-        "session_id": "ses:a",
-        "status": "sent"
-      }
-    },
-    "set_model.a": {
+    "get_session.kid": {
       "status": 200,
       "body": {
-        "model": "anthropic/claude-fable-5"
-      }
-    },
-    "set_thinking.a": {
-      "status": 200,
-      "body": {
-        "effort": "high"
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:kid",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "agent_type": "general-purpose",
+          "children": [],
+          "depth": 1,
+          "parent_id": "ses:a",
+          "status": "canceled"
+        },
+        "messages": 1,
+        "model": "anthropic/claude-fable-5",
+        "parent_session": "ses:a",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 1,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
       }
     }
   }

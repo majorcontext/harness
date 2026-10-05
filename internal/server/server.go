@@ -50,6 +50,7 @@ type Runtime[S Session] interface {
 	Create(ctx context.Context, req protocol.CreateSession) (S, error)
 	Open(ctx context.Context, id string) (S, error)
 	Read(ctx context.Context, id string) (Reader, error)
+	End(ctx context.Context, id string) error
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	Models() []protocol.Model
 	Commands() (protocol.Commands, error)
@@ -140,6 +141,7 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 	mux.HandleFunc("POST /sessions", h.serve(h.create))
 	mux.HandleFunc("GET /sessions", h.serve(h.list))
 	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
+	mux.HandleFunc("DELETE /sessions/{id}", h.serve(h.end))
 	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
 	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
 	h.handle(mux, "GET /sessions/{id}/inputs", h.serve(h.queued), command.OpQueueList)
@@ -427,6 +429,14 @@ func (h *handler[S]) setGoal(s S, w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	reply(w, http.StatusOK, s.View())
+	return nil
+}
+
+func (h *handler[S]) end(w http.ResponseWriter, r *http.Request) error {
+	if err := h.rt.End(r.Context(), r.PathValue("id")); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
 	return nil
 }
 

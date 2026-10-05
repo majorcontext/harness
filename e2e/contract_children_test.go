@@ -1,6 +1,9 @@
 package e2e
 
 import (
+	"os"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -207,4 +210,113 @@ func TestContractChildUsageLimit(t *testing.T) {
 			},
 		},
 	})
+}
+
+func TestContractChildrenEnd(t *testing.T) {
+	model := []harnesstest.Step{
+		{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+			ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+		}}}},
+		{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "partial", Block: true}},
+		{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+		{Name: "rest", Reply: harnesstest.Reply{Text: "rest"}, Repeat: true},
+	}
+	endIdleParent := []action{
+		create{as: "a"},
+		submit{as: "a", text: "delegate"},
+		awaitRequests{n: 3},
+		waitIdle{as: "a"},
+		bindChild{as: "kid", parent: "a", record: true, staysActive: true},
+		endSession{as: "a"},
+	}
+	runScenarios(t, []scenario{
+		{
+			name:       "end_idle_parent_cancels_running_child",
+			concurrent: true,
+			model:      model,
+			actions:    append(slices.Clone(endIdleParent), getSession{as: "kid"}, getSession{as: "a"}),
+		},
+		{
+			name:       "end_then_send_runs_no_report_of_the_stopped_child",
+			concurrent: true,
+			model:      model,
+			actions:    append(slices.Clone(endIdleParent), submit{as: "a", text: "again"}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+	})
+}
+
+// The engine refuses input to a session that its DELETE canceled, so no serve
+// golden holds these rows: they run on the runtime host only. A stop that
+// the end walk made sends no report; any other stop still reports canceled.
+func TestContractRuntimeChildReportsAfterEnd(t *testing.T) {
+	skipShort(t)
+	if os.Getenv(runtimeEnv) == "" {
+		return
+	}
+	call := func(id, prompt string) harnesstest.ToolCall {
+		return harnesstest.ToolCall{ID: id, Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": prompt}}
+	}
+	blocked := func(name, text string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(text), Reply: harnesstest.Reply{Text: "partial", Block: true}}
+	}
+	ack := harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}, Repeat: true}
+	rest := harnesstest.Step{Name: "rest", Reply: harnesstest.Reply{Text: "rest"}, Repeat: true}
+	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{call("toolu_1", "child work")}}}
+	endA := []action{
+		create{as: "a"},
+		submit{as: "a", text: "delegate"},
+		awaitRequests{n: 3},
+		waitIdle{as: "a"},
+		bindChild{as: "kid", parent: "a", record: true, staysActive: true},
+		endSession{as: "a"},
+	}
+	for _, tc := range []struct {
+		name    string
+		model   []harnesstest.Step
+		actions []action
+		session string
+		reports bool
+	}{
+		{
+			name:  "a direct interrupt after the end reports canceled to the closed parent",
+			model: []harnesstest.Step{delegate, blocked("child", "child work"), ack, blocked("more", "more"), rest},
+			actions: append(slices.Clone(endA),
+				submit{as: "kid", text: "more"}, awaitRequests{n: 4}, interrupt{as: "kid"}, awaitRequests{n: 5}),
+			session: "a",
+			reports: true,
+		},
+		{
+			name: "a tree interrupt after the end settles the closed parent with no report input",
+			model: []harnesstest.Step{delegate,
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{call("toolu_2", "grand work")}}},
+				blocked("grand", "grand work"), ack, blocked("more", "more"), rest},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 6},
+				waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a", record: true},
+				bindChild{as: "grand", parent: "kid", record: true, staysActive: true},
+				endSession{as: "kid"},
+				submit{as: "grand", text: "more"},
+				awaitRequests{n: 7},
+				cancelTree{as: "a"},
+				submit{as: "kid", text: "hello"},
+			},
+			session: "kid",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := runScenario(t, scenario{concurrent: true, model: tc.model, actions: tc.actions}, runtimeHost)
+			var reported bool
+			for _, m := range obs.Sessions[tc.session] {
+				for _, p := range m.Parts {
+					reported = reported || m.Role == "user" && strings.Contains(p.Text, "outcome: canceled")
+				}
+			}
+			if reported != tc.reports {
+				t.Errorf("%s holds a canceled report = %v, want %v: %+v", tc.session, reported, tc.reports, obs.Sessions[tc.session])
+			}
+		})
+	}
 }

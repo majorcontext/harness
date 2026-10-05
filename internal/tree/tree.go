@@ -280,33 +280,55 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // Report delivers the outcome of a child to its parent, which it opens
 // when the runtime does not run it, even when the child has settled. It
 // never waits for the child. A child that a tree interrupt stops settles
-// with no report input, so no parent inside the tree starts a turn.
+// with no report input, so no parent inside the tree starts a turn. A child
+// that the end of a session stopped (cause ended) leaves a parent that the
+// runtime does not run closed: the end never opens a session.
 func (t *Tree) Report(parent string, s eventlog.ChildSettled, report []eventlog.Part) {
-	if t.quieted(s.ChildID) {
+	quiet := t.quieted(s.ChildID)
+	if quiet {
 		report = nil
 	}
 	t.cfg.Go(func() {
+		if _, ok := t.s.Running(parent); quiet && !ok && t.endedBy(s.ChildID) {
+			return
+		}
 		if p, err := t.s.Open(t.cfg.Base, parent); err == nil {
 			_ = p.Actor.Settle(t.cfg.Base, s, report)
 		}
 	})
 }
 
+// endedBy reports whether the last turn of session id was stopped by the end
+// of a session.
+func (t *Tree) endedBy(id string) bool {
+	var ended bool
+	_ = t.s.Read(t.cfg.Base, id, func(st *eventlog.State) { ended = st.LastEnded().Cause == eventlog.CauseEnded })
+	return ended
+}
+
 // Recover settles each unsettled child of a that has ended, or that never
 // started, and opens each other one, which reports when its turn ends. A
 // crash can come between the end of a child turn and its child.settled
-// record.
+// record. A child whose last turn the end of a session stopped (cause ended)
+// settles canceled with no report input; every other child reports its
+// outcome, a canceled one included.
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
 		var report []eventlog.Part
-		var ended bool
-		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) { s, report, ended = session.Settlement(id, st) })
+		var ended, byEnd bool
+		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
+			s, report, ended = session.Settlement(id, st)
+			byEnd = st.LastEnded().Cause == eventlog.CauseEnded
+		})
 		switch {
 		case errors.Is(err, session.ErrNotFound):
 			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
+			if byEnd {
+				report = nil
+			}
 			_ = a.Settle(t.cfg.Base, s, report)
 		default:
 			_, _ = t.s.Open(t.cfg.Base, id)

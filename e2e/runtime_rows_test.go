@@ -30,6 +30,8 @@ const (
 	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
 	specCompactResult = "`Compact()` returns `protocol.Compacted`"
 	specChildResend   = "changes by design in one way: a later send is not refused"
+	specEndTree       = "stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`."
+	specClearGoal     = "Stops the turn with `goal_cleared` while the goal is active"
 	specWaiting       = "| `waiting` | A turn ended `awaiting_input`; a request is open |"
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
@@ -169,10 +171,12 @@ var runtimeRows = map[string]runtimeRow{
 	"driver_child_send_and_cancel":                                reGolden(specTaskInputs, specChildNoGoal, specReceipt, specView),
 	"driver_clean_restart":                                        reGolden(specView),
 	"driver_compact":                                              reGolden(specView, specCompactResult),
-	"driver_queue_goal_and_end":                                   pendingOn("phase 4"),
+	"driver_queue_goal_and_end":                                   reGolden(specView, specReceipt, specClearGoal),
 	"driver_resume_streams":                                       reGolden(specCursor, specBoxGlobal),
 	"driver_settings_and_reads":                                   pendingOn("phase 4"),
-	"end_session_semantics":                                       pendingOn("phase 4"),
+	"end_then_send_runs_no_report_of_the_stopped_child":           reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
+	"end_idle_parent_cancels_running_child":                       reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
+	"end_session_semantics":                                       reGolden(specView, specErrors, specReceipt),
 	"enqueue_joins_the_turn_at_the_tool_boundary":                 sameAsServe(),
 	"enqueue_while_busy_runs_after":                               sameAsServe(),
 	"file_tools_read_edges":                                       sameAsServe(),
