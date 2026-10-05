@@ -12,13 +12,13 @@ import (
 	"github.com/majorcontext/harness/internal/testpoll"
 )
 
-// awaitStartWork waits until serve has finished what a start owes: the lines
-// that follow the replication and the opens of the stored sessions.
+// awaitStartWork waits until serve has finished what a start owes: the line
+// that follows the opens of the stored sessions. These rows name no Sync, so
+// serve starts no catch-up.
 func awaitStartWork(t *testing.T, d *runtimeDriver) {
 	t.Helper()
 	done := func() bool {
-		log := d.Stderr()
-		return strings.Contains(log, "opened stored sessions") && strings.Contains(log, "caught up stored sessions")
+		return strings.Contains(d.Stderr(), "opened stored sessions")
 	}
 	if !testpoll.UntilNoT(waitBound, done) {
 		t.Fatalf("serve did not finish its start work\n%s", d.Stderr())
@@ -35,6 +35,9 @@ func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 	awaitStartWork(t, d)
 	d.Restart(t, false)
 	awaitStartWork(t, d)
+	if strings.Contains(d.Stderr(), "caught up stored sessions") {
+		t.Errorf("serve logged a catch-up with no Sync configured\n%s", d.Stderr())
+	}
 	if after := d.view(t, id).HeadSeq; after != before {
 		t.Errorf("an idle session holds %d records after two starts, want the %d from before: a start opened it", after, before)
 	}
