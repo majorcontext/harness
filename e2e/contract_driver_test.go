@@ -86,7 +86,7 @@ func TestContractDriverQueue(t *testing.T) {
 				clearGoal{as: "a"},
 				endSession{as: "a"},
 				cancelTree{as: "a"},
-				release{step: "slow"},
+				awaitCanceled{step: "slow"},
 				waitIdle{as: "a"},
 				endSession{as: "a"},
 			},

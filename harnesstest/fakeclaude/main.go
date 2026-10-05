@@ -32,7 +32,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -44,14 +43,27 @@ type fake struct {
 	sessionID string
 	out       *bufio.Writer
 	stdin     *bufio.Reader
+	// held is the init frame; the next emit writes it with its own frames.
+	held []byte
 }
 
+// emit writes the held init frame and frames in one write, so a SIGINT that
+// follows the first frame the driver reads never cuts the rest of them off.
 func (f *fake) emit(frames ...obj) {
+	buf := f.held
+	f.held = nil
 	for _, v := range frames {
 		b, _ := json.Marshal(v)
-		_, _ = fmt.Fprintln(f.out, string(b))
-		_ = f.out.Flush()
+		buf = append(append(buf, b...), '\n')
 	}
+	_, _ = f.out.Write(buf)
+	_ = f.out.Flush()
+}
+
+// hold keeps the init frame for the first emit.
+func (f *fake) hold(v obj) {
+	b, _ := json.Marshal(v)
+	f.held = append(append(f.held, b...), '\n')
 }
 
 func (f *fake) readLine() (string, bool) {
@@ -118,11 +130,12 @@ func main() {
 		init["model"] = "claude-opus-5-5[1m]"
 	}
 	initExtras(init)
-	f.emit(init)
+	f.hold(init)
 	if h, ok := modes[mode]; ok {
 		h(f)
 	} else {
 		normalTurn(f)
 	}
+	f.emit()
 	callHostedTool(f)
 }

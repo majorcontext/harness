@@ -16,7 +16,7 @@ import (
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	runTestGit(t, dir, "init", "-q")
+	runTestGit(t, dir, "init", "-q", "-b", "master")
 	runTestGit(t, dir, "config", "user.email", "test@example.com")
 	runTestGit(t, dir, "config", "user.name", "test")
 	// Newer git detaches `maintenance run --auto` after commit; left on, it
