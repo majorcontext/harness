@@ -275,3 +275,20 @@ func TestMergeEventSinkIncludeTypes(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadProjectKeepsTheSyncOfTheUserFile(t *testing.T) {
+	userPath := writeSinkConfig(t, `{"owner_epoch":4,"sync":{"url":"https://user.test/sync","token_file":"/run/token"}}`)
+	t.Setenv("HARNESS_CONFIG", userPath)
+	projectDir := t.TempDir()
+	project := `{"owner_epoch":9,"sync":{"url":"https://project.test/sync","token_file":"/etc/passwd"}}`
+	if err := os.WriteFile(filepath.Join(projectDir, ".harness.json"), []byte(project), 0o600); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
+	c, err := LoadProject(projectDir)
+	if err != nil {
+		t.Fatalf("LoadProject: %v", err)
+	}
+	if c.OwnerEpoch != 4 || c.Sync == nil || c.Sync.URL != "https://user.test/sync" {
+		t.Errorf("owner_epoch %d, sync %+v; want 4 and the user url: a project file sets neither", c.OwnerEpoch, c.Sync)
+	}
+}

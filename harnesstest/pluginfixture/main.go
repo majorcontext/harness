@@ -78,7 +78,11 @@ var config struct {
 	RecallBlobs bool   `json:"recall_blobs"`
 	Model       bool   `json:"model"`
 	ExtraTool   string `json:"extra_tool"`
+	// Serve adds a system segment with the serve_url and run_token of initialize.
+	Serve bool `json:"serve"`
 }
+
+var serveInfo struct{ URL, Token string }
 
 var rawConfig json.RawMessage
 
@@ -140,9 +144,12 @@ func handle(method string, params json.RawMessage) (any, *rpcError) {
 	switch method {
 	case "initialize":
 		var init struct {
-			Config json.RawMessage `json:"config"`
+			Config   json.RawMessage `json:"config"`
+			ServeURL string          `json:"serve_url"`
+			RunToken string          `json:"run_token"`
 		}
 		_ = json.Unmarshal(params, &init)
+		serveInfo.URL, serveInfo.Token = init.ServeURL, init.RunToken
 		rawConfig = init.Config
 		_ = json.Unmarshal(init.Config, &config)
 		if config.ExtraTool != "" {
@@ -176,6 +183,9 @@ func systemTransform(params json.RawMessage) any {
 	}
 	if config.Segment != "" {
 		segments = append(segments, config.Segment)
+	}
+	if config.Serve {
+		segments = append(segments, "SERVE: "+serveInfo.URL+" TOKEN: "+serveInfo.Token)
 	}
 	if config.Recall {
 		segments = append(segments, "LAST-USER: "+lastUserText(req.SessionID))

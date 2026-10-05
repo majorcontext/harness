@@ -91,6 +91,8 @@ type Options struct {
 	// the newest message of the session when its first request left. Empty:
 	// no banner.
 	Version string
+	// ServeURL and RunToken go to each plugin. A token needs a URL.
+	ServeURL, RunToken string
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -131,11 +133,17 @@ type Runtime struct {
 	births    births
 	base      context.Context
 	cancel    context.CancelFunc
-	group     sync.WaitGroup
+	// closing ends when Close starts.
+	closing    context.Context
+	closeStart context.CancelFunc
+	group      sync.WaitGroup
 
 	mu       sync.Mutex
 	closed   bool
 	sessions map[string]*entry
+	// catching holds the sessions that CatchUp replicates.
+	catching  map[string]*catchGrant
+	catchSlot chan struct{}
 }
 
 type entry struct {
@@ -155,9 +163,12 @@ func New(opts Options) (*Runtime, error) {
 	if key := ignoredKey(opts.Config); key != "" {
 		return nil, fmt.Errorf("%w: config key %s is not read by the runtime", ErrInvalidRequest, key)
 	}
+	if err := checkEmbedder(opts); err != nil {
+		return nil, err
+	}
 	d := config.Defaults()
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
-		sessions:  map[string]*entry{},
+		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
@@ -169,6 +180,7 @@ func New(opts Options) (*Runtime, error) {
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.base, r.cancel = context.WithCancel(context.Background())
+	r.closing, r.closeStart = context.WithCancel(r.base)
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs) },
@@ -188,7 +200,7 @@ func New(opts Options) (*Runtime, error) {
 		}
 	}
 	r.mcp = mcpsrc.New(opts.Config)
-	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob)
+	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob, opts.ServeURL, opts.RunToken)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {
@@ -197,7 +209,10 @@ func New(opts Options) (*Runtime, error) {
 		r.tools = append(r.tools, t)
 	}
 	if r.owner == nil {
-		r.owner = newLocalOwner()
+		r.owner = newLocalOwner(uint64(cmp.Or(opts.Config.OwnerEpoch, 1)))
+	}
+	if r.sync == nil && opts.Config.Sync != nil {
+		r.sync = newHTTPSync(*opts.Config.Sync)
 	}
 	r.name = sync.OnceValue(func() string {
 		host, _ := os.Hostname()
@@ -349,6 +364,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	if err := r.startPlugins(ctx); err != nil {
+		return nil, err
+	}
+	if err := r.yieldCatchUp(ctx, id); err != nil {
 		return nil, err
 	}
 	own, err := r.owner.Acquire(ctx, id)
@@ -564,6 +582,7 @@ func (r *Runtime) describe(ctx context.Context, id string) (protocol.Session, er
 func (r *Runtime) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closed = true
+	r.closeStart()
 	entries := make([]*entry, 0, len(r.sessions))
 	for _, e := range r.sessions {
 		entries = append(entries, e)

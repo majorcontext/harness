@@ -74,7 +74,11 @@ func (a *Actor) Open(ctx context.Context, key string) (io.ReadCloser, error) {
 
 // blob returns the bytes of a blob of the session: the attachment of a blob part.
 func (a *Actor) blob(ctx context.Context, key string) ([]byte, error) {
-	rc, err := a.cfg.Store.GetBlob(ctx, key)
+	return readBlob(ctx, a.cfg.Store, key)
+}
+
+func readBlob(ctx context.Context, st Blobs, key string) ([]byte, error) {
+	rc, err := st.GetBlob(ctx, key)
 	if err != nil {
 		return nil, err
 	}

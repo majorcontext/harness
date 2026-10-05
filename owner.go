@@ -22,13 +22,16 @@ type Ownership interface {
 
 var errHeld = errors.New("harness: session is held")
 
-// localOwner grants every session to this process, one grant at a time.
+// localOwner grants every session to this process at one epoch, one grant at a time.
 type localOwner struct {
-	mu   sync.Mutex
-	held map[string]bool
+	epoch uint64
+	mu    sync.Mutex
+	held  map[string]bool
 }
 
-func newLocalOwner() *localOwner { return &localOwner{held: map[string]bool{}} }
+func newLocalOwner(epoch uint64) *localOwner {
+	return &localOwner{epoch: epoch, held: map[string]bool{}}
+}
 
 func (o *localOwner) Acquire(ctx context.Context, session string) (Ownership, error) {
 	if err := ctx.Err(); err != nil {
@@ -49,7 +52,7 @@ type localGrant struct {
 	once    sync.Once
 }
 
-func (g *localGrant) Epoch() uint64 { return 1 }
+func (g *localGrant) Epoch() uint64 { return g.owner.epoch }
 
 func (g *localGrant) Lost() <-chan struct{} { return nil }
 

@@ -68,6 +68,9 @@ func (d *runtimeDriver) start(t *testing.T) {
 		t.Fatalf("harness.New: %v", err)
 	}
 	d.rt, d.srv = rt, httptest.NewServer(rt.Handler())
+	if err := rt.CatchUp(t.Context()); err != nil {
+		t.Fatalf("catch up: %v", err)
+	}
 	d.openAll(t)
 }
 

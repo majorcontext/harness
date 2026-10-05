@@ -107,7 +107,7 @@ func New(opts Options) (*Runtime, error) // no I/O; sessions load on Create, Ope
 type Options struct {
 	Store  Store         // required
 	Owner  Owner         // nil: the local process owns every session
-	Sync   Sync          // nil: no replication
+	Sync   Sync          // nil: no replication, unless the config key sync is set
 	Config config.Config // New checks it with Validate
 	// ModelTransport returns the HTTP transport for a model provider.
 	// nil, or a nil result: the default transport.
@@ -123,6 +123,8 @@ type Options struct {
 	// AskUserQuestion lets a backend that owns its loop ask the user a question,
 	// which the embedder answers with Session.Resolve.
 	AskUserQuestion bool
+	// ServeURL and RunToken go to each plugin in its initialize call. A token needs a URL.
+	ServeURL, RunToken string
 }
 
 // A Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -137,6 +139,9 @@ func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command men
 // every record through each handoff, or, when ctx ends first, once the
 // turns that it cancels have ended.
 func (r *Runtime) Close(ctx context.Context) error
+
+// CatchUp replicates every stored session through Sync, opening none. A box harness calls it at start.
+func (r *Runtime) CatchUp(ctx context.Context) error
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
@@ -158,8 +163,8 @@ func (v *View) Messages(ctx context.Context, before uint64, limit int) ([]protoc
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
 	// Deliver returns the receiver's head on success and on a seq mismatch;
-	// the sender resends from Head+1. ErrStaleEpoch or ErrConflict stops the
-	// session and releases its Ownership.
+	// the sender resends from Head+1. ErrStaleEpoch, ErrConflict, or
+	// ErrSyncRejected stops the session and releases its Ownership.
 	Deliver(ctx context.Context, b protocol.SyncBatch) (protocol.SyncAck, error)
 }
 
@@ -383,7 +388,7 @@ Start-up order of `Open` after `Acquire`:
 2. Append `owner.acquired{epoch, owner}` at that head. On `ErrConflict`, read `Head` again and retry. An old owner's append that lands first is ordered before the fence.
 3. Replay through the fence record, then run.
 
-After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The default `Owner` grants every session to the local process at epoch 1, one grant at a time. Boxes supplies a lease.
+After step 2, every append from a previous owner conflicts. When `Lost` closes, the actor stops without another append; `ErrConflict` from the store has the same effect. The default `Owner` grants every session to the local process, one grant at a time, at epoch 1 or at the `owner_epoch` of the config. Boxes supplies a lease, or writes `owner_epoch` for a box harness.
 
 ### State machines
 
@@ -558,7 +563,9 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
 - Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: `backend.state`, `tool_result.retained`, and the blob parts of `input.admitted`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
-- The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch) and `ErrConflict` (different bytes at a seq) are final: a resend cannot change them. Either one stops the session with no further append and releases its `Ownership`. `Session.Release` then returns the `ErrConflict` rejection, and `ErrSessionNotOwned` after a stale epoch. Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. On start, a box harness replicates every session that its `Store` holds, not only the sessions that it opens, so the logs that the cutover conversion wrote reach the receiver through this path. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
+- The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch), `ErrConflict` (different bytes at a seq), and `ErrSyncRejected` (a request that a resend cannot fix) are final: a resend cannot change them. Each one stops the session with no further append and releases its `Ownership`. `Session.Release` then returns the rejection, and `ErrSessionNotOwned` after a stale epoch. Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. On start, a box harness replicates every session that its `Store` holds, not only the sessions that it opens, so the logs that the cutover conversion wrote reach the receiver through this path. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
+- A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which `boxinit` writes from `BootConfig`. With `sync` set and no `Options.Sync`, `New` builds a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. Boxes serves `POST /v1/boxes/{id}/sync`; a `200` carries the `protocol.SyncAck{head}`, also on a seq mismatch. The reply follows one contract, and every status that it lists as final stops the session: `200` with `SyncAck{head}`; `409` with `stale_epoch` is `ErrStaleEpoch`; `409` with `sync_conflict` is `ErrConflict`, so the sender stops replicating that session and logs the rejection; `400` with `invalid_request` is `ErrInvalidRequest`; `413` with `too_large` when the body is over 32 MiB; `401` and `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. A `5xx` and a transport error resend the batch with backoff. The sender keeps the JSON body of a batch under 32 MiB by cutting it after fewer records than the page of 512, with the blobs of the records that it keeps, so a `413` happens only when one record with its blobs is over the bound, and it is final. `New` refuses `owner_epoch` beside `Options.Owner`, and `sync` beside `Options.Sync`.
+- `Runtime.CatchUp` is the start of a box harness: for each session in the `Store` that this runtime does not run, it takes a grant of the `Owner`, sends the log in pages from seq 1 (each acknowledgement moves the next page to the head that the receiver reports), and releases the grant. It appends nothing, so an idle session gets no `owner.acquired`. `Open` of a session that `CatchUp` holds ends the catch-up of that session first, and the opened session replicates itself. `Close` ends `CatchUp` with `ErrDraining`, and the next start catches up again. A stale epoch ends it with `ErrStaleEpoch`. If that `Open` fails, `CatchUp` replicates the session itself. Two calls at once run one after the other. A session that fails for another reason, such as a log that cannot be read, is skipped, and `CatchUp` returns each failure with its session ID after the other sessions finish. The phase 4 switch makes `cmd/harness` call it at start, beside the opens of the sessions that have work to resume.
 - The epoch is a number because fencing needs order. An embedder maps its own claim to a monotonic epoch; boxes uses `claim_epoch`, a plain counter that boxes increments when it admits a Spawn, and its string command ID stays the workflow token. Boxes switches its ownership comparison to that counter in the same release.
 
 ### Errors
@@ -794,7 +801,7 @@ With a `WorkDir`, each session of the harness loop gets the built-in tools of th
 - Events. `session.Config.Appended` gives each appended event, and the state after it, to the runtime, which gives the events to the plugins of the session. `turn.started` and `turn.resumed` send `session.status` busy. `turn.suspended` and `turn.ended` send idle, and a failed turn first sends `session.error`. The tool hooks send `tool.execute.start` and `tool.execute.end` around each call that runs, and `file.edited`, with an absolute path, after a `write_file` or `edit_file` call that succeeds. Delivery is best effort, as in the engine.
 - Client API. `client/session.messages` reads the history of the session from its actor when this runtime runs it, and from the store otherwise. The history carries each attachment as a `blob` part with its bytes, read from the store by `blob_key`; a failed read fails the call. `client/mcp.call` and `client/generate` fail.
 - The runtime does not dispatch `chat.params`, `chat.message`, or `shell.env`. No contract row pins them, and no boxes plugin uses them.
-- Switch oracle: the `plugin_*` rows. `serve_url` and `run_token` stay empty until the phase 4 switch.
+- Switch oracle: the `plugin_*` rows. `serve_url` and `run_token` are `Options.ServeURL` and `Options.RunToken`, empty when the embedder sets none.
 
 ### prompt
 
@@ -845,6 +852,8 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject` runs it on the merged config, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
 
 `New` also refuses a config that sets a key which the runtime does not read, with `ErrInvalidRequest` that names the key: `instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`. `session_dir` stays for `cmd/harness`, and `session_sync` sets the engine banner. The switch stops reading these keys and changes boxinit in the same release, and phase 6 deletes them; `model_tool` turns the `model` tool off, and `New` reads it.
+
+`owner_epoch` (a number) and `sync {url, token_file}` are the keys of a box harness; `Validate` requires an `http` or `https` URL with no userinfo, and a token file. Only the user file sets them: a project file cannot. A project file is still read as a file, so an invalid `sync` there fails the load, and a valid one is dropped.
 
 `ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. The phase 4 switch wires `ApplyEnv` into `cmd/harness`.
 
@@ -988,7 +997,6 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 ## Open questions
 
 - Where does a pinned segment sit after a compaction, and does it survive a restart? The engine kept each pin as a slot number, the smaller of that slot and the length of the history, in memory only. The runtime fixes a pin to the messages around it and rebuilds it from the log. Three cases differ. (1) A pin after the cut of a compaction: the engine puts it in the message of the next input, after the last message of the turn that held the report; the runtime keeps it after the message that it followed. (2) A pin that a compaction folds, with a kept tail of several calls: the engine puts it at its slot inside the tail, between a tool call and its result; the runtime puts it at the end of the history, after the next input. (3) A restart after a report: the engine lost the segment, and the runtime still reads it. The engine result of cases 2 and 3 splits a tool call from its result and loses a report, so the runtime does not copy it. Andy or a parity decision settles each case.
-- What posts `SyncBatch` to the control plane in a box? The engine posted each journal record to `event_sink`. The runtime has `Options.Sync` and no HTTP client for it, and `New` refuses `event_sink`. The epoch of a batch is `claim_epoch` (see Decided).
 
 ## Closed parity questions
 
@@ -1027,8 +1035,7 @@ Each row is a difference between the runtime and the engine that remains after t
 | Place of a pinned segment after the cut of a compaction | The pin sits in the message of the next input | The pin keeps its place after the message that it followed | Open: see Open questions | `child_report_to_a_busy_parent_after_the_cut_of_a_compaction` |
 | Place of a pinned segment that a compaction folds into a kept tail | The pin sits at its slot inside the tail, between a tool call and its result | The pin sits at the end of the history, after the next input | Open: see Open questions | `child_report_to_a_busy_parent_folded_with_a_long_kept_tail` |
 | Pinned segment after a restart | The segment is gone | The segment is rebuilt from the log | Open: see Open questions | `child_report_to_a_busy_parent_survives_a_restart` |
-| `event_sink` | The engine posts each journal record to the URL | `New` refuses the key | Closed by the Sync decision of Decided: a box harness replicates to boxes through `Sync`, so the key has no reader | None: no row sets `event_sink` |
-| Sender of `SyncBatch` in a box | The engine posts each journal record to `event_sink` | `Options.Sync` is a Go interface, and no HTTP client implements it | Open: see Open questions | None: no row runs a box harness against a control plane |
+| `event_sink` | The engine posts each journal record to the URL | `New` refuses the key; a box harness replicates through the config key `sync` (see Events) | Closed: boxes moves to `Sync` at the cutover (see Decided) | None: no row sets `event_sink` |
 
 ## Decided
 
@@ -1059,6 +1066,8 @@ Each row is a difference between the runtime and the engine that remains after t
 - The parity questions under Closed parity questions are closed (2026-10-04, and 2026-10-05 for the child report by backend and for `DELETE /sessions/{id}`): mid-turn delivery, `session_info` and `model`, the banner, the plugin inventory, the crash marker, the MCP connect reason, the child report in the `[tasks: …]` segment of the engine, read by backend as the mid-turn delivery bullet says, the history bridge and the frames of a subagent, questions and Codex prewarm, the warm-up wait, `DELETE /sessions/{id}`, the messages page limit, the CI step of the contract suite, the `[continuation: …]` tags, the creation order of `GET /sessions`, the receipt of the answer route, a repeated agent definition name, a settings change to another kind of backend in the middle of a turn, and the log parts of a child report to a busy parent. The coordinator closed the last five of these, and the log parts of a child report, by the parity rule on 2026-10-05; Andy may veto them. The questions under Open questions stay open.
 - Boxes pins an exact harness commit for its box images (2026-10-04), and harness reaches boxes only through a bump PR (see Boxes integration).
 - The cutover is one quiesced cutover, as this spec says: no per-box canary, no `harness_api` column, and no dual stack. A rehearsal on a copy of production data and a tested rollback come first, so the `box_journal_*` tables of boxes drop one release after the cutover.
+- What posts `SyncBatch` in a box (2026-10-05, by the parity and spec rules): the config keys `owner_epoch` and `sync {url, token_file}` build the `Owner` epoch and an HTTP sender in `New`, and `Runtime.CatchUp` replicates the stored sessions at start (see Events).
+- The wire contract of `POST /v1/boxes/{id}/sync` (2026-10-05): `409 sync_conflict` is `ErrConflict`, and `400 invalid_request`, `413 too_large`, `401`, and `403` are final; `5xx` and transport errors resend. A batch stays under 32 MiB (see Events).
 - On start, a box harness replicates every stored session through `Sync`, not only the open ones. At the cutover, the converted archive logs load into `pgstore` through the same receiver, so there is one conversion path and no converter in the control plane.
 - `claim_epoch` is a plain counter that boxes increments when it admits a Spawn, and the ownership comparison uses it in the same release. Boxes writes one `BootConfig` file, validates it once, and sends post-boot values such as `DATABASE_URL` as an update to that same file, with no serve-env channel; `boxinit` supervises `harness serve` in phase 5.
 - There is no comment purge. A history comment leaves when its code is rewritten or deleted; the gates stop new ones.
