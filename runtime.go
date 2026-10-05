@@ -179,7 +179,7 @@ func New(opts Options) (*Runtime, error) {
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
 	}
 	r.mcp = mcpsrc.New(opts.Config)
-	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history)
+	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob)
 	r.models = backend.New(opts.Config, opts.WorkDir, opts.ModelTransport)
 	for _, t := range tools {
 		if name := t.Spec().Name; name == "" || r.known("", name) {

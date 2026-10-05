@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -27,6 +28,9 @@ const probeTimeout = 30 * time.Second
 // History returns the conversation of a session.
 type History func(ctx context.Context, sessionID string) ([]eventlog.Message, error)
 
+// Blob opens the bytes that a session stores under key.
+type Blob func(ctx context.Context, sessionID, key string) (io.ReadCloser, error)
+
 // Plugins starts the configured plugins once for each runtime.
 type Plugins struct {
 	specs   []config.PluginSpec
@@ -40,12 +44,12 @@ type Plugins struct {
 }
 
 // New returns the Plugins of cfg.Plugins, or nil when it is empty. It does no I/O.
-func New(cfg config.Config, workDir string, history History) *Plugins {
+func New(cfg config.Config, workDir string, history History, blob Blob) *Plugins {
 	if len(cfg.Plugins) == 0 {
 		return nil
 	}
 	return &Plugins{specs: cfg.Plugins, workDir: workDir,
-		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history}}}
+		opts: plugin.Options{WorkspaceDir: workDir, HTTPHeaders: cfg.PluginHTTPHeaders, Client: client{history, blob}}}
 }
 
 // Start reads the manifest of each plugin with one bounded probe, once. The
@@ -220,7 +224,10 @@ func (t tool) Run(ctx context.Context, c protocol.ToolCall) (protocol.ToolResult
 }
 
 // client serves the plugin calls of the harness client API.
-type client struct{ history History }
+type client struct {
+	history History
+	blob    Blob
+}
 
 func (c client) SessionMessages(ctx context.Context, req *plugin.SessionMessagesRequest) (*plugin.SessionMessagesResponse, error) {
 	h, err := c.history(ctx, req.SessionID)
@@ -240,11 +247,26 @@ func (c client) SessionMessages(ctx context.Context, req *plugin.SessionMessages
 				out.Parts = append(out.Parts, &message.ToolCall{CallID: p.CallID, Name: p.Name, Arguments: p.Arguments})
 			case eventlog.PartToolResult:
 				out.Parts = append(out.Parts, &message.ToolResult{CallID: p.CallID, IsError: p.IsError, Content: message.Parts{&message.Text{Text: p.Text}}})
+			case eventlog.PartBlob:
+				data, err := c.readBlob(ctx, req.SessionID, p.BlobKey)
+				if err != nil {
+					return nil, err
+				}
+				out.Parts = append(out.Parts, &message.Blob{MediaType: p.MediaType, Data: data})
 			}
 		}
 		msgs = append(msgs, out)
 	}
 	return &plugin.SessionMessagesResponse{Messages: msgs}, nil
+}
+
+func (c client) readBlob(ctx context.Context, sessionID, key string) ([]byte, error) {
+	rc, err := c.blob(ctx, sessionID, key)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
 }
 
 func (client) MCPCall(context.Context, *plugin.MCPCallRequest) (*plugin.MCPCallResult, error) {
