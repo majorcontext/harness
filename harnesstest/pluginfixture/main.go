@@ -37,6 +37,14 @@ type part struct {
 	Text string `json:"text,omitempty"`
 }
 
+// blobPart reads a blob part of client/session.messages, whose bytes arrive
+// as base64.
+type blobPart struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
 type toolSpec struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -63,10 +71,13 @@ var manifest = map[string]any{
 }
 
 var config struct {
-	Segment   string `json:"segment"`
-	Recall    bool   `json:"recall"`
-	Model     bool   `json:"model"`
-	ExtraTool string `json:"extra_tool"`
+	Segment string `json:"segment"`
+	Recall  bool   `json:"recall"`
+	// RecallBlobs adds a system segment that lists the media type and size
+	// of each blob part that client/session.messages returns.
+	RecallBlobs bool   `json:"recall_blobs"`
+	Model       bool   `json:"model"`
+	ExtraTool   string `json:"extra_tool"`
 }
 
 var rawConfig json.RawMessage
@@ -169,6 +180,9 @@ func systemTransform(params json.RawMessage) any {
 	if config.Recall {
 		segments = append(segments, "LAST-USER: "+lastUserText(req.SessionID))
 	}
+	if config.RecallBlobs {
+		segments = append(segments, "BLOBS: "+recalledBlobs(req.SessionID))
+	}
 	if len(segments) == 0 {
 		return map[string]any{}
 	}
@@ -195,6 +209,28 @@ func lastUserText(sessionID string) string {
 		}
 	}
 	return "none"
+}
+
+// recalledBlobs asks the host for the session history and lists each blob
+// part as media type and byte count.
+func recalledBlobs(sessionID string) string {
+	var resp struct {
+		Messages []struct {
+			Parts []blobPart `json:"parts"`
+		} `json:"messages"`
+	}
+	if err := callHost("client/session.messages", map[string]string{"session_id": sessionID}, &resp); err != nil {
+		return "error: " + err.Error()
+	}
+	var blobs []string
+	for _, m := range resp.Messages {
+		for _, p := range m.Parts {
+			if p.Type == "blob" {
+				blobs = append(blobs, fmt.Sprintf("%s:%d", p.MediaType, len(p.Data)))
+			}
+		}
+	}
+	return strings.Join(blobs, " ")
 }
 
 // callHost sends one numbered request and serves every other line until the

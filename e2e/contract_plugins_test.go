@@ -72,6 +72,16 @@ func pluginBoxesConfig(t *testing.T) map[string]any {
 	}}}
 }
 
+// attachmentsSegment is the segment that the fixture builds from the blob
+// parts of rowAttachments.
+func attachmentsSegment() string {
+	var sizes []string
+	for _, a := range rowAttachments() {
+		sizes = append(sizes, fmt.Sprintf("%s:%d", a.mediaType, len(a.data)))
+	}
+	return "BLOBS: " + strings.Join(sizes, " ")
+}
+
 func requestHasSegment(want bool) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool { return strings.Contains(r.System, fixtureSegment) == want }
 }
@@ -137,6 +147,16 @@ func TestContractPluginTools(t *testing.T) {
 				submit{as: "a", text: "first"},
 				waitIdle{as: "a"},
 				submit{as: "a", text: "second"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name:   "plugin_session_messages_carry_attachments",
+			config: pluginConfig(t, map[string]any{"recall_blobs": true}),
+			model:  []harnesstest.Step{{Name: "seen", Match: harnesstest.SystemContains(attachmentsSegment()), Reply: harnesstest.Reply{Text: "ok"}}},
+			actions: []action{
+				create{as: "a"},
+				submitAttachments{as: "a", text: "look"},
 				waitIdle{as: "a"},
 			},
 		},

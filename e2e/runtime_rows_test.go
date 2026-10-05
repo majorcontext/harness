@@ -184,6 +184,7 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_event_and_after_hook_payloads":                        sameAsServe(),
 	"plugin_system_segment_in_every_request":                      sameAsServe(),
 	"plugin_system_transform_reads_session_messages":              sameAsServe(),
+	"plugin_session_messages_carry_attachments":                   sameAsServe(),
 	"plugin_tools_listed_and_run":                                 reGolden(specView),
 	"provider_429_then_ok":                                        reGolden(specView),
 	"provider_usage_limit_fails_turn":                             reGolden(specView),
