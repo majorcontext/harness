@@ -86,8 +86,12 @@ func (r *Runtime) sessionsByCreation(ctx context.Context, after string, limit in
 		}
 		start = i + 1
 	}
+	rest := all[start:]
+	if len(rest) > limit {
+		rest = rest[:limit]
+	}
 	var out []string
-	for _, c := range all[start:min(len(all), start+limit)] {
+	for _, c := range rest {
 		out = append(out, c.id)
 	}
 	return out, nil
