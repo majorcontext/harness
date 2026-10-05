@@ -114,6 +114,24 @@ func TestToolExecuteBeforeDeny(t *testing.T) {
 	}
 }
 
+func TestToolExecuteAfterMutation(t *testing.T) {
+	guard := testPlugin(t, "guard", &Hooks{
+		ToolExecuteAfter: func(_ context.Context, _ *Client, req *ToolExecuteAfterRequest) (*ToolExecuteAfterResponse, error) {
+			return &ToolExecuteAfterResponse{
+				Output: message.Parts{&message.Text{Text: "[REJECTED] " + req.Output.Text()}},
+			}, nil
+		},
+	})
+	h := newTestHost(t, Options{}, guard)
+	out := h.ToolExecuteAfter(context.Background(), &ToolExecuteAfterRequest{
+		SessionID: "s1", CallID: "tc1", Tool: "screenshot",
+		Output: message.Parts{&message.Text{Text: "too big"}},
+	})
+	if out.Text() != "[REJECTED] too big" {
+		t.Errorf("output = %q", out.Text())
+	}
+}
+
 func TestShellEnvMerge(t *testing.T) {
 	envPlugin := func(name string, env map[string]string) Spec {
 		return testPlugin(t, name, &Hooks{

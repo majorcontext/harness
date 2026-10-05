@@ -188,6 +188,46 @@ func TestStdioInitializeUnsupportedServerVersion(t *testing.T) {
 // TestStdioListAllToolsNonAdvancingCursor guards against a server bug (or
 // malicious server) that keeps returning the same NextCursor forever:
 // ListAllTools must error instead of looping without bound.
+func TestStdioListToolsPagination(t *testing.T) {
+	var tools []Tool
+	for i := 0; i < 5; i++ {
+		tools = append(tools, Tool{Name: fmt.Sprintf("tool-%d", i)})
+	}
+	srv := &fakeStdioServer{tools: tools, pageSize: 2}
+	c := newTestClient(t, srv.dial(t), Options{})
+	mustInitialize(t, c)
+
+	var got []Tool
+	cursor := ""
+	pages := 0
+	for {
+		page, err := c.ListTools(context.Background(), cursor)
+		if err != nil {
+			t.Fatalf("ListTools: %v", err)
+		}
+		got = append(got, page.Tools...)
+		pages++
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+		if pages > 10 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+	if pages != 3 {
+		t.Errorf("pages = %d, want 3", pages)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d tools, want 5", len(got))
+	}
+	for i, tool := range got {
+		if tool.Name != fmt.Sprintf("tool-%d", i) {
+			t.Errorf("tools[%d].Name = %q", i, tool.Name)
+		}
+	}
+}
+
 func TestStdioListAllToolsNonAdvancingCursor(t *testing.T) {
 	srv := &fakeStdioServer{
 		tools:       []Tool{{Name: "a"}},
@@ -210,6 +250,30 @@ func TestStdioListAllToolsNonAdvancingCursor(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ListAllTools did not terminate on a repeated cursor")
+	}
+}
+
+func TestStdioCallToolIsError(t *testing.T) {
+	srv := &fakeStdioServer{
+		callTool: func(name string, arguments json.RawMessage) (*CallToolResult, error) {
+			return &CallToolResult{
+				Content: []Content{{Type: ContentTypeText, Text: "boom: division by zero"}},
+				IsError: true,
+			}, nil
+		},
+	}
+	c := newTestClient(t, srv.dial(t), Options{})
+	mustInitialize(t, c)
+
+	res, err := c.CallTool(context.Background(), "divide", nil)
+	if err != nil {
+		t.Fatalf("CallTool returned protocol error for a tool-level failure: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("IsError = false, want true")
+	}
+	if res.Content[0].Text == "" {
+		t.Error("expected error text in content")
 	}
 }
 
