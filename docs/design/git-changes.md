@@ -2,7 +2,7 @@
 
 `GET /git/changes` answers a box's git diff for the boxes web console's
 Changes panel, mirroring `GET /process`'s role for box-local process state.
-See `server/git_changes.go` and `server/openapi.yaml` for the wire contract.
+See `server/git_changes.go` and the former `server/openapi.yaml` for the wire contract.
 
 ## Constant subprocess cost
 

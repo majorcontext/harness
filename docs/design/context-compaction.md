@@ -614,7 +614,7 @@ session — a live-only event closes it only for a tab that happens to be
 open at the exact moment the CLI compacts, which is not a fix for the
 gap's general shape.
 
-`server/openapi.yaml`'s `Event` schema documents `compaction.claude_code`
+the former `server/openapi.yaml`'s `Event` schema documents `compaction.claude_code`
 and its `trigger`/`pre_tokens`/`post_tokens`/`compact_started_at` fields
 alongside `history.compacted`/`compaction.failed`/`compaction.started`,
 including the absent-vs-zero caveat above — the hand-written API contract
@@ -725,7 +725,7 @@ as long as `contextUnknown` holds. `used_tokens` therefore now carries
 either an exact measurement or a size estimate, never distinguishing the
 two on the wire: both answer the same question, "how full is context now,"
 to the precision each has available, and no consumer needs to tell them
-apart (see `server/openapi.yaml`'s `used_tokens` description).
+apart (see the former `server/openapi.yaml`'s `used_tokens` description).
 
 This split is honestly asymmetric across the five projections, not
 uniform. `contextJSONForSession`, `recordTurnEnd`, and
