@@ -208,6 +208,7 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_unavailable_connect_fails_with_classified_reason":        reGolden(specMCPNoStatus, specMCPText),
 	"messages_page_after_compaction":                              pendingOn("phase 4"),
 	"messages_page_windows":                                       pendingOn("phase 4"),
+	"model_tool_false_removes_the_model_tool":                     sameAsServe(),
 	"model_tool_reports_lists_and_switches_the_model":             sameAsServe(),
 	"one_tool_round_trip":                                         sameAsServe(),
 	"openai_key_http_sse_text_turn":                               reGolden(specItems),

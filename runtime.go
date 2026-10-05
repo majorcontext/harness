@@ -173,6 +173,9 @@ func New(opts Options) (*Runtime, error) {
 		Base: r.base, Go: r.group.Go, Profiles: func() map[string]prompt.Profile { return prompt.Profiles(r.agentDirs) },
 		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
 	tools := opts.Tools
+	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
+		return nil, fmt.Errorf("%w: tool name %q is reserved", ErrInvalidRequest, modelToolName)
+	}
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
 	}

@@ -32,6 +32,11 @@ func TestContractModelTool(t *testing.T) {
 			model("action", "status"),
 		),
 		actions: oneTurn,
+	}, {
+		name:    "model_tool_false_removes_the_model_tool",
+		config:  map[string]any{"model_tool": false},
+		model:   toolChain(),
+		actions: oneTurn,
 	}})
 }
 
