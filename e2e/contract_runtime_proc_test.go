@@ -3,7 +3,6 @@ package e2e
 import (
 	"encoding/json"
 	"errors"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,8 +32,6 @@ func TestContractRuntimeProcesses(t *testing.T) {
 		name string
 		run  func(t *testing.T)
 	}{
-		{"process_http_lifecycle", processHTTPLifecycle},
-		{"process_http_unknown_name_is_404", processHTTPUnknown},
 		{"process_tool_from_the_model", func(t *testing.T) { processToolFromModel(t, serveHost, "process: process: ") }},
 	}
 	for _, row := range rows {
@@ -69,87 +66,6 @@ func processHost(t *testing.T, h host, steps ...harnesstest.Step) (driver, *harn
 	t.Helper()
 	fake := harnesstest.New(t, steps...)
 	return h.open(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(devProcesses())), nil), fake
-}
-
-func processStatus(t *testing.T, d *httpDriver, method, path string) map[string]any {
-	t.Helper()
-	res := d.call(t, method, path, nil)
-	if res.Status != http.StatusOK {
-		t.Fatalf("%s %s = %d %v\nstderr:\n%s", method, path, res.Status, res.Body, d.Stderr())
-	}
-	return bodyOf(t, res)
-}
-
-func pidOf(t *testing.T, status map[string]any) int64 {
-	t.Helper()
-	n, err := status["pid"].(json.Number).Int64()
-	if err != nil || n <= 0 {
-		t.Fatalf("status = %v, want a positive pid", status)
-	}
-	return n
-}
-
-func processHTTPLifecycle(t *testing.T) {
-	workdir := runtimeWorkdir(t, nil)
-	d, _ := startRuntime(t, workdir, devProcesses())
-	logPath := filepath.Join(workdir, ".harness", "proc", "dev.log")
-
-	res := d.call(t, http.MethodGet, "/process", nil)
-	list, _ := res.Body.([]any)
-	if res.Status != http.StatusOK || len(list) != 1 {
-		t.Fatalf("GET /process = %d %v, want one declared process", res.Status, res.Body)
-	}
-	info := list[0].(map[string]any)
-	status := info["status"].(map[string]any)
-	if info["name"] != "dev" || info["origin"] != "config" || status["ready"] != false || status["state"] != nil || status["log"] != logPath {
-		t.Errorf("never-started process = %v, want a config process with no state, not ready, log %s", info, logPath)
-	}
-
-	started := processStatus(t, d, http.MethodPost, "/process/dev/start")
-	if started["state"] != "ready" || started["ready"] != true || started["log"] != logPath {
-		t.Errorf("start = %v, want ready with log %s", started, logPath)
-	}
-	pid := pidOf(t, started)
-	if again := processStatus(t, d, http.MethodPost, "/process/dev/start"); pidOf(t, again) != pid {
-		t.Errorf("second start = %v, want the same running process (pid %d)", again, pid)
-	}
-
-	logs := processStatus(t, d, http.MethodGet, "/process/dev/logs")
-	if logs["content"] != "ready-line\nsecond" {
-		t.Errorf("logs content = %q, want both lines", logs["content"])
-	}
-	if tail := processStatus(t, d, http.MethodGet, "/process/dev/logs?tail=1"); tail["content"] != "second" {
-		t.Errorf("logs tail=1 content = %q, want the last line", tail["content"])
-	}
-
-	restarted := processStatus(t, d, http.MethodPost, "/process/dev/restart")
-	if restarted["state"] != "ready" || pidOf(t, restarted) == pid {
-		t.Errorf("restart = %v, want a ready process with a new pid", restarted)
-	}
-
-	stopped := processStatus(t, d, http.MethodPost, "/process/dev/stop")
-	if stopped["state"] != "stopped" {
-		t.Errorf("stop = %v, want state stopped", stopped)
-	}
-	listed := d.call(t, http.MethodGet, "/process", nil).Body.([]any)[0].(map[string]any)["status"].(map[string]any)
-	if listed["state"] != "stopped" {
-		t.Errorf("GET /process after stop = %v, want state stopped", listed)
-	}
-}
-
-func processHTTPUnknown(t *testing.T) {
-	d, _ := startRuntime(t, runtimeWorkdir(t, nil), devProcesses())
-	for _, call := range []struct{ method, path string }{
-		{http.MethodPost, "/process/nope/start"},
-		{http.MethodPost, "/process/nope/stop"},
-		{http.MethodPost, "/process/nope/restart"},
-		{http.MethodGet, "/process/nope/logs"},
-	} {
-		res := d.call(t, call.method, call.path, nil)
-		if res.Status != http.StatusNotFound || bodyOf(t, res)["error"] != "no such process" {
-			t.Errorf("%s %s = %d %v, want 404 no such process", call.method, call.path, res.Status, res.Body)
-		}
-	}
 }
 
 // normProcessResult masks the fields of a process tool result that vary per

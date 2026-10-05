@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,30 +21,16 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// hold is an embedder tool that reports each call on started and returns
-// when its ctx ends.
-type hold chan struct{}
-
-func (hold) Spec() protocol.ToolSpec {
-	return protocol.ToolSpec{Name: "hold", Description: "hold", InputSchema: json.RawMessage(`{"type":"object"}`)}
-}
-
-func (h hold) Run(ctx context.Context, _ protocol.ToolCall) (protocol.ToolResult, error) {
-	h <- struct{}{}
-	<-ctx.Done()
-	return protocol.ToolResult{}, context.Cause(ctx)
-}
-
 // serve serves the handler of a Runtime on a MemStore whose codex and
 // openai providers are a scripted Codex server, and creates session s1.
-func serve(t *testing.T, tools []harness.Tool, steps ...harnesstest.Step) (*harness.Runtime, string) {
+func serve(t *testing.T, steps ...harnesstest.Step) (*harness.Runtime, string) {
 	t.Helper()
 	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, steps...)
 	t.Setenv("HARNESS_TEST_CODEX_KEY", "k")
 	retries := 0
 	p := config.Provider{Type: config.TypeOpenAI, APIKeyEnv: "HARNESS_TEST_CODEX_KEY", BaseURL: o.URL() + "/backend-api/codex",
 		ResponsesPath: "/responses", OmitResponseParams: []string{"max_output_tokens"}}
-	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: tools,
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(),
 		Config: config.Config{PromptRetries: &retries, GoalEvaluatorModel: "codex/gpt-5", Providers: map[string]config.Provider{"codex": p, "openai": p}}})
 	if err != nil {
 		t.Fatal(err)
@@ -151,99 +136,21 @@ func want(t *testing.T, what string, got any, want any) {
 	}
 }
 
-func TestSessionOverHTTP(t *testing.T) {
-	_, s1 := serve(t, nil, harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
+// TestLiveFramesCarryNoSSEID pins spec HTTP > Events: only the SSE frames of
+// durable records carry id: <seq>, and a live frame carries the last durable
+// seq. A golden holds no live frame, so no contract row reaches this.
+func TestLiveFramesCarryNoSSEID(t *testing.T) {
+	_, s1 := serve(t, harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
 	live := subscribe(t, s1+"/events", "")
 	want(t, "first frames", live.until(t, "owner.acquired"), []string{"1 session.created", "2 owner.acquired"})
-	in := `{"id":"a","parts":[{"type":"text","text":"hi"}]}`
-	for _, code := range []int{http.StatusCreated, http.StatusOK} {
-		var got protocol.Admitted
-		want(t, "submit status", call(t, "POST", s1+"/inputs", in, &got), code)
-		want(t, "receipt", got, protocol.Admitted{InputID: "a", Seq: 3})
-	}
+	var got protocol.Admitted
+	want(t, "submit status", call(t, "POST", s1+"/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, &got), http.StatusCreated)
 	want(t, "turn frames", live.until(t, "turn.ended"),
 		[]string{"3 input.admitted", "4 turn.started", "~4 item.started", "~4 item.delta text hello", "5 context.measured", "6 item.completed", "7 turn.ended"})
-
-	for _, tc := range []struct{ query, lastID string }{{"?after=4", ""}, {"", "4"}, {"?after=1", "4"}} {
-		want(t, "resume "+tc.query+" "+tc.lastID, subscribe(t, s1+"/events"+tc.query, tc.lastID).until(t, "turn.ended"),
-			[]string{"5 context.measured", "6 item.completed", "7 turn.ended"})
-	}
-	for _, tc := range []struct {
-		query string
-		kinds []string
-		next  uint64
-	}{{"?after=2&limit=2", []string{"input.admitted", "turn.started"}, 4}, {"?after=4", []string{"context.measured", "item.completed", "turn.ended"}, 0}} {
-		var page protocol.EventPage
-		call(t, "GET", s1+"/events"+tc.query, "", &page)
-		var got []string
-		for _, e := range page.Events {
-			got = append(got, e.Kind)
-		}
-		want(t, "page "+tc.query, [2]any{got, page.Next}, [2]any{tc.kinds, tc.next})
-	}
-
-	var v protocol.Session
-	want(t, "patch status", call(t, "PATCH", s1, `{"model":"openai/gpt-6-sol","effort":"high"}`, &v), http.StatusOK)
-	want(t, "patched", [3]any{v.Model, v.Effort, v.HeadSeq}, [3]any{"openai/gpt-6-sol", "high", uint64(8)})
-	var page protocol.SessionPage
-	call(t, "GET", strings.TrimSuffix(s1, "/s1"), "", &page)
-	call(t, "GET", s1, "", &v)
-	want(t, "list", page.Sessions, []protocol.Session{v})
-	want(t, "view", [2]string{v.Status, v.Model}, [2]string{protocol.StatusIdle, "openai/gpt-6-sol"})
-}
-
-func TestInterruptOverHTTP(t *testing.T) {
-	started := make(hold)
-	_, s1 := serve(t, []harness.Tool{started}, harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("run"),
-		Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "hold"}}}})
-	call(t, "POST", s1+"/inputs", `{"id":"a","parts":[{"type":"text","text":"run"}]}`, nil)
-	<-started
-	var busy protocol.ErrorBody
-	want(t, "compact while a turn runs", [2]any{call(t, "POST", s1+"/compact", "", &busy), busy.Error.Code},
-		[2]any{http.StatusConflict, protocol.CodeSessionBusy})
-	want(t, "interrupt status", call(t, "POST", s1+"/interrupt", "", nil), http.StatusNoContent)
-	var bad protocol.ErrorBody
-	want(t, "compact with keep_turns 0", [2]any{call(t, "POST", s1+"/compact", `{"keep_turns":0}`, &bad), bad.Error.Code},
-		[2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
-	var compacted protocol.Compacted
-	want(t, "compact with nothing to fold", [2]any{call(t, "POST", s1+"/compact", `{"keep_turns":1}`, &compacted), compacted},
-		[2]any{http.StatusOK, protocol.Compacted{}})
-	var page protocol.EventPage
-	call(t, "GET", s1+"/events?after=6", "", &page)
-	want(t, "events after the interrupt", len(page.Events), 2)
-	if last := page.Events[len(page.Events)-1]; last.Kind != "turn.ended" || !bytes.Contains(last.Data, []byte(`"stop_reason":"interrupted"`)) {
-		t.Errorf("last event = %s %s, want an interrupted turn.ended", last.Kind, last.Data)
-	}
-}
-
-func TestGoalOverHTTP(t *testing.T) {
-	judge := harnesstest.SystemContains("MET: <one short sentence")
-	_, s1 := serve(t, nil, harnesstest.Step{Name: "work", Match: harnesstest.LastUserText("say done"), Reply: harnesstest.Reply{Text: "done"}},
-		harnesstest.Step{Name: "judge", Match: judge, Reply: harnesstest.Reply{Text: "MET: said done"}})
-	live := subscribe(t, s1+"/events", "")
-	var v protocol.Session
-	want(t, "put status", call(t, "PUT", s1+"/goal", `{"condition":"say done","max_turns":3}`, &v), http.StatusOK)
-	want(t, "put goal", *v.Goal, protocol.GoalView{Goal: protocol.Goal{Condition: "say done", MaxTurns: 3}, State: "active"})
-	live.until(t, "goal.changed")
-	call(t, "GET", s1, "", &v)
-	want(t, "achieved", [2]any{v.Goal.State, v.Goal.Turns}, [2]any{"achieved", 1})
-	want(t, "delete status", call(t, "DELETE", s1+"/goal", "", nil), http.StatusNoContent)
-	call(t, "GET", s1, "", &v)
-	want(t, "cleared", v.Goal.State, "cleared")
-	var bad protocol.ErrorBody
-	want(t, "empty condition", [2]any{call(t, "PUT", s1+"/goal", `{"condition":" "}`, &bad), bad.Error.Code}, [2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
-}
-
-func TestModelsOverHTTP(t *testing.T) {
-	r, s1 := serve(t, nil)
-	var got []protocol.Model
-	want(t, "status", call(t, "GET", strings.TrimSuffix(s1, "/sessions/s1")+"/models", "", &got), http.StatusOK)
-	want(t, "models", got, r.Models())
-	want(t, "health", call(t, "GET", strings.TrimSuffix(s1, "/sessions/s1")+"/health", "", nil), http.StatusOK)
 }
 
 func TestErrorsOverHTTP(t *testing.T) {
-	r, s1 := serve(t, nil, harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
+	r, s1 := serve(t, harnesstest.Step{Name: "hi", Match: harnesstest.LastUserText("hi"), Reply: harnesstest.Reply{Text: "hello"}})
 	base := strings.TrimSuffix(s1, "/s1")
 	if code := call(t, "POST", s1+"/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil); code != http.StatusCreated {
 		t.Fatalf("submit = %d", code)
@@ -286,24 +193,11 @@ func TestErrorsOverHTTP(t *testing.T) {
 // stub is a Runtime and a Session with scripted results.
 type stub struct {
 	openErr error
-	head    uint64
 	receipt protocol.Admitted
-	repeat  bool
-	// resolved records the last Resolve; resolveErr is its result.
-	resolved   *resolveCall
-	resolveErr error
 }
 
-type resolveCall struct {
-	id  string
-	res protocol.Resolution
-}
-
-func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) (protocol.Resolved, error) {
-	if s.resolved != nil {
-		*s.resolved = resolveCall{id, res}
-	}
-	return protocol.Resolved{}, s.resolveErr
+func (stub) Resolve(context.Context, string, protocol.Resolution) (protocol.Resolved, error) {
+	return protocol.Resolved{}, nil
 }
 
 func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }
@@ -316,7 +210,7 @@ func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, 
 func (stub) Models() []protocol.Model                            { return nil }
 func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) Withdraw(context.Context, string) error            { return nil }
-func (s stub) View() protocol.Session                            { return protocol.Session{HeadSeq: s.head} }
+func (stub) View() protocol.Session                              { return protocol.Session{} }
 func (stub) Interrupt(context.Context, protocol.Interrupt) error { return nil }
 func (stub) Compact(context.Context, protocol.Compact) (protocol.Compacted, error) {
 	return protocol.Compacted{}, nil
@@ -328,9 +222,7 @@ func (s stub) Update(context.Context, protocol.SettingsPatch) (protocol.Session,
 }
 func (stub) Events(context.Context, uint64) iter.Seq2[protocol.Event, error] { return nil }
 func (s stub) Submit(context.Context, protocol.Input) (protocol.Admitted, error) {
-	r := s.receipt
-	r.Repeat = s.repeat
-	return r, nil
+	return s.receipt, nil
 }
 
 // reader is a stub as a server.Reader.
@@ -348,68 +240,10 @@ func TestInternalErrorHidesItsCause(t *testing.T) {
 	}
 }
 
-func TestSubmitStatusFollowsTheSessionVerdict(t *testing.T) {
-	for _, repeat := range []bool{false, true} {
-		status := http.StatusCreated
-		if repeat {
-			status = http.StatusOK
-		}
-		srv := httptest.NewServer(server.New(stub{head: 9, receipt: protocol.Admitted{InputID: "a", Seq: 5}, repeat: repeat}, server.Options{}))
-		t.Cleanup(srv.Close)
-		want(t, fmt.Sprintf("status with repeat=%v", repeat),
-			call(t, "POST", srv.URL+"/sessions/s1/inputs", `{"id":"a","parts":[{"type":"text","text":"hi"}]}`, nil), status)
-	}
-}
-
 func TestAnInputBodyMayHoldAnAttachmentOfTheAdmissionLimit(t *testing.T) {
 	srv := httptest.NewServer(server.New(stub{receipt: protocol.Admitted{InputID: "a", Seq: 5}}, server.Options{}))
 	t.Cleanup(srv.Close)
 	body := `{"id":"a","parts":[{"type":"blob","media_type":"application/pdf","data":"` + strings.Repeat("QUJD", 12<<18) + `"}]}`
 	want(t, "an input of 12 MiB", call(t, "POST", srv.URL+"/sessions/s1/inputs", body, nil), http.StatusCreated)
 	want(t, "another body of 12 MiB", call(t, "PATCH", srv.URL+"/sessions/s1", `{"model":"`+strings.Repeat("x", 12<<20)+`"}`, nil), http.StatusRequestEntityTooLarge)
-}
-
-func TestResolveOverHTTP(t *testing.T) {
-	var got resolveCall
-	pending := errors.New("not pending")
-	srv := httptest.NewServer(server.New(stub{resolved: &got, resolveErr: nil}, server.Options{}))
-	t.Cleanup(srv.Close)
-	url := srv.URL + "/sessions/s1/requests/c1"
-	want(t, "answer status", call(t, "POST", url, `{"answer":{"Which database?":"SQLite"}}`, nil), http.StatusNoContent)
-	want(t, "answer", [2]any{got.id, string(got.res.Answer)}, [2]any{"c1", `{"Which database?":"SQLite"}`})
-	want(t, "dismiss status", call(t, "POST", url, `{"dismiss":true}`, nil), http.StatusNoContent)
-	want(t, "dismiss", got.res, protocol.Resolution{Dismiss: true})
-	var bad protocol.ErrorBody
-	want(t, "unknown field", [2]any{call(t, "POST", url, `{"dismis":true}`, &bad), bad.Error.Code}, [2]any{http.StatusBadRequest, protocol.CodeInvalidRequest})
-	closed := httptest.NewServer(server.New(stub{resolveErr: pending}, server.Options{Codes: []server.Code{{Err: pending, Code: protocol.CodeRequestNotPending}}}))
-	t.Cleanup(closed.Close)
-	want(t, "not pending", [2]any{call(t, "POST", closed.URL+"/sessions/s1/requests/c9", `{"dismiss":true}`, &bad), bad.Error.Code},
-		[2]any{http.StatusConflict, protocol.CodeRequestNotPending})
-}
-
-func TestEventsAcceptNegotiation(t *testing.T) {
-	_, s1 := serve(t, nil)
-	for accept, ct := range map[string]string{
-		"text/event-stream":                        "text/event-stream",
-		"TEXT/Event-Stream":                        "text/event-stream",
-		"application/json, text/event-stream":      "text/event-stream",
-		"text/event-streaming":                     "application/json",
-		"text/event-stream;q=0":                    "application/json",
-		"text/event-stream; q=0, application/json": "application/json",
-		"*/*": "application/json",
-	} {
-		ctx, cancel := context.WithCancel(context.Background())
-		req, err := http.NewRequestWithContext(ctx, "GET", s1+"/events", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Accept", accept)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want(t, "content type for Accept "+accept, resp.Header.Get("Content-Type"), ct)
-		cancel()
-		_ = resp.Body.Close()
-	}
 }

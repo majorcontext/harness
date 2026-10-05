@@ -211,8 +211,24 @@ func (n *normalizer) value(key string, v any) any {
 			return x
 		}
 		return n.str(x)
+	case json.Number:
+		if key == "pid" {
+			return n.pid(x.String())
+		}
 	}
 	return v
+}
+
+// pid numbers each process id in order of first sight, so a golden keeps
+// whether two reads name the same process.
+func (n *normalizer) pid(s string) string {
+	if a, ok := n.aliases["pid:"+s]; ok {
+		return a
+	}
+	n.counts["pid"]++
+	a := fmt.Sprintf("pid#%d", n.counts["pid"])
+	n.aliases["pid:"+s] = a
+	return a
 }
 
 // key normalizes an object key. A key named *_id is a field name, not an id.

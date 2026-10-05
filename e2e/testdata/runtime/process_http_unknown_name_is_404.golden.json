@@ -1,0 +1,56 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "process_explode.dev": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "Not Found"
+        }
+      }
+    },
+    "process_logs.nope": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "process_not_found",
+          "details": {},
+          "message": "process: unknown process \"nope\""
+        }
+      }
+    },
+    "process_restart.nope": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "process_not_found",
+          "details": {},
+          "message": "process: unknown process \"nope\""
+        }
+      }
+    },
+    "process_start.nope": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "process_not_found",
+          "details": {},
+          "message": "process: unknown process \"nope\""
+        }
+      }
+    },
+    "process_stop.nope": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "process_not_found",
+          "details": {},
+          "message": "process: unknown process \"nope\""
+        }
+      }
+    }
+  }
+}

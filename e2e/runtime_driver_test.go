@@ -44,7 +44,7 @@ var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codex
 
 func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver {
 	t.Helper()
-	return newRuntimeDriverIn(t, configPath, ask, t.TempDir())
+	return newRuntimeDriverIn(t, configPath, ask, resolved(t.TempDir()))
 }
 
 // newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
@@ -604,6 +604,9 @@ func decodeBody(t *testing.T, label string, data []byte) any {
 	var v any
 	if err := dec.Decode(&v); err != nil {
 		t.Fatalf("%s: decode body: %v (%s)", label, err, data)
+	}
+	if dec.More() {
+		return string(bytes.TrimSpace(data))
 	}
 	return v
 }

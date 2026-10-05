@@ -75,6 +75,10 @@ type driver interface {
 	Child(t *testing.T, parentID string, nth int) string
 	Command(t *testing.T, id, text string, repeatable bool) callResult
 	Commands(t *testing.T) callResult
+	Processes(t *testing.T) callResult
+	ProcessAction(t *testing.T, name, action string) callResult
+	ProcessLogs(t *testing.T, name string, tail int) callResult
+	WorkspaceChanges(t *testing.T, scope, dir string) callResult
 }
 
 // promptParts sends text and then each attachment as one prompt.
@@ -104,6 +108,9 @@ type callResult struct {
 	Status   int
 	Body     any
 	Messages []transcriptMessage
+	// Wire is the raw reply of a route whose rows check the bytes as well as
+	// the decoded body. It is not recorded.
+	Wire []byte
 }
 
 // waitBound is a failure bound for a wait on the serve process, not a delay.

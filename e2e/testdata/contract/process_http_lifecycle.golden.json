@@ -1,0 +1,157 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "list_processes": {
+      "status": 200,
+      "body": [
+        {
+          "command": [
+            "sh",
+            "-c",
+            "echo ready-line; echo second; sleep 100"
+          ],
+          "name": "dev",
+          "origin": "config",
+          "ports": [
+            3000
+          ],
+          "ready_regex": "second",
+          "ready_timeout": "10s",
+          "status": {
+            "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+            "name": "dev",
+            "ports": [
+              3000
+            ],
+            "ready": false
+          }
+        }
+      ]
+    },
+    "list_processes#2": {
+      "status": 200,
+      "body": [
+        {
+          "command": [
+            "sh",
+            "-c",
+            "echo ready-line; echo second; sleep 100"
+          ],
+          "name": "dev",
+          "origin": "config",
+          "ports": [
+            3000
+          ],
+          "ready_regex": "second",
+          "ready_timeout": "10s",
+          "status": {
+            "exit_code": -1,
+            "finished_at": "\u003ctime\u003e",
+            "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+            "name": "dev",
+            "pid": "pid#2",
+            "ports": [
+              3000
+            ],
+            "ready": true,
+            "started_at": "\u003ctime\u003e",
+            "state": "stopped"
+          }
+        }
+      ]
+    },
+    "process_logs.dev": {
+      "status": 200,
+      "body": {
+        "content": "ready-line\nsecond",
+        "status": {
+          "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+          "name": "dev",
+          "pid": "pid#1",
+          "ports": [
+            3000
+          ],
+          "ready": true,
+          "started_at": "\u003ctime\u003e",
+          "state": "ready"
+        }
+      }
+    },
+    "process_logs.dev#2": {
+      "status": 200,
+      "body": {
+        "content": "second",
+        "status": {
+          "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+          "name": "dev",
+          "pid": "pid#1",
+          "ports": [
+            3000
+          ],
+          "ready": true,
+          "started_at": "\u003ctime\u003e",
+          "state": "ready"
+        }
+      }
+    },
+    "process_restart.dev": {
+      "status": 200,
+      "body": {
+        "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+        "name": "dev",
+        "pid": "pid#2",
+        "ports": [
+          3000
+        ],
+        "ready": true,
+        "started_at": "\u003ctime\u003e",
+        "state": "ready"
+      }
+    },
+    "process_start.dev": {
+      "status": 200,
+      "body": {
+        "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+        "name": "dev",
+        "pid": "pid#1",
+        "ports": [
+          3000
+        ],
+        "ready": true,
+        "started_at": "\u003ctime\u003e",
+        "state": "ready"
+      }
+    },
+    "process_start.dev#2": {
+      "status": 200,
+      "body": {
+        "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+        "name": "dev",
+        "pid": "pid#1",
+        "ports": [
+          3000
+        ],
+        "ready": true,
+        "started_at": "\u003ctime\u003e",
+        "state": "ready"
+      }
+    },
+    "process_stop.dev": {
+      "status": 200,
+      "body": {
+        "exit_code": -1,
+        "finished_at": "\u003ctime\u003e",
+        "log": "\u003cworkdir\u003e/.harness/proc/dev.log",
+        "name": "dev",
+        "pid": "pid#2",
+        "ports": [
+          3000
+        ],
+        "ready": true,
+        "started_at": "\u003ctime\u003e",
+        "state": "stopped"
+      }
+    }
+  }
+}
