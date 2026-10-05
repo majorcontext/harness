@@ -23,7 +23,11 @@ func comments(n int) string { return strings.Repeat("// x\n", n) }
 
 func code(n int) string { return strings.Repeat("var _ = 1\n", n) }
 
-func tests(n int) string { return "package a\n" + code(n) }
+func testBody(n int) string { return strings.Repeat("\t_ = 1\n", n) }
+
+func tests(n int) string { return "package a\n\nfunc TestX() {\n" + testBody(n) + "}\n" }
+
+func withTest(extra string) string { return tests(2) + "\n" + extra }
 
 func exceptions(lines ...string) *fstest.MapFile {
 	return file(strings.Join(lines, "\n") + "\n")
@@ -38,12 +42,14 @@ func rules(vs []Violation) []string {
 	return out
 }
 
-var checkCases = []struct {
+type checkCase struct {
 	name       string
 	head, base fstest.MapFS
 	renames    map[string]string
 	want       []string
-}{
+}
+
+var checkCases = []checkCase{
 	{
 		name: "new_file_comment_share_at_limit_passes",
 		head: fstest.MapFS{"a/a.go": file("package a\n" + comments(25) + code(74))},
@@ -333,11 +339,6 @@ var checkCases = []struct {
 		},
 	},
 	{
-		name: "equal_lines_deleted_and_added_in_a_test_file_pass",
-		head: fstest.MapFS{"a/a_test.go": file("package a\nvar B = 2\nvar C = 3\n")},
-		base: fstest.MapFS{"a/a_test.go": file("package a\nvar A = 1\nvar D = 4\n")},
-	},
-	{
 		name: "added_test_lines_in_changed_file_fail",
 		head: fstest.MapFS{"a/a_test.go": file(tests(5))},
 		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
@@ -345,7 +346,7 @@ var checkCases = []struct {
 	},
 	{
 		name: "same_test_lines_in_changed_file_pass",
-		head: fstest.MapFS{"a/a_test.go": file("package a\n// edit\n" + code(4))},
+		head: fstest.MapFS{"a/a_test.go": file("package a\n\n// edit\nfunc TestX() {\n" + testBody(4) + "}\n")},
 		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
 	},
 	{
@@ -414,7 +415,7 @@ var checkCases = []struct {
 }
 
 func TestCheck(t *testing.T) {
-	for _, tc := range checkCases {
+	for _, tc := range slices.Concat(checkCases, placementCases) {
 		t.Run(tc.name, func(t *testing.T) {
 			head, err := Collect(tc.head)
 			if err != nil {

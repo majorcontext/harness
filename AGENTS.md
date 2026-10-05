@@ -42,7 +42,7 @@ Add none of these without a new design decision:
 
 ## Tests
 - TDD means: write the failing contract test first, see it fail for the named reason, then implement. A contract test is a scenario row in `e2e/`; a row runs on both drivers with `HARNESS_E2E_RUNTIME=1`, except a row marked `rowDeleted` (the spec deletes what it pins). A behavior change adds a row; a bug fix adds one row to the nearest table.
-- Write no other test unless the code is pure: `internal/eventlog` Apply, wire transcoders (`provider/*/`, `internal/backend/modelapi/convert_test.go`, `internal/backend/claudecode/frames_test.go`), `config`, `message`, `internal/gates`. Otherwise list the file with a one-line reason in `testdata/test-exceptions.txt` (path, space, reason). `internal/gates` fails a change that adds test lines elsewhere. A listed file still meets the 1.5 test:code ratio of its package.
+- Write no other test unless the code is pure: `internal/eventlog` Apply, wire transcoders (`provider/*/`, `internal/backend/modelapi/convert_test.go`, `internal/backend/claudecode/frames_test.go`), `config`, `message`, `internal/gates`. Otherwise list the file with a one-line reason in `testdata/test-exceptions.txt` (path, space, reason). `internal/gates` fails a change that nets new lines inside Test, Benchmark, Fuzz, or Example functions or package-level vars elsewhere. Top-level helpers, fakes, and types do not count. A listed file still meets the 1.5 test:code ratio of its package.
 - Name a test by its behavior, never by an incident. No test reads another package's unexported state.
 - No `time.Sleep` or `time.After` in tests. Use `testing/synctest` or channels. Use `internal/testpoll` only for cross-process waits.
 - Run Go tests with `-race`.
