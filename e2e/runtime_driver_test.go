@@ -142,7 +142,7 @@ func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path str
 	t.Helper()
 	var rdr io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
+		b, err := encodeBody(body)
 		if err != nil {
 			t.Fatalf("marshal body: %v", err)
 		}

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -36,17 +35,32 @@ func callHostedTool(f *fake) {
 			break
 		}
 	}
+	appendFile(log, hostedRPC(method, params)+"\n")
+}
+
+// hostedRPC posts one JSON-RPC request to the harness MCP server of
+// --mcp-config and returns the response body, or the text of the failure.
+func hostedRPC(method string, params obj) string {
 	srv, ok := hostedServer()
 	if !ok {
-		appendFile(log, "no harness server in --mcp-config\n")
-		return
+		return "no harness server in --mcp-config"
 	}
 	out, err := hostedPost(srv, method, params)
 	if err != nil {
-		appendFile(log, err.Error()+"\n")
-		return
+		return err.Error()
 	}
-	appendFile(log, fmt.Sprintf("%s\n", out))
+	return string(out)
+}
+
+// hangAfterListing lists the tools of the harness MCP server into the file of
+// FAKE_CLAUDE_LIST_TOOLS, prints a text, and hangs, so a test reads the tools
+// that the host offers a CLI that is still running.
+func hangAfterListing(f *fake) {
+	if log := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); log != "" {
+		appendFile(log, hostedRPC("tools/list", obj{})+"\n")
+	}
+	f.emit(say("Working on it."))
+	hang(f)
 }
 
 // hostedPost sends one JSON-RPC request to srv and returns the response body.

@@ -52,7 +52,7 @@ type logEntry struct {
 func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 	t.Helper()
 	inputs := map[string][]logPart{}
-	callOf, itemOf := map[string]logPart{}, map[string]string{}
+	callOf := map[string]logPart{}
 	var entries []logEntry
 	var summary *transcriptMessage
 	say := func(seq uint64, id, role string, parts []logPart) {
@@ -87,15 +87,9 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 			say(ev.Seq, "msg_"+it.ItemID, it.Message.Role, it.Message.Parts)
 			for _, p := range it.Message.Parts {
 				if p.Type == "tool_call" {
-					callOf[it.ItemID] = p
+					callOf[p.CallID] = p
 				}
 			}
-		case "request.opened":
-			o := decodeEvent[struct {
-				RequestID string `json:"request_id"`
-				ItemID    string `json:"item_id"`
-			}](t, ev)
-			itemOf[o.RequestID] = o.ItemID
 		case "request.resolved":
 			r := decodeEvent[struct {
 				RequestID  string          `json:"request_id"`
@@ -105,7 +99,7 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 			if r.Resolution == "answered" {
 				break
 			}
-			call := callOf[itemOf[r.RequestID]]
+			call := callOf[r.RequestID]
 			part := logPart{Type: "tool_result", CallID: call.CallID, Name: call.Name, Text: dismissalText, IsError: true}
 			say(ev.Seq, "msg_resolved_"+r.RequestID, "tool", []logPart{part})
 		case "compaction.applied":

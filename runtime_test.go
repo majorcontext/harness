@@ -143,10 +143,6 @@ func callTool(id string) eventlog.Message {
 		{Type: eventlog.PartToolCall, CallID: id, Name: "bash", Arguments: json.RawMessage(`{}`)}}}
 }
 
-func toolResult(id string) eventlog.Message {
-	return eventlog.Message{Role: eventlog.RoleTool, Parts: []eventlog.Part{{Type: eventlog.PartToolResult, CallID: id, Text: "ok"}}}
-}
-
 func text(id, s string) protocol.Input {
 	return protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: s}}}
 }

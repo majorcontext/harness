@@ -19,7 +19,8 @@ import (
 // in process. open takes a config file, the environment of a lane, and the
 // serve flags of a lane.
 type host struct {
-	open func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost
+	runtime bool
+	open    func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost
 }
 
 // laneHost is a driver plus the reads that a lane action makes through the
@@ -27,17 +28,17 @@ type host struct {
 type laneHost interface {
 	driver
 	awaitAssistantText(t *testing.T, id, text string)
-	answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult
+	resolveQuestion(t *testing.T, id, callID string, res resolution) callResult
 	journalEvents(t *testing.T, id, prefix string) []any
 	messageParents(t *testing.T, id string) callResult
 }
 
 var (
-	serveHost = host{func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
+	serveHost = host{open: func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
 		return newHTTPDriverAt(t, configPath, env, args...)
 	}}
 	// runtimeHost sets env in the process, so a row that passes env runs alone.
-	runtimeHost = host{func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
+	runtimeHost = host{runtime: true, open: func(t *testing.T, configPath string, env map[string]string, args ...string) laneHost {
 		ask := slices.Contains(args, "--ask-user-question")
 		if len(args) > 1 || len(args) == 1 && !ask {
 			t.Fatalf("the runtime takes only the serve flag --ask-user-question: %q", args)

@@ -131,7 +131,7 @@ func (n *normalizer) mask(s string) string {
 	return maskUnstable(s)
 }
 
-// scrub masks the workdir in every string of a decoded JSON value.
+// scrub masks the workdir and the session ids in every string of a decoded JSON value.
 func (n *normalizer) scrub(v any) any {
 	switch x := v.(type) {
 	case map[string]any:
@@ -149,6 +149,9 @@ func (n *normalizer) scrub(v any) any {
 	case string:
 		for _, w := range n.workdirs {
 			x = strings.ReplaceAll(x, w, "<workdir>")
+		}
+		if strings.HasPrefix(x, "ses_") && fullIDPattern.MatchString(x) {
+			return n.id(x)
 		}
 		return x
 	}

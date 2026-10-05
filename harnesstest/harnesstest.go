@@ -25,11 +25,14 @@ type Step struct {
 
 // Reply is what the server sends when a Step matches.
 type Reply struct {
-	Text       string
-	ToolCalls  []ToolCall // emitted as tool_use blocks after Text
-	StopReason string     // default "end_turn", or "tool_use" when ToolCalls is set; "max_tokens" ends the turn at the output limit
-	Usage      Usage      // default {Input: 5, Output: 3}; Input past a context-window threshold triggers auto-compaction
-	HTTPStatus int        // non-zero: reply with this status and an Anthropic error body
+	Text      string
+	ToolCalls []ToolCall // emitted as tool_use blocks after Text
+	// Calls, when set, replaces ToolCalls with the calls that it returns for
+	// the request, so a reply can name an ID that only the conversation holds.
+	Calls      func(Request) []ToolCall
+	StopReason string // default "end_turn", or "tool_use" when ToolCalls is set; "max_tokens" ends the turn at the output limit
+	Usage      Usage  // default {Input: 5, Output: 3}; Input past a context-window threshold triggers auto-compaction
+	HTTPStatus int    // non-zero: reply with this status and an Anthropic error body
 	// ErrorMessage is the message of the error body of an HTTPStatus reply.
 	// The default is "harnesstest: scripted error".
 	ErrorMessage string
@@ -398,6 +401,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case step.Reply.HTTPStatus != 0:
 		s.wire().replyError(w, step.Reply)
 	default:
+		if step.Reply.Calls != nil {
+			step.Reply.ToolCalls = step.Reply.Calls(req)
+		}
 		s.wire().stream(s, w, r, n, step.Name, step.Reply)
 	}
 }

@@ -109,6 +109,7 @@ var basicModes = map[string]mode{
 	"rate_limit_event_no_overage": rateLimitTurn(false),
 	"hang":                        hang,
 	"hang_after_text":             hangAfterText,
+	"hang_after_listing":          hangAfterListing,
 	"hang_in_tool":                hangInTool,
 	"tool_on_interrupt":           hang,
 	"tool_result_on_interrupt":    hang,

@@ -86,7 +86,7 @@ func requestHasSegment(want bool) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool { return strings.Contains(r.System, fixtureSegment) == want }
 }
 
-func pluginMatchAll(ms ...harnesstest.Matcher) harnesstest.Matcher {
+func matchAll(ms ...harnesstest.Matcher) harnesstest.Matcher {
 	return func(r harnesstest.Request) bool {
 		for _, m := range ms {
 			if !m(r) {
@@ -124,8 +124,8 @@ func TestContractPluginTools(t *testing.T) {
 			name:   "plugin_system_segment_in_every_request",
 			config: cfg,
 			model: []harnesstest.Step{
-				{Name: "call", Match: pluginMatchAll(assistantTurns(0), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "ls", ftArgs("path", "."))},
-				{Name: "done", Match: pluginMatchAll(assistantTurns(1), requestHasSegment(true)), Reply: harnesstest.Reply{Text: "done"}},
+				{Name: "call", Match: matchAll(assistantTurns(0), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "ls", ftArgs("path", "."))},
+				{Name: "done", Match: matchAll(assistantTurns(1), requestHasSegment(true)), Reply: harnesstest.Reply{Text: "done"}},
 			},
 			actions: oneTurn,
 		},
@@ -139,8 +139,8 @@ func TestContractPluginTools(t *testing.T) {
 			name:   "plugin_system_transform_reads_session_messages",
 			config: pluginConfig(t, map[string]any{"recall": true}),
 			model: []harnesstest.Step{
-				{Name: "first", Match: pluginMatchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("LAST-USER: first")), Reply: harnesstest.Reply{Text: "ok1"}},
-				{Name: "second", Match: pluginMatchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("LAST-USER: second")), Reply: harnesstest.Reply{Text: "ok2"}},
+				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("LAST-USER: first")), Reply: harnesstest.Reply{Text: "ok1"}},
+				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("LAST-USER: second")), Reply: harnesstest.Reply{Text: "ok2"}},
 			},
 			actions: []action{
 				create{as: "a"},
@@ -176,8 +176,8 @@ func TestContractPluginSession(t *testing.T) {
 			name:   "plugin_sees_the_model_of_each_call",
 			config: pluginConfig(t, map[string]any{"model": true}),
 			model: []harnesstest.Step{
-				{Name: "first", Match: pluginMatchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("MODEL: anthropic/claude-fable-5")), Reply: harnesstest.Reply{Text: "ok1"}},
-				{Name: "second", Match: pluginMatchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("MODEL: anthropic/claude-haiku-4-5")), Reply: harnesstest.Reply{Text: "ok2"}},
+				{Name: "first", Match: matchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("MODEL: anthropic/claude-fable-5")), Reply: harnesstest.Reply{Text: "ok1"}},
+				{Name: "second", Match: matchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("MODEL: anthropic/claude-haiku-4-5")), Reply: harnesstest.Reply{Text: "ok2"}},
 			},
 			actions: []action{
 				create{as: "a"},
@@ -248,8 +248,8 @@ func TestContractPluginCrash(t *testing.T) {
 			name:   "plugin_crash_mid_call_session_continues",
 			config: cfg,
 			model: []harnesstest.Step{
-				{Name: "crash", Match: pluginMatchAll(harnesstest.LastUserText("crash"), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "fixture_crash", ftArgs())},
-				{Name: "reported", Match: pluginMatchAll(harnesstest.LastToolResult("fixture_crash"), requestHasSegment(false)), Reply: harnesstest.Reply{Text: "plugin died"}},
+				{Name: "crash", Match: matchAll(harnesstest.LastUserText("crash"), requestHasSegment(true)), Reply: pluginToolReply("toolu_1", "fixture_crash", ftArgs())},
+				{Name: "reported", Match: matchAll(harnesstest.LastToolResult("fixture_crash"), requestHasSegment(false)), Reply: harnesstest.Reply{Text: "plugin died"}},
 				{Name: "again", Match: harnesstest.LastUserText("again"), Reply: pluginToolReply("toolu_2", "bash", ftArgs("command", "echo rewrite-me"))},
 				{Name: "echo", Match: harnesstest.LastToolResult("bash"), Reply: pluginToolReply("toolu_3", "fixture_echo", ftArgs("text", "hi"))},
 				{Name: "fin", Match: harnesstest.LastToolResult("fixture_echo"), Reply: harnesstest.Reply{Text: "still here"}},

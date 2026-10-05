@@ -3,6 +3,7 @@ package e2e
 import (
 	"bufio"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ type claudeLane struct {
 	mode string
 	ask  bool           // pass --ask-user-question to serve
 	mcp  map[string]any // config mcp_servers
+	// extra adds top-level keys to the config, for example plugins.
+	extra map[string]any
 	// historyTool makes each turn of the CLI call get_conversation_history on
 	// the hosted MCP server after the result, for a host with no route to it.
 	historyTool bool
@@ -33,6 +36,9 @@ type claudeLane struct {
 	// listTools makes each turn of the CLI list the tools of the hosted MCP
 	// server after the result.
 	listTools bool
+	// initTools is the JSON list of tools in the init frame of the CLI, which a
+	// session with an allowed list checks.
+	initTools string
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
@@ -58,6 +64,9 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
 	}
+	if lane.initTools != "" {
+		env["FAKE_CLAUDE_INIT_TOOLS"] = lane.initTools
+	}
 	return env
 }
 
@@ -79,6 +88,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	if l.mcp != nil {
 		cfg["mcp_servers"] = l.mcp
 	}
+	maps.Copy(cfg, l.extra)
 	stateDir := t.TempDir()
 	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"), toolLog: filepath.Join(stateDir, "tool.jsonl"),
 		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
@@ -152,6 +162,27 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":      value("--disallowedTools"),
 		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
 	}
+}
+
+// claudeSystemPrompt records, for each fakeclaude spawn in order, whether the
+// system prompt that harness appended holds text.
+type claudeSystemPrompt struct{ as, contains string }
+
+func (a claudeSystemPrompt) run(t *testing.T, r *run) {
+	data, err := os.ReadFile(claudeDriverOf(t, r).argvLog)
+	if err != nil {
+		t.Fatalf("read argv log: %v", err)
+	}
+	out := []any{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var argv []string
+		if err := json.Unmarshal([]byte(line), &argv); err != nil {
+			t.Fatalf("decode argv line %q: %v", line, err)
+		}
+		i := slices.Index(argv, "--append-system-prompt")
+		out = append(out, i >= 0 && i+1 < len(argv) && strings.Contains(argv[i+1], a.contains))
+	}
+	r.record(t, "claude_system_prompt", a.as, callResult{Status: http.StatusOK, Body: out})
 }
 
 // claudeMCPConfig records the operator servers of the --mcp-config file of
@@ -264,6 +295,13 @@ func (d *httpDriver) awaitAssistantText(t *testing.T, id, text string) {
 	}
 }
 
+// resolution is the body of a call that resolves an open question: the JSON
+// text of an answer, with an empty text for none, or a dismissal.
+type resolution struct {
+	answer  string
+	dismiss bool
+}
+
 // claudeAnswer posts an answer to a parked question. The answer starts a
 // turn, so the scenario waits for idle afterwards.
 type claudeAnswer struct {
@@ -272,12 +310,42 @@ type claudeAnswer struct {
 }
 
 func (a claudeAnswer) run(t *testing.T, r *run) {
-	r.record(t, "answer_question", a.as, claudeDriverOf(t, r).answerQuestion(t, r.id(t, a.as), a.callID, a.answers))
+	body, err := json.Marshal(a.answers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.record(t, "answer_question", a.as, claudeDriverOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{answer: string(body)}))
 }
 
-func (d *httpDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+// claudeRawAnswer posts the JSON text answer as the answer of a parked
+// question, whatever its shape. An empty answer sends no answer field.
+// A dismiss flag sends the dismissal in the same body.
+type claudeRawAnswer struct {
+	as, callID, answer string
+	dismiss            bool
+}
+
+func (a claudeRawAnswer) run(t *testing.T, r *run) {
+	r.record(t, "answer_question", a.as, claudeDriverOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{answer: a.answer, dismiss: a.dismiss}))
+}
+
+// claudeDismiss dismisses a parked question.
+type claudeDismiss struct{ as, callID string }
+
+func (a claudeDismiss) run(t *testing.T, r *run) {
+	r.record(t, "dismiss_question", a.as, claudeDriverOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{dismiss: true}))
+}
+
+func (d *httpDriver) resolveQuestion(t *testing.T, id, callID string, res resolution) callResult {
 	t.Helper()
-	return d.call(t, http.MethodPost, "/session/"+id+"/question/"+callID+"/answer", map[string]any{"answers": answers})
+	if res.dismiss {
+		return notInEngine("a dismissal of a question")
+	}
+	body := rawBody("{}")
+	if res.answer != "" {
+		body = rawBody(`{"answers":` + res.answer + `}`)
+	}
+	return d.call(t, http.MethodPost, "/session/"+id+"/question/"+callID+"/answer", body)
 }
 
 // claudeHistoryTool calls get_conversation_history on the session's hosted MCP
@@ -463,9 +531,16 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 	})
 }
 
-func (d *runtimeDriver) answerQuestion(t *testing.T, id, callID string, answers map[string]string) callResult {
+func (d *runtimeDriver) resolveQuestion(t *testing.T, id, callID string, res resolution) callResult {
 	t.Helper()
-	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, map[string]any{"answer": answers})
+	var fields []string
+	if res.dismiss {
+		fields = append(fields, `"dismiss":true`)
+	}
+	if res.answer != "" {
+		fields = append(fields, `"answer":`+res.answer)
+	}
+	return d.call(t, http.MethodPost, "/sessions/"+id+"/requests/"+callID, rawBody("{"+strings.Join(fields, ",")+"}"))
 }
 
 // journalEvents lists the durable events of session id whose kind starts

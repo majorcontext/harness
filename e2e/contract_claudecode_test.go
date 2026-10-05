@@ -112,6 +112,14 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodePlugins(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:    "claudecode_turn_gets_no_plugin_system_segment",
+		driver:  claudeLane{mode: "normal", extra: pluginConfig(t, nil)}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSystemPrompt{as: "a", contains: fixtureSegment}),
+	}})
+}
+
 func TestContractClaudeCodeMCPServers(t *testing.T) {
 	servers := map[string]any{
 		"chrome-devtools": map[string]any{"command": []string{"chrome-devtools-mcp-absent", "--headless"}, "env": []string{"A=1", "malformed"}, "dir": "/nonexistent"},
@@ -235,6 +243,80 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 				claudeSession{as: "a"},
 				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
 				waitIdle{as: "a"},
+			),
+		},
+	})
+}
+
+func TestContractClaudeCodeQuestionRefusals(t *testing.T) {
+	lane := claudeLane{mode: "question", ask: true}.newDriver
+	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
+	answers := map[string]string{"Which database?": "SQLite"}
+	raw := func(answer string) action { return claudeRawAnswer{as: "a", callID: "toolu_q", answer: answer} }
+	runScenarios(t, []scenario{
+		{
+			name:      "claudecode_question_dismissed_by_resolve",
+			openCalls: true,
+			driver:    lane,
+			actions: withActions(parked,
+				claudeDismiss{as: "a", callID: "toolu_q"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+				claudeInputs{as: "a"},
+			),
+		},
+		{
+			name:      "claudecode_question_dismissed_by_a_model_of_another_provider",
+			openCalls: true,
+			driver:    lane,
+			actions: withActions(parked,
+				setModel{as: "a", model: "claude-code/opus"},
+				claudeSession{as: "a"},
+				setModel{as: "a", model: "anthropic/claude-fable-5"},
+				claudeSession{as: "a"},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				claudeInvocations{as: "a"},
+			),
+		},
+		{
+			name:   "claudecode_question_answer_bodies_that_are_refused",
+			driver: lane,
+			actions: withActions(parked,
+				raw(""), raw(`{}`), raw(`{ }`), raw(`null`), raw("  null  "), raw("\n{}\t"), raw(`["SQLite"]`), raw(`{"Which database?":1}`),
+				claudeRawAnswer{as: "a", callID: "toolu_q", answer: `{"Which database?":"SQLite"}`, dismiss: true},
+				claudeSession{as: "a"},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				waitIdle{as: "a"},
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			),
+		},
+	})
+}
+
+func TestContractClaudeCodeQuestionResults(t *testing.T) {
+	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}
+	runScenarios(t, []scenario{
+		{
+			name:      "claudecode_answered_call_with_no_result_gets_a_cut_off_result",
+			openCalls: true,
+			driver:    claudeLane{mode: "question_no_result", ask: true}.newDriver,
+			actions: withActions(parked,
+				claudeAnswer{as: "a", callID: "toolu_q", answers: map[string]string{"Which database?": "SQLite"}},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
+			),
+		},
+		{
+			name:      "claudecode_question_sibling_call_gets_a_result_when_the_turn_parks",
+			openCalls: true,
+			driver:    claudeLane{mode: "question_sibling", ask: true}.newDriver,
+			actions: withActions(parked,
+				submit{as: "a", text: "never mind"}, waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInvocations{as: "a"},
 			),
 		},
 	})
