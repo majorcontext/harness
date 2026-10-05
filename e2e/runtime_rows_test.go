@@ -72,6 +72,17 @@ const (
 	specGoalWording   = "The tool copies the engine description and error wording."
 	specGoalNoEval    = "`SetGoal` without it is an invalid request."
 	specOverflowFolds = "A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history."
+	specLimitFails    = "A spawn past any limit fails the tool call."
+	specTaskWording   = "The `task` tool keeps the engine actions and wording."
+	specReadOnlyKinds = "The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan."
+	specCancelReport  = "The report of the target reaches its parent."
+	specProfileKnown  = "a spawn keeps only the names of a profile that `known` accepts for the model of the child"
+	specCrashMarker   = "Does the switch keep the crash marker? Yes, built"
+	specDismissed     = "A dismissal closes the call with an error result that says the user dismissed the question."
+	specNoStart       = "That turn has no input; a dismissal starts none."
+	specAnswerMap     = "A question takes an answer that maps each question to text."
+	specProviderSwap  = "A settings change to a model of another provider dismisses it too."
+	specRequestRoute  = "POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}"
 	specBannerPrefix  = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier."
 )
 
@@ -281,4 +292,28 @@ var runtimeRows = map[string]runtimeRow{
 	"typed_commands_record_their_outcome":                             reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
 	"typed_compact_keeps_keep_turns_and_returns_the_range":            reGolden(specTypedReceipt, specCmdResult, specReceipt),
 	"unknown_tool_call_gets_an_error_result":                          reGolden(specMCPText),
+	"task_profile_sets_the_tools_model_and_prompt_of_the_child":       reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"agent_defs_dirs_replace_the_default_profile_dir":                 reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_explore_and_plan_children_get_read_only_tools":              pendingOn(specReadOnlyKinds),
+	"task_refusals":                                                      pendingOn(specTaskWording),
+	"task_refusal_past_max_task_depth":                                   pendingOn(specLimitFails, specTaskWording),
+	"task_refusal_past_max_concurrent_tasks":                             pendingOn(specLimitFails, specTaskWording),
+	"task_status_and_log_of_a_settled_child":                             reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
+	"task_cancel_and_send_to_a_running_child":                            reGolden(specTaskInputs, specChildWording, specOpenChildParts, specChildNoGoal, specItems, specOneResult),
+	"task_spawn_past_max_tree_tokens_is_refused":                         pendingOn(specLimitFails, specTaskWording),
+	"task_send_runs_a_settled_child_again":                               reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_two_sends_to_a_settled_child_need_one_slot":                    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
+	"task_action_refusals":                                               reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
+	"task_tree_reaches_a_grandchild":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_cancel_of_a_child_stops_the_grandchild":                        pendingOn(specCancelReport),
+	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
+	"task_child_on_claude_code_gets_no_runtime_builtin":                  reGolden(specTaskInputs, specChildReport),
+	"claudecode_turn_gets_no_plugin_system_segment":                      sameAsServe(),
+	"claudecode_question_dismissed_by_resolve":                           reGolden(specDismissed, specNoStart, specWaiting, specView),
+	"claudecode_question_dismissed_by_a_model_of_another_provider":       reGolden(specProviderSwap, specDismissed, specView, specErrors),
+	"claudecode_question_answer_bodies_that_are_refused":                 reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specOpenAnswerReceipt),
+	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specOpenAnswerReceipt),
+	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView),
+	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
 }

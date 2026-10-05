@@ -81,11 +81,11 @@ func goalChain(calls ...map[string]any) []harnesstest.Step {
 	for i, c := range calls {
 		steps = append(steps, harnesstest.Step{
 			Name:  fmt.Sprintf("goal%d", i+1),
-			Match: pluginMatchAll(notEvaluator, harnesstest.LastUserText("go"), assistantTurns(i)),
+			Match: matchAll(notEvaluator, harnesstest.LastUserText("go"), assistantTurns(i)),
 			Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: fmt.Sprintf("toolu_%d", i+1), Name: "goal", Input: c}}},
 		})
 	}
-	return append(steps, harnesstest.Step{Name: "went", Match: pluginMatchAll(notEvaluator, assistantTurns(len(calls))), Reply: harnesstest.Reply{Text: "went"}})
+	return append(steps, harnesstest.Step{Name: "went", Match: matchAll(notEvaluator, assistantTurns(len(calls))), Reply: harnesstest.Reply{Text: "went"}})
 }
 
 func TestContractGoalTool(t *testing.T) {
@@ -124,7 +124,7 @@ func TestContractGoalTool(t *testing.T) {
 			model: []harnesstest.Step{
 				evaluatorStep("judge", "NOT MET: more", true),
 				{Name: "first", Match: notEvaluator, Reply: harnesstest.Reply{Text: "working"}},
-				{Name: "adjust", Match: pluginMatchAll(notEvaluator, harnesstest.LastUserText("The goal has not been met yet")), Reply: harnesstest.Reply{
+				{Name: "adjust", Match: matchAll(notEvaluator, harnesstest.LastUserText("The goal has not been met yet")), Reply: harnesstest.Reply{
 					ToolCalls: []harnesstest.ToolCall{{ID: "toolu_adjust", Name: "goal", Input: adjust("say done now")}}}},
 				{Name: "after", Match: harnesstest.LastToolResult("goal"), Reply: harnesstest.Reply{Text: "working"}},
 			},

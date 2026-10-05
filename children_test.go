@@ -25,16 +25,13 @@ import (
 // history and records each request. A nil answer blocks until the call ends.
 type family struct {
 	answer func(last eventlog.Part) []eventlog.Message
-	owns   string
 	// usage is the usage of each model call.
 	usage eventlog.Usage
 	mu    sync.Mutex
 	reqs  []turn.Request
 }
 
-func (f *family) Capabilities(model string) turn.Capabilities {
-	return turn.Capabilities{OwnsLoop: model == f.owns}
-}
+func (*family) Capabilities(string) turn.Capabilities { return turn.Capabilities{} }
 
 func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
 	f.mu.Lock()
@@ -138,7 +135,6 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		name   string
 		agent  string
 		spawns int
-		owns   string
 		cfg    config.Config
 		// store returns the Store of the runtime, or nil for a MemStore.
 		store func(t *testing.T, dir string) harness.Store
@@ -146,13 +142,6 @@ func TestTaskSpawnsAChild(t *testing.T) {
 		kids  int
 		check func(t *testing.T, f *family, children []protocol.Session)
 	}{
-		{name: "the result of the child reaches its parent as an input", agent: "general-purpose", child: done, kids: 1,
-			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if _, got := f.last("s1", report); !strings.HasSuffix(got, "outcome: done\n\nchild done") && !strings.HasSuffix(got, "done: child done (usage: 0 in / 0 out)\n]") {
-					t.Errorf("report %q, want outcome done", got)
-				}
-			}},
-		{name: "a profile sets the tools, model, and prompt of the child", agent: "reader", child: done, kids: 1, check: profileApplied},
 		{name: "a profile is read once, when the spawn reads it", agent: "reader", child: done, kids: 1, store: rewriteReader, check: profileApplied},
 		{name: "an unknown agent spawns no child and names the agents", agent: "nope",
 			check: func(t *testing.T, f *family, children []protocol.Session) {
@@ -174,12 +163,6 @@ func TestTaskSpawnsAChild(t *testing.T) {
 					t.Error("the second task call does not fail on max_concurrent_tasks")
 				}
 			}},
-		{name: "a backend that owns the loop gives the child no runtime built-in", agent: "reader", owns: "fake/small", child: done, kids: 1,
-			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if req, _ := f.last(children[0].ID, "child work"); slices.Contains(req.AllowedTools, "ls") {
-					t.Errorf("child allowed tools %v, want no ls", req.AllowedTools)
-				}
-			}},
 		{name: "an explore child gets only the read-only tools that the runtime has", agent: "explore", child: done, kids: 1, check: readOnly},
 		{name: "a plan child gets only the read-only tools that the runtime has", agent: "plan", child: done, kids: 1, check: readOnly},
 	} {
@@ -192,7 +175,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 				t.Fatal(err)
 			}
 			synctest.Test(t, func(t *testing.T) {
-				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child), owns: tc.owns}
+				f := &family{answer: delegation(tc.agent, max(tc.spawns, 1), tc.child)}
 				var st harness.Store = harness.NewMemStore()
 				if tc.store != nil {
 					st = tc.store(t, dir)
@@ -263,27 +246,25 @@ func TestOpenSettlesEachUnsettledChild(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		arm  bool
-		// stop stops the first runtime before s1 settles its child; free lets the child end.
-		stop    func(st *refusing, own killable, free func())
+		// stop leaves the first runtime before s1 settles its child; free lets the child end.
+		stop    func(st *refusing, free func())
 		outcome eventlog.Outcome
 		report  string
 	}{
-		{name: "a child that crashed settles failed", outcome: eventlog.OutcomeFailed, report: "outcome: failed: crashed",
-			stop: func(_ *refusing, own killable, _ func()) { close(own.lost) }},
 		{name: "a child that ended before its parent settled it settles done", outcome: eventlog.OutcomeDone, report: "outcome: done\n\nchild done",
-			stop: func(st *refusing, _ killable, free func()) { st.armed.Store(true); free() }},
+			stop: func(st *refusing, free func()) { st.armed.Store(true); free() }},
 		{name: "a spawned child with no log settles failed with no report", arm: true, outcome: eventlog.OutcomeFailed,
-			stop: func(*refusing, killable, func()) {}},
+			stop: func(*refusing, func()) {}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			eachStore(t, func(t *testing.T, open func() harness.Store) {
-				st, own, release := &refusing{Store: open(), arm: tc.arm}, killable{make(chan struct{})}, make(chan struct{})
+				st, release := &refusing{Store: open(), arm: tc.arm}, make(chan struct{})
 				free := sync.OnceFunc(func() { close(release) })
 				f1 := &family{answer: delegation("general-purpose", 1, func() []eventlog.Message { <-release; return done() })}
-				r1 := familyRuntime(t, st, f1, own, config.Config{}, dir)
+				r1 := familyRuntime(t, st, f1, nil, config.Config{}, dir)
 				submit(t, create(t, r1), text("a", "delegate"))
-				tc.stop(st, own, free)
+				tc.stop(st, free)
 				synctest.Wait()
 				f2 := &family{answer: f1.answer}
 				r2 := familyRuntime(t, open(), f2, nil, config.Config{}, dir)
@@ -448,19 +429,6 @@ func TestTwoSpawnsInOneTreeCountEachOthersChildren(t *testing.T) {
 	})
 }
 
-func TestASpawnOfAnUnsettledChildNeedsNoSlot(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		r := familyRuntime(t, harness.NewMemStore(), &family{}, nil, config.Config{MaxConcurrentTasks: 1}, t.TempDir())
-		create(t, r)
-		for range 2 {
-			if err := r.SpawnChild(bg, "s1", "ses_kid", "general-purpose"); err != nil {
-				t.Errorf("SpawnChild of a child that max_concurrent_tasks 1 already counts = %v, want nil", err)
-			}
-		}
-		closeRuntime(t, r)
-	})
-}
-
 func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
 	dir := t.TempDir()
 	lead := strings.Replace(readerProfile, "name: reader", "name: lead", 1)
@@ -477,7 +445,6 @@ func TestAgentDefsDirsReplaceTheDefaultProfileDir(t *testing.T) {
 		kids  int
 		want  string
 	}{
-		{"lead", 1, ""},
 		{"reader", 0, `task: unknown agent "reader"; the agents are explore, general-purpose, lead, plan`},
 	} {
 		t.Run(tc.agent, func(t *testing.T) {

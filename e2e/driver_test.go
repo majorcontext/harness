@@ -404,6 +404,17 @@ func (d *httpDriver) Restart(t *testing.T, kill bool) {
 	d.p = d.serve(t)
 }
 
+// rawBody is a request body that goes on the wire as written, with the
+// whitespace that json.Marshal would remove.
+type rawBody string
+
+func encodeBody(body any) ([]byte, error) {
+	if raw, ok := body.(rawBody); ok {
+		return []byte(raw), nil
+	}
+	return json.Marshal(body)
+}
+
 func (d *httpDriver) call(t *testing.T, method, path string, body any) callResult {
 	t.Helper()
 	resp, data := d.p.do(method, path, body)

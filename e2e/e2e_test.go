@@ -296,7 +296,7 @@ func (p *serveProc) send(method, path string, body any) (*http.Response, []byte,
 	p.t.Helper()
 	var rdr io.Reader
 	if body != nil {
-		b, err := json.Marshal(body)
+		b, err := encodeBody(body)
 		if err != nil {
 			p.t.Fatalf("marshal body: %v", err)
 		}

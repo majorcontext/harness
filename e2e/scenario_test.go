@@ -22,9 +22,11 @@ type scenario struct {
 	chat       bool // the model is a chat-completions gateway, and config names it as provider "bifrost"
 	config     map[string]any
 	setup      func(t *testing.T, fx map[string]any) map[string]any // fills fx for actions; the result is added to config
-	model      []harnesstest.Step
-	actions    []action
-	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
+	// openCalls marks a row where serve leaves a tool call without a result and the runtime closes it. Only the runtime host checks the pairing.
+	openCalls bool
+	model     []harnesstest.Step
+	actions   []action
+	driver    func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -391,7 +393,11 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 	for _, alias := range r.aliases {
 		msgs := r.drv.Messages(t, r.ids[alias])
 		sessions[alias] = msgs
-		for _, v := range messageViolations(msgs) {
+		violations := messageViolations(msgs)
+		if sc.openCalls && !h.runtime {
+			violations = messageIDViolations(msgs)
+		}
+		for _, v := range violations {
 			t.Errorf("session %s: %s", alias, v)
 		}
 	}

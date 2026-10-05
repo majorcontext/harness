@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 // preInitModes print before the init frame, or never print it. A handler
@@ -14,6 +15,8 @@ var preInitModes = map[string]func(f *fake) bool{
 	"queued_empty_result_error": queuedEmptyResult,
 	"question":                  question,
 	"question_continues":        question,
+	"question_no_result":        question,
+	"question_sibling":          question,
 	"mirror":                    replayMirror,
 	"no_init":                   noInit,
 	"mcp":                       mcpTurn,
@@ -91,7 +94,7 @@ var askQuestionInput = obj{"questions": []obj{{
 func (f *fake) questionState() string { return os.Getenv("FAKE_CLAUDE_STATE") }
 
 func (f *fake) questionParked() bool {
-	if f.mode != "question" && f.mode != "question_continues" {
+	if !strings.HasPrefix(f.mode, "question") {
 		return false
 	}
 	_, err := os.Stat(f.questionState())
@@ -112,10 +115,11 @@ func question(f *fake) bool {
 	}
 	_ = os.WriteFile(state+".asked", nil, 0o644)
 	_ = os.WriteFile(state, nil, 0o644)
-	f.emit(
-		system("init", obj{"session_id": f.sessionID}),
-		assistant(toolUse("toolu_q", "AskUserQuestion", askQuestionInput)),
-	)
+	calls := []obj{toolUse("toolu_q", "AskUserQuestion", askQuestionInput)}
+	if f.mode == "question_sibling" {
+		calls = append(calls, toolUse("toolu_s", "Bash", obj{"command": "echo hi"}))
+	}
+	f.emit(system("init", obj{"session_id": f.sessionID}), assistant(calls...))
 	questionMirrorFrame(f, "parked")
 	f.emit(obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "tool_deferred", "result": ""})
 	return true
@@ -151,8 +155,10 @@ func resumeParkedQuestion(f *fake, state string) {
 		continueInTool(f, line)
 		return
 	}
+	if f.mode != "question_no_result" {
+		f.emit(user(toolResult("toolu_q", line, false)))
+	}
 	f.emit(
-		user(toolResult("toolu_q", line, false)),
 		system("init", obj{"session_id": f.sessionID}),
 		say("Noted."),
 		obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "end_turn", "result": "Noted."},
