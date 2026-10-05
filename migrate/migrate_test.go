@@ -64,6 +64,10 @@ func oldTranscript(t *testing.T, dir, id string) []string {
 			case *message.Text:
 				line += "|text:" + p.Text
 			case *message.Blob:
+				if len(p.Data) == 0 {
+					line += "|text:" + blobText(p)
+					break
+				}
 				sum := sha256.Sum256(p.Data)
 				line += fmt.Sprintf("|blob:%s:%d:attachment-%x", p.MediaType, len(p.Data), sum)
 			case *message.Reasoning:
