@@ -91,10 +91,17 @@ func sameJSON(x, y any) bool {
 	return errx == nil && erry == nil && string(bx) == string(by)
 }
 
+// modelRequest returns the request of the next model call before its inputs:
+// the conversation as the model reads it, with each pinned segment.
+func (a *Actor) modelRequest() turn.Request {
+	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), Blob: a.blob}
+}
+
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
-	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
-		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model()), Blob: a.blob}
+	req := a.modelRequest()
+	req.TurnID, req.Foreign = id, a.state.Foreign(req.Model)
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {

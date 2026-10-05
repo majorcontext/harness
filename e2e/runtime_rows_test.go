@@ -415,6 +415,7 @@ var runtimeRows = map[string]runtimeRow{
 	"goal_judges_the_last_turn_after_a_restart":                              reGolden(specView, specGoalRestart),
 	"claudecode_child_and_goal_sessions_ask_no_question":                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specAskRule),
 	"codex_ws_restart_warms_the_websocket_again":                             reGolden(specItems, specWarm),
+	"codex_ws_restart_prewarms_with_a_tool_the_log_selected":                 reGolden(specItems, specWarm),
 	"codex_ws_prewarm_carries_the_plugin_system_segment":                     reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":         reGolden(specTaskInputs, specChildReport, specChildNoGoal, specNarrow),
 	"a_failed_summary_keeps_its_usage_in_the_session":                        reGolden(specView, specOverflowFails),
