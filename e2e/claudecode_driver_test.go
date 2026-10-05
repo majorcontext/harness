@@ -26,6 +26,10 @@ type claudeLane struct {
 	// historyTool makes each turn of the CLI call get_conversation_history on
 	// the hosted MCP server after the result, for a host with no route to it.
 	historyTool bool
+	// callTool makes each turn of the CLI call this tool of the hosted MCP
+	// server, with callArgs as its arguments, after the result.
+	callTool string
+	callArgs map[string]any
 	// listTools makes each turn of the CLI list the tools of the hosted MCP
 	// server after the result.
 	listTools bool
@@ -36,18 +40,22 @@ type claudeLogs struct {
 	argvLog, stdinLog, mcpLog, toolLog, stateDir string
 }
 
-func (l claudeLogs) env(mode string, historyTool, listTools bool) map[string]string {
+func (l claudeLogs) env(lane claudeLane) map[string]string {
 	env := map[string]string{
-		"FAKE_CLAUDE_MODE":           mode,
+		"FAKE_CLAUDE_MODE":           lane.mode,
 		"FAKE_CLAUDE_LOG":            l.argvLog,
 		"FAKE_CLAUDE_STDIN_LOG":      l.stdinLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG": l.mcpLog,
 		"FAKE_CLAUDE_STATE":          filepath.Join(l.stateDir, "parked"),
 	}
-	if historyTool {
+	if lane.historyTool {
 		env["FAKE_CLAUDE_CALL_TOOL"], env["FAKE_CLAUDE_TOOL_LOG"] = "get_conversation_history", l.toolLog
 	}
-	if listTools {
+	if lane.callTool != "" {
+		args, _ := json.Marshal(lane.callArgs)
+		env["FAKE_CLAUDE_CALL_TOOL"], env["FAKE_CLAUDE_TOOL_LOG"], env["FAKE_CLAUDE_CALL_ARGS"] = lane.callTool, l.toolLog, string(args)
+	}
+	if lane.listTools {
 		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
 	}
 	return env
@@ -78,7 +86,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	if l.ask {
 		args = append(args, "--ask-user-question")
 	}
-	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode, l.historyTool, l.listTools), args...), claudeLogs: logs}
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l), args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
@@ -323,6 +331,31 @@ func (a claudeOfferedTools) run(t *testing.T, r *run) {
 	}
 	slices.Sort(names)
 	r.record(t, "offered_tools", a.as, callResult{Status: http.StatusOK, Body: names})
+}
+
+// claudeOfferedModelTool records the description and the input schema of the
+// model tool that the hosted MCP server offered the CLI after its newest run.
+type claudeOfferedModelTool struct{ as string }
+
+func (a claudeOfferedModelTool) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	list, _ := result["tools"].([]any)
+	var entry any
+	for _, tool := range list {
+		if m, _ := tool.(map[string]any); m["name"] == "model" {
+			entry = map[string]any{"description": m["description"], "inputSchema": m["inputSchema"]}
+		}
+	}
+	r.record(t, "offered_model_tool", a.as, callResult{Status: http.StatusOK, Body: entry})
+}
+
+// claudeToolCall records the response that the CLI of the newest run got from
+// the tool that the lane makes it call.
+type claudeToolCall struct{ as string }
+
+func (a claudeToolCall) run(t *testing.T, r *run) {
+	r.record(t, "tool_call", a.as, claudeDriverOf(t, r).lastToolCall(t))
 }
 
 // claudeSession records GET /session/{id} without the journal seq, and with

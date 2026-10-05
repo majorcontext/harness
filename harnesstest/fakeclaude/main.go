@@ -17,6 +17,7 @@
 //	FAKE_CLAUDE_CWD_LOG        receives the working directory
 //	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
 //	FAKE_CLAUDE_MCP_CONFIG_LOG append the --mcp-config file of each invocation as one line
+//	FAKE_CLAUDE_CALL_ARGS      JSON arguments of the FAKE_CLAUDE_CALL_TOOL call
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,

@@ -1,0 +1,1689 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "quick",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "quick",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "high",
+                "model": "anthropic/claude-child-3",
+                "prompt": "child work A"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "quick",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "high",
+                "model": "anthropic/claude-child-3",
+                "prompt": "child work A"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work B"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "quick",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "high",
+                "model": "anthropic/claude-child-3",
+                "prompt": "child work A"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work B"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "done"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild A done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 8192,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "bogus",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "nope/model-x",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "bare",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "model": "quick",
+                "prompt": "child work x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\"",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "effort": "high",
+                "model": "anthropic/claude-child-3",
+                "prompt": "child work A"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "general-purpose",
+                "prompt": "child work B"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "tool_name": "task",
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "done"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild A done"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "parent saw A"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild B done"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-child-3",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work A"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work B"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delegate"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "effort": "bogus",
+              "prompt": "child work x"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "task: invalid effort \"bogus\": message: invalid effort \"bogus\" (want one of: off, minimal, low, medium, high, or empty)"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "model": "nope/model-x",
+              "prompt": "child work x"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "task: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic openai openrouter])"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "model": "bare",
+              "prompt": "child work x"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "task: invalid model \"bare\": message: model ref \"bare\" is not of the form \"provider/model\""
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "model": "quick",
+              "prompt": "child work x"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "task: invalid model \"quick\": message: model ref \"quick\" is not of the form \"provider/model\""
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "effort": "high",
+              "model": "anthropic/claude-child-3",
+              "prompt": "child work A"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "task",
+            "arguments": {
+              "agent": "general-purpose",
+              "prompt": "child work B"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild A done"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "parent saw A"
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild B done"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "parent saw B"
+          }
+        ]
+      }
+    ],
+    "kidA": [
+      {
+        "id": "msg#19",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child work A"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child A done"
+          }
+        ]
+      }
+    ],
+    "kidB": [
+      {
+        "id": "msg#21",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child work B"
+          }
+        ]
+      },
+      {
+        "id": "msg#22",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "child B done"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.kidA": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 7,
+        "id": "ses:kidA",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-child-3",
+        "origin": "task",
+        "parent_id": "ses:a",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "get_session.kidB": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 7,
+        "id": "ses:kidB",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#2"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "task",
+        "parent_id": "ses:a",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    },
+    "set_thinking.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "medium",
+        "head_seq": 3,
+        "id": "ses:a",
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    }
+  }
+}

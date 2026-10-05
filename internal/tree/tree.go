@@ -16,6 +16,7 @@ import (
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/message"
 )
 
 // Node is a session that the runtime runs, as the tree sees it.
@@ -64,8 +65,10 @@ type Config struct {
 	Base context.Context
 	Go   func(func())
 	// Profiles reads the agent profiles. Resolve maps a model alias to its ref.
-	Profiles func() map[string]prompt.Profile
-	Resolve  func(string) string
+	// CheckModel reports why no child can run the model ref.
+	Profiles   func() map[string]prompt.Profile
+	Resolve    func(string) string
+	CheckModel func(model string) error
 	// Suffix returns a fresh random suffix for an ID.
 	Suffix func() string
 }
@@ -85,13 +88,31 @@ func New(s Sessions, cfg Config) *Tree {
 	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}}
 }
 
+// Choice is what a spawn takes from its caller beside the agent and the task:
+// the model of the child, or "" for the model of its profile and then of its
+// parent, and the effort of the child, or "" for the default of its provider.
+type Choice struct{ Model, Effort string }
+
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
-func (t *Tree) spawn(ctx context.Context, parent, agent, task string) (string, error) {
+func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice) (string, error) {
 	profiles := t.cfg.Profiles()
 	p, ok := profiles[agent]
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q; the agents are %s", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))
+	}
+	effort, err := message.ParseEffort(ch.Effort)
+	if err != nil {
+		return "", fmt.Errorf("invalid effort %q: %w", ch.Effort, err)
+	}
+	model := ch.Model
+	if model == "" && p.Model != "" {
+		model = t.cfg.Resolve(p.Model)
+	}
+	if model != "" {
+		if err := t.cfg.CheckModel(model); err != nil {
+			return "", err
+		}
 	}
 	ps, ok := t.s.Running(parent)
 	if !ok {
@@ -102,9 +123,10 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if p.Model != "" {
-		c.Model = t.cfg.Resolve(p.Model)
+	if model != "" {
+		c.Model = model
 	}
+	c.Settings.Effort = string(effort)
 	c.Origin, c.AllowedTools = "task", t.available(c.Model, narrow(p.Tools, c.AllowedTools))
 	first := eventlog.InputAdmitted{InputID: "input_" + t.cfg.Suffix(), Delivery: eventlog.DeliveryQueue, Source: "parent",
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}

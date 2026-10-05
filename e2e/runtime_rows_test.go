@@ -39,7 +39,6 @@ const (
 	specNoParkedGoal = "There is no deferred goal and no parked goal."
 
 	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in three ways"
-	specModelTool    = "Port it fully before the switch: `status`, `list`, and `set` through `Session.Update`"
 
 	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
@@ -116,6 +115,8 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_child_reports_share_the_next_turn":                reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":      reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":          sameAsServe(),
+	"claudecode_bridge_model_tool_offers_list_only":               sameAsServe(),
+	"claudecode_bridge_refuses_set_on_the_model_tool":             sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),
 	"claudecode_error_result_fails_turn":                          reGolden(specView, specOpenRetry, specOpenGauge),
@@ -207,6 +208,7 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_unavailable_connect_fails_with_classified_reason":        reGolden(specMCPNoStatus, specMCPText),
 	"messages_page_after_compaction":                              pendingOn("phase 4"),
 	"messages_page_windows":                                       pendingOn("phase 4"),
+	"model_tool_reports_lists_and_switches_the_model":             sameAsServe(),
 	"one_tool_round_trip":                                         sameAsServe(),
 	"openai_key_http_sse_text_turn":                               reGolden(specItems),
 	"persisted_queue_dispatches_after_deferred_arm":               deletedBy(specGoalDeferred),
@@ -232,9 +234,9 @@ var runtimeRows = map[string]runtimeRow{
 	"replay_after_kill_full_transcript":                           pendingOn("phase 4"),
 	"send_to_child_and_cancel_tree":                               reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn": reGolden(specUpdate),
-	"session_info_reports_the_session":                            reGolden(specPromptSwitch, specModelTool),
-	"session_info_reports_what_the_session_loaded":                reGolden(specPromptSwitch, specModelTool),
-	"session_info_reports_the_plugin_and_its_system_segment":      reGolden(specPromptSwitch, specModelTool),
+	"session_info_reports_the_session":                            reGolden(specPromptSwitch),
+	"session_info_reports_what_the_session_loaded":                reGolden(specPromptSwitch),
+	"session_info_reports_the_plugin_and_its_system_segment":      reGolden(specPromptSwitch),
 	"session_settings_validation_and_persistence":                 reGolden(specModelCheck, specErrors, specUpdate, specView),
 	"sse_resume_after_kill":                                       reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                           reGolden(specCursor, specBoxGlobal),
@@ -242,11 +244,12 @@ var runtimeRows = map[string]runtimeRow{
 	"steer_joins_the_turn_at_the_tool_boundary":                   sameAsServe(),
 	"stream_stall":                                                reGolden(specView),
 	"task_child_result_reaches_parent":                            reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"text_reply":                                                  sameAsServe(),
-	"tool_error_reaches_model":                                    sameAsServe(),
-	"two_tool_calls_one_turn":                                     reGolden(specOneResult),
-	"two_turns_keep_history":                                      sameAsServe(),
-	"usage_survives_a_mid_turn_restart":                           reGolden(specView, specHandoffResume),
+	"task_spawn_runs_the_child_on_its_model_and_effort":           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"text_reply":                        sameAsServe(),
+	"tool_error_reaches_model":          sameAsServe(),
+	"two_tool_calls_one_turn":           reGolden(specOneResult),
+	"two_turns_keep_history":            sameAsServe(),
+	"usage_survives_a_mid_turn_restart": reGolden(specView, specHandoffResume),
 
 	"a_kill_interrupts_an_unfinished_command":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":       reGolden(specOverflowFolds, specBannerPrefix, specView),

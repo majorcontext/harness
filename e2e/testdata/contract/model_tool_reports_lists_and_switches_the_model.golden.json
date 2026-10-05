@@ -1,0 +1,1717 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-quick-1",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-quick-1",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-direct-2",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-direct-2"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-direct-2",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-direct-2"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: set requires a non-empty model (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-direct-2",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-direct-2"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: set requires a non-empty model (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "bare"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-direct-2",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-direct-2"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: set requires a non-empty model (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "bare"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "clear"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: unknown action \"clear\" (valid actions: status, set, list — there is no clear action)",
+              "tool_name": "model",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-direct-2",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "list"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "quick"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "nope/model-x"
+              },
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "anthropic/claude-direct-2"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set"
+              },
+              "tool_use_id": "toolu#6"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: set requires a non-empty model (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#6",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "set",
+                "model": "bare"
+              },
+              "tool_use_id": "toolu#7"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])",
+              "tool_name": "model",
+              "tool_use_id": "toolu#7",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "clear"
+              },
+              "tool_use_id": "toolu#8"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "model: unknown action \"clear\" (valid actions: status, set, list — there is no clear action)",
+              "tool_name": "model",
+              "tool_use_id": "toolu#8",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "model",
+              "tool_input": {
+                "action": "status"
+              },
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}",
+              "tool_name": "model",
+              "tool_use_id": "toolu#9"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "model",
+            "arguments": {
+              "action": "status"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "{\"model\":\"anthropic/claude-fable-5\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "model",
+            "arguments": {
+              "action": "list"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "{\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}],\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"}}"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "quick"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "content": "{\"model\":\"anthropic/claude-quick-1\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "nope/model-x"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "model: provider \"nope\" is not configured (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "anthropic/claude-direct-2"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#6",
+            "name": "model",
+            "arguments": {
+              "action": "set"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#13",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#6",
+            "is_error": true,
+            "content": "model: set requires a non-empty model (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])"
+          }
+        ]
+      },
+      {
+        "id": "msg#14",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#7",
+            "name": "model",
+            "arguments": {
+              "action": "set",
+              "model": "bare"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#15",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#7",
+            "is_error": true,
+            "content": "model: message: model ref \"bare\" is not of the form \"provider/model\" (valid aliases: [quick]; configured providers: [anthropic claude-code codex gateway openai openrouter])"
+          }
+        ]
+      },
+      {
+        "id": "msg#16",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#8",
+            "name": "model",
+            "arguments": {
+              "action": "clear"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#17",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#8",
+            "is_error": true,
+            "content": "model: unknown action \"clear\" (valid actions: status, set, list — there is no clear action)"
+          }
+        ]
+      },
+      {
+        "id": "msg#18",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#9",
+            "name": "model",
+            "arguments": {
+              "action": "status"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#19",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#9",
+            "content": "{\"model\":\"anthropic/claude-direct-2\",\"aliases\":{\"quick\":\"anthropic/claude-quick-1\"},\"providers\":[{\"name\":\"anthropic\",\"billing\":\"api\"},{\"name\":\"claude-code\",\"billing\":\"subscription\"},{\"name\":\"codex\",\"billing\":\"subscription\"},{\"name\":\"gateway\",\"billing\":\"api\"},{\"name\":\"openai\",\"billing\":\"api\"},{\"name\":\"openrouter\",\"billing\":\"api\"}]}"
+          }
+        ]
+      },
+      {
+        "id": "msg#20",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

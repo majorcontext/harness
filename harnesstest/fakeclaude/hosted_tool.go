@@ -13,13 +13,18 @@ import (
 const toolUseMeta = "claudecode/toolUseId"
 
 // callHostedTool runs when FAKE_CLAUDE_CALL_TOOL names a tool and
-// FAKE_CLAUDE_TOOL_LOG a file, or when FAKE_CLAUDE_LIST_TOOLS names a file.
+// FAKE_CLAUDE_TOOL_LOG a file (the call takes the JSON arguments of
+// FAKE_CLAUDE_CALL_ARGS), or when FAKE_CLAUDE_LIST_TOOLS names a file.
 // It waits for harness to close stdin, which it does after it has recorded
 // the result, then calls the tool or lists the tools on the harness MCP
 // server of --mcp-config, and appends the response body to the file.
 func callHostedTool(f *fake) {
 	name, log := os.Getenv("FAKE_CLAUDE_CALL_TOOL"), os.Getenv("FAKE_CLAUDE_TOOL_LOG")
-	method, params := "tools/call", obj{"name": name, "arguments": obj{}, "_meta": obj{toolUseMeta: "toolu_hosted"}}
+	args := obj{}
+	if raw := os.Getenv("FAKE_CLAUDE_CALL_ARGS"); raw != "" {
+		_ = json.Unmarshal([]byte(raw), &args)
+	}
+	method, params := "tools/call", obj{"name": name, "arguments": args, "_meta": obj{toolUseMeta: "toolu_hosted"}}
 	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
 		name, log, method, params = "tools/list", list, "tools/list", obj{}
 	}

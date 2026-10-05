@@ -12,6 +12,7 @@
         "ls",
         "mcp",
         "mcp__srv__send",
+        "model",
         "process",
         "read_file",
         "read_tool_result",

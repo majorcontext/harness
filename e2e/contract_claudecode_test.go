@@ -241,9 +241,18 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 }
 
 func TestContractClaudeCodeTools(t *testing.T) {
+	setModel := map[string]any{"action": "set", "model": "anthropic/claude-fable-5"}
 	runScenarios(t, []scenario{{
 		name:    "claudecode_cli_gets_the_tools_of_the_engine_bridge",
 		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
 		actions: withActions(claudeOneTurn, claudeOfferedTools{as: "a"}),
+	}, {
+		name:    "claudecode_bridge_model_tool_offers_list_only",
+		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
+		actions: withActions(claudeOneTurn, claudeOfferedModelTool{as: "a"}),
+	}, {
+		name:    "claudecode_bridge_refuses_set_on_the_model_tool",
+		driver:  claudeLane{mode: "normal", callTool: "model", callArgs: setModel}.newDriver,
+		actions: withActions(claudeOneTurn, claudeToolCall{as: "a"}),
 	}})
 }

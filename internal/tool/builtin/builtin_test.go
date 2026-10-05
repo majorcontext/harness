@@ -250,7 +250,7 @@ func TestToolsNeedAWorkDir(t *testing.T) {
 		t.Run(fmt.Sprint("workdir=", workDir), func(t *testing.T) {
 			dir, want := "", []string(nil)
 			if workDir {
-				dir, want = t.TempDir(), append([]string{"process", "task"}, builtins...)
+				dir, want = t.TempDir(), append([]string{"model", "process", "task"}, builtins...)
 				slices.Sort(want)
 			}
 			_, tools := chain(t, dir, config.Config{}, nil)

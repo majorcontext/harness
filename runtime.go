@@ -67,7 +67,7 @@ type Options struct {
 	// nil, or a nil result: the default transport.
 	ModelTransport func(provider string) http.RoundTripper
 	// Tools are the embedder tools. Each name must be unique. With a
-	// WorkDir, no name may be process, task, or a built-in tool name. With a
+	// WorkDir, no name may be process, task, model, or a built-in tool name. With a
 	// goal evaluator, no name may be goal. With Config.MCPServers, no name
 	// may be mcp, list_mcp_resources, read_mcp_resource, or start with mcp__.
 	Tools []Tool
@@ -106,7 +106,9 @@ type Runtime struct {
 	prompt    func() prompt.Info
 	evaluator string
 	resolve   func(string) string
-	tree      *tree.Tree
+	// aliases map a model alias to its ref.
+	aliases map[string]string
+	tree    *tree.Tree
 	// procs is nil without a WorkDir.
 	procs *process.Manager
 	// mcp is nil without MCP servers.
@@ -162,14 +164,14 @@ func New(opts Options) (*Runtime, error) {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
 	}
 	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir) }
-	r.resolve = opts.Config.ResolveModel
+	r.resolve, r.aliases = opts.Config.ResolveModel, opts.Config.Aliases
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
 	r.base, r.cancel = context.WithCancel(context.Background())
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
 		Base: r.base, Go: r.group.Go, Profiles: func() map[string]prompt.Profile { return prompt.Profiles(r.agentDirs) },
-		Resolve: opts.Config.ResolveModel, Suffix: newSuffix})
+		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
 	tools := opts.Tools
 	if r.evaluator != "" {
 		tools = append(slices.Clip(tools), goalTool{r: r})
@@ -177,6 +179,9 @@ func New(opts Options) (*Runtime, error) {
 	if opts.WorkDir != "" {
 		r.procs, r.workDir = proc.NewManager(opts.WorkDir, opts.Config.Processes), opts.WorkDir
 		tools = append(slices.Clip(tools), proc.NewTool(r.procs, opts.Config.Processes), r.tree.Tool())
+		if opts.Config.ModelToolEnabled() {
+			tools = append(tools, modelTool{r: r})
+		}
 	}
 	r.mcp = mcpsrc.New(opts.Config)
 	r.plugins = pluginsrc.New(opts.Config, opts.WorkDir, r.history, r.store.GetBlob)

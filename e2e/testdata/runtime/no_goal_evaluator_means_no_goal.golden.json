@@ -9,6 +9,7 @@
         "glob",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",

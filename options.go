@@ -9,8 +9,6 @@ func ignoredKey(c config.Config) string {
 	switch {
 	case c.InstructionsMode != "":
 		return "instructions_mode"
-	case c.ModelTool != nil:
-		return "model_tool"
 	case c.EventSink != nil:
 		return "event_sink"
 	case c.SnapshotEveryRecords != nil:
