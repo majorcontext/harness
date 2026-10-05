@@ -209,10 +209,11 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 	return &View{st: st, id: id, state: session.Describe(id, s, window), log: s}, nil
 }
 
-// Messages returns the page of the conversation that precedes seq before, as
-// the model reads it. A before of 0 names the newest page. A limit of 0 is
-// protocol.DefaultMessageLimit, and a limit above protocol.MaxMessageLimit
-// fails with ErrInvalidRequest.
+// Resumable reports whether Open of the session has work to resume.
+func (v *View) Resumable() bool { return v.log.Resumable() }
+
+// Messages returns the page of the conversation before seq before; 0 is the
+// newest page. A limit above protocol.MaxMessageLimit fails with ErrInvalidRequest.
 func (v *View) Messages(_ context.Context, before uint64, limit int) (protocol.MessagePage, error) {
 	if err := checkMessageLimit(limit); err != nil {
 		return protocol.MessagePage{}, err

@@ -654,6 +654,16 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
 }
 
+// ProbePlugins reads the manifest of each configured plugin, as the first
+// Create or Open does, and returns each plugin with its tools and hooks. It
+// fails as that Create or Open fails. It returns nil with no plugin.
+func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
+	if err := r.startPlugins(ctx); err != nil {
+		return nil, err
+	}
+	return r.pluginInfo(), nil
+}
+
 // created returns the session.created record of session id, which is its
 // first record.
 func (r *Runtime) created(ctx context.Context, id string) (eventlog.SessionCreated, error) {
