@@ -250,7 +250,7 @@ func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error
 		k.status = string(s.Outcome)
 		switch last := st.LastEnded(); s.Outcome {
 		case eventlog.OutcomeDone:
-			k.result, _ = capRunes(session.LastText(st.History()), resultCap)
+			k.result, _ = session.CapRunes(session.LastText(st.History()), session.ResultCap)
 		case eventlog.OutcomeFailed:
 			k.reason = last.Detail()
 			if last.Cause == eventlog.CauseProviderExhausted {

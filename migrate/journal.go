@@ -15,6 +15,7 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
@@ -132,12 +133,24 @@ func childEnd(recs []engine.JournalRecord, history []message.Message) eventlog.T
 		end := eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: commit.TaskFailReason}
 		if commit.TaskFailKind == engine.FailKindProviderExhausted {
 			end.Cause = eventlog.CauseProviderExhausted
+			end.ErrorClass, end.Error = wallCause(end.Error)
+			end.RecoverHint = commit.TaskFailHint
 		}
 		return end
 	case commit == nil && unsettled:
 		return inFlightEnd(history)
 	}
 	return eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
+}
+
+// wallCause splits the classified reason that the engine journaled for a wall
+// of the provider account into its class and its cause. The report builds the
+// prefix of the class again, so the end keeps only the cause.
+func wallCause(reason string) (eventlog.ErrorClass, string) {
+	if cause, ok := strings.CutPrefix(reason, session.ReasonRateLimited+": "); ok {
+		return eventlog.ErrorRateLimited, cause
+	}
+	return "", strings.TrimPrefix(reason, session.ReasonExhausted+": ")
 }
 
 // inFlightEnd ends a child turn that was running at the cutover. A turn

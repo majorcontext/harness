@@ -1,5 +1,4 @@
 migrate/migrate_test.go the journal converter is a pure codec with one row per journal shape, and no contract row reads an engine journal
-internal/session/children_test.go Settlement is a pure function of one log State, and no serve row reaches a crashed child that reports to a busy parent
 banner_test.go Options.Version empty is Go API: serve always passes a version, so no row runs without the engine banner
 codex_test.go ModelTransport is a Go API option with no serve equivalent; it supplies the key and dials the websocket
 commands_test.go a panicking command operation, a typed command during Close, and the route walk of spec Contract source reach no driver

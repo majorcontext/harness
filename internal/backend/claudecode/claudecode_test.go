@@ -162,7 +162,7 @@ func TestClaudeCodeTurn(t *testing.T) {
 		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
 			want: []string{"backend.state", "compaction.applied", "turn.ended completed"}},
 		{name: "a failed result fails the turn", mode: "error",
-			want: []string{"backend.state", "context.measured", "backend.state", "turn.ended failed turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure"}},
+			want: []string{"backend.state", "context.measured", "backend.state", "turn.ended failed claudecode: the turn failed (error_during_execution): fake failure"}},
 		{name: "a compaction by Claude Code is logged", mode: "compact_boundary",
 			want: []string{"backend.state", "compaction.applied", "item.completed assistant Continuing after compaction.", "context.measured", "turn.ended completed"}},
 		{name: "the context reading is logged", mode: "per_call_usage",

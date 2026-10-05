@@ -101,7 +101,7 @@ func TestArchiveAddsTheConvertedLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 11 || len(Failed(results)) != 1 {
+	if len(results) != 12 || len(Failed(results)) != 1 {
 		t.Fatalf("results %+v", results)
 	}
 	old, all := headers(t, in), headers(t, out.Bytes())

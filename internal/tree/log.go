@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/session"
 )
 
 // The bounds of the log action. Its reply stays in the context of the
@@ -16,9 +17,7 @@ const (
 	logEntryCap = 2000
 	logTotalCap = 20000
 	logArgsCap  = 300
-	// resultCap bounds the final text of a child in the status action.
-	resultCap = 4000
-	cutMark   = "… [truncated]"
+	cutMark     = session.CutMark
 )
 
 // logEntry is one message of a child transcript, flattened to text.
@@ -51,7 +50,7 @@ func renderLog(h []eventlog.Message) []logEntry {
 func renderEntry(m eventlog.Message) logEntry {
 	cut := false
 	capped := func(s string, n int) string {
-		s, c := capRunes(s, n)
+		s, c := session.CapRunes(s, n)
 		cut = cut || c
 		return s
 	}
@@ -71,16 +70,4 @@ func renderEntry(m eventlog.Message) logEntry {
 		}
 	}
 	return logEntry{Role: m.Role, Text: capped(strings.Join(lines, "\n"), logEntryCap), Truncated: cut}
-}
-
-// capRunes cuts s to n runes and marks the cut.
-func capRunes(s string, n int) (string, bool) {
-	runes := 0
-	for i := range s {
-		if runes == n {
-			return s[:i] + cutMark, true
-		}
-		runes++
-	}
-	return s, false
 }

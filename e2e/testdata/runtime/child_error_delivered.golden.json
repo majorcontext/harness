@@ -164,7 +164,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400)\n\nlooking"
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: turn failed with a permanent provider error and cannot succeed on retry: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400)\n\nlooking"
             }
           ]
         }
@@ -319,7 +319,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400)\n\nlooking"
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: turn failed with a permanent provider error and cannot succeed on retry: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400)\n\nlooking"
           }
         ]
       },

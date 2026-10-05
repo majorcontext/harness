@@ -147,6 +147,7 @@ type JournalRecord struct {
 	// (engine.FailKindProviderExhausted, or empty) — engine-generated from
 	// a fixed vocabulary, never provider text, so it is not sanitized.
 	TaskFailKind string `json:"task_fail_kind,omitempty"`
+	TaskFailHint string `json:"task_fail_hint,omitempty"`
 	TaskCanceled bool   `json:"task_canceled,omitempty"`
 
 	// Compaction (Type == recCompact). The folded summary message's own
@@ -277,6 +278,7 @@ func projectJournalRecord(seq int, rec record) JournalRecord {
 			out.TaskStatus = string(rec.TaskNotify.Status)
 			out.TaskFailReason = plugin.SanitizeSessionError(rec.TaskNotify.FailReason)
 			out.TaskFailKind = rec.TaskNotify.FailKind
+			out.TaskFailHint = plugin.SanitizeSessionError(rec.TaskNotify.FailHint)
 			out.TaskCanceled = rec.TaskNotify.Canceled
 		}
 	case recCompact:

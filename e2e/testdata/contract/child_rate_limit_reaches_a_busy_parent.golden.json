@@ -85,7 +85,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -144,7 +144,7 @@
           "parts": [
             {
               "kind": "tool_result",
-              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}",
+              "text": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}",
               "tool_name": "task",
               "tool_use_id": "toolu#1"
             }
@@ -174,7 +174,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: turn failed with a permanent provider error and cannot succeed on retry: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400) (usage: 5 in / 3 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: provider rate limit outlasted the retry budget for this account: [retryable:rate_limited] anthropic: slow down (rate_limit_error, HTTP 429) (usage: 5 in / 3 out) — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child with task send on session_id \u003csession\u003e\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -187,6 +187,7 @@
         "bash",
         "edit_file",
         "glob",
+        "goal",
         "grep",
         "ls",
         "model",
@@ -220,6 +221,7 @@
         "bash",
         "edit_file",
         "glob",
+        "goal",
         "grep",
         "ls",
         "model",
@@ -309,7 +311,7 @@
           {
             "type": "tool_result",
             "call_id": "toolu#1",
-            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"running in the background; its report arrives later as a message. Do not poll or wait for it.\"}"
+            "content": "{\"session_id\":\"\u003csession\u003e\",\"agent\":\"general-purpose\",\"note\":\"spawned and running in the background; its result will arrive later as engine context — no need to poll or wait for it\"}"
           }
         ]
       },
@@ -340,16 +342,6 @@
       },
       {
         "id": "msg#6",
-        "role": "user",
-        "parts": [
-          {
-            "type": "engine_context",
-            "text": "[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: turn failed with a permanent provider error and cannot succeed on retry: [permanent] anthropic: child request rejected (invalid_request_error, HTTP 400) (usage: 5 in / 3 out)\n]"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {

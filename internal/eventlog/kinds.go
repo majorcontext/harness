@@ -144,12 +144,14 @@ type TurnResumed struct {
 	Count  int    `json:"count"`
 }
 
-// TurnEnded ends a turn. Cause types an early end, and Error holds the masked, capped message of a failure.
+// TurnEnded ends a turn. Cause types an early end, Error is the masked, capped message of a failure, ErrorClass types it, and RecoverHint is when a usage limit lifts.
 type TurnEnded struct {
-	TurnID     string     `json:"turn_id"`
-	StopReason StopReason `json:"stop_reason"`
-	Cause      Cause      `json:"cause,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	TurnID      string     `json:"turn_id"`
+	StopReason  StopReason `json:"stop_reason"`
+	Cause       Cause      `json:"cause,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	ErrorClass  ErrorClass `json:"error_class,omitempty"`
+	RecoverHint string     `json:"recover_hint,omitempty"`
 }
 
 // Detail returns Error, or Cause when there is no Error.

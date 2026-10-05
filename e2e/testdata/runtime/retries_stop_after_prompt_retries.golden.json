@@ -95,7 +95,7 @@
         "head_seq": 5,
         "id": "ses:a",
         "last_turn": {
-          "error": "turn: retryable backend error: [retryable:server_error] anthropic: upstream broke again (api_error, HTTP 500)",
+          "error": "[retryable:server_error] anthropic: upstream broke again (api_error, HTTP 500)",
           "stop_reason": "failed",
           "turn_id": "turn#1"
         },

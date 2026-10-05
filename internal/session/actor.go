@@ -242,7 +242,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, eventlog.CauseCrashed, "", cutOff)
+		err = a.endTurn(ctx, eventlog.TurnEnded{TurnID: t.ID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseCrashed}, cutOff)
 		if err == nil {
 			err = a.settle(true)
 		}
