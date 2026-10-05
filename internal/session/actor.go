@@ -99,6 +99,8 @@ type Config struct {
 	Sync Sync
 	// Limits bounds how each turn recovers from a failed model call.
 	Limits turn.Limits
+	// MaxTokens caps the response of each model call of a turn. Zero: the backend default.
+	MaxTokens int
 	// Threshold is the share of the context window at which the next turn compacts first.
 	Threshold float64
 	// KeepTurns is the number of newest turns that a compaction keeps.

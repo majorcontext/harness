@@ -39,6 +39,7 @@ type runOptions struct {
 	agentDefsDirs  []string
 	resume         string
 	cont           bool
+	maxTokens      int
 }
 
 func runFlags(opts *runOptions) *flag.FlagSet {
@@ -63,6 +64,7 @@ func runFlags(opts *runOptions) *flag.FlagSet {
 		opts.agentDefsDirs = append(opts.agentDefsDirs, v)
 		return nil
 	})
+	fs.IntVar(&opts.maxTokens, "max-tokens", 0, "per-response output token cap")
 	fs.StringVar(&opts.resume, "r", "", "resume the session with this id")
 	fs.StringVar(&opts.resume, "resume", "", "resume the session with this id")
 	fs.BoolVar(&opts.cont, "c", false, "continue the most recent session")
@@ -109,7 +111,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version})
+	rt, err := harness.New(harness.Options{Store: store, Config: *cfg, WorkDir: workDir, Version: version, MaxTokens: opts.maxTokens})
 	if err != nil {
 		return err
 	}

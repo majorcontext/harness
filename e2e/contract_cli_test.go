@@ -376,3 +376,15 @@ func TestContractCLIPluginProbePrintsHooks(t *testing.T) {
 		t.Errorf("plugin probe = %d %q, want the name and the hooks of the fixture\n%s", code, out, errOut)
 	}
 }
+
+func TestContractCLIRunMaxTokensCapsEachModelResponse(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	out, errOut, code := h.run("run", "-max-tokens", "123", "-p", "hi")
+	if code != 0 || out != "hello\n" {
+		t.Fatalf("run = %d %q, want 0 and the reply\n%s", code, out, errOut)
+	}
+	if reqs := h.fake.Requests(); len(reqs) == 0 || reqs[0].MaxTokens != 123 {
+		t.Errorf("requests = %+v, want a first request with max_tokens 123", reqs)
+	}
+}

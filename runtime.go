@@ -95,6 +95,9 @@ type Options struct {
 	Version string
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
+	// MaxTokens caps the response of each model call of a turn, as the engine
+	// flag -max-tokens did. Zero: the backend default. Negative: New fails.
+	MaxTokens int
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -104,8 +107,9 @@ type Runtime struct {
 	sync  Sync
 	tools []turn.Tool
 	// models routes each turn to the backend of its model.
-	models *backend.Router
-	limits turn.Limits
+	models    *backend.Router
+	limits    turn.Limits
+	maxTokens int
 	// prompt reads the system prompt of a session with the files that it holds.
 	prompt    func() prompt.Info
 	evaluator string
@@ -175,6 +179,7 @@ func New(opts Options) (*Runtime, error) {
 	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
+	r.maxTokens = opts.MaxTokens
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
 	if opts.Config.GoalEvaluatorModel != "" {
@@ -418,6 +423,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Appended:        r.appended(id, plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
+		MaxTokens:       r.maxTokens,
 		Threshold:       r.threshold,
 		KeepTurns:       r.keep,
 		Base:            r.base,
