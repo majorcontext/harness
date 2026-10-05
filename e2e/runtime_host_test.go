@@ -174,12 +174,26 @@ func tail(b []byte, n int) []byte {
 
 // suiteBreaks are the differences that every row shows on the runtime. Each
 // waits for its port. A same row compares with its serve golden less these.
-var suiteBreaks = []func(*normRequest){dropTool("model")}
+var suiteBreaks = []func(*observation){dropTool("model")}
 
-func dropTool(name string) func(*normRequest) {
-	return func(r *normRequest) {
-		if r.Tools = slices.DeleteFunc(r.Tools, func(n string) bool { return n == name }); len(r.Tools) == 0 {
-			r.Tools = nil
+// dropTool removes the tool name from each request of obs and from each tool
+// list that a call recorded as offered_tools.
+func dropTool(name string) func(*observation) {
+	drop := func(names []string) []string {
+		if names = slices.DeleteFunc(names, func(n string) bool { return n == name }); len(names) == 0 {
+			return nil
+		}
+		return names
+	}
+	return func(o *observation) {
+		for i := range o.Requests {
+			o.Requests[i].Tools = drop(o.Requests[i].Tools)
+		}
+		for key, c := range o.Calls {
+			if list, ok := c.Body.([]any); ok && strings.HasPrefix(key, "offered_tools.") {
+				c.Body = slices.DeleteFunc(list, func(v any) bool { return v == name })
+				o.Calls[key] = c
+			}
 		}
 	}
 }
@@ -196,10 +210,8 @@ func compareSame(t *testing.T, name string, obs observation) {
 	if err := json.Unmarshal(data, &want); err != nil {
 		t.Fatalf("decode %s: %v", path, err)
 	}
-	for i := range want.Requests {
-		for _, apply := range suiteBreaks {
-			apply(&want.Requests[i])
-		}
+	for _, apply := range suiteBreaks {
+		apply(&want)
 	}
 	if w, g := string(mustJSON(t, want)), string(mustJSON(t, obs)); w != g {
 		t.Errorf("runtime differs from %s less the suite breaks (-golden +got):\n%s", path, lineDiff(w, g))

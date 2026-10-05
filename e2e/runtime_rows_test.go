@@ -82,6 +82,7 @@ var runtimeRows = map[string]runtimeRow{
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
+	"claudecode_cli_gets_the_tools_of_the_engine_bridge":          sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),
 	"claudecode_error_result_fails_turn":                          reGolden(specView, specOpenRetry, specOpenGauge),

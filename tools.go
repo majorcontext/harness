@@ -41,21 +41,34 @@ func (r *Runtime) builtin(name string) bool {
 }
 
 // source returns the tools of session id for each model call: the runtime
-// tools, then the file, MCP, and plugin tools of the models that take them.
-// A session tool binds to the session or drops out. Each session has its own
-// file tools, because the write_file guard belongs to one session, and its
-// own session_info tool, which reads what sp recorded of the session.
+// tools, then the goal, file, MCP, and plugin tools of the models that take
+// them. A session tool binds to the session or drops out. Each session has
+// its own file tools, because the write_file guard belongs to one session,
+// and its own session_info tool, which reads what sp recorded of the session.
 func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
-	var static []turn.Tool
+	var static, loopOnly []turn.Tool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
 			if t = b.Bind(id, child); t == nil {
 				continue
 			}
 		}
+		if _, ok := t.(goalTool); ok {
+			loopOnly = append(loopOnly, t)
+			continue
+		}
 		static = append(static, t)
 	}
 	srcs := turn.Sources{turn.Fixed(static)}
+	if len(loopOnly) > 0 {
+		goal := turn.Fixed(loopOnly)
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+			if c.OwnsLoop {
+				return nil
+			}
+			return goal
+		}})
+	}
 	if r.workDir != "" {
 		files := turn.Fixed(append(builtin.Tools(r.workDir), &sessionInfoTool{r: r, session: id, prompt: sp}))
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {

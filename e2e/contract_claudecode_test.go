@@ -178,3 +178,11 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 		},
 	})
 }
+
+func TestContractClaudeCodeTools(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:    "claudecode_cli_gets_the_tools_of_the_engine_bridge",
+		driver:  claudeLane{mode: "normal", listTools: true}.newDriver,
+		actions: withActions(claudeOneTurn, claudeOfferedTools{as: "a"}),
+	}})
+}
