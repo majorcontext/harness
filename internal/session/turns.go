@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/plugin"
+	"github.com/majorcontext/harness/provider"
 )
 
 const (
@@ -193,20 +195,20 @@ func (a *Actor) ended(r *running, runErr error) {
 	next := false
 	switch {
 	case runErr == nil:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", cutOff)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopCompleted, "", "", cutOff)
 		next = true
 	case errors.Is(cause, turn.ErrHandoff):
 		err = a.append(append(a.closeOpen(turnID, cutOff, false), eventlog.TurnSuspended{TurnID: turnID, Cause: eventlog.CauseHandoff})...)
 	case errors.Is(cause, errStopTurn):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseStopped), interrupted)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseStopped, "", interrupted)
 		next = true
 	case errors.Is(cause, errGoalCleared):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, string(eventlog.CauseGoalCleared), interrupted)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseGoalCleared, "", interrupted)
 		next = true
 	case errors.Is(runErr, turn.ErrExhausted):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, eventlog.CauseProviderExhausted, plugin.SanitizeSessionError(exhaustedText(runErr)), cutOff, a.goalStop(runErr)...)
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, plugin.SanitizeSessionError(runErr.Error()), cutOff, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, "", plugin.SanitizeSessionError(runErr.Error()), cutOff, a.goalStop(runErr)...)
 		next = true
 	}
 	var after func() error
@@ -231,18 +233,29 @@ func (a *Actor) next(check bool) error {
 	return nil
 }
 
-func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause, text string, after ...eventlog.Event) error {
+func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause eventlog.Cause, msg, text string, after ...eventlog.Event) error {
 	awaiting := reason == eventlog.StopCompleted && len(a.state.Requests()) > 0
 	events := a.closeOpen(turnID, text, awaiting)
 	if awaiting {
 		reason = eventlog.StopAwaitingInput
 	}
-	if cause == string(eventlog.CauseCrashed) {
+	if cause == eventlog.CauseCrashed {
 		marker := eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: lostToRestart}}}
 		events = append(events, eventlog.ItemCompleted{ItemID: newID("item"), TurnID: turnID, Message: marker})
 	}
-	events = append(events, eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Error: cause})
+	events = append(events, eventlog.TurnEnded{TurnID: turnID, StopReason: reason, Cause: cause, Error: msg})
 	return a.appendCtx(ctx, append(events, after...)...)
+}
+
+// exhaustedText is the message of a turn that a usage limit failed: the
+// error of the backend without the sentinel that marks the limit, then the
+// time that the provider says access returns when the message does not say it.
+func exhaustedText(err error) string {
+	msg := strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": ")
+	if pe, ok := provider.AsProviderExhausted(err); ok && pe.RecoverHint != "" && !strings.Contains(msg, pe.RecoverHint) {
+		msg += " (access returns " + pe.RecoverHint + ")"
+	}
+	return msg
 }
 
 // closeOpen dismisses every open request unless keep is set, which closes its

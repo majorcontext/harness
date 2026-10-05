@@ -65,15 +65,15 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, string, bo
 	}
 	out := eventlog.OutcomeDone
 	switch {
-	case last.StopReason == eventlog.StopFailed, eventlog.Cause(last.Error) == eventlog.CauseCrashed:
+	case last.StopReason == eventlog.StopFailed, last.Cause == eventlog.CauseCrashed:
 		out = eventlog.OutcomeFailed
 	case last.StopReason == eventlog.StopInterrupted:
 		out = eventlog.OutcomeCanceled
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "A background task you started has finished.\n\ntask: %s (agent %s)\noutcome: %s", id, s.Agent(), out)
-	if last.Error != "" {
-		b.WriteString(": " + last.Error)
+	if d := last.Detail(); d != "" {
+		b.WriteString(": " + d)
 	}
 	if text := LastText(s.History()); text != "" {
 		b.WriteString("\n\n" + text)

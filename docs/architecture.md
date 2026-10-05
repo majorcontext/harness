@@ -272,7 +272,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |
 | `turn.suspended` | `turn_id`, `cause` |
 | `turn.resumed` | `turn_id`, `count` |
-| `turn.ended` | `turn_id`, `stop_reason`, `error?` |
+| `turn.ended` | `turn_id`, `stop_reason`, `cause?`, `error?` |
 | `request.opened` | `request_id`, `item_id`, `kind`, `payload` |
 | `request.resolved` | `request_id`, `resolution` (`answered` or `dismissed`), `answer?` |
 | `goal.set` | `condition`, `max_turns`, `turns?` |
@@ -422,6 +422,8 @@ A turn ends early for one of five causes. A live owner carries the first three w
 | `handoff` | `Session.Release`, `Runtime.Close` | Stop at an item boundary: admit no new tool call, let running tools finish within the budget, append `turn.suspended`. A delegated backend (`OwnsLoop`) cannot stop at an item boundary, so a handoff interrupts it, records every item that it already wrote, gives each open tool call a cut-off result, and appends `turn.suspended`. A suspended turn has no open tool call, so the next owner resumes it automatically. |
 | `provider_exhausted` | A usage limit of the provider: a spent quota, credit balance, or spend cap | Append `turn.ended{failed, provider_exhausted}`; keep the partial; queued inputs wait for the next input |
 | `crashed` | `Open` finds `turn.started` with no end or suspend (forced stop, OOM, an exceeded handoff budget) | Append `turn.ended{interrupted, crashed}`; keep the partial; each open tool call gets a result saying it was cut off and to check whether it took effect before running it again; an assistant item, `[harness: this turn was interrupted by a process restart and could not complete]`, closes the turn before `turn.ended`, so the next user message does not join it on the wire. The session then starts the next queued input, or waits for input when none is queued. |
+
+`turn.ended` types the cause in `cause`, as Codex `TurnAborted.reason` and the Claude Code `result` subtype do: `stopped`, `goal_cleared`, `crashed`, or `provider_exhausted` (`handoff` is the cause of `turn.suspended`). `error` holds only the message of a failure, masked and capped; a turn that ended by its cause alone has no `error`. A `provider_exhausted` turn keeps the provider message in `error`, with the `RecoverHint` of the provider when the message does not say it. Every reader branches on `stop_reason` and `cause` and never parses the text of `error`: `Apply`, the `last_turn` of the view (`stop_reason`, `cause`, `error`), the settlement of a child, the status of a task, and the rule that holds queued inputs. The `session.error` plugin event carries `error` as its message. The child report and the task status show `error`, or `cause` when there is no `error`.
 
 After any other failed turn, the next queued input runs, as after a completed turn. Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule: it starts the next queued input when no turn is open, except after a turn that ended `provider_exhausted`.
 

@@ -85,6 +85,30 @@ func TestContractChildren(t *testing.T) {
 				getSession{as: "a"},
 			},
 		},
+		{
+			name:       "child_usage_limit_delivered",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate,
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{{
+					ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."},
+				}}}},
+				{Name: "child_wall", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+				{Name: "parent", Match: harnesstest.LastUserText("A background task"), Reply: harnesstest.Reply{Text: "parent done"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 3},
+				release{step: "child"},
+				awaitRequests{n: 5},
+				waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a", record: true},
+				getSession{as: "kid"},
+				getSession{as: "a"},
+			},
+		},
 	})
 }
 

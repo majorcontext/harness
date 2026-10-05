@@ -72,13 +72,13 @@ func lines(t *testing.T, l *memLog, after uint64) []string {
 				f = append(f, strings.TrimSpace(p.CallID+" "+p.Text))
 			}
 		case eventlog.TurnEnded:
-			f = append(f, string(e.StopReason), e.Error)
+			f = append(f, string(e.StopReason), string(e.Cause), e.Error)
 		case eventlog.GoalEvaluated:
 			f = append(f, string(e.Verdict))
 		case eventlog.GoalChanged:
 			f = append(f, string(e.State))
 		}
-		out = append(out, strings.TrimSpace(strings.Join(f, " ")))
+		out = append(out, strings.Join(slices.DeleteFunc(f, func(s string) bool { return s == "" }), " "))
 	}
 	return out
 }
@@ -127,7 +127,7 @@ func TestModelCallErrors(t *testing.T) {
 			[]string{"compaction.applied", overflowed}},
 		{"a provider usage limit ends the turn with its cause", nil,
 			[]step{{Name: "limit", Reply: reply{HTTPStatus: 400, ErrorMessage: "You have reached your specified API usage limits."}}},
-			[]string{"turn.ended failed provider_exhausted"}},
+			[]string{"turn.ended failed provider_exhausted [permanent] anthropic: You have reached your specified API usage limits. (invalid_request_error, HTTP 400)"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := harnesstest.New(t, tc.steps...)

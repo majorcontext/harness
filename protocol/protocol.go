@@ -78,11 +78,12 @@ type Context struct {
 	Window int64 `json:"window"`
 }
 
-// LastTurn is the outcome of the newest turn that ended. StopReason is a
-// stop reason of the turn.ended record, and Error carries its cause or message.
+// LastTurn is the outcome of the newest turn that ended: the stop reason, typed
+// cause, and masked error message of its turn.ended record.
 type LastTurn struct {
 	TurnID     string `json:"turn_id"`
 	StopReason string `json:"stop_reason"`
+	Cause      string `json:"cause,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 

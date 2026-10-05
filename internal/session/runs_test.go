@@ -218,7 +218,7 @@ func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
 		runs  bool
 	}{
 		{"a failed turn", errors.New("bad request"), "turn.ended failed bad request", true},
-		{"a usage limit", turn.ErrExhausted, "turn.ended failed provider_exhausted", false},
+		{"a usage limit", turn.ErrExhausted, "turn.ended failed provider_exhausted turn: provider usage limit reached", false},
 	} {
 		t.Run(tc.name+" live", func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestAFailedTurnLeavesItsQueuedInputToRunExceptAtAUsageLimit(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ended := eventlog.TurnEnded{TurnID: "turn_1", StopReason: eventlog.StopFailed, Error: "bad request"}
 				if !tc.runs {
-					ended.Error = string(eventlog.CauseProviderExhausted)
+					ended.Error, ended.Cause = "usage limit", eventlog.CauseProviderExhausted
 				}
 				log := encode(t, eventlog.SessionCreated{Model: "m/m"}, eventlog.OwnerAcquired{Epoch: 1}, *firstInput(),
 					eventlog.TurnStarted{TurnID: "turn_1", InputIDs: []string{"in1"}},

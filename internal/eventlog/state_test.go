@@ -40,7 +40,7 @@ func result(turn, item, id string) Event {
 }
 
 func end(turn string, r StopReason, cause Cause) Event {
-	return TurnEnded{TurnID: turn, StopReason: r, Error: string(cause)}
+	return TurnEnded{TurnID: turn, StopReason: r, Cause: cause}
 }
 
 func ask(req, item string) Event {
@@ -179,6 +179,8 @@ var applyRows = []struct {
 	{"a resume counts each resume", with(suspended, resume("t1", 2)), "count 2, want 1", view{}},
 	{"a stopped turn never resumes", with(running, end("t1", StopInterrupted, CauseStopped), resume("t1", 1)), "turn t1 is not suspended", view{}},
 	{"a suspended turn does not end", with(suspended, end("t1", StopCompleted, "")), "turn t1 is suspended", view{}},
+	{"a failed turn takes no interrupt cause", with(running, end("t1", StopFailed, CauseStopped)), "failure cause", view{}},
+	{"a completed turn has no cause", with(running, end("t1", StopCompleted, CauseStopped)), "completes with cause", view{}},
 	{"an interrupted turn names its cause", with(running, end("t1", StopInterrupted, "")), "interrupt cause", view{}},
 	{"a goal counts evaluated turns", evaluated, "", view{Status: StatusIdle, Goal: "active 1"}},
 	{"a turn is evaluated once", with(evaluated, verdict("t1")), "turn t1 was evaluated", view{}},
@@ -292,7 +294,7 @@ func TestRecordedUsageFoldsIntoTheState(t *testing.T) {
 		ContextMeasured{Tokens: 100, Window: 1000, Source: "m", Usage: Usage{InputTokens: 10, OutputTokens: 2}, SubscriptionUsage: first},
 		ContextMeasured{Usage: Usage{InputTokens: 5, OutputTokens: 1}, SubscriptionUsage: second},
 		ContextMeasured{Usage: Usage{OutputTokens: 1}},
-		end("t1", StopFailed, "boom"),
+		TurnEnded{TurnID: "t1", StopReason: StopFailed, Error: "boom"},
 		CompactionApplied{FromSeq: 1, ToSeq: 3, Summary: "s", Usage: Usage{InputTokens: 7, OutputTokens: 3}},
 		GoalEvaluated{TurnID: "t1", Verdict: VerdictNotMet}))
 	if got, want := s.Usage(), (Usage{InputTokens: 22, OutputTokens: 7}); got != want {
