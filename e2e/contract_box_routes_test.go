@@ -52,11 +52,7 @@ func (a processLogs) run(t *testing.T, r *run) {
 	r.record(t, "process_logs", a.name, r.drv.ProcessLogs(t, a.name, a.tail))
 }
 func (a workspaceChanges) run(t *testing.T, r *run) {
-	dir := a.dir
-	if dir != "" && !filepath.IsAbs(dir) {
-		dir = filepath.Join(resolved(r.drv.Workdir()), dir)
-	}
-	res := r.drv.WorkspaceChanges(t, a.scope, dir)
+	res := r.drv.WorkspaceChanges(t, a.scope, a.dir)
 	r.record(t, "workspace_changes", a.scope, res)
 	if body, ok := res.Body.(map[string]any); ok && body["patch"] != nil {
 		r.record(t, "workspace_changes_wire", a.scope, callResult{Status: res.Status,
