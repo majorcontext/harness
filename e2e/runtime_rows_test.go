@@ -11,6 +11,7 @@ const (
 	specExternal      = "| Items | External items become `item.completed` | stream-json frames | `item/completed` |"
 	specTaskInputs    = "Task notifications become inputs"
 	specChildReport   = "The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child"
+	specChildClaude   = "On Claude Code the engine checked out reports only when a turn started, so a busy parent gets no report in the middle of its turn"
 	specChildNoGoal   = "A child session has no `goal` tool"
 	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
 	specAnswerNoSteer = "A run that answers a question takes no steer input"
@@ -111,6 +112,9 @@ var runtimeRows = map[string]runtimeRow{
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording, specOpenChildParts),
 	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildWording, specOpenChildFailure, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
+	"claudecode_child_report_waits_for_the_next_turn":             reGolden(specTaskInputs, specChildReport, specChildClaude),
+	"claudecode_child_reports_share_the_next_turn":                reGolden(specTaskInputs, specChildReport, specChildClaude),
+	"claudecode_queued_prompt_and_child_report_share_a_turn":      reGolden(specQueue, specChildReport, specChildClaude),
 	"claudecode_cli_gets_the_tools_of_the_engine_bridge":          sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),

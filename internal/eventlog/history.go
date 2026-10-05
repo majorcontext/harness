@@ -55,9 +55,15 @@ func SteerMessage(inputs [][]Part) Message {
 	}
 	out = append(out, blobs...)
 	if len(tasks) > 0 {
-		out = append(out, Part{Type: PartEngineContext, Text: "[tasks:\n- " + strings.Join(tasks, "\n- ") + "\n]"})
+		out = append(out, Part{Type: PartEngineContext, Text: TaskSegment(tasks)})
 	}
 	return Message{Role: RoleUser, Parts: out}
+}
+
+// TaskSegment is the segment of the engine that holds the task lines of
+// reports: one line for each report between "[tasks:" and "]".
+func TaskSegment(lines []string) string {
+	return "[tasks:\n- " + strings.Join(lines, "\n- ") + "\n]"
 }
 
 // withoutTaskReports returns parts with the task lines left out: a turn that

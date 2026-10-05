@@ -27,7 +27,7 @@ func mergeModes(ms ...map[string]mode) map[string]mode {
 	return out
 }
 
-var modes = mergeModes(basicModes, threadModes, stdinModes)
+var modes = mergeModes(basicModes, threadModes, stdinModes, childModes)
 
 const credentialError = "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment."
 

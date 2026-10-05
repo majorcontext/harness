@@ -76,6 +76,41 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodeChildReport(t *testing.T) {
+	settled := []action{waitIdle{as: "a"}, claudeInputs{as: "a"}}
+	runScenarios(t, []scenario{
+		{
+			name:   "claudecode_child_report_waits_for_the_next_turn",
+			driver: claudeLaneDriver("child_report"),
+			actions: append([]action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				claudeAwaitText{as: "a", text: "noted"},
+			}, settled...),
+		},
+		{
+			name:   "claudecode_child_reports_share_the_next_turn",
+			driver: claudeLaneDriver("child_reports"),
+			actions: append([]action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				claudeAwaitText{as: "a", text: "noted"},
+			}, settled...),
+		},
+		{
+			name:   "claudecode_queued_prompt_and_child_report_share_a_turn",
+			driver: claudeLaneDriver("child_report_after_prompt"),
+			actions: append([]action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				claudeAwaitText{as: "a", text: "Delegating."},
+				enqueueNext{as: "a", text: "next step"},
+				claudeAwaitText{as: "a", text: "noted"},
+			}, settled...),
+		},
+	})
+}
+
 func TestContractClaudeCodeMCPServers(t *testing.T) {
 	servers := map[string]any{
 		"chrome-devtools": map[string]any{"command": []string{"chrome-devtools-mcp-absent", "--headless"}, "env": []string{"A=1", "malformed"}, "dir": "/nonexistent"},

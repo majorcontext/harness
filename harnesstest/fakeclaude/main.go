@@ -20,7 +20,7 @@
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
 //
 // The mode names and what each proves are in modes.go, modes_thinking.go,
-// modes_stdin.go, modes_question.go, modes_mirror.go, and modes_mcp.go.
+// modes_stdin.go, modes_question.go, modes_mirror.go, modes_mcp.go, and modes_children.go.
 //
 // The normal turn is not byte-faithful to the real CLI in two ways. Its
 // result frame has no num_turns or session_id, so the driver takes its
@@ -39,6 +39,7 @@ import (
 
 type fake struct {
 	mode      string
+	first     string
 	sessionID string
 	out       *bufio.Writer
 	stdin     *bufio.Reader
@@ -105,7 +106,7 @@ func main() {
 		f.sessionID = "fake-session-1"
 	}
 	if mode != "fast_no_drain" && !f.questionParked() {
-		f.readLine()
+		f.first, _ = f.readLine()
 	}
 	if h, ok := preInitModes[mode]; ok && h(f) {
 		return

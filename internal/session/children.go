@@ -33,8 +33,11 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.Sessio
 }
 
 // Settle appends the outcome of an unsettled child, and admits report as an
-// input with source child when report is not empty. A child that is not
-// unsettled changes nothing, so a repeated report is safe.
+// input with source child when report is not empty. A report joins a busy
+// turn at its next item boundary, except for a backend that owns the loop:
+// that report waits in the queue and reaches the model when the next turn
+// starts. A child that is not unsettled changes nothing, so a repeated
+// report is safe.
 func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, report []eventlog.Part) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		switch {
@@ -43,7 +46,11 @@ func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, report []ev
 		case len(report) == 0:
 			reply(struct{}{}, a.append(s))
 		default:
-			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: eventlog.DeliverySteer, Source: sourceChild, Parts: report}
+			delivery := eventlog.DeliverySteer
+			if a.ownsLoop() {
+				delivery = eventlog.DeliveryQueue
+			}
+			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: report}
 			_, err := a.admit(in, "", append(a.resumed(), s)...)
 			reply(struct{}{}, err)
 		}

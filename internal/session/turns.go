@@ -59,15 +59,12 @@ func (a *Actor) admit(in eventlog.InputAdmitted, expectedTurn string, before ...
 	seq := a.state.Head() + uint64(len(events))
 	r := a.run
 	if r == nil && !a.overThreshold() {
-		next := in.InputID
-		if q := a.state.Queue(); len(q) > 0 {
-			next = q[0].InputID
-		}
+		ids := a.startInputs(append(a.state.Queue(), in))
 		id := newID("turn")
-		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: []string{next}})...); err != nil {
+		if err := a.append(append(events, eventlog.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 			return 0, err
 		}
-		a.start(id, []string{next})
+		a.start(id, ids)
 		return seq, nil
 	}
 	if err := a.append(events...); err != nil {
@@ -225,12 +222,34 @@ func (a *Actor) next(check bool) error {
 	if len(q) == 0 || check && a.autoCompact() {
 		return nil
 	}
-	id := newID("turn")
-	if err := a.append(append(a.dismissRequests(), eventlog.TurnStarted{TurnID: id, InputIDs: []string{q[0].InputID}})...); err != nil {
+	id, ids := newID("turn"), a.startInputs(q)
+	if err := a.append(append(a.dismissRequests(), eventlog.TurnStarted{TurnID: id, InputIDs: ids})...); err != nil {
 		return err
 	}
-	a.start(id, []string{q[0].InputID})
+	a.start(id, ids)
 	return nil
+}
+
+// startInputs returns the inputs of the turn that starts from q, which is not
+// empty: the first input, and, on a backend that owns the loop, every report
+// of a child, because that backend reads no report in a turn that it runs.
+func (a *Actor) startInputs(q []eventlog.InputAdmitted) []string {
+	ids := []string{q[0].InputID}
+	if !a.ownsLoop() {
+		return ids
+	}
+	for _, in := range q[1:] {
+		if in.Source == sourceChild {
+			ids = append(ids, in.InputID)
+		}
+	}
+	return ids
+}
+
+// ownsLoop reports whether the backend of the current model runs the loop of
+// a turn itself.
+func (a *Actor) ownsLoop() bool {
+	return a.cfg.Backend.Capabilities(a.state.Model()).OwnsLoop
 }
 
 func (a *Actor) endTurn(ctx context.Context, turnID string, reason eventlog.StopReason, cause eventlog.Cause, msg, text string, after ...eventlog.Event) error {

@@ -260,6 +260,12 @@ func (d *runtimeDriver) Enqueue(t *testing.T, id, text string) {
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 
+func (d *runtimeDriver) EnqueueNext(t *testing.T, id, text string) {
+	t.Helper()
+	path, body := d.input(id, text, protocol.DeliveryQueue, "")
+	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
+}
+
 func (d *runtimeDriver) Send(t *testing.T, id, text string) callResult {
 	t.Helper()
 	path, body := d.input(id, text, "", "")
