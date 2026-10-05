@@ -136,7 +136,7 @@ func TestGoal(t *testing.T) {
 		{"an impossible verdict fails the goal", &goalBackend{verdicts: []string{"IMPOSSIBLE: no way"}}, setGoal(0),
 			slices.Concat(ran, []string{"goal.evaluated impossible", "goal.changed failed"})},
 		{"a usage limit pauses the goal until its retry", &goalBackend{verdicts: []string{"MET: ok"}, errs: []error{turn.ErrExhausted, nil}}, setGoal(0),
-			slices.Concat(ran[:3], []string{"turn.ended failed provider_exhausted", "goal.changed paused", "goal.changed active", "input.admitted", "turn.started",
+			slices.Concat(ran[:3], []string{"turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed active", "input.admitted", "turn.started",
 				"item.completed assistant re Continue working toward the goal.", "turn.ended completed"}, achieved)},
 		{"an error the user must fix fails the goal", &goalBackend{errs: []error{errors.New("bad request")}}, setGoal(0),
 			slices.Concat(ran[:3], []string{"turn.ended failed bad request", "goal.changed failed"})},
@@ -162,7 +162,7 @@ func TestGoal(t *testing.T) {
 			close(b.gate)
 			synctest.Wait()
 			clearGoal(t, a)
-		}, slices.Concat(ran[:3], []string{"input.admitted", "turn.ended failed provider_exhausted", "goal.changed paused", "goal.changed cleared",
+		}, slices.Concat(ran[:3], []string{"input.admitted", "turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "goal.changed cleared",
 			"turn.started", "item.completed assistant re hi", "turn.ended completed"})},
 		{"an interrupt during the evaluation leaves the goal running", &goalBackend{verdicts: []string{"MET: ok"}, gated: true, gateJudge: true},
 			func(t *testing.T, a *Actor, b *goalBackend) {
@@ -220,7 +220,7 @@ func TestOpenContinuesTheGoal(t *testing.T) {
 		{"an active goal judges the last turn", &goalBackend{verdicts: []string{"MET: ok"}, gated: true, gateJudge: true},
 			[]string{"turn.ended completed", "owner.acquired", "goal.evaluated met", "goal.changed achieved"}},
 		{"a paused goal runs again at its retry time", &goalBackend{verdicts: []string{"MET: ok"}, errs: []error{turn.ErrExhausted, nil}},
-			[]string{"turn.ended failed provider_exhausted", "goal.changed paused", "owner.acquired", "goal.changed active", "input.admitted", "turn.started",
+			[]string{"turn.ended failed provider_exhausted turn: provider usage limit reached", "goal.changed paused", "owner.acquired", "goal.changed active", "input.admitted", "turn.started",
 				"item.completed assistant re Continue working toward the goal.", "turn.ended completed", "goal.evaluated met", "goal.changed achieved"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

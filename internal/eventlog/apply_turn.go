@@ -116,12 +116,22 @@ func (s *State) applyEnded(e TurnEnded) error {
 		return err
 	}
 	switch e.StopReason {
-	case StopCompleted, StopFailed:
+	case StopCompleted:
+		if e.Cause != "" {
+			return illegal("turn %s completes with cause %q", e.TurnID, e.Cause)
+		}
+	case StopFailed:
+		if e.Cause != "" && e.Cause != CauseProviderExhausted {
+			return illegal("turn %s has failure cause %q", e.TurnID, e.Cause)
+		}
 	case StopInterrupted:
-		if c := Cause(e.Error); c != CauseStopped && c != CauseGoalCleared && c != CauseCrashed {
-			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Error)
+		if c := e.Cause; c != CauseStopped && c != CauseGoalCleared && c != CauseCrashed {
+			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Cause)
 		}
 	case StopAwaitingInput:
+		if e.Cause != "" {
+			return illegal("turn %s awaits input with cause %q", e.TurnID, e.Cause)
+		}
 		if !slices.ContainsFunc(s.requests, func(r pendingRequest) bool { return r.turnID == e.TurnID }) {
 			return illegal("turn %s awaits input with no open request from this turn", e.TurnID)
 		}
@@ -132,7 +142,7 @@ func (s *State) applyEnded(e TurnEnded) error {
 		return err
 	}
 	own := s.turnItems
-	if Cause(e.Error) == CauseCrashed {
+	if e.Cause == CauseCrashed {
 		own--
 	}
 	if own <= 0 {

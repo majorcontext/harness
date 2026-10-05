@@ -184,6 +184,11 @@ var journalCases = []struct {
 			t.Errorf("a child with no tools has tools %v", tools)
 		}
 	}},
+	{"child that a usage limit failed keeps the provider cause", "ses_0000000000000014", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Cause != eventlog.CauseProviderExhausted || e.Error != "usage limit reached" {
+			t.Errorf("last ended %+v", e)
+		}
+	}},
 	{"child in a turn at the cutover fails as lost to restart", "ses_0000000000000012", func(t *testing.T, s *eventlog.State, _ harness.Store) {
 		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Error != lostToRestart {
 			t.Errorf("last ended %+v", e)
@@ -212,7 +217,7 @@ func TestDirConvertsEachJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := Failed(results)
-	if len(results) != 10 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
+	if len(results) != 11 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
 		t.Fatalf("results %+v", results)
 	}
 	for _, c := range journalCases {

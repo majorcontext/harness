@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"cmp"
 	"encoding/json"
 	"time"
 )
@@ -141,12 +142,16 @@ type TurnResumed struct {
 	Count  int    `json:"count"`
 }
 
-// TurnEnded ends a turn. Error carries the Cause of an interrupted turn.
+// TurnEnded ends a turn. Cause types an early end, and Error holds the masked, capped message of a failure.
 type TurnEnded struct {
 	TurnID     string     `json:"turn_id"`
 	StopReason StopReason `json:"stop_reason"`
+	Cause      Cause      `json:"cause,omitempty"`
 	Error      string     `json:"error,omitempty"`
 }
+
+// Detail returns Error, or Cause when there is no Error.
+func (e TurnEnded) Detail() string { return cmp.Or(e.Error, string(e.Cause)) }
 
 // RequestQuestion is the kind of a request that asks the user to choose.
 const RequestQuestion = "question"

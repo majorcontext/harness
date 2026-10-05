@@ -127,9 +127,13 @@ func childEnd(recs []engine.JournalRecord, history []message.Message) eventlog.T
 	}
 	switch {
 	case commit != nil && (commit.TaskCanceled || commit.TaskStatus == string(engine.StatusCanceled)):
-		return eventlog.TurnEnded{StopReason: eventlog.StopInterrupted, Error: string(eventlog.CauseStopped)}
+		return eventlog.TurnEnded{StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped}
 	case commit != nil && commit.TaskStatus == string(engine.StatusFailed):
-		return eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: commit.TaskFailReason}
+		end := eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: commit.TaskFailReason}
+		if commit.TaskFailKind == engine.FailKindProviderExhausted {
+			end.Cause = eventlog.CauseProviderExhausted
+		}
+		return end
 	case commit == nil && unsettled:
 		return inFlightEnd(history)
 	}

@@ -9,8 +9,8 @@ import (
 func TestSettlement(t *testing.T) {
 	said := eventlog.ItemCompleted{ItemID: "i1", TurnID: "t1", Message: eventlog.Message{Role: eventlog.RoleAssistant,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: "found it"}}}}
-	ended := func(r eventlog.StopReason, cause string) eventlog.Event {
-		return eventlog.TurnEnded{TurnID: "t1", StopReason: r, Error: cause}
+	ended := func(r eventlog.StopReason, cause eventlog.Cause, msg string) eventlog.Event {
+		return eventlog.TurnEnded{TurnID: "t1", StopReason: r, Cause: cause, Error: msg}
 	}
 	const head = "A background task you started has finished.\n\ntask: kid (agent explore)\noutcome: "
 	for _, tc := range []struct {
@@ -19,12 +19,12 @@ func TestSettlement(t *testing.T) {
 		outcome eventlog.Outcome
 		text    string
 	}{
-		{"a completed turn is done with its last text", []eventlog.Event{said, ended(eventlog.StopCompleted, "")},
+		{"a completed turn is done with its last text", []eventlog.Event{said, ended(eventlog.StopCompleted, "", "")},
 			eventlog.OutcomeDone, head + "done\n\nfound it"},
-		{"a failed turn names its error", []eventlog.Event{ended(eventlog.StopFailed, "boom")}, eventlog.OutcomeFailed, head + "failed: boom"},
-		{"a crashed turn failed", []eventlog.Event{said, ended(eventlog.StopInterrupted, "crashed")},
+		{"a failed turn names its error", []eventlog.Event{ended(eventlog.StopFailed, "", "boom")}, eventlog.OutcomeFailed, head + "failed: boom"},
+		{"a crashed turn failed", []eventlog.Event{said, ended(eventlog.StopInterrupted, eventlog.CauseCrashed, "")},
 			eventlog.OutcomeFailed, head + "failed: crashed\n\nfound it"},
-		{"a stopped turn is canceled", []eventlog.Event{ended(eventlog.StopInterrupted, "stopped")}, eventlog.OutcomeCanceled, head + "canceled: stopped"},
+		{"a stopped turn is canceled", []eventlog.Event{ended(eventlog.StopInterrupted, eventlog.CauseStopped, "")}, eventlog.OutcomeCanceled, head + "canceled: stopped"},
 		{"a running turn has not settled", []eventlog.Event{said}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -242,7 +242,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 			a.start(t.ID, t.InputIDs)
 		}
 	case ok:
-		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, string(eventlog.CauseCrashed), cutOff)
+		err = a.endTurn(ctx, t.ID, eventlog.StopInterrupted, eventlog.CauseCrashed, "", cutOff)
 		if err == nil {
 			err = a.settle(true)
 		}
@@ -257,7 +257,7 @@ func open(ctx context.Context, cfg Config) (*Actor, error) {
 // after a restart.
 func (a *Actor) waitsForInput() bool {
 	last := a.state.LastEnded()
-	return last.StopReason == eventlog.StopFailed && eventlog.Cause(last.Error) == eventlog.CauseProviderExhausted
+	return last.Cause == eventlog.CauseProviderExhausted
 }
 
 // fence appends owner.acquired at the head. An append of an earlier owner

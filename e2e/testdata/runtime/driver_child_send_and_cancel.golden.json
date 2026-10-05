@@ -222,7 +222,7 @@
         "head_seq": 7,
         "id": "ses:kid",
         "last_turn": {
-          "error": "stopped",
+          "cause": "stopped",
           "stop_reason": "interrupted",
           "turn_id": "turn#1"
         },

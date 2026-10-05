@@ -40,7 +40,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	}
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c)}
 	if last := s.LastEnded(); last.TurnID != "" {
-		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Error: last.Error}
+		v.LastTurn = &protocol.LastTurn{TurnID: last.TurnID, StopReason: string(last.StopReason), Cause: string(last.Cause), Error: last.Error}
 	}
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {

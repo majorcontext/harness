@@ -16,6 +16,8 @@ func (a awaitCanceled) run(t *testing.T, r *run) {
 	}
 }
 
+const usageLimitMessage = "You have reached your specified API usage limits. You will regain access on 2099-01-01 at 00:00 UTC."
+
 func TestContractProviderErrors(t *testing.T) {
 	ok := harnesstest.Step{Name: "ok", Reply: harnesstest.Reply{Text: "recovered"}}
 	oneTurn := func(extra ...action) []action {
@@ -57,6 +59,13 @@ func TestContractProviderErrors(t *testing.T) {
 				waitIdle{as: "a"},
 				getSession{as: "a"},
 			},
+		},
+		{
+			name: "provider_usage_limit_fails_turn",
+			model: []harnesstest.Step{
+				{Name: "wall", Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}},
+			},
+			actions: oneTurn(getSession{as: "a"}),
 		},
 		{
 			name:   "stream_stall",
