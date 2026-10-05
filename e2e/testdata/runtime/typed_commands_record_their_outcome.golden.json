@@ -12,6 +12,7 @@
         "goal",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",
@@ -47,59 +48,7 @@
         "goal",
         "grep",
         "ls",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "/nosuch x"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "/compact"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 16384,
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",
@@ -138,24 +87,6 @@
               "text": "/compact"
             }
           ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "Review HEAD now.\n"
-            }
-          ]
         }
       ]
     },
@@ -171,6 +102,7 @@
         "goal",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",
@@ -227,6 +159,78 @@
               "text": "Review HEAD now.\n"
             }
           ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "/nosuch x"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "/compact"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Review HEAD now.\n"
+            }
+          ]
         },
         {
           "role": "assistant",
@@ -260,6 +264,7 @@
         "goal",
         "grep",
         "ls",
+        "model",
         "process",
         "read_file",
         "read_tool_result",

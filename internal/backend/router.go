@@ -113,6 +113,9 @@ func (m *Router) lookup(model string) (turn.Backend, error) {
 	return m.backend(ref)
 }
 
+// Providers returns the names of the configured providers, sorted.
+func (m *Router) Providers() []string { return slices.Sorted(maps.Keys(m.backends)) }
+
 // Capabilities returns the capabilities of the backend of model, or none for a model with no backend.
 func (m *Router) Capabilities(model string) turn.Capabilities {
 	be, err := m.lookup(model)

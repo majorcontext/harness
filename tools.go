@@ -47,11 +47,16 @@ func (r *Runtime) builtin(name string) bool {
 // and its own session_info tool, which reads what sp recorded of the session.
 func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
 	var static, loopOnly []turn.Tool
+	var model *modelTool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
 			if t = b.Bind(id, child); t == nil {
 				continue
 			}
+		}
+		if m, ok := t.(modelTool); ok {
+			model = &m
+			continue
 		}
 		if _, ok := t.(goalTool); ok {
 			loopOnly = append(loopOnly, t)
@@ -67,6 +72,17 @@ func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *ses
 				return nil
 			}
 			return goal
+		}})
+	}
+	if model != nil {
+		list := *model
+		list.listOnly = true
+		full, listed := turn.Fixed{*model}, turn.Fixed{list}
+		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
+			if c.OwnsLoop {
+				return listed
+			}
+			return full
 		}})
 	}
 	if r.workDir != "" {

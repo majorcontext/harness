@@ -17,7 +17,16 @@ const (
 func scenarioFake(t *testing.T, sc scenario) (*harnesstest.Server, map[string]any) {
 	t.Helper()
 	if !sc.chat {
-		return harnesstest.New(t, sc.model...), sc.config
+		fake := harnesstest.New(t, sc.model...)
+		extra, ok := sc.config["providers"].(map[string]any)
+		if !ok {
+			return fake, sc.config
+		}
+		providers := map[string]any{"anthropic": map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": fake.URL()}}
+		maps.Copy(providers, extra)
+		config := maps.Clone(sc.config)
+		config["providers"] = providers
+		return fake, config
 	}
 	fake := harnesstest.NewChat(t, sc.model...)
 	config := map[string]any{

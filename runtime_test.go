@@ -309,7 +309,6 @@ func TestNewRejectsAKeyThatTheRuntimeIgnores(t *testing.T) {
 	n := 1
 	for key, cfg := range map[string]config.Config{
 		"instructions_mode":          {InstructionsMode: "full"},
-		"model_tool":                 {ModelTool: new(false)},
 		"event_sink":                 {EventSink: &config.EventSinkSpec{URL: "http://127.0.0.1:1"}},
 		"snapshot_every_records":     {SnapshotEveryRecords: &n},
 		"tool_result_inline_bytes":   {ToolResultInlineBytes: &n},

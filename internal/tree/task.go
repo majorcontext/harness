@@ -22,6 +22,8 @@ const taskSchema = `{
 		"action": {"type": "string", "enum": ["spawn", "cancel", "status", "send", "log"], "description": "The operation to perform; defaults to \"spawn\" if omitted"},
 		"agent": {"type": "string", "description": "spawn only: the agent profile of the child (default general-purpose)"},
 		"prompt": {"type": "string", "description": "The whole task for the child (spawn), or the message to deliver to it (send). The child sees nothing of this conversation."},
+		"model": {"type": "string", "description": "spawn only: optional model override, as \"provider/model\""},
+		"effort": {"type": "string", "description": "spawn only: optional reasoning-effort level for the child: off, minimal, low, medium, or high; omitted means the provider default"},
 		"session_id": {"type": "string", "description": "cancel/status/send/log only: the id of a session you spawned, directly or transitively"},
 		"tail": {"type": "integer", "description": "log only: how many of the descendant's most recent transcript entries to return (default 20, capped)"}
 	}
@@ -29,11 +31,12 @@ const taskSchema = `{
 
 const taskDescription = "Delegate work to a child session, or manage one you already spawned (directly or transitively). " +
 	"action selects the operation and defaults to \"spawn\" if omitted. " +
-	"spawn(agent?, prompt): starts a child agent that does a task in the background, in a session of its own. " +
+	"spawn(agent?, prompt, model?, effort?): starts a child agent that does a task in the background, in a session of its own. " +
 	"The call returns at once with the session id of the child. The final report of the child arrives later as a new message: " +
 	"do not poll or wait for it. agent selects the profile of the child: general-purpose has every tool, " +
 	"explore finds code with read-only tools, plan returns an implementation plan with read-only tools, " +
 	"and each .agents/*.md file of the project adds a profile. A call with an unknown agent lists the profiles. " +
+	"model optionally overrides which model the child uses. effort optionally sets the child's reasoning-effort level. " +
 	"cancel(session_id): stops a descendant you spawned and its entire subtree — anything IT has spawned too. " +
 	"status(session_id): reports a descendant's current status, lineage, and cumulative token usage. " +
 	"send(session_id, prompt): delivers a message to a descendant — if it is still running, the message is queued and delivered " +
@@ -59,6 +62,7 @@ func (t *Tree) Tool() turn.Tool { return taskTool{tree: t} }
 
 type taskArgs struct {
 	Action, Agent, Prompt string
+	Model, Effort         string
 	SessionID             string `json:"session_id"`
 	Tail                  int
 }
@@ -134,7 +138,7 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 		return nil, errors.New("prompt is required")
 	}
 	in.Agent = cmp.Or(in.Agent, prompt.GeneralPurpose)
-	id, err := t.tree.spawn(ctx, t.parent, in.Agent, in.Prompt)
+	id, err := t.tree.spawn(ctx, t.parent, in.Agent, in.Prompt, Choice{in.Model, in.Effort})
 	return struct {
 		SessionID string `json:"session_id"`
 		Agent     string `json:"agent"`
