@@ -427,32 +427,16 @@ func (a *Actor) beginRelease(reply func(struct{}, error)) {
 }
 
 // End stops the actor and releases its ownership, as Release does, and
-// appends nothing. It fails with ErrBusy while a turn runs; a compaction or an
-// evaluation stops as under Release. An actor that has stopped is ended
-// already, so it returns nil.
+// appends nothing. It fails with ErrBusy while a turn or a control command
+// runs; a compaction or an evaluation that no command started stops as under
+// Release. An actor that has stopped is ended already, so it returns nil.
 func (a *Actor) End(ctx context.Context) error {
 	err := a.halt(ctx, func(reply func(struct{}, error)) {
-		if a.turnRuns() {
+		if a.turnRuns() || len(a.state.Unfinished()) > 0 {
 			reply(struct{}{}, ErrBusy)
 			return
 		}
 		a.beginRelease(reply)
-	})
-	if errors.Is(err, ErrNotOwned) {
-		return nil
-	}
-	return err
-}
-
-// Idle fails with ErrBusy while a turn runs. It changes nothing, and a turn can
-// start right after it returns.
-func (a *Actor) Idle(ctx context.Context) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		if a.turnRuns() {
-			reply(struct{}{}, ErrBusy)
-			return
-		}
-		reply(struct{}{}, nil)
 	})
 	if errors.Is(err, ErrNotOwned) {
 		return nil

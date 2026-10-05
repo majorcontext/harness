@@ -326,7 +326,7 @@ func TestContractChildrenEnd(t *testing.T) {
 			name:       "end_then_send_runs_no_report_of_the_stopped_child",
 			concurrent: true,
 			model:      model,
-			actions:    append(slices.Clone(endIdleParent), submit{as: "a", text: "again"}, waitIdle{as: "a"}, getSession{as: "a"}),
+			actions:    append(slices.Clone(endIdleParent), waitIdle{as: "kid"}, submit{as: "a", text: "again"}, waitIdle{as: "a"}, getSession{as: "a"}),
 		},
 	})
 }

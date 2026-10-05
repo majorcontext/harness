@@ -149,7 +149,7 @@ func (t taskTool) spawn(ctx context.Context, in taskArgs) (any, error) {
 // cancel stops session id and each of its descendants, and withdraws
 // their queued inputs. The report of session id reaches its parent.
 func (t taskTool) cancel(ctx context.Context, id string) (any, error) {
-	if err := t.tree.Interrupt(ctx, id, func(ctx context.Context) error { return t.tree.cancelTurn(ctx, id) }); err != nil {
+	if err := t.tree.Interrupt(ctx, id, func(ctx context.Context) error { return t.tree.cancelTurn(ctx, id, false) }); err != nil {
 		return nil, err
 	}
 	k, err := t.tree.child(ctx, id, 0)

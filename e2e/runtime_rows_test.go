@@ -307,6 +307,7 @@ var runtimeRows = map[string]runtimeRow{
 	"two_turns_keep_history":            sameAsServe(),
 	"usage_survives_a_mid_turn_restart": reGolden(specView, specHandoffResume),
 
+	"end_is_refused_while_a_typed_command_runs":                       reGolden(specTypedReceipt, specErrors, specReceipt),
 	"a_kill_interrupts_an_unfinished_command":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":       reGolden(specOverflowFolds, specBannerPrefix, specView),
 	"codex_http_truncated_and_empty_responses_are_retried":            reGolden(specView, specItems, specRetryable),
