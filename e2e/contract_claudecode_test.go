@@ -179,7 +179,7 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 
 func TestContractClaudeCodeFrames(t *testing.T) {
 	row := func(name, mode string, more ...action) scenario {
-		return scenario{name: name, openCalls: mode == "parallel_tools_crossing", driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
+		return scenario{name: name, driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
 	}
 	session := claudeSession{as: "a"}
 	runScenarios(t, []scenario{

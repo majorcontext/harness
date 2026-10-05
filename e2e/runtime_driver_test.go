@@ -191,6 +191,21 @@ func (d *runtimeDriver) Stderr() string {
 
 func (d *runtimeDriver) Workdir() string { return d.workDir }
 
+// endpoint is the base URL and client of the host.
+func (d *runtimeDriver) endpoint() (string, *http.Client) {
+	if d.serve {
+		return "http://" + d.proc.addr, d.client
+	}
+	return d.srv.URL, d.srv.Client()
+}
+
+// authorize adds the run token that serve requires.
+func (d *runtimeDriver) authorize(req *http.Request) {
+	if d.serve {
+		req.Header.Set("Authorization", "Bearer "+d.proc.token)
+	}
+}
+
 func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path string, body any, header http.Header) *http.Response {
 	t.Helper()
 	var rdr io.Reader
@@ -201,19 +216,12 @@ func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path str
 		}
 		rdr = bytes.NewReader(b)
 	}
-	base, client := "", d.client
-	if d.serve {
-		base = "http://" + d.proc.addr
-	} else {
-		base, client = d.srv.URL, d.srv.Client()
-	}
+	base, client := d.endpoint()
 	req, err := http.NewRequestWithContext(ctx, method, base+path, rdr)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
-	if d.serve {
-		req.Header.Set("Authorization", "Bearer "+d.proc.token)
-	}
+	d.authorize(req)
 	maps.Copy(req.Header, header)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -445,12 +453,14 @@ func (d *runtimeDriver) Models(t *testing.T) callResult {
 func (d *runtimeDriver) AwaitTurnEnd(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), waitBound)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.srv.URL+"/sessions/"+id+"/events?after=0", nil)
+	base, client := d.endpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/sessions/"+id+"/events?after=0", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := d.srv.Client().Do(req)
+	d.authorize(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

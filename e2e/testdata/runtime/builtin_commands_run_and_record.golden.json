@@ -75,7 +75,7 @@
       "body": {
         "command": "failed",
         "input_id": "in2",
-        "seq": 5
+        "seq": 6
       }
     },
     "command.a#3": {

@@ -618,10 +618,6 @@ func (a claudeBackendStates) run(t *testing.T, r *run) {
 	r.record(t, "backend_states", a.as, claudeDriverOf(t, r).backendStateKeys(t, r.id(t, a.as)))
 }
 
-func (d *httpDriver) backendStateKeys(*testing.T, string) callResult {
-	return notInEngine("a backend state blob")
-}
-
 func (d *runtimeDriver) backendStateKeys(t *testing.T, id string) callResult {
 	t.Helper()
 	keys := map[string]bool{}
@@ -643,11 +639,6 @@ type claudeCompactKeeping struct {
 
 func (a claudeCompactKeeping) run(t *testing.T, r *run) {
 	r.record(t, "compact_keeping", a.as, claudeDriverOf(t, r).compactKeeping(t, r.id(t, a.as), a.keep))
-}
-
-func (d *httpDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
-	t.Helper()
-	return d.call(t, http.MethodPost, "/session/"+id+"/compact", map[string]any{"keep_turns": keep})
 }
 
 func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
