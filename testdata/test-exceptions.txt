@@ -1,0 +1,1 @@
+migrate/migrate_test.go the journal converter is a pure codec with one row per journal shape, and no contract row reads an engine journal
