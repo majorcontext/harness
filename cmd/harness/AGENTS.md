@@ -13,4 +13,4 @@ Read the root AGENTS.md.
 - The provider-map key is the model-reference family. Pass it into native Responses clients.
 - Allow empty-token service only when `resolveUnauthenticated` proves loopback or gets the opt-in.
 - Use `runtime/metrics` for GC pauses, not `runtime.ReadMemStats`.
-- Test flag and environment precedence as tables. Use no live provider.
+- Pin flag and environment precedence with an `e2e/` contract row. Use no live provider. Add no test here unless `testdata/test-exceptions.txt` lists the file.

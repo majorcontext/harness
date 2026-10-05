@@ -12,5 +12,5 @@ Read the root AGENTS.md. `mcp/AGENTS.md` covers the client role.
 - Reject a cross-origin request with 403. Never relax this check.
 - Return `mcp.RPCError` for protocol failures: unknown method, unknown tool, bad params.
 - Return a successful `CallToolResult` with `IsError` for a handler failure.
-- Test through `Registry.ServeHTTP` with `httptest`.
+- Pin registry behavior with an `e2e/` contract row that reaches it through the harness. Test `Registry.ServeHTTP` directly only in a file that `testdata/test-exceptions.txt` lists.
 - Cover success, handler error, unknown tool, unknown method, and notifications.

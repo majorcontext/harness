@@ -10,4 +10,4 @@ Read the root AGENTS.md. Read `provider/AGENTS.md` before changing adapter limit
 - Use the text placeholder when decode or downscale is impossible.
 - Keep the decode-memory guards. Never rewrite the durable source blob.
 - The caller decides whether to recurse into tool results.
-- Test with small generated fixtures: copy-on-write, determinism, limits, placeholders.
+- Pin limits and placeholders with an `e2e/` contract row. Test copy-on-write and determinism only in a file that `testdata/test-exceptions.txt` lists.

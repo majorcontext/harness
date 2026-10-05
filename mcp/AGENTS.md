@@ -12,4 +12,4 @@ Read the root AGENTS.md. `engine/AGENTS.md` owns connection policy.
 - Add no OAuth, client capabilities, legacy HTTP+SSE, subscriptions, or prompts.
 - Preserve text, image, audio, resource-link, embedded-resource, and `isError` fields.
 - Never collapse structured content into text here.
-- Use `net.Pipe` for framing and `httptest` for HTTP. Make no remote call.
+- Pin framing and HTTP behavior with an `e2e/` contract row. Make no remote call. Test a transport directly only in a file that `testdata/test-exceptions.txt` lists.

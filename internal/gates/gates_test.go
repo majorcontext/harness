@@ -23,6 +23,12 @@ func comments(n int) string { return strings.Repeat("// x\n", n) }
 
 func code(n int) string { return strings.Repeat("var _ = 1\n", n) }
 
+func tests(n int) string { return "package a\n" + code(n) }
+
+func exceptions(lines ...string) *fstest.MapFile {
+	return file(strings.Join(lines, "\n") + "\n")
+}
+
 func rules(vs []Violation) []string {
 	var out []string
 	for _, v := range vs {
@@ -77,17 +83,17 @@ var checkCases = []struct {
 	},
 	{
 		name: "new_test_sleep_and_after_fail",
-		head: fstest.MapFS{"a/a_test.go": file("package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestX(t *testing.T) {\n\ttime.Sleep(1)\n\t<-time.After(1)\n}\n")},
-		want: []string{"a/a_test.go:sleep_after"},
+		head: fstest.MapFS{"e2e/a_test.go": file("package a\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestX(t *testing.T) {\n\ttime.Sleep(1)\n\t<-time.After(1)\n}\n")},
+		want: []string{"e2e/a_test.go:sleep_after"},
 	},
 	{
 		name: "aliased_time_import_sleep_fails",
-		head: fstest.MapFS{"a/a_test.go": file("package a\n\nimport clock \"time\"\n\nfunc TestX() { clock.Sleep(1) }\n")},
-		want: []string{"a/a_test.go:sleep_after"},
+		head: fstest.MapFS{"e2e/a_test.go": file("package a\n\nimport clock \"time\"\n\nfunc TestX() { clock.Sleep(1) }\n")},
+		want: []string{"e2e/a_test.go:sleep_after"},
 	},
 	{
 		name: "sleep_method_on_value_named_time_passes",
-		head: fstest.MapFS{"a/a_test.go": file("package a\n\ntype T struct{}\n\nfunc (T) Sleep(int) {}\n\nfunc TestX() {\n\ttime := T{}\n\ttime.Sleep(1)\n}\n")},
+		head: fstest.MapFS{"e2e/a_test.go": file("package a\n\ntype T struct{}\n\nfunc (T) Sleep(int) {}\n\nfunc TestX() {\n\ttime := T{}\n\ttime.Sleep(1)\n}\n")},
 	},
 	{
 		name: "sleep_outside_test_file_passes",
@@ -192,30 +198,30 @@ var checkCases = []struct {
 	},
 	{
 		name: "package_ratio_rise_over_limit_fails",
-		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
-		base: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(2))},
-		want: []string{"a:test_ratio"},
+		head: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(2))},
+		want: []string{"config:test_ratio"},
 	},
 	{
 		name: "package_ratio_rise_within_limit_passes",
-		head: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(4))},
-		base: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(2))},
+		head: fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(2))},
 	},
 	{
 		name: "package_ratio_over_limit_may_fall",
-		head: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(8))},
-		base: fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
+		head: fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(8))},
+		base: fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(11))},
 	},
 	{
 		name: "deleting_untested_dead_code_passes",
-		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
-		base: fstest.MapFS{"a/a.go": file("package a\n" + code(4)), "a/a_test.go": file("package a\n" + code(4))},
+		head: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"config/a.go": file("package a\n" + code(4)), "config/a_test.go": file("package a\n" + code(4))},
 	},
 	{
 		name: "deleting_code_while_adding_tests_over_limit_fails",
-		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
-		base: fstest.MapFS{"a/a.go": file("package a\n" + code(4)), "a/a_test.go": file("package a\n" + code(2))},
-		want: []string{"a:test_ratio"},
+		head: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(4))},
+		base: fstest.MapFS{"config/a.go": file("package a\n" + code(4)), "config/a_test.go": file("package a\n" + code(2))},
+		want: []string{"config:test_ratio"},
 	},
 	{
 		name: "deleting_code_from_a_commented_file_passes",
@@ -248,25 +254,157 @@ var checkCases = []struct {
 	},
 	{
 		name:    "moved_package_keeps_its_old_ratio",
-		head:    fstest.MapFS{"b/b.go": file("package b\n" + code(3)), "b/b_test.go": file("package b\n" + code(11))},
-		base:    fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
-		renames: map[string]string{"b/b.go": "a/a.go", "b/b_test.go": "a/a_test.go"},
+		head:    fstest.MapFS{"message/b.go": file("package b\n" + code(3)), "message/b_test.go": file("package b\n" + code(11))},
+		base:    fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(11))},
+		renames: map[string]string{"message/b.go": "config/a.go", "message/b_test.go": "config/a_test.go"},
 	},
 	{
 		name:    "moved_package_may_not_raise_its_old_ratio",
-		head:    fstest.MapFS{"b/b.go": file("package b\n" + code(3)), "b/b_test.go": file("package b\n" + code(12))},
-		base:    fstest.MapFS{"a/a.go": file("package a\n" + code(3)), "a/a_test.go": file("package a\n" + code(11))},
-		renames: map[string]string{"b/b.go": "a/a.go", "b/b_test.go": "a/a_test.go"},
-		want:    []string{"b:test_ratio"},
+		head:    fstest.MapFS{"message/b.go": file("package b\n" + code(3)), "message/b_test.go": file("package b\n" + code(12))},
+		base:    fstest.MapFS{"config/a.go": file("package a\n" + code(3)), "config/a_test.go": file("package a\n" + code(11))},
+		renames: map[string]string{"message/b.go": "config/a.go", "message/b_test.go": "config/a_test.go"},
+		want:    []string{"message:test_ratio"},
 	},
 	{
 		name: "new_package_at_ratio_limit_passes",
-		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(2))},
+		head: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(2))},
 	},
 	{
 		name: "new_package_over_ratio_limit_fails",
-		head: fstest.MapFS{"a/a.go": file("package a\nvar A = 1\n"), "a/a_test.go": file("package a\n" + code(4))},
-		want: []string{"a:test_ratio"},
+		head: fstest.MapFS{"config/a.go": file("package a\nvar A = 1\n"), "config/a_test.go": file("package a\n" + code(4))},
+		want: []string{"config:test_ratio"},
+	},
+	{
+		name: "new_test_outside_contract_locations_fails",
+		head: fstest.MapFS{"a/a_test.go": file(tests(3))},
+		want: []string{"a/a_test.go:contract_tests"},
+	},
+	{
+		name: "new_test_in_root_package_fails",
+		head: fstest.MapFS{"a_test.go": file(tests(3))},
+		want: []string{"a_test.go:contract_tests"},
+	},
+	{
+		name: "new_test_in_engine_fails",
+		head: fstest.MapFS{"engine/a_test.go": file(tests(3))},
+		want: []string{"engine/a_test.go:contract_tests"},
+	},
+	{
+		name: "new_test_in_sibling_of_allowed_directory_fails",
+		head: fstest.MapFS{"configx/a_test.go": file(tests(3)), "e2e2/a_test.go": file(tests(3))},
+		want: []string{"configx/a_test.go:contract_tests", "e2e2/a_test.go:contract_tests"},
+	},
+	{
+		name: "new_test_in_e2e_passes",
+		head: fstest.MapFS{"e2e/contract_x_test.go": file(tests(30))},
+	},
+	{
+		name: "new_test_in_pure_code_packages_passes",
+		head: fstest.MapFS{
+			"internal/eventlog/a_test.go":                file(tests(3)),
+			"provider/openai/a_test.go":                  file(tests(3)),
+			"provider/openai/deep/a_test.go":             file(tests(3)),
+			"internal/backend/modelapi/convert_test.go":  file(tests(3)),
+			"internal/backend/claudecode/frames_test.go": file(tests(3)),
+			"config/a_test.go":                           file(tests(3)),
+			"message/a_test.go":                          file(tests(3)),
+			"internal/gates/a_test.go":                   file(tests(3)),
+		},
+	},
+	{
+		name: "new_test_in_driving_code_fails",
+		head: fstest.MapFS{
+			"provider/a_test.go":                          file(tests(3)),
+			"internal/backend/a_test.go":                  file(tests(3)),
+			"internal/backend/router_test.go":             file(tests(3)),
+			"internal/backend/claudecode/workdir_test.go": file(tests(3)),
+			"internal/backend/modelapi/warm_test.go":      file(tests(3)),
+			"internal/backend/external/tools_test.go":     file(tests(3)),
+			"internal/session/actor_test.go":              file(tests(3)),
+		},
+		want: []string{
+			"provider/a_test.go:contract_tests",
+			"internal/backend/a_test.go:contract_tests",
+			"internal/backend/router_test.go:contract_tests",
+			"internal/backend/claudecode/workdir_test.go:contract_tests",
+			"internal/backend/modelapi/warm_test.go:contract_tests",
+			"internal/backend/external/tools_test.go:contract_tests",
+			"internal/session/actor_test.go:contract_tests",
+		},
+	},
+	{
+		name: "equal_lines_deleted_and_added_in_a_test_file_pass",
+		head: fstest.MapFS{"a/a_test.go": file("package a\nvar B = 2\nvar C = 3\n")},
+		base: fstest.MapFS{"a/a_test.go": file("package a\nvar A = 1\nvar D = 4\n")},
+	},
+	{
+		name: "added_test_lines_in_changed_file_fail",
+		head: fstest.MapFS{"a/a_test.go": file(tests(5))},
+		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
+		want: []string{"a/a_test.go:contract_tests"},
+	},
+	{
+		name: "same_test_lines_in_changed_file_pass",
+		head: fstest.MapFS{"a/a_test.go": file("package a\n// edit\n" + code(4))},
+		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
+	},
+	{
+		name: "deleted_test_lines_pass",
+		head: fstest.MapFS{"a/a_test.go": file(tests(3))},
+		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
+	},
+	{
+		name: "deleted_test_file_passes",
+		head: fstest.MapFS{},
+		base: fstest.MapFS{"a/a_test.go": file(tests(4))},
+	},
+	{
+		name:    "renamed_test_file_compares_with_its_old_path",
+		head:    fstest.MapFS{"b/b_test.go": file(tests(4))},
+		base:    fstest.MapFS{"a/a_test.go": file(tests(4))},
+		renames: map[string]string{"b/b_test.go": "a/a_test.go"},
+	},
+	{
+		name:    "renamed_test_file_may_not_grow",
+		head:    fstest.MapFS{"b/b_test.go": file(tests(5))},
+		base:    fstest.MapFS{"a/a_test.go": file(tests(4))},
+		renames: map[string]string{"b/b_test.go": "a/a_test.go"},
+		want:    []string{"b/b_test.go:contract_tests"},
+	},
+	{
+		name: "non_test_lines_are_not_test_lines",
+		head: fstest.MapFS{"a/a.go": file(tests(30))},
+	},
+	{
+		name: "listed_file_may_add_test_lines",
+		head: fstest.MapFS{
+			"a/a_test.go": file(tests(3)),
+			exceptionsFile: exceptions(
+				"# one path and one reason per line",
+				"a/a_test.go a race that no contract row can reproduce",
+			),
+		},
+	},
+	{
+		name: "listing_one_file_does_not_cover_another",
+		head: fstest.MapFS{
+			"a/a_test.go":  file(tests(3)),
+			"a/b_test.go":  file(tests(3)),
+			exceptionsFile: exceptions("a/a_test.go a race that no contract row can reproduce"),
+		},
+		want: []string{"a/b_test.go:contract_tests"},
+	},
+	{
+		name: "exception_without_a_reason_fails_and_covers_nothing",
+		head: fstest.MapFS{
+			"a/a_test.go":  file(tests(3)),
+			exceptionsFile: exceptions("a/a_test.go"),
+		},
+		want: []string{"a/a_test.go:contract_tests", exceptionsFile + ":test_exceptions"},
+	},
+	{
+		name: "empty_exceptions_file_passes",
+		head: fstest.MapFS{exceptionsFile: file("")},
 	},
 }
 
@@ -284,6 +422,11 @@ func TestCheck(t *testing.T) {
 			changed := map[string]bool{}
 			for p, f := range tc.head {
 				if b, ok := tc.base[p]; !ok || string(b.Data) != string(f.Data) {
+					changed[p] = true
+				}
+			}
+			for p := range tc.base {
+				if _, ok := tc.head[p]; !ok {
 					changed[p] = true
 				}
 			}
