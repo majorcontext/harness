@@ -68,7 +68,7 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 		}
 		for _, kid := range kids {
 			if _, ok := marked[kid]; !ok {
-				m := walkMark{quiet: !(end && top), ending: end}
+				m := walkMark{quiet: !end || !top, ending: end}
 				marked[kid] = m
 				t.hush(kid, m, 1)
 			}
