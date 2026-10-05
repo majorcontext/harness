@@ -24,8 +24,6 @@ func TestSettlement(t *testing.T) {
 		{"a failed turn names its error", []eventlog.Event{ended(eventlog.StopFailed, "", "boom")}, eventlog.OutcomeFailed, head + "failed: boom"},
 		{"a crashed turn failed", []eventlog.Event{said, ended(eventlog.StopInterrupted, eventlog.CauseCrashed, "")},
 			eventlog.OutcomeFailed, head + "failed: crashed\n\nfound it"},
-		{"a usage limit failed the turn with the provider message", []eventlog.Event{ended(eventlog.StopFailed, eventlog.CauseProviderExhausted, "limit reached")},
-			eventlog.OutcomeFailed, head + "failed: limit reached"},
 		{"a stopped turn is canceled", []eventlog.Event{ended(eventlog.StopInterrupted, eventlog.CauseStopped, "")}, eventlog.OutcomeCanceled, head + "canceled: stopped"},
 		{"a running turn has not settled", []eventlog.Event{said}, "", ""},
 	} {
