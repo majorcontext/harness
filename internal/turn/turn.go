@@ -103,10 +103,11 @@ type Delta struct {
 // Telemetry is what a backend measured during one model call.
 type Telemetry struct {
 	Usage eventlog.Usage
-	// Context is a context reading; the zero value is none.
+	// Context is a context reading; an empty Source is none.
 	Context eventlog.ContextMeasured
 	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
 	SubscriptionUsage *eventlog.SubscriptionUsage
+	CostUSD           *float64
 }
 
 // Sink receives the items of a running turn.
@@ -194,7 +195,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
-		lim.Idle = 0
+		lim.Idle, lim.Retries = 0, 0
 	}
 	continued := 0
 	var nudge []eventlog.Message

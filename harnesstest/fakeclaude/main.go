@@ -122,7 +122,7 @@ func main() {
 	}
 
 	init := system("init", obj{"session_id": f.sessionID})
-	if mode == "per_call_usage" {
+	if mode == "per_call_usage" || mode == "compact_after_window" {
 		init["model"] = "claude-opus-5-5[1m]"
 	}
 	initExtras(init)

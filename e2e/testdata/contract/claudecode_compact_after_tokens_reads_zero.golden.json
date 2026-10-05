@@ -56,52 +56,49 @@
             "text": "Done — it printed hi."
           }
         ]
+      },
+      {
+        "id": "msg#6",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "/compact"
+          }
+        ]
       }
     ]
   },
   "calls": {
-    "claude_inputs.a": {
+    "compact.a": {
       "status": 200,
-      "body": [
-        {
-          "content": "run it",
-          "role": "user",
-          "type": "user"
-        }
-      ]
-    },
-    "claude_invocations.a": {
-      "status": 200,
-      "body": [
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": null,
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        }
-      ]
+      "body": {
+        "claude_code_delegated": true,
+        "turns_folded": 0
+      }
     },
     "get_session.a": {
       "status": 200,
       "body": {
         "context": {
-          "tokens": 113,
-          "window": 0
+          "used_tokens": 113,
+          "window_tokens": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 11,
         "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#1"
+          "outcome": "completed"
         },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 5,
         "model": "claude-code/sonnet",
-        "origin": "",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
         "status": "idle",
         "subscription_usage": {
           "captured_at": "\u003ctime\u003e",
@@ -110,14 +107,55 @@
           "session_cost_usd": 0.0123,
           "windows": []
         },
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
         "usage": {
           "cache_read_tokens": 7,
           "cache_write_tokens": 5,
           "input_tokens": 101,
+          "last_input_tokens": 101,
+          "messages": 5,
           "output_tokens": 42
-        }
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 6,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0.0123,
+          "windows": []
+        },
+        "usage": {
+          "cache_read_tokens": 7,
+          "cache_write_tokens": 5,
+          "input_tokens": 101,
+          "messages": 6,
+          "output_tokens": 42
+        },
+        "workdir": "\u003cworkdir\u003e"
       }
     }
   }

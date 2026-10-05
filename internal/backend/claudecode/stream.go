@@ -138,7 +138,7 @@ func (r *run) finish(ctx context.Context, err error) error {
 	if r.resolution != nil && err == nil && r.mirror.Parked == r.resolution.callID {
 		r.mirror.Parked = ""
 	}
-	if r.taken && err != nil && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
+	if r.taken && err != nil && errors.Is(context.Cause(ctx), turn.ErrHandoff) {
 		r.mirror.Turn = r.turnID
 	}
 	if r.mirror.SessionID != "" {
@@ -433,9 +433,11 @@ func (r *run) settle(env envelope) error {
 }
 
 func (r *run) telemetry(env envelope) {
-	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits}
-	if w, tokens := env.ModelUsage[r.mainModel].ContextWindow, r.lastCall.prompt(); w > 0 || tokens > 0 {
-		t.Context = eventlog.ContextMeasured{Tokens: tokens, Window: w, Source: stateKey}
+	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &env.TotalCostUSD}
+	last := r.lastCall
+	if last == nil {
+		last = env.Usage
 	}
+	t.Context = eventlog.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
 	r.out.Telemetry(t)
 }

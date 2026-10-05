@@ -22,6 +22,7 @@ type envelope struct {
 	Result          string                `json:"result,omitempty"`
 	LocalCommand    string                `json:"local_command,omitempty"`
 	Usage           *usage                `json:"usage,omitempty"`
+	TotalCostUSD    float64               `json:"total_cost_usd,omitempty"`
 	ParentToolUseID string                `json:"parent_tool_use_id,omitempty"`
 	CompactMetadata *compactMetadata      `json:"compact_metadata,omitempty"`
 	Model           string                `json:"model,omitempty"`

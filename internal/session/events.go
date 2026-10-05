@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
@@ -35,7 +36,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 		v.Queued = append(v.Queued, in.InputID)
 	}
 	c := s.Context()
-	if c.Tokens == 0 {
+	if c.Tokens == 0 && c.Source == "" {
 		c = eventlog.ContextMeasured{}
 	}
 	v.Context = protocol.Context{Tokens: c.Tokens, Window: contextWindow(window, c)}
@@ -45,6 +46,9 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)
+		if v.SubscriptionUsage.CapturedAt == 0 {
+			v.SubscriptionUsage.CapturedAt = time.Now().Unix()
+		}
 	}
 	if g, ok := s.Goal(); ok {
 		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
@@ -54,7 +58,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 }
 
 func subscriptionView(u *eventlog.SubscriptionUsage) *protocol.SubscriptionUsage {
-	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt,
+	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt, SessionCostUSD: u.SessionCostUSD,
 		Windows: make([]protocol.SubscriptionUsageWindow, len(u.Windows))}
 	for i, w := range u.Windows {
 		v.Windows[i] = protocol.SubscriptionUsageWindow(w)

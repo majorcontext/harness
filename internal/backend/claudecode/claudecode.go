@@ -28,7 +28,7 @@ import (
 const stateKey = "claude-code"
 
 // continuation is the prompt of a run that continues a turn whose input the
-// CLI already took: a resume after a handoff, or a retry.
+// CLI already took: a resume after a handoff.
 const continuation = "The previous turn was interrupted. " +
 	"Continue the unfinished work from the saved conversation. " +
 	"Check the current state before repeating actions that may already have completed."

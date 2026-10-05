@@ -166,7 +166,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
 			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog)...)
 			st, echo := harness.NewMemStore(), newProbe("echo", false)
-			r := retryingRuntime(t, st, nil, false, 0, nil, echo, newProbe("hidden", false))
+			r := claudeRuntimeWith(t, st, nil, false, nil, echo, newProbe("hidden", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
 			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
@@ -193,7 +193,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	mcpLog := filepath.Join(t.TempDir(), "mcp")
 	argvLog := fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
 	st, block := harness.NewMemStore(), newProbe("block", true)
-	r := retryingRuntime(t, st, nil, false, 0, nil, block)
+	r := claudeRuntimeWith(t, st, nil, false, nil, block)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	if _, err := s.Submit(bg, text("a", "hi")); err != nil {

@@ -35,33 +35,33 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 11,
-          "window": 0
+          "used_tokens": 0,
+          "window_tokens": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
         "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
         "last_turn": {
-          "error": "claudecode: the turn failed (error_during_execution): fake failure",
-          "stop_reason": "failed",
-          "turn_id": "turn#1"
+          "error": "[retryable:server_error] engine: claude-code: \u003cfakeclaude\u003e exited with error: exit status 1",
+          "outcome": "error"
         },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 1,
         "model": "claude-code/sonnet",
-        "origin": "",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
         "status": "idle",
-        "subscription_usage": {
-          "captured_at": "\u003ctime\u003e",
-          "plan": "",
-          "provider": "claude",
-          "session_cost_usd": 0,
-          "windows": []
-        },
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
+        "subscription_usage": null,
         "usage": {
-          "input_tokens": 11,
-          "output_tokens": 3
-        }
+          "input_tokens": 0,
+          "messages": 1,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
       }
     }
   }
