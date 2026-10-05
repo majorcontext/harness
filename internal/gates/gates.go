@@ -23,7 +23,26 @@ const (
 	maxFuncLines  = 80
 	rootAgentsMax = 80
 	agentsMax     = 25
+
+	exceptionsFile = "testdata/test-exceptions.txt"
 )
+
+// testGrowthDirs holds the directories whose tests may grow: the contract
+// suite, the gate itself, and the packages of pure code.
+var testGrowthDirs = []string{
+	"e2e",
+	"internal/eventlog",
+	"config",
+	"message",
+	"internal/gates",
+}
+
+// testGrowthFiles holds the test files of the wire mapping that may grow. A
+// directory prefix cannot name them: the packages around them drive processes.
+var testGrowthFiles = map[string]bool{
+	"internal/backend/modelapi/convert_test.go":  true,
+	"internal/backend/claudecode/frames_test.go": true,
+}
 
 // FileMetrics holds the measured line counts and rule hits of one Go file.
 type FileMetrics struct {
@@ -41,11 +60,16 @@ type PackageMetrics struct {
 	CodeLines int
 }
 
-// Report is the full measurement of a tree: files, packages, and AGENTS.md sizes.
+// Report is the full measurement of a tree: files, packages, AGENTS.md sizes,
+// and the test exceptions file.
 type Report struct {
 	Files    map[string]FileMetrics
 	Packages map[string]PackageMetrics
 	Agents   map[string]int
+	// Exceptions maps each path listed in the exceptions file to its reason.
+	Exceptions map[string]string
+	// BadExceptions holds the lines of the exceptions file that name no reason.
+	BadExceptions []string
 }
 
 // Violation names one rule broken by one path.
@@ -64,6 +88,7 @@ func Collect(fsys fs.FS) (Report, error) {
 		Packages: map[string]PackageMetrics{},
 		Agents:   map[string]int{},
 	}
+	r.Exceptions, r.BadExceptions = loadExceptions(fsys)
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -108,6 +133,28 @@ func Collect(fsys fs.FS) (Report, error) {
 		return nil
 	})
 	return r, err
+}
+
+func loadExceptions(fsys fs.FS) (map[string]string, []string) {
+	listed := map[string]string{}
+	var bad []string
+	data, err := fs.ReadFile(fsys, exceptionsFile)
+	if err != nil {
+		return listed, nil
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, reason, _ := strings.Cut(line, " ")
+		if reason = strings.TrimSpace(reason); reason == "" {
+			bad = append(bad, line)
+			continue
+		}
+		listed[name] = reason
+	}
+	return listed, bad
 }
 
 func generated(name string, src []byte) bool {
@@ -283,8 +330,27 @@ func oldPackage(dir string, head Report, renames map[string]string) string {
 	return best
 }
 
+func testMayGrow(p string) bool {
+	if testGrowthFiles[p] {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(p, "provider/"); ok && strings.Contains(rest, "/") {
+		return true
+	}
+	for _, d := range testGrowthDirs {
+		if strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // Check returns the violations of head against base. Only files in changed
-// are checked. A file absent from base is new and meets the absolute limits,
+// are checked. A changed _test.go file may not add test lines unless
+// testMayGrow names it or the exceptions file lists it with a reason. The
+// count is net per file: a change that deletes and adds the same number of
+// test lines passes, as it does in the other merge-base rules.
+// A file absent from base is new and meets the absolute limits,
 // unless renames maps it to a base path. A package absent from base compares
 // with the base package that its files came from.
 func Check(head, base Report, changed map[string]bool, renames map[string]string) []Violation {
@@ -303,6 +369,20 @@ func Check(head, base Report, changed map[string]bool, renames map[string]string
 			v.Path = p
 			vs = append(vs, v)
 		}
+	}
+	for p, m := range head.Files {
+		if !changed[p] || !strings.HasSuffix(p, "_test.go") || m.CodeLines <= base.Files[baseOf(p)].CodeLines {
+			continue
+		}
+		if _, ok := head.Exceptions[p]; !ok && !testMayGrow(p) {
+			vs = append(vs, Violation{p, "contract_tests", fmt.Sprintf("%d test lines added outside the contract suite and pure code; write a contract row in e2e/ or list the file with a reason in %s", m.CodeLines-base.Files[baseOf(p)].CodeLines, exceptionsFile)})
+		}
+	}
+	for _, line := range head.BadExceptions {
+		if !changed[exceptionsFile] {
+			break
+		}
+		vs = append(vs, Violation{exceptionsFile, "test_exceptions", fmt.Sprintf("%q names no reason", line)})
 	}
 	for p, n := range head.Agents {
 		limit := agentsMax

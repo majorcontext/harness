@@ -891,7 +891,7 @@ Today ~70% of 127k test lines read unexported state and will not survive the res
 
 ### Unit tests
 
-Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`. A bug fix adds a table row, not a file. No test reads unexported state across packages.
+Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and the `internal/backend` wire mapping files), `config`, `message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
 
 ### CI gates
 
@@ -902,6 +902,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders, `config`, `message`.
 | File size | Fail above 800 lines |
 | Function size | Fail when the closing brace is more than 80 lines below the opening brace |
 | Test lines vs code lines per package | Fail above 1.5 test lines per code line, unless the ratio does not rise over the merge base. A new package has no base, but a moved package compares with the package it came from. A change that removes code and adds no test lines always passes |
+| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines outside `e2e/`, `internal/eventlog`, `provider/*/`, `config`, `message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
 | `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
 | `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
 | Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |

@@ -7,7 +7,7 @@ Read the root AGENTS.md. Behavior detail lives in `docs/`.
 - Keep the tool array byte-stable: built-ins by name, then MCP, then plugin.
 - Return exactly one result per tool call, including on cancellation. Keep file-key order.
 - Retry only typed retryable errors. Never retry cancellation or interrupted tool intent.
-- Emit one `TurnMetrics` per completed provider call. Inject `Config.Now` in tests.
+- Emit one `TurnMetrics` per completed provider call. Inject `Config.Now`.
 - Treat `StopMaxTokens` as incomplete. Continue within one `MaxTokensContinuations` budget.
 - Keep the goal evaluator tool-less at `message.EffortOff`. Persist goal transitions.
 - Treat the sidecar index and snapshots as caches. Refold or replay on doubt.

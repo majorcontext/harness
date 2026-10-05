@@ -20,4 +20,4 @@ Read the root AGENTS.md. Read `engine/AGENTS.md` for session state machines.
 - Never import `net/http/pprof`; `cmd/harness/pprof_defaultmux_test.go` guards the default mux. Keep pprof off by default and authenticated.
 - Log the mux route pattern, never the raw path. Bound `X-Request-Id`.
 - No ACP adapter exists. Do not describe one as implemented.
-- Keep lock-order tests for each new lock edge.
+- No contract row sees lock order. Add a lock-order test only in a file that `testdata/test-exceptions.txt` lists.

@@ -12,4 +12,4 @@ Read the root AGENTS.md. `engine/AGENTS.md` covers prompt integration.
 - Sort discovered skills by name. Reject duplicate names across directories.
 - A malformed `SKILL.md` fails discovery loudly.
 - In `engine.Config`, an empty directory list disables discovery. A nil list keeps the default.
-- Keep parser tables and fuzz coverage. Test stage-one reads apart from body reads.
+- Pin parser behavior with an `e2e/` contract row. Add no test here unless `testdata/test-exceptions.txt` lists the file.

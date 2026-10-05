@@ -13,4 +13,4 @@ Read the root AGENTS.md. `engine/AGENTS.md` owns context-window policy.
 - `SupportsToolSearch` uses an explicit first-party Anthropic allowlist.
 - Return false for other families and Bedrock-style Anthropic refs.
 - Keep Bifrost namespace stripping aligned with context-window lookup.
-- Test known refs, variants, near misses, unknown families, and tool-search refusals.
+- Pin refs, variants, near misses, unknown families, and tool-search refusals with an `e2e/` contract row. Add no test here unless `testdata/test-exceptions.txt` lists the file.
