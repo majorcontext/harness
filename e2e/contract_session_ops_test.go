@@ -218,7 +218,7 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				command{as: "a", text: "/cost"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
-				bootstrap{as: "a"},
+				commandRecords{as: "a"},
 			},
 		},
 	})

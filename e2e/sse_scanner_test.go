@@ -2,58 +2,9 @@ package e2e
 
 import (
 	"bytes"
-	"context"
 	"io"
-	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 )
-
-// scanEvents opens GET /event?from=0 and passes each frame to visit until it
-// returns true. It returns nil on that, or the stream error that ended the read
-// first, such as ctx expiring.
-func (p *serveProc) scanEvents(ctx context.Context, visit func(raw []byte) bool) error {
-	p.t.Helper()
-	return p.scanEventsFrom(ctx, 0, false, "", func(_ string, raw []byte) bool { return visit(raw) })
-}
-
-// scanEventsFrom is scanEvents with a resume cursor. header sends it as
-// Last-Event-ID instead of the from query. session asks the server to filter.
-// visit also gets the id field of the frame.
-func (p *serveProc) scanEventsFrom(ctx context.Context, from int64, header bool, session string, visit func(id string, raw []byte) bool) error {
-	p.t.Helper()
-	q := url.Values{}
-	if !header {
-		q.Set("from", strconv.FormatInt(from, 10))
-	}
-	if session != "" {
-		q.Set("session", session)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+p.addr+"/event?"+q.Encode(), nil)
-	if err != nil {
-		p.t.Fatalf("event request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+p.token)
-	if header {
-		req.Header.Set("Last-Event-ID", strconv.FormatInt(from, 10))
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		p.t.Fatalf("GET /event: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			return err
-		}
-		if visit(sc.id, raw) {
-			return nil
-		}
-	}
-}
 
 // sseScanner extracts the data payload of each SSE frame from a reader.
 type sseScanner struct {

@@ -15,7 +15,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var updateGoldens = flag.Bool("update", false, "rewrite e2e/testdata/contract goldens")
+var updateGoldens = flag.Bool("update", false, "rewrite the e2e/testdata/runtime goldens from the serve host")
 
 type scenario struct {
 	name       string
@@ -23,11 +23,9 @@ type scenario struct {
 	chat       bool // the model is a chat-completions gateway, and config names it as provider "bifrost"
 	config     map[string]any
 	setup      func(t *testing.T, fx map[string]any) map[string]any // fills fx for actions; the result is added to config
-	// openCalls marks a row where serve leaves a tool call without a result and the runtime closes it. Only the runtime host checks the pairing.
-	openCalls bool
-	model     []harnesstest.Step
-	actions   []action
-	driver    func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
+	model      []harnesstest.Step
+	actions    []action
+	driver     func(t *testing.T, h host, modelURL string) driver // nil runs the default driver of the host
 }
 
 type action interface{ run(t *testing.T, r *run) }
@@ -281,6 +279,13 @@ type bindChild struct {
 	record, staysActive bool
 }
 
+// awaitSettled waits until the log of the parent records that the child as settled.
+type awaitSettled struct{ as, parent string }
+
+func (a awaitSettled) run(t *testing.T, r *run) {
+	r.drv.AwaitChildSettled(t, r.id(t, a.parent), r.id(t, a.as))
+}
+
 func (a compact) run(t *testing.T, r *run) {
 	r.record(t, "compact", a.as, r.drv.Compact(t, r.id(t, a.as)))
 }
@@ -450,11 +455,7 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 	for _, alias := range r.aliases {
 		msgs := r.drv.Messages(t, r.ids[alias])
 		sessions[alias] = msgs
-		violations := messageViolations(msgs)
-		if sc.openCalls && !h.runtime {
-			violations = messageIDViolations(msgs)
-		}
-		for _, v := range violations {
+		for _, v := range messageViolations(msgs) {
 			t.Errorf("session %s: %s", alias, v)
 		}
 	}
@@ -473,22 +474,9 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 func runScenarios(t *testing.T, table []scenario) {
 	t.Helper()
 	skipShort(t)
-	for _, sc := range table {
-		t.Run(sc.name, func(t *testing.T) {
-			parallelUnlessUpdating(t)
-			compareGolden(t, sc.name, runScenario(t, sc, serveHost))
-		})
-	}
-	onRuntime(t, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
-		func(t *testing.T, sc scenario) observation { return runScenario(t, sc, runtimeHost) })
-}
-
-// parallelUnlessUpdating keeps a serve row synchronous under -update, so the
-// runtime same rows read the goldens after it rewrites them.
-func parallelUnlessUpdating(t *testing.T) {
-	t.Helper()
-	if !*updateGoldens {
-		t.Parallel()
+	for _, h := range []host{serveHost, runtimeHost} {
+		onHost(t, h, table, func(sc scenario) (string, bool) { return sc.name, sc.driver != nil },
+			func(t *testing.T, sc scenario) observation { return runScenario(t, sc, h) })
 	}
 }
 
@@ -499,11 +487,6 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatalf("marshal: %v", err)
 	}
 	return append(b, '\n')
-}
-
-func compareGolden(t *testing.T, name string, obs observation) {
-	t.Helper()
-	compareGoldenAt(t, filepath.Join("testdata", "contract", name+".golden.json"), obs, *updateGoldens)
 }
 
 func compareGoldenAt(t *testing.T, path string, obs observation, update bool) {

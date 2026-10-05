@@ -14,7 +14,7 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 )
 
-var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_`)
+var idPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item|input)_`)
 
 var timePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})`)
 
@@ -22,14 +22,15 @@ var sessionIDPattern = regexp.MustCompile(`ses_[0-9a-z]+`)
 
 var enginePattern = regexp.MustCompile(`engine: harness \S+`)
 
-// runtimeOwner is the owner name that an in-process runtime records.
-var runtimeOwner = func() string {
+// ownerPattern matches the owner name that a runtime records: the host name
+// and the pid of its process.
+var ownerPattern = func() *regexp.Regexp {
 	host, _ := os.Hostname()
-	return fmt.Sprintf("%s/%d", host, os.Getpid())
+	return regexp.MustCompile(regexp.QuoteMeta(host) + `/\d+`)
 }()
 
 func maskUnstable(s string) string {
-	s = strings.ReplaceAll(s, runtimeOwner, "<owner>")
+	s = ownerPattern.ReplaceAllString(s, "<owner>")
 	s = timePattern.ReplaceAllString(s, "<time>")
 	s = sessionIDPattern.ReplaceAllString(s, "<session>")
 	return enginePattern.ReplaceAllString(s, "engine: harness <version>")
@@ -184,7 +185,7 @@ type normCall struct {
 	Messages []normMessage `json:"messages,omitempty"`
 }
 
-var fullIDPattern = regexp.MustCompile(`^(msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_[0-9A-Za-z_]+$`)
+var fullIDPattern = regexp.MustCompile(`^((msg|toolu|ses|call|cmd|cmpsum|wt|turn|item)_[0-9A-Za-z_]+|input_[0-9a-z]{26})$`)
 
 // value normalizes decoded JSON. Object keys are visited in sorted order so
 // the first-seen id numbering does not depend on map order. A session id that
@@ -648,4 +649,81 @@ func TestGroupByConversation(t *testing.T) {
 			t.Errorf("groupByConversation(%s) = %s, want %s", label(in), got, want)
 		}
 	}
+}
+
+// apiMessage and apiEvent are the messages and the events of the engine wire,
+// which the normalizer tests decode.
+type apiMessage struct {
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	CreatedAt string `json:"created_at"`
+	Parts     []struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		CallID    string          `json:"call_id"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+		IsError   bool            `json:"is_error"`
+		Content   []apiContent    `json:"content"`
+	} `json:"parts"`
+}
+
+type apiEvent struct {
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Seq       int64  `json:"seq"`
+	Message   *struct {
+		ID string `json:"id"`
+	} `json:"message"`
+	GoalCondition string `json:"goal_condition"`
+	GoalReason    string `json:"goal_reason"`
+	GoalMet       bool   `json:"goal_met"`
+	GoalTurn      int    `json:"goal_turn"`
+	// Compaction fields (docs/design/context-compaction.md §4); see
+	// compaction_test.go.
+	CompactFirstID     string `json:"compact_first_id"`
+	CompactLastID      string `json:"compact_last_id"`
+	CompactTurnsFolded int    `json:"compact_turns_folded"`
+	CompactSummaryID   string `json:"compact_summary_id"`
+}
+
+// apiContent is one item of a tool result: text, or a blob with its bytes.
+type apiContent struct {
+	Type, Text, Data string
+	MediaType        string `json:"media_type"`
+}
+
+func transcriptOf(msgs []apiMessage) []transcriptMessage {
+	out := make([]transcriptMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = transcriptMessage{ID: m.ID, Role: m.Role}
+		for _, p := range m.Parts {
+			tp := transcriptPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, IsError: p.IsError}
+			if len(p.Arguments) > 0 {
+				_ = json.Unmarshal(p.Arguments, &tp.Arguments)
+			}
+			var content []string
+			for _, c := range p.Content {
+				if c.Type == "blob" {
+					content = append(content, "[blob "+c.MediaType+" "+c.Data+"]")
+					continue
+				}
+				content = append(content, c.Text)
+			}
+			tp.Content = strings.Join(content, "\n")
+			out[i].Parts = append(out[i].Parts, tp)
+		}
+	}
+	return out
+}
+
+func journalOf(events []apiEvent) []journalEntry {
+	out := make([]journalEntry, len(events))
+	for i, ev := range events {
+		out[i] = journalEntry{Seq: ev.Seq}
+		if ev.Type == "message" && ev.Message != nil {
+			out[i].IsMessage, out[i].MessageID = true, ev.Message.ID
+		}
+	}
+	return out
 }

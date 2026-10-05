@@ -228,12 +228,12 @@ func TestServeProcessesDieWithTheirTest(t *testing.T) {
 	var pids []int
 	t.Run("body", func(t *testing.T) {
 		fake := harnesstest.New(t)
-		d := newHTTPDriver(t, fake.URL())
-		pids = append(pids, d.p.cmd.Process.Pid)
+		d := newServeDriverIn(t, writeGoalConfig(t, fake.URL()), nil, t.TempDir())
+		pids = append(pids, d.proc.cmd.Process.Pid)
 		d.Restart(t, true)
-		pids = append(pids, d.p.cmd.Process.Pid)
+		pids = append(pids, d.proc.cmd.Process.Pid)
 		d.Restart(t, false)
-		pids = append(pids, d.p.cmd.Process.Pid)
+		pids = append(pids, d.proc.cmd.Process.Pid)
 	})
 	if len(pids) != 3 {
 		t.Fatalf("recorded %d serve pids, want 3", len(pids))

@@ -105,6 +105,7 @@ const (
 	specCmdFailed      = "`failed` (the error text of a sentinel error"
 	specCmdResult      = "Its result is the `protocol.Compacted` of `Compact`."
 	specCmdInterrupt   = "`Open` records `interrupted` for each command that an earlier owner accepted and never finished"
+	specCmdSwitch      = "Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape."
 	specCmdUnsupport   = "A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`"
 	specCmdMenuRoutes  = "A control command names its operation and `available_during_task`; the handler adds the route of the same operation, where one exists."
 	specGoalOwnTurn    = "So the turn that calls `set` is not judged; the condition runs as a turn of its own after it"
@@ -214,7 +215,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_two_tool_calls_one_turn":                                     reGolden(specItems, specOneResult),
 	"bootstrap_cold_then_resident_windows":                                pendingOn("phase 4"),
 	"bootstrap_cold_window_after_kill":                                    pendingOn("phase 4"),
-	"builtin_commands_run_and_record":                                     pendingOn("phase 4"),
+	"builtin_commands_run_and_record": reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
 	"busy_deferred_goal_with_max_turns":                                   deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                               reGolden(specView, specCrash, specChildReport),
 	"child_crash_reaches_a_busy_parent":                                   reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording),

@@ -435,7 +435,7 @@
           "window": 1000000
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 13,
+        "head_seq": 15,
         "id": "ses:a",
         "last_turn": {
           "cause": "crashed",
@@ -444,6 +444,9 @@
         },
         "model": "anthropic/claude-fable-5",
         "origin": "",
+        "queued": [
+          "input#1"
+        ],
         "status": "running",
         "subscription_usage": null,
         "synced_seq": 0,

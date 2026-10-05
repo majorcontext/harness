@@ -198,6 +198,7 @@ func TestContractChildCrashReport(t *testing.T) {
 				enqueueNext{as: "a", text: "next"},
 				bindChild{as: "kid", parent: "a", record: true},
 				restart{kill: true},
+				awaitSettled{as: "kid", parent: "a"},
 				getSession{as: "a"},
 				getSession{as: "kid"},
 				release{step: "next"},

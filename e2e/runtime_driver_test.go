@@ -23,17 +23,26 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// runtimeDriver drives harness.Runtime in process over Runtime.Handler, on
-// a DiskStore, with the config that serve would read.
+// runtimeDriver drives harness.Runtime over its HTTP routes, on a DiskStore:
+// in process, over Runtime.Handler with the config that serve would read, or
+// through the serve binary.
 type runtimeDriver struct {
 	store, workDir string
 	ask            bool
 	cfg            config.Config
 	rt             *harness.Runtime
 	srv            *httptest.Server
-	inputs         int
-	lastInput      map[string]string
-	lastTyped      map[string]string
+	// serve is true when the driver runs the serve binary, as proc, which it
+	// restarts on the same store.
+	serve      bool
+	proc       *serveProc
+	configPath string
+	env        map[string]string
+	args       []string
+	client     *http.Client
+	inputs     int
+	lastInput  map[string]string
+	lastTyped  map[string]string
 }
 
 // runtimeVersion is the build version that serve reports in its engine banner.
@@ -42,11 +51,6 @@ const runtimeVersion = "0.1.0-dev"
 // runtimeKey gives the in-process runtime the model key that startServeIn
 // gives serve.
 var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
-
-func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver {
-	t.Helper()
-	return newRuntimeDriverIn(t, configPath, ask, resolved(t.TempDir()))
-}
 
 // newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
 // A .harness.json in workDir joins the config as the project layer, as an
@@ -69,8 +73,29 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	return d
 }
 
+// newServeDriverIn runs the serve binary in workDir, on the config at
+// configPath, with env added to its environment and args after its flags.
+func newServeDriverIn(t *testing.T, configPath string, env map[string]string, workDir string, args ...string) *runtimeDriver {
+	t.Helper()
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, serve: true, configPath: configPath, env: env, args: args, client: &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	d.start(t)
+	return d
+}
+
+func (d *runtimeDriver) startProc(t *testing.T) {
+	t.Helper()
+	env := map[string]string{"HARNESS_SESSION_DIR": d.store, "HARNESS_CONFIG": d.configPath, "ANTHROPIC_API_KEY": "e2e-dummy-key"}
+	maps.Copy(env, d.env)
+	d.proc = startServeProc(t, freeAddr, d.workDir, env, d.args...)
+}
+
 func (d *runtimeDriver) start(t *testing.T) {
 	t.Helper()
+	if d.serve {
+		d.startProc(t)
+		return
+	}
 	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
@@ -109,6 +134,9 @@ func (d *runtimeDriver) openAll(t *testing.T) {
 // stop closes the runtime first, which ends its event streams, then the server.
 func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 	t.Helper()
+	if d.serve {
+		return
+	}
 	if d.rt == nil {
 		return
 	}
@@ -129,6 +157,15 @@ func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 // with SIGKILL of serve.
 func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 	t.Helper()
+	if d.serve {
+		if kill {
+			d.proc.kill()
+		} else {
+			d.proc.terminate(t)
+		}
+		d.startProc(t)
+		return
+	}
 	if !kill {
 		d.stop(t, context.Background())
 		d.start(t)
@@ -145,7 +182,12 @@ func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 	d.start(t)
 }
 
-func (d *runtimeDriver) Stderr() string { return "(the runtime runs in the test process)" }
+func (d *runtimeDriver) Stderr() string {
+	if d.serve {
+		return d.proc.stderr.String()
+	}
+	return "(the runtime runs in the test process)"
+}
 
 func (d *runtimeDriver) Workdir() string { return d.workDir }
 
@@ -159,14 +201,23 @@ func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path str
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, d.srv.URL+path, rdr)
+	base, client := "", d.client
+	if d.serve {
+		base = "http://" + d.proc.addr
+	} else {
+		base, client = d.srv.URL, d.srv.Client()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, rdr)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+	if d.serve {
+		req.Header.Set("Authorization", "Bearer "+d.proc.token)
+	}
 	maps.Copy(req.Header, header)
-	resp, err := d.srv.Client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("%s %s: %v\nstderr:\n%s", method, path, err, d.Stderr())
 	}
 	return resp
 }
@@ -684,14 +735,14 @@ func (d *runtimeDriver) WaitIdle(t *testing.T, id string) {
 		})
 	}
 	if v.ParentID != "" {
-		d.awaitChildSettled(t, v.ParentID, id)
+		d.AwaitChildSettled(t, v.ParentID, id)
 		d.WaitIdle(t, v.ParentID)
 	}
 }
 
-// awaitChildSettled waits until the newest child.spawned of child in the
+// AwaitChildSettled waits until the newest child.spawned of child in the
 // log of parent has a child.settled after it.
-func (d *runtimeDriver) awaitChildSettled(t *testing.T, parent, child string) {
+func (d *runtimeDriver) AwaitChildSettled(t *testing.T, parent, child string) {
 	t.Helper()
 	settledLast := func(ev protocol.Event) (mine, done bool) {
 		if ev.Kind != "child.spawned" && ev.Kind != "child.settled" {
