@@ -232,6 +232,7 @@ var runtimeRows = map[string]runtimeRow{
 	"messages_page_after_compaction":                              pendingOn("phase 4"),
 	"messages_page_windows":                                       pendingOn("phase 4"),
 	"model_tool_false_removes_the_model_tool":                     sameAsServe(),
+	"model_tool_lists_the_registry_and_sets_native":               sameAsServe(),
 	"model_tool_reports_lists_and_switches_the_model":             sameAsServe(),
 	"one_tool_round_trip":                                         sameAsServe(),
 	"openai_key_http_sse_text_turn":                               reGolden(specItems),
