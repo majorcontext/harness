@@ -174,7 +174,7 @@ func tail(b []byte, n int) []byte {
 
 // suiteBreaks are the differences that every row shows on the runtime. Each
 // waits for its port. A same row compares with its serve golden less these.
-var suiteBreaks = []func(*normRequest){dropTool("model"), dropTool("session_info")}
+var suiteBreaks = []func(*normRequest){dropTool("model")}
 
 func dropTool(name string) func(*normRequest) {
 	return func(r *normRequest) {

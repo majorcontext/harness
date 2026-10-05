@@ -149,3 +149,43 @@ func TestContractFileToolsEdges(t *testing.T) {
 		},
 	})
 }
+
+// promptChain is toolChain for the session whose first message is prompt.
+func promptChain(prompt string, calls ...harnesstest.ToolCall) []harnesstest.Step {
+	steps := toolChain(calls...)
+	first := func(r harnesstest.Request) bool {
+		return len(r.Messages) > 0 && len(r.Messages[0].Parts) > 0 && r.Messages[0].Parts[0].Text == prompt
+	}
+	for i := range steps {
+		match := steps[i].Match
+		steps[i].Name = prompt + " " + steps[i].Name
+		steps[i].Match = func(r harnesstest.Request) bool { return first(r) && match(r) }
+	}
+	return steps
+}
+
+func TestContractSessionInfo(t *testing.T) {
+	runScenarios(t, []scenario{
+		{
+			name:    "session_info_reports_the_session",
+			model:   toolChain(ftTool("session_info", map[string]any{})),
+			actions: oneTurn,
+		},
+		{
+			name: "session_info_reports_what_the_session_loaded",
+			model: append(promptChain("first",
+				ftWrite("AGENTS.md", "project rule\n"),
+				ftWrite(".agents/skills/alpha/SKILL.md", skillFile("alpha", "the alpha skill", "alpha body")),
+				ftTool("session_info", map[string]any{})),
+				promptChain("second", ftTool("session_info", map[string]any{}))...),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				waitIdle{as: "a"},
+				create{as: "b"},
+				submit{as: "b", text: "second"},
+				waitIdle{as: "b"},
+			},
+		},
+	})
+}

@@ -28,31 +28,53 @@ const skillsHeader = "Available skills. Each skill below is a capability you can
 	"MUST first read its SKILL.md file with the read_file tool before relying " +
 	"on it; do not assume its contents from the description alone."
 
+// Skill is a skill that the prompt lists, with the path of its SKILL.md.
+type Skill struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// Info is the system prompt of a session and what it holds.
+type Info struct {
+	// Segments are the prompt segments, in order.
+	Segments []string
+	// Instructions names each instructions file in the prompt, in order.
+	Instructions []string
+	// Skills are the skills in the prompt, sorted by name.
+	Skills []Skill
+}
+
 // Build returns the system prompt segments of a session in workDir: the base
 // prompt, append_system_prompt, the AGENTS.md chain, and the skill list. With
 // no workDir it reads no file and returns only append_system_prompt. A file
 // that cannot be used is skipped.
-func Build(cfg config.Config, workDir string) []string {
+func Build(cfg config.Config, workDir string) []string { return Describe(cfg, workDir).Segments }
+
+// Describe returns what Build returns, with the instructions files and the
+// skills that it read.
+func Describe(cfg config.Config, workDir string) Info {
 	if workDir == "" {
-		return slices.Clone(cfg.AppendSystemPrompt)
+		return Info{Segments: slices.Clone(cfg.AppendSystemPrompt)}
 	}
 	if abs, err := filepath.Abs(workDir); err == nil {
 		workDir = abs
 	}
 	segs := append([]string{Base(workDir)}, cfg.AppendSystemPrompt...)
-	for _, s := range []string{instructions(cfg, workDir), skills(cfg, workDir)} {
+	instr, names := instructions(cfg, workDir)
+	list, skills := skillList(cfg, workDir)
+	for _, s := range []string{instr, list} {
 		if s != "" {
 			segs = append(segs, s)
 		}
 	}
-	return segs
+	return Info{Segments: segs, Instructions: names, Skills: skills}
 }
 
 type file struct{ name, body string }
 
-func instructions(cfg config.Config, workDir string) string {
+func instructions(cfg config.Config, workDir string) (string, []string) {
 	if cfg.Instructions != nil && !*cfg.Instructions {
-		return ""
+		return "", nil
 	}
 	limit := cfg.InstructionsMaxBytes
 	if limit == 0 {
@@ -70,18 +92,22 @@ func instructions(cfg config.Config, workDir string) string {
 	} else {
 		files = chain(workDir, limit)
 	}
+	names := make([]string, len(files))
+	for i, f := range files {
+		names[i] = f.name
+	}
 	switch len(files) {
 	case 0:
-		return ""
+		return "", nil
 	case 1:
-		return "Project instructions from " + files[0].name + ":\n\n" + files[0].body
+		return "Project instructions from " + files[0].name + ":\n\n" + files[0].body, names
 	}
 	var b strings.Builder
 	b.WriteString("Project instructions, root to working directory. The deepest file wins on conflict.\n")
 	for _, f := range files {
 		b.WriteString("\nFrom " + f.name + ":\n\n" + f.body + "\n")
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return strings.TrimRight(b.String(), "\n"), names
 }
 
 // chain returns the AGENTS.md, or else AGENT.md, of each directory from the
@@ -141,14 +167,15 @@ func render(path string, data []byte, limit int) (string, bool) {
 		kept, path, len(data), len(kept), len(data)-len(kept)), true
 }
 
-// skills lists each valid skill of the skills dirs once, sorted by name.
-func skills(cfg config.Config, workDir string) string {
+// skillList lists each valid skill of the skills dirs once, sorted by name.
+func skillList(cfg config.Config, workDir string) (string, []Skill) {
 	dirs := cfg.SkillsDirs
 	if dirs == nil {
 		dirs = []string{filepath.Join(".agents", "skills")}
 	}
 	seen := map[string]bool{}
 	var lines []string
+	var found []Skill
 	for _, dir := range dirs {
 		dir = resolve(workDir, dir)
 		entries, _ := os.ReadDir(dir)
@@ -166,13 +193,15 @@ func skills(cfg config.Config, workDir string) string {
 			}
 			seen[s.Name] = true
 			lines = append(lines, fmt.Sprintf("%s — %s (path: %s)", s.Name, s.Description, s.Path))
+			found = append(found, Skill{s.Name, s.Path})
 		}
 	}
 	if len(lines) == 0 {
-		return ""
+		return "", nil
 	}
 	slices.Sort(lines)
-	return skillsHeader + "\n" + strings.Join(lines, "\n")
+	slices.SortFunc(found, func(a, b Skill) int { return strings.Compare(a.Name, b.Name) })
+	return skillsHeader + "\n" + strings.Join(lines, "\n"), found
 }
 
 func resolve(workDir, p string) string {

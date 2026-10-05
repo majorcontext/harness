@@ -37,6 +37,9 @@ const (
 	specGoalFailed   = "An error the user must fix yields `failed`."
 	specNoParkedGoal = "There is no deferred goal and no parked goal."
 
+	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in three ways"
+	specModelTool    = "Port it fully before the switch: `status`, `list`, and `set` through `Session.Update`"
+
 	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
@@ -194,6 +197,9 @@ var runtimeRows = map[string]runtimeRow{
 	"replay_after_kill_full_transcript":                           pendingOn("phase 4"),
 	"send_to_child_and_cancel_tree":                               reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn": reGolden(specUpdate),
+	"session_info_reports_the_session":                            reGolden(specPromptSwitch, specModelTool),
+	"session_info_reports_what_the_session_loaded":                reGolden(specPromptSwitch, specModelTool),
+	"session_info_reports_the_plugin_and_its_system_segment":      reGolden(specPromptSwitch, specModelTool),
 	"session_settings_validation_and_persistence":                 reGolden(specModelCheck, specErrors, specUpdate, specView),
 	"sse_resume_after_kill":                                       reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                           reGolden(specCursor, specBoxGlobal),
