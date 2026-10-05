@@ -1,0 +1,79 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Continuing after compaction."
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 12,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 2,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "usage": {
+          "input_tokens": 12,
+          "last_input_tokens": 12,
+          "messages": 2,
+          "output_tokens": 6
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "journal_events.a": {
+      "status": 200,
+      "body": [
+        {
+          "post_tokens": 0,
+          "pre_tokens": 123456,
+          "trigger": "auto",
+          "type": "compaction.claude_code"
+        }
+      ]
+    }
+  }
+}

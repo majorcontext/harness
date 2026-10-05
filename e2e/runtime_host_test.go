@@ -31,6 +31,8 @@ type laneHost interface {
 	resolveQuestion(t *testing.T, id, callID string, res resolution) callResult
 	journalEvents(t *testing.T, id, prefix string) []any
 	messageParents(t *testing.T, id string) callResult
+	backendStateKeys(t *testing.T, id string) callResult
+	compactKeeping(t *testing.T, id string, keep int) callResult
 }
 
 var (

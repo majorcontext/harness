@@ -1,0 +1,97 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo child"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "Bash",
+            "arguments": {
+              "command": "echo main"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "child"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "reasoning",
+            "text": "Next response opens with thinking."
+          },
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "message_parents.a": {
+      "status": 200,
+      "body": [
+        {
+          "parent_tool_use_id": "",
+          "role": "user"
+        },
+        {
+          "parent_tool_use_id": "toolu#3",
+          "role": "assistant"
+        },
+        {
+          "parent_tool_use_id": "",
+          "role": "assistant"
+        },
+        {
+          "parent_tool_use_id": "toolu#3",
+          "role": "tool"
+        },
+        {
+          "parent_tool_use_id": "",
+          "role": "assistant"
+        }
+      ]
+    }
+  }
+}

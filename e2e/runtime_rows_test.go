@@ -46,8 +46,12 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
-	specClaudeGauge = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
-	specClaudeOnce  = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
+	specClaudeGauge   = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
+	specClaudeOnce    = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
+	specHistoryBridge = "When another provider recorded a message after the newest message that this backend saw"
+	specBackendState  = "Private backend state is one `backend.state` event plus a blob"
+	specMirrorBlob    = "The Claude Code transcript mirror is that blob."
+	specKeepOwned     = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
 
 	specErrorText    = "the actor masks and bounds each error text that it writes to the log"
 	specGoalFailed   = "An error the user must fix yields `failed`."
@@ -396,4 +400,29 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_prewarm_carries_the_plugin_system_segment":                     reGolden(specItems, specWarm),
 	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":         reGolden(specTaskInputs, specChildReport, specChildNoGoal, specNarrow),
 	"a_failed_summary_keeps_its_usage_in_the_session":                        reGolden(specView, specOverflowFails),
+
+	"claudecode_history_bridge_after_a_mid_turn_model_change":             reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
+	"claudecode_history_bridge_after_a_turn_whose_cli_never_started":      reGolden(specUpdate, specView, specClaudeGauge),
+	"claudecode_restart_mid_turn_stops_the_cli_and_resumes":               reGolden(specView, specExternal, specHandoffResume, specOneResult, specClaudeGauge),
+	"claudecode_crash_mid_turn_waits_for_input":                           reGolden(specView, specExternal, specCrash, specCrashQueue, specCrashMarker, specHistoryBridge, specClaudeGauge),
+	"claudecode_mirror_continues_a_turn_that_the_cli_took":                reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
+	"claudecode_mirror_restart_before_a_transcript_starts_the_turn_again": reGolden(specView, specBackendState, specMirrorBlob, specHandoffResume, specClaudeGauge),
+	"claudecode_mirror_resumes_after_a_restart":                           reGolden(specBackendState, specMirrorBlob),
+	"claudecode_mirror_crash_before_a_transcript_starts_a_new_session":    reGolden(specView, specBackendState, specMirrorBlob, specCrash, specCrashQueue, specClaudeGauge),
+
+	"claudecode_interrupt_keeps_the_usage_of_the_result_after_the_signal":         reGolden(specView, specStopped, specClaudeGauge),
+	"claudecode_interrupt_closes_a_tool_call_that_the_cli_left_open":              reGolden(specView, specStopped, specOneResult, specClaudeGauge),
+	"claudecode_interrupt_closes_a_tool_call_that_the_cli_printed_on_the_signal":  reGolden(specView, specStopped, specOneResult, specClaudeGauge),
+	"claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal": reGolden(specView, specStopped, specClaudeGauge),
+	"claudecode_interrupt_ends_completed_when_the_cli_finishes_on_the_signal":     reGolden(specView, specClaudeGauge),
+	"claudecode_interrupt_ignores_a_placeholder_result":                           pendingOn(specClaudeGauge),
+	"claudecode_interrupt_of_a_cli_that_exits_with_no_frame":                      reGolden(specView, specStopped, specClaudeGauge),
+
+	"claudecode_runs_in_the_work_dir":                               sameAsServe(),
+	"claudecode_append_system_prompt_reaches_the_cli_as_one_value":  sameAsServe(),
+	"claudecode_compact_result_with_no_local_command_ends_the_turn": reGolden(specView, specCompactOwned, specClaudeGauge),
+	"claudecode_subagent_and_main_frames_keep_their_wire_order":     reGolden(specOneResult),
+	"claudecode_queued_notification_result_does_not_end_the_turn":   reGolden(specView, specClaudeGauge),
+	"claudecode_compact_refuses_keep_turns":                         reGolden(specView, specKeepOwned, specErrors, specClaudeGauge),
+	"claudecode_cli_compaction_is_logged":                           reGolden(specView, specCompactOwned, specClaudeGauge),
 }

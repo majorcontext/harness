@@ -332,6 +332,7 @@
       "status": 200,
       "body": [
         {
+          "defer_hook": true,
           "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList,EnterPlanMode,ExitPlanMode",
           "forward_subagent_text": true,
           "history_directive": false,

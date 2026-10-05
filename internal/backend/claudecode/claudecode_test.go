@@ -58,18 +58,15 @@ func fakeClaude(t *testing.T, mode string, env ...string) string {
 	return filepath.Join(dir, "argv")
 }
 
-func claudeRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool) *harness.Runtime {
-	t.Helper()
-	return claudeRuntimeWith(t, st, owner, mirror, nil)
-}
-
-func claudeRuntimeWith(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, system []string, tools ...harness.Tool) *harness.Runtime {
+func claudeRuntime(t *testing.T, st harness.Store, tools ...harness.Tool) *harness.Runtime {
 	t.Helper()
 	bin, err := fakeClaudeBin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: tools, Config: config.Config{AppendSystemPrompt: system, Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
+	retries := 0
+	r, err := harness.New(harness.Options{Store: st, Tools: tools, Config: config.Config{PromptRetries: &retries,
+		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,94 +135,10 @@ func hasArgs(argv []string, want ...string) bool {
 
 const toolsInit = "FAKE_CLAUDE_INIT_TOOLS"
 
-func TestClaudeCodeTurn(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		mode    string
-		env     []string
-		allowed []string
-		want    []string
-		args    []string
-		system  []string
-	}{
-		{name: "a text turn records the assistant items", mode: "thinking",
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"}},
-		{name: "a tool use inside Claude Code appears as items", mode: "",
-			want: []string{"backend.state", "item.completed assistant Let me check that.", "item.completed assistant toolu_1",
-				"item.completed tool toolu_1 hi", "item.completed assistant Done — it printed hi.", "context.measured", "turn.ended completed"}},
-		{name: "append_system_prompt reaches the CLI as one value", mode: "thinking",
-			want:   []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
-			system: []string{"one", "two"}, args: []string{"--append-system-prompt", "one\n\ntwo"}},
-		{name: "a placeholder result of a queued notification does not end the turn", mode: "queued_empty_result",
-			want: []string{"backend.state", "item.completed assistant second", "context.measured", "turn.ended completed"}},
-		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
-			want: []string{"backend.state", "compaction.applied", "context.measured", "turn.ended completed"}},
-		{name: "a failed result fails the turn", mode: "error",
-			want: []string{"backend.state", "context.measured", "turn.ended failed claudecode: the turn failed (error_during_execution): fake failure"}},
-		{name: "a compaction by Claude Code is logged", mode: "compact_boundary",
-			want: []string{"backend.state", "compaction.applied", "item.completed assistant Continuing after compaction.", "context.measured", "turn.ended completed"}},
-		{name: "the context reading is logged", mode: "per_call_usage",
-			want: []string{"backend.state", "item.completed assistant toolu_1", "item.completed tool toolu_1 ok", "item.completed assistant toolu_2",
-				"item.completed tool toolu_2 ok", "item.completed assistant done", "context.measured", "turn.ended completed"}},
-		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["Bash","Read"]`}, allowed: []string{"Read", "Bash"},
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
-			args: []string{"--tools", "Bash,Read", "--strict-mcp-config"}},
-		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
-			want: []string{"backend.state", "item.completed assistant Let me reason about this.", "item.completed assistant Here is my answer.", "context.measured", "turn.ended completed"},
-			args: []string{"--tools", "", "--strict-mcp-config"}},
-		{name: "a restricted CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"Bash"},
-			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
-		{name: "a CLI that ignores the restriction fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash","Write"]`}, allowed: []string{"Bash"},
-			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: Write"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			argvLog := fakeClaude(t, tc.mode, tc.env...)
-			st := harness.NewMemStore()
-			r := claudeRuntimeWith(t, st, nil, false, tc.system)
-			defer closeRuntime(t, r)
-			s := createClaude(t, r, tc.allowed)
-			turnOf(t, s, text("a", "hi"))
-			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
-			argv := jsonLines[[]string](t, argvLog)
-			if len(argv) != 1 {
-				t.Fatalf("CLI runs = %d, want 1", len(argv))
-			}
-			if tc.args != nil && !hasArgs(argv[0], tc.args...) {
-				t.Errorf("argv = %q, want %q in it", argv[0], tc.args)
-			}
-			if tc.allowed == nil && slices.Contains(argv[0], "--tools") {
-				t.Errorf("argv = %q, want no --tools", argv[0])
-			}
-			if tc.system == nil && slices.Contains(argv[0], "--append-system-prompt") {
-				t.Errorf("argv = %q, want no --append-system-prompt", argv[0])
-			}
-		})
-	}
-}
-
-func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
-	fakeClaude(t, "compact_turn")
-	st := harness.NewMemStore()
-	r := claudeRuntime(t, st, nil, false)
-	defer closeRuntime(t, r)
-	s, one := createClaude(t, r, nil), 1
-	if _, err := s.Compact(bg, protocol.Compact{KeepTurns: &one}); !errors.Is(err, harness.ErrInvalidRequest) {
-		t.Errorf("Compact with keep_turns = %v, want ErrInvalidRequest", err)
-	}
-	if _, err := s.Compact(bg, protocol.Compact{}); err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	wantLog(t, st, 4, "backend.state", "compaction.applied", "context.measured", "turn.ended completed")
-	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
-	if len(stdin) != 1 || stdin[0].Message.Content != "/compact" {
-		t.Errorf("stdin lines = %+v, want /compact", stdin)
-	}
-}
-
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {
-			r := claudeRuntimeWith(t, harness.NewMemStore(), nil, false, nil, lookup{})
+			r := claudeRuntime(t, harness.NewMemStore(), lookup{})
 			defer closeRuntime(t, r)
 			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
 			if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -237,112 +150,13 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
 	for _, allowed := range [][]string{nil, {"Read"}} {
-		r := claudeRuntimeWith(t, harness.NewMemStore(), nil, false, nil, newProbe("Read", false))
+		r := claudeRuntime(t, harness.NewMemStore(), newProbe("Read", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {
 			t.Errorf("Create with AllowedTools %v = %v, want ErrInvalidRequest", allowed, err)
 		}
 	}
-}
-
-func TestClaudeCodeSteerReachesStdin(t *testing.T) {
-	fakeClaude(t, "steer")
-	st := harness.NewMemStore()
-	r := claudeRuntime(t, st, nil, false)
-	defer closeRuntime(t, r)
-	s := createClaude(t, r, nil)
-	if _, err := s.Submit(bg, text("a", "run")); err != nil {
-		t.Fatal(err)
-	}
-	seq := await(t, s, 0, "item.completed")
-	steer := text("b", "left")
-	steer.Delivery = protocol.DeliverySteer
-	if _, err := s.Submit(bg, steer); err != nil {
-		t.Fatal(err)
-	}
-	await(t, s, seq, "turn.ended")
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_s",
-		"input.admitted b", "input.promoted b", "item.completed tool toolu_s slept", "item.completed assistant steered: OPERATOR MESSAGES (address these, then continue the task):\n1. left", "context.measured", "turn.ended completed")
-	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
-	if len(stdin) != 2 || stdin[1].Message.Content != "OPERATOR MESSAGES (address these, then continue the task):\n1. left\n" {
-		t.Errorf("stdin lines = %+v, want the prompt, then the steer input", stdin)
-	}
-}
-
-func TestClaudeCodeInterruptStopsTheCLI(t *testing.T) {
-	const stopped = "turn.ended interrupted stopped"
-	for _, tc := range []struct {
-		mode     string
-		want     []string
-		noResult bool
-	}{
-		{"hang_after_text", []string{"item.completed assistant Working on it.", "context.measured", stopped}, false},
-		{"hang_in_tool", []string{"item.completed assistant Checking. toolu_h", "context.measured", "item.completed tool toolu_h " + interrupted, stopped}, false},
-		{"tool_on_interrupt", []string{"item.completed assistant toolu_i", "context.measured", "item.completed tool toolu_i " + interrupted, stopped}, false},
-		{"tool_result_on_interrupt", []string{"item.completed assistant toolu_i", "item.completed tool toolu_i ok", "context.measured", stopped}, false},
-		{"success_on_interrupt", []string{"item.completed assistant Finished anyway.", "context.measured", "turn.ended completed"}, false},
-		{"placeholder_on_interrupt", []string{"context.measured", stopped}, false},
-		{"exit_on_interrupt", []string{stopped}, true},
-	} {
-		t.Run(tc.mode, func(t *testing.T) {
-			signals := filepath.Join(t.TempDir(), "signals")
-			fakeClaude(t, tc.mode, "FAKE_CLAUDE_SIGNAL_LOG", signals)
-			st := harness.NewMemStore()
-			r := claudeRuntime(t, st, nil, false)
-			defer closeRuntime(t, r)
-			s := createClaude(t, r, nil)
-			if _, err := s.Submit(bg, text("a", "hi")); err != nil {
-				t.Fatal(err)
-			}
-			await(t, s, 0, "backend.state")
-			if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
-				t.Fatal(err)
-			}
-			want := append([]string{"input.admitted a", "turn.started a", "backend.state"}, tc.want...)
-			wantLog(t, st, 2, want...)
-			if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
-				t.Errorf("signals = %q, want one SIGINT", got)
-			}
-			wantUsage := eventlog.Usage{InputTokens: 7, OutputTokens: 2}
-			if tc.noResult {
-				wantUsage = eventlog.Usage{}
-			}
-			if u := recordedUsage(t, st); u.InputTokens != wantUsage.InputTokens || u.OutputTokens != wantUsage.OutputTokens {
-				t.Errorf("turn usage = %+v, want %+v from the result after the SIGINT", u, wantUsage)
-			}
-		})
-	}
-}
-
-const (
-	continuation = "The previous turn was interrupted. Continue the unfinished work from the saved conversation. " +
-		"Check the current state before repeating actions that may already have completed."
-	interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
-	cutOff      = "cut off before a result was recorded; check whether it took effect before running it again"
-)
-
-func TestClaudeCodeHandoffInterruptsTheCLI(t *testing.T) {
-	signals := filepath.Join(t.TempDir(), "signals")
-	fakeClaude(t, "tool_on_interrupt", "FAKE_CLAUDE_SIGNAL_LOG", signals)
-	st := harness.NewMemStore()
-	handOff(t, claudeRuntime(t, st, nil, false), "backend.state")
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_i",
-		"context.measured", "backend.state", "item.completed tool toolu_i "+cutOff, "turn.suspended handoff")
-	if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
-		t.Errorf("signals = %q, want one SIGINT", got)
-	}
-}
-
-// handOff starts a turn on r, waits for the first event of kind, and closes r.
-func handOff(t *testing.T, r *harness.Runtime, kind string) {
-	t.Helper()
-	s := createClaude(t, r, nil)
-	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
-		t.Fatal(err)
-	}
-	await(t, s, 0, kind)
-	closeRuntime(t, r)
 }
 
 func text(id, s string) protocol.Input {
@@ -355,14 +169,6 @@ func closeRuntime(t *testing.T, r *harness.Runtime) {
 		t.Fatalf("Close: %v", err)
 	}
 }
-
-// killable is an Owner whose one grant ends when the test closes lost.
-type killable struct{ lost chan struct{} }
-
-func (k killable) Acquire(context.Context, string) (harness.Ownership, error) { return k, nil }
-func (k killable) Epoch() uint64                                              { return 1 }
-func (k killable) Lost() <-chan struct{}                                      { return k.lost }
-func (k killable) Release()                                                   {}
 
 // wantLog fails unless the records of session s1 after seq render as want.
 func wantLog(t *testing.T, st harness.Store, after uint64, want ...string) {
@@ -410,7 +216,7 @@ func wantLog(t *testing.T, st harness.Store, after uint64, want ...string) {
 
 func TestClaudeCodeStreamsDeltas(t *testing.T) {
 	fakeClaude(t, "thinking_reserved_id")
-	r := claudeRuntime(t, harness.NewMemStore(), nil, false)
+	r := claudeRuntime(t, harness.NewMemStore())
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	var got []string
@@ -443,4 +249,85 @@ func TestClaudeCodeStreamsDeltas(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("events =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+}
+
+func TestClaudeCodeAppliesTheAllowedToolsOfASession(t *testing.T) {
+	const answered = "item.completed assistant Here is my answer."
+	for _, tc := range []struct {
+		name, mode string
+		env        []string
+		allowed    []string
+		want       []string
+		args       []string
+	}{
+		{name: "a restriction maps to the tool list", mode: "thinking", env: []string{toolsInit, `["Bash","Read"]`}, allowed: []string{"Read", "Bash"},
+			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
+			args: []string{"--tools", "Bash,Read", "--strict-mcp-config"}},
+		{name: "an empty restriction disables every built-in tool", mode: "thinking", env: []string{toolsInit, `[]`}, allowed: []string{},
+			want: []string{"backend.state", "item.completed assistant Let me reason about this.", answered, "context.measured", "turn.ended completed"},
+			args: []string{"--tools", "", "--strict-mcp-config"}},
+		{name: "a restricted CLI with no init frame fails the turn", mode: "no_init", allowed: []string{"Bash"},
+			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: assistant frame before init"}},
+		{name: "a CLI that ignores the restriction fails the turn", mode: "thinking", env: []string{toolsInit, `["Bash","Write"]`}, allowed: []string{"Bash"},
+			want: []string{"context.measured", "turn.ended failed claudecode: the CLI did not apply the tool restriction: Write"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argvLog := fakeClaude(t, tc.mode, tc.env...)
+			st := harness.NewMemStore()
+			r := claudeRuntime(t, st)
+			defer closeRuntime(t, r)
+			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
+			wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
+			argv := jsonLines[[]string](t, argvLog)
+			if len(argv) != 1 {
+				t.Fatalf("CLI runs = %d, want 1", len(argv))
+			}
+			if tc.args != nil && !hasArgs(argv[0], tc.args...) {
+				t.Errorf("argv = %q, want %q in it", argv[0], tc.args)
+			}
+		})
+	}
+}
+
+func TestClaudeCodeTakesTheUsageOfTheResultThatFollowsAPlaceholderAfterASignal(t *testing.T) {
+	signals := filepath.Join(t.TempDir(), "signals")
+	fakeClaude(t, "placeholder_on_interrupt", "FAKE_CLAUDE_SIGNAL_LOG", signals)
+	st := harness.NewMemStore()
+	r := claudeRuntime(t, st)
+	defer closeRuntime(t, r)
+	s := createClaude(t, r, nil)
+	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
+		t.Fatal(err)
+	}
+	await(t, s, 0, "item.completed")
+	if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
+		t.Fatal(err)
+	}
+	wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant Working on it.", "context.measured", "turn.ended interrupted stopped")
+	if got, _ := os.ReadFile(signals); string(got) != "interrupt\n" {
+		t.Errorf("signals = %q, want one SIGINT", got)
+	}
+	if u := recordedUsage(t, st); u.InputTokens != 7 || u.OutputTokens != 2 {
+		t.Errorf("turn usage = %+v, want 7 in and 2 out from the result after the placeholder", u)
+	}
+}
+
+// recordedUsage returns the usage that the context.measured records of session s1 hold.
+func recordedUsage(t *testing.T, st harness.Store) eventlog.Usage {
+	t.Helper()
+	recs, err := st.Read(bg, "s1", 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total eventlog.Usage
+	for _, r := range recs {
+		var env struct {
+			K string
+			D eventlog.ContextMeasured
+		}
+		if json.Unmarshal(r.Data, &env) == nil && env.K == "context.measured" {
+			total = total.Add(env.D.Usage)
+		}
+	}
+	return total
 }

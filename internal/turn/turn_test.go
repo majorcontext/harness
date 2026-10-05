@@ -3,7 +3,6 @@ package turn_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -100,6 +99,12 @@ func callTool(id string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartToolCall, CallID: id, Name: "x"}}}
 }
 
+type source struct{ ts turn.Toolset }
+
+func (s source) Toolset(context.Context, []eventlog.Message, []string, string) turn.Toolset {
+	return s.ts
+}
+
 func steerInput(text string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 }
@@ -130,28 +135,6 @@ func TestRunTakesNoSteerInputWhenTheContinuationLimitFailsTheTurn(t *testing.T) 
 	}
 	if len(r.steer) != 1 {
 		t.Fatalf("a steer input was taken by a turn that makes no further model call")
-	}
-}
-
-func TestRunReportsItsItemsAndEndThroughOneTurn(t *testing.T) {
-	m, r := &model{replies: []eventlog.Message{say("hi")}}, &recorder{}
-	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
-	if len(r.items) != 1 || r.items[0].Parts[0].Text != "hi" {
-		t.Fatalf("items = %+v, want the reply", r.items)
-	}
-	if len(r.ended) != 1 || r.ended[0] != nil {
-		t.Fatalf("Ended calls = %v, want one with no error", r.ended)
-	}
-}
-
-func TestRunReportsAFailureToEnded(t *testing.T) {
-	boom := errors.New("boom")
-	m, r := &model{errs: []error{boom}}, &recorder{}
-	ctx := context.Background()
-	turn.Run(ctx, ctx, m, turn.Request{Model: "test/model"}, nil, r, turn.Limits{})
-	if len(r.ended) != 1 || !errors.Is(r.ended[0], boom) {
-		t.Fatalf("Ended calls = %v, want boom", r.ended)
 	}
 }
 

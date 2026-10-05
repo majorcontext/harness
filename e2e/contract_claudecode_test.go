@@ -141,6 +141,22 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 	})
 }
 
+func TestContractClaudeCodeConfig(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:    "claudecode_runs_in_the_work_dir",
+		driver:  claudeLaneDriver("normal"),
+		actions: withActions(claudeOneTurn, claudeWorkDir{as: "a"}),
+	}, {
+		name:    "claudecode_append_system_prompt_reaches_the_cli_as_one_value",
+		driver:  claudeLane{mode: "normal", extra: map[string]any{"append_system_prompt": []string{"one", "two"}}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeSystemPrompt{as: "a", contains: "one\n\ntwo"}),
+	}, {
+		name:    "claudecode_compact_result_with_no_local_command_ends_the_turn",
+		driver:  claudeLane{mode: "compact_turn", env: map[string]string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND": ""}}.newDriver,
+		actions: withActions(claudeOneTurn, claudeJournalEvents{as: "a", prefix: "compaction."}, claudeSession{as: "a"}),
+	}})
+}
+
 func TestContractClaudeCodePlugins(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name:    "claudecode_turn_gets_no_plugin_system_segment",
@@ -163,12 +179,16 @@ func TestContractClaudeCodeMCPServers(t *testing.T) {
 
 func TestContractClaudeCodeFrames(t *testing.T) {
 	row := func(name, mode string, more ...action) scenario {
-		return scenario{name: name, driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
+		return scenario{name: name, openCalls: mode == "parallel_tools_crossing", driver: claudeLaneDriver(mode), actions: withActions(claudeOneTurn, more...)}
 	}
 	session := claudeSession{as: "a"}
 	runScenarios(t, []scenario{
 		row("claudecode_thinking_block_is_reasoning", "thinking", session),
 		row("claudecode_subagent_frames_keep_parent", "subagent", claudeMessageParents{as: "a"}),
+		row("claudecode_subagent_and_main_frames_keep_their_wire_order", "parallel_tools_crossing", claudeMessageParents{as: "a"}),
+		row("claudecode_queued_notification_result_does_not_end_the_turn", "queued_empty_result", session),
+		row("claudecode_compact_refuses_keep_turns", "normal", claudeCompactKeeping{as: "a", keep: 1}, session),
+		row("claudecode_cli_compaction_is_logged", "compact_boundary", claudeJournalEvents{as: "a", prefix: "compaction."}, session),
 		row("claudecode_error_result_fails_turn", "error", session, claudeInvocations{as: "a"}),
 		row("claudecode_cli_exit_runs_once", "crash", session, claudeInvocations{as: "a"}),
 		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
@@ -179,6 +199,40 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 func TestContractClaudeCodeHistory(t *testing.T) {
 	native := harnesstest.Step{Name: "native", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "native reply"}}
 	runScenarios(t, []scenario{{
+		name:   "claudecode_history_bridge_after_a_mid_turn_model_change",
+		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
+		model: []harnesstest.Step{
+			{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+				{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "echo hi"}},
+			}}},
+			{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "native reply"}, Repeat: true},
+		},
+		actions: withActions(claudeOneTurn,
+			setModel{as: "a", model: "anthropic/claude-fable-5"},
+			submit{as: "a", text: "native"},
+			awaitRequests{n: 1},
+			setModel{as: "a", model: "claude-code/sonnet"},
+			release{step: "call"},
+			waitIdle{as: "a"},
+			submit{as: "a", text: "back"}, waitIdle{as: "a"},
+			claudeInvocations{as: "a"},
+			claudeHistoryTool{as: "a"},
+		),
+	}, {
+		name:   "claudecode_history_bridge_after_a_turn_whose_cli_never_started",
+		driver: claudeLane{mode: "normal", historyTool: true, spawnModes: "2=crash_before_init"}.newDriver,
+		model:  []harnesstest.Step{native},
+		actions: withActions(claudeOneTurn,
+			setModel{as: "a", model: "anthropic/claude-fable-5"},
+			submit{as: "a", text: "native"}, waitIdle{as: "a"},
+			setModel{as: "a", model: "claude-code/sonnet"},
+			submit{as: "a", text: "back"}, waitIdle{as: "a"},
+			submit{as: "a", text: "again"}, waitIdle{as: "a"},
+			claudeSession{as: "a"},
+			claudeInvocations{as: "a"},
+			claudeHistoryTool{as: "a"},
+		),
+	}, {
 		name:   "claudecode_history_bridge_after_native_turn",
 		driver: claudeLane{mode: "normal", historyTool: true}.newDriver,
 		model:  []harnesstest.Step{native},
@@ -187,6 +241,7 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 			submit{as: "a", text: "native"}, waitIdle{as: "a"},
 			setModel{as: "a", model: "claude-code/sonnet"},
 			submit{as: "a", text: "back"}, waitIdle{as: "a"},
+			submit{as: "a", text: "again"}, waitIdle{as: "a"},
 			claudeInvocations{as: "a"},
 			claudeHistoryTool{as: "a"},
 		),

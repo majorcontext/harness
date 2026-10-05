@@ -1,0 +1,111 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Working on it."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "hi",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "hi",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_mirror.a": {
+      "status": 200,
+      "body": [
+        {
+          "resume": null,
+          "session_mirror": true,
+          "transcripts": {}
+        },
+        {
+          "resume": null,
+          "session_mirror": true,
+          "transcripts": {}
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 1,
+          "window": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 14,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "claude-code/sonnet",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 1,
+          "output_tokens": 1
+        }
+      }
+    }
+  }
+}

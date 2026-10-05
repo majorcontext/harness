@@ -13,21 +13,23 @@ import (
 // fixtureConfigDir is the CLAUDE_CONFIG_DIR of the recorded mirror fixtures.
 const fixtureConfigDir = "/home/u/cfg"
 
-// replayMirror replays the frames of the fixture named by
-// FAKE_CLAUDE_MIRROR_FIXTURE. Each transcript_mirror frame appends its
-// entries to its file under CLAUDE_CONFIG_DIR, as --session-mirror does.
-// FAKE_CLAUDE_MIRROR_SEEN receives the files found there at start, and
-// FAKE_CLAUDE_MIRROR_HANG_AFTER=n hangs after n mirror frames.
+// replayMirror replays the frames of the fixture of the spawn, from the
+// comma separated list FAKE_CLAUDE_MIRROR_FIXTURE; the last fixture serves
+// each later spawn. Each transcript_mirror frame appends its entries to its
+// file under CLAUDE_CONFIG_DIR, as --session-mirror does.
+// FAKE_CLAUDE_MIRROR_SEEN receives the files found there at start. An entry
+// n of the list FAKE_CLAUDE_MIRROR_HANG_AFTER makes that spawn print a text
+// and hang after n mirror frames; a spawn with no entry runs to its end.
 func replayMirror(f *fake) bool {
 	cfgDir := os.Getenv("CLAUDE_CONFIG_DIR")
 	recordSeen(cfgDir)
-	raw, err := os.ReadFile(os.Getenv("FAKE_CLAUDE_MIRROR_FIXTURE"))
+	raw, err := os.ReadFile(perSpawn(os.Getenv("FAKE_CLAUDE_MIRROR_FIXTURE"), f.spawn, true))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	hangAfter := -1
-	if v := os.Getenv("FAKE_CLAUDE_MIRROR_HANG_AFTER"); v != "" {
+	if v := perSpawn(os.Getenv("FAKE_CLAUDE_MIRROR_HANG_AFTER"), f.spawn, false); v != "" {
 		hangAfter, _ = strconv.Atoi(v)
 	}
 	frames := 0
@@ -45,7 +47,7 @@ func replayMirror(f *fake) bool {
 			continue
 		}
 		if frames == hangAfter {
-			hang(f)
+			hangAfterText(f)
 		}
 		frames++
 		path := cfgDir + strings.TrimPrefix(frame.FilePath, fixtureConfigDir)
@@ -125,7 +127,7 @@ func logEnv() {
 // logInterrupt appends "interrupt" to FAKE_CLAUDE_SIGNAL_LOG on SIGINT, then
 // prints the onInterrupt frames of the mode and, unless they end with a
 // result or are empty, the error result of the interrupted turn, and exits.
-func logInterrupt() {
+func logInterrupt(mode string) {
 	path := os.Getenv("FAKE_CLAUDE_SIGNAL_LOG")
 	if path == "" {
 		return
@@ -135,7 +137,7 @@ func logInterrupt() {
 	go func() {
 		<-ch
 		appendFile(path, "interrupt\n")
-		out, ok := onInterrupt[os.Getenv("FAKE_CLAUDE_MODE")]
+		out, ok := onInterrupt[mode]
 		if !ok || (len(out) > 0 && out[len(out)-1]["type"] != "result") {
 			out = append(out, result("error_during_execution", true, "", 7, 2))
 		}

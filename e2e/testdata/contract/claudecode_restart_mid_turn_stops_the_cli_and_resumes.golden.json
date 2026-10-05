@@ -1,0 +1,113 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Working on it."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "Bash",
+            "arguments": {
+              "command": "sleep 60"
+            }
+          }
+        ]
+      },
+      {
+        "id": "synthetic-orphan-tool-result-2-toolu_i",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "synthesized: no tool_result was found in history for this tool_use; injected to keep the request protocol-valid"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "hi",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    },
+    "claude_invocations.a": {
+      "status": 200,
+      "body": [
+        {
+          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
+          "forward_subagent_text": true,
+          "history_directive": false,
+          "mcp_config": true,
+          "model": "sonnet",
+          "question_tool_open": false,
+          "resume": null,
+          "strict_mcp_config": true,
+          "thinking_display": "summarized"
+        }
+      ]
+    },
+    "claude_signals.a": {
+      "status": 200,
+      "body": {
+        "sigint": 1
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 7,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "messages": 4,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 7,
+          "last_input_tokens": 7,
+          "messages": 4,
+          "output_tokens": 2
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    }
+  }
+}

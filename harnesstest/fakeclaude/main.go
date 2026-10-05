@@ -16,6 +16,7 @@
 //	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
 //	FAKE_CLAUDE_CWD_LOG        receives the working directory
 //	FAKE_CLAUDE_SIGNAL_LOG     receives the name of a SIGINT before the exit
+//	FAKE_CLAUDE_SPAWN_MODES    "n=mode,..." runs mode in spawn n instead of FAKE_CLAUDE_MODE
 //	FAKE_CLAUDE_MCP_CONFIG_LOG append the --mcp-config file of each invocation as one line
 //	FAKE_CLAUDE_CALL_ARGS      JSON arguments of the FAKE_CLAUDE_CALL_TOOL call
 //	FAKE_CLAUDE_LIST_TOOLS     file that receives the tools/list response of the harness MCP server
@@ -33,6 +34,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,6 +46,7 @@ type fake struct {
 	out       *bufio.Writer
 	stdin     *bufio.Reader
 	held      []byte
+	spawn     int
 }
 
 func (f *fake) emit(frames ...obj) {
@@ -95,8 +98,52 @@ func logCwd() {
 	}
 }
 
+// spawnNumber counts the spawns of this fake in the state directory of the
+// session, from 1. Without a state file every spawn is the first.
+func spawnNumber() int {
+	state := os.Getenv("FAKE_CLAUDE_STATE")
+	if state == "" {
+		return 1
+	}
+	path := state + ".spawns"
+	b, _ := os.ReadFile(path)
+	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	n++
+	_ = os.WriteFile(path, []byte(strconv.Itoa(n)), 0o644)
+	return n
+}
+
+// modeOfSpawn is the mode that spawn n runs: its entry in
+// FAKE_CLAUDE_SPAWN_MODES, or FAKE_CLAUDE_MODE.
+func modeOfSpawn(n int) string {
+	for _, entry := range strings.Split(os.Getenv("FAKE_CLAUDE_SPAWN_MODES"), ",") {
+		if k, mode, ok := strings.Cut(entry, "="); ok && k == strconv.Itoa(n) {
+			return mode
+		}
+	}
+	return os.Getenv("FAKE_CLAUDE_MODE")
+}
+
+// perSpawn is entry n of a comma separated list, counting spawns from 1. An
+// entry past the end is the last one when repeat is set, else it is empty.
+func perSpawn(list string, n int, repeat bool) string {
+	entries := strings.Split(list, ",")
+	if n > len(entries) {
+		if !repeat {
+			return ""
+		}
+		n = len(entries)
+	}
+	return entries[n-1]
+}
+
 func main() {
+	spawn := 0
 	mode := os.Getenv("FAKE_CLAUDE_MODE")
+	if mode != "bg_leak_child" {
+		spawn = spawnNumber()
+		mode = modeOfSpawn(spawn)
+	}
 	if mode == "bg_leak_child" {
 		time.Sleep(time.Hour)
 		return
@@ -108,9 +155,9 @@ func main() {
 	logMCPConfig()
 	logCwd()
 	logEnv()
-	logInterrupt()
+	logInterrupt(mode)
 
-	f := &fake{mode: mode, sessionID: os.Getenv("FAKE_CLAUDE_SESSION_ID"), out: bufio.NewWriter(os.Stdout), stdin: bufio.NewReader(os.Stdin)}
+	f := &fake{mode: mode, spawn: spawn, sessionID: os.Getenv("FAKE_CLAUDE_SESSION_ID"), out: bufio.NewWriter(os.Stdout), stdin: bufio.NewReader(os.Stdin)}
 	if f.sessionID == "" {
 		f.sessionID = "fake-session-1"
 	}
