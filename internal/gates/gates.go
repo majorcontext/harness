@@ -63,9 +63,12 @@ type PackageMetrics struct {
 // Report is the full measurement of a tree: files, packages, AGENTS.md sizes,
 // and the test exceptions file.
 type Report struct {
-	Files    map[string]FileMetrics
-	Packages map[string]PackageMetrics
-	Agents   map[string]int
+	Files map[string]FileMetrics
+	// TestScope maps each test file to its code lines inside Test, Benchmark,
+	// Fuzz, and Example functions and package-level var declarations.
+	TestScope map[string]int
+	Packages  map[string]PackageMetrics
+	Agents    map[string]int
 	// Exceptions maps each path listed in the exceptions file to its reason.
 	Exceptions map[string]string
 	// BadExceptions holds the lines of the exceptions file that name no reason.
@@ -84,9 +87,10 @@ var (
 // Collect measures every Go file and AGENTS.md file in fsys.
 func Collect(fsys fs.FS) (Report, error) {
 	r := Report{
-		Files:    map[string]FileMetrics{},
-		Packages: map[string]PackageMetrics{},
-		Agents:   map[string]int{},
+		Files:     map[string]FileMetrics{},
+		TestScope: map[string]int{},
+		Packages:  map[string]PackageMetrics{},
+		Agents:    map[string]int{},
 	}
 	r.Exceptions, r.BadExceptions = loadExceptions(fsys)
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -117,11 +121,14 @@ func Collect(fsys fs.FS) (Report, error) {
 			if generated(p, data) {
 				return nil
 			}
-			m, err := measure(p, data)
+			m, testScope, err := measure(p, data)
 			if err != nil {
 				return fmt.Errorf("%s: %w", p, err)
 			}
 			r.Files[p] = m
+			if strings.HasSuffix(p, "_test.go") {
+				r.TestScope[p] = testScope
+			}
 			pm := r.Packages[path.Dir(p)]
 			if strings.HasSuffix(p, "_test.go") {
 				pm.TestLines += m.CodeLines
@@ -171,33 +178,16 @@ func nestedRoot(fsys fs.FS, dir string) bool {
 	return false
 }
 
-func measure(name string, src []byte) (FileMetrics, error) {
+func measure(name string, src []byte) (FileMetrics, int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, name, src, parser.ParseComments)
 	if err != nil {
-		return FileMetrics{}, err
+		return FileMetrics{}, 0, err
 	}
-	lines := bytes.Split(src, []byte("\n"))
-	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-		lines = lines[:len(lines)-1]
-	}
+	lines := sourceLines(src)
 	m := FileMetrics{Lines: len(lines)}
-	commentLine := map[int]bool{}
-	for _, cg := range f.Comments {
-		for _, c := range cg.List {
-			if hasDirective(c.Text) {
-				continue
-			}
-			m.HistoryMarkers += len(historyRE.FindAllString(c.Text, -1))
-			start, end := fset.PositionFor(c.Pos(), false), fset.PositionFor(c.End(), false)
-			if len(bytes.TrimSpace(lines[start.Line-1][:start.Column-1])) > 0 {
-				continue
-			}
-			for l := start.Line; l <= end.Line; l++ {
-				commentLine[l] = true
-			}
-		}
-	}
+	commentLine, history := commentLines(fset, f, lines)
+	m.HistoryMarkers = history
 	exempt := func(line int) bool {
 		return f.Doc != nil && path.Base(name) == "doc.go" &&
 			line >= fset.PositionFor(f.Doc.Pos(), false).Line && line <= fset.PositionFor(f.Doc.End(), false).Line
@@ -229,7 +219,42 @@ func measure(name string, src []byte) (FileMetrics, error) {
 		}
 		return true
 	})
-	return m, nil
+	testScope := 0
+	if strings.HasSuffix(name, "_test.go") {
+		testScope = testScopeLines(fset, f, lines, commentLine)
+	}
+	return m, testScope, nil
+}
+
+func sourceLines(src []byte) [][]byte {
+	lines := bytes.Split(src, []byte("\n"))
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// commentLines returns the line numbers that hold only a comment, and the
+// count of history markers in comments.
+func commentLines(fset *token.FileSet, f *ast.File, lines [][]byte) (map[int]bool, int) {
+	commentLine := map[int]bool{}
+	history := 0
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if hasDirective(c.Text) {
+				continue
+			}
+			history += len(historyRE.FindAllString(c.Text, -1))
+			start, end := fset.PositionFor(c.Pos(), false), fset.PositionFor(c.End(), false)
+			if len(bytes.TrimSpace(lines[start.Line-1][:start.Column-1])) > 0 {
+				continue
+			}
+			for l := start.Line; l <= end.Line; l++ {
+				commentLine[l] = true
+			}
+		}
+	}
+	return commentLine, history
 }
 
 func timeImportName(f *ast.File) string {
@@ -346,10 +371,13 @@ func testMayGrow(p string) bool {
 }
 
 // Check returns the violations of head against base. Only files in changed
-// are checked. A changed _test.go file may not add test lines unless
-// testMayGrow names it or the exceptions file lists it with a reason. The
-// count is net per file: a change that deletes and adds the same number of
-// test lines passes, as it does in the other merge-base rules.
+// are checked. A changed _test.go file may not add lines inside its Test,
+// Benchmark, Fuzz, or Example functions or its package-level var
+// declarations unless testMayGrow names it or the exceptions file lists it
+// with a reason. The count is net per file, so a change that deletes and adds
+// the same number of such lines passes. Lines of top-level helpers, fakes,
+// and type declarations never count; closures and local types inside a test
+// function do.
 // A file absent from base is new and meets the absolute limits,
 // unless renames maps it to a base path. A package absent from base compares
 // with the base package that its files came from.
@@ -370,12 +398,13 @@ func Check(head, base Report, changed map[string]bool, renames map[string]string
 			vs = append(vs, v)
 		}
 	}
-	for p, m := range head.Files {
-		if !changed[p] || !strings.HasSuffix(p, "_test.go") || m.CodeLines <= base.Files[baseOf(p)].CodeLines {
+	for p := range head.Files {
+		if !changed[p] || !strings.HasSuffix(p, "_test.go") {
 			continue
 		}
-		if _, ok := head.Exceptions[p]; !ok && !testMayGrow(p) {
-			vs = append(vs, Violation{p, "contract_tests", fmt.Sprintf("%d test lines added outside the contract suite and pure code; write a contract row in e2e/ or list the file with a reason in %s", m.CodeLines-base.Files[baseOf(p)].CodeLines, exceptionsFile)})
+		added := head.TestScope[p] - base.TestScope[baseOf(p)]
+		if _, ok := head.Exceptions[p]; added > 0 && !ok && !testMayGrow(p) {
+			vs = append(vs, Violation{p, "contract_tests", fmt.Sprintf("%d lines added in test functions outside the contract suite and pure code; write a contract row in e2e/ or list the file with a reason in %s", added, exceptionsFile)})
 		}
 	}
 	for _, line := range head.BadExceptions {
