@@ -41,7 +41,7 @@ type driver interface {
 	// is Enqueue there.
 	EnqueueNext(t *testing.T, id, text string)
 	WaitIdle(t *testing.T, id string)
-	// AwaitTurnEnd returns once the log of the session holds the end of a turn, which the session records only after the turn has settled its parent.
+	// AwaitTurnEnd returns once the log of the session holds the end of a turn. WaitIdle does not wait for it: a canceled session reads idle before its turn.ended is appended.
 	AwaitTurnEnd(t *testing.T, id string)
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)

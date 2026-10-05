@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -307,6 +308,17 @@ func TestContractChildrenEnd(t *testing.T) {
 		{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
 		{Name: "rest", Reply: harnesstest.Reply{Text: "rest"}, Repeat: true},
 	}
+	reopenModel := []harnesstest.Step{
+		{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}, Repeat: true},
+	}
+	for n := 1; n <= 3; n++ {
+		reopenModel = append(reopenModel,
+			harnesstest.Step{Name: fmt.Sprintf("delegate %d", n), Match: harnesstest.LastUserText(fmt.Sprintf("delegate %d", n)), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+				ID: fmt.Sprintf("toolu_%d", n), Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": fmt.Sprintf("child work %d", n)},
+			}}}},
+			harnesstest.Step{Name: fmt.Sprintf("child %d", n), Match: harnesstest.LastUserText(fmt.Sprintf("child work %d", n)), Reply: harnesstest.Reply{Text: "partial", Block: true}})
+	}
+	reopenModel = append(reopenModel, harnesstest.Step{Name: "rest", Reply: harnesstest.Reply{Text: "rest"}, Repeat: true})
 	endIdleParent := []action{
 		create{as: "a"},
 		submit{as: "a", text: "delegate"},
@@ -327,6 +339,21 @@ func TestContractChildrenEnd(t *testing.T) {
 			concurrent: true,
 			model:      model,
 			actions:    append(slices.Clone(endIdleParent), awaitTurnEnd{as: "kid"}, submit{as: "a", text: "again"}, waitIdle{as: "a"}, getSession{as: "a"}),
+		},
+		{
+			name:       "end_then_open_before_the_child_turn_ends_runs_no_report",
+			concurrent: true,
+			model:      reopenModel,
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate 1"}, awaitRequests{n: 3}, waitIdle{as: "a"},
+				submit{as: "a", text: "delegate 2"}, awaitRequests{n: 6}, waitIdle{as: "a"},
+				submit{as: "a", text: "delegate 3"}, awaitRequests{n: 9}, waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a", nth: 2, record: true, staysActive: true},
+				endWhileOpened{as: "a"},
+				awaitTurnEnd{as: "kid"},
+				waitIdle{as: "a"},
+			},
 		},
 	})
 }

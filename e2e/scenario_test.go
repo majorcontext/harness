@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -178,6 +179,9 @@ type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
 type endSession struct{ as string }
+
+// endWhileOpened ends the session while the test opens it again and again until the end returns, so an open can come between the stop of the session and the stop of its children.
+type endWhileOpened struct{ as string }
 type endMissingSession struct{}
 type sendToSession struct{ as, text string }
 
@@ -273,6 +277,29 @@ func (a setServiceTier) run(t *testing.T, r *run) {
 }
 func (a endSession) run(t *testing.T, r *run) {
 	r.record(t, "end_session", a.as, r.drv.EndSession(t, r.id(t, a.as)))
+}
+func (a endWhileOpened) run(t *testing.T, r *run) {
+	id := r.id(t, a.as)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					r.drv.AwaitTurnEnd(t, id)
+				}
+			}
+		}()
+	}
+	res := r.drv.EndSession(t, id)
+	close(stop)
+	wg.Wait()
+	r.record(t, "end_session", a.as, res)
 }
 func (endMissingSession) run(t *testing.T, r *run) {
 	r.record(t, "end_missing_session", "", r.drv.EndSession(t, "missing"))

@@ -214,6 +214,7 @@ var runtimeRows = map[string]runtimeRow{
 	"driver_resume_streams":                                       reGolden(specCursor, specBoxGlobal),
 	"driver_settings_and_reads":                                   pendingOn("phase 4"),
 	"end_then_send_runs_no_report_of_the_stopped_child":           reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
+	"end_then_open_before_the_child_turn_ends_runs_no_report":     reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_idle_parent_cancels_running_child":                       reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_session_semantics":                                       reGolden(specView, specErrors, specReceipt),
 	"enqueue_joins_the_turn_at_the_tool_boundary":                 sameAsServe(),

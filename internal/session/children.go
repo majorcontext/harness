@@ -76,9 +76,10 @@ type Report struct {
 func (r *Report) Reason() string { return r.reason }
 
 // Settlement returns the outcome of the last ended turn of child session
-// id, and its report. ok is false while a turn runs, is suspended, or waits
-// for an answer, and after a completed turn while an input waits: the next
-// turn reports.
+// id, and its report. A turn that the end of a session stopped (cause ended)
+// gives no report. ok is false while a turn runs, is suspended, or waits for
+// an answer, and after a completed turn while an input waits: the next turn
+// reports.
 func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, bool) {
 	last := s.LastEnded()
 	_, busy := s.Turn()
@@ -92,9 +93,13 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, b
 	case last.StopReason == eventlog.StopInterrupted:
 		out = eventlog.OutcomeCanceled
 	}
+	settled := eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}
+	if last.Cause == eventlog.CauseEnded {
+		return settled, nil, true
+	}
 	r := &Report{child: id, agent: s.Agent(), turn: last.TurnID, outcome: out, reason: failReason(last), guidance: failGuidance(id, last),
 		result: LastText(s.History()), usage: s.Usage()}
-	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, r, true
+	return settled, r, true
 }
 
 // Parts returns the report as the parts of an input: the text for a parent

@@ -313,17 +313,16 @@ func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
 		var report *session.Report
-		var ended, byEnd bool
+		var ended bool
 		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
 			s, report, ended = session.Settlement(id, st)
-			byEnd = st.LastEnded().Cause == eventlog.CauseEnded
 		})
 		switch {
 		case errors.Is(err, session.ErrNotFound):
 			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
-			if byEnd || t.muting(id) {
+			if t.muting(id) {
 				report = nil
 			}
 			_ = a.Settle(t.cfg.Base, s, report)
