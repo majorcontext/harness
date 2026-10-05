@@ -203,7 +203,7 @@ func (a *Actor) ended(r *running, runErr error) {
 		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseStopped}, interrupted)
 		next = true
 	case errors.Is(cause, errEndTurn):
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseEnded, "", interrupted)
+		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseEnded}, interrupted)
 		next = true
 	case errors.Is(cause, errGoalCleared):
 		err = a.endTurn(a.cfg.Base, eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopInterrupted, Cause: eventlog.CauseGoalCleared}, interrupted)
