@@ -293,7 +293,7 @@ func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
 		}
 		converse(t, create(t, r), "hi")
 		wantLog(t, st, 2, "input.admitted a", "turn.started a", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
-			"turn.ended failed "+errFlaky.Error())
+			"turn.ended failed flaky")
 		if got := b.runs.Load(); got != 1 {
 			t.Errorf("runs = %d, want 1", got)
 		}
