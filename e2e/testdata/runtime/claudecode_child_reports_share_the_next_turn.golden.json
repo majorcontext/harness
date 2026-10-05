@@ -84,7 +84,7 @@
           "type": "user"
         },
         {
-          "content": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done a\n\nA background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done b",
+          "content": "A background task you started has finished. See the engine context below for its result, and continue accordingly.\n\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done a (usage: 1 in / 1 out)\n- \u003csession\u003e (agent=general-purpose) done: child done b (usage: 1 in / 1 out)\n]",
           "role": "user",
           "type": "user"
         }
