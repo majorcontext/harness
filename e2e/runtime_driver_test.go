@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,10 +49,17 @@ func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver 
 }
 
 // newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
+// A .harness.json in workDir joins the config as the project layer, as an
+// embedder loads it with config.LoadProject; the row then runs alone, because
+// the load reads the user config path from the process environment.
 func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir string) *runtimeDriver {
 	t.Helper()
 	runtimeKey()
 	c, err := config.Load(configPath)
+	if _, statErr := os.Stat(filepath.Join(workDir, ".harness.json")); workDir != "" && statErr == nil {
+		t.Setenv("HARNESS_CONFIG", configPath)
+		c, err = config.LoadProject(workDir)
+	}
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}

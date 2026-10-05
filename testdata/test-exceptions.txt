@@ -9,3 +9,8 @@ mcp_test.go AllowedTools at Create has no serve oracle: the engine create takes 
 plugin_test.go plugin start failures surface at Create here and at serve start on the engine; Create after Close is Go API
 reads_test.go both hosts open each session with work at start, so no row isolates a read that must not open a session
 goaltool_test.go the goal tool rows wait on the runtime: its evaluator transcript, its refusal wording, and the withdrawal of a set condition by adjust differ from serve
+internal/prompt/guidance_test.go goldens reduce the system prompt to a flag, so the base prompt text reaches no row
+internal/prompt/prompt_test.go an empty Options.WorkDir is Go API: no file is read
+internal/tool/builtin/builtin_test.go an empty Options.WorkDir is Go API: no built-in tool exists
+internal/tool/mcpsrc/mcpsrc_test.go AllowedTools has no serve oracle; MCP search scoring is a pure table
+internal/toolresult/toolresult_test.go pure secret-mask table with many edge cases (spec Tool-result retention)

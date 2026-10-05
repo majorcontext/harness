@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/base64"
 	"fmt"
 	"testing"
 
@@ -146,6 +147,56 @@ func TestContractFileToolsEdges(t *testing.T) {
 				ftTool("ls", ftArgs("path", "proj/nope")),
 			),
 			actions: oneTurn,
+		},
+	})
+}
+
+func TestContractFileToolsLimits(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString(mcpPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runScenarios(t, []scenario{
+		{
+			name: "file_tools_size_cap",
+			model: toolChain(
+				ftWrite("s.txt", "s\n"),
+				ftBash("dd if=/dev/zero of=big.txt bs=1 count=0 seek=20971521 2>/dev/null && dd if=/dev/zero of=s.txt bs=1 count=0 seek=20971521 2>/dev/null"),
+				ftRead(ftArgs("path", "big.txt")),
+				ftEdit("big.txt", "a", "b"),
+				ftWrite("s.txt", "x"),
+			),
+			actions: oneTurn,
+		},
+		{
+			name: "bash_output_and_exit_status",
+			model: toolChain(
+				ftBash("echo hi"),
+				ftBash("echo out; exit 3"),
+				ftBash("exit 4"),
+				ftTool("bash", ftArgs()),
+				ftBash("echo x; sleep 3 &"),
+			),
+			actions: oneTurn,
+		},
+		{
+			name:    "read_file_returns_an_image",
+			model:   toolChain(ftRead(ftArgs("path", "a.txt"))),
+			actions: append([]action{writeFile{path: "a.txt", body: string(png)}}, oneTurn...),
+		},
+		{
+			name: "write_guard_belongs_to_one_session",
+			model: append(promptChain("read", ftRead(ftArgs("path", "f.txt"))),
+				promptChain("write", ftWrite("f.txt", "y"))...),
+			actions: []action{
+				writeFile{path: "f.txt", body: "x\n"},
+				create{as: "a"},
+				submit{as: "a", text: "read"},
+				waitIdle{as: "a"},
+				create{as: "b"},
+				submit{as: "b", text: "write"},
+				waitIdle{as: "b"},
+			},
 		},
 	})
 }

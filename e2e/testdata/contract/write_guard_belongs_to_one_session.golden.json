@@ -1,0 +1,288 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "read"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "read"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "read_file",
+              "tool_input": {
+                "path": "f.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "1→x",
+              "tool_name": "read_file",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "write"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "write"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "write_file",
+              "tool_input": {
+                "content": "y",
+                "path": "f.txt"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "write_file: \u003cworkdir\u003e/f.txt exists and has not been read this session; read it first (or use edit_file)",
+              "tool_name": "write_file",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "read"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "read_file",
+            "arguments": {
+              "path": "f.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "1→x"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ],
+    "b": [
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "write"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "write_file",
+            "arguments": {
+              "content": "y",
+              "path": "f.txt"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "write_file: \u003cworkdir\u003e/f.txt exists and has not been read this session; read it first (or use edit_file)"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}

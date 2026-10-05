@@ -100,20 +100,6 @@ func bodyOf(t *testing.T, res callResult) map[string]any {
 	return obj
 }
 
-// requestSystem is the system prompt segments of the newest model request of a session.
-func requestSystem(t *testing.T, d *httpDriver, id string) []string {
-	t.Helper()
-	res := d.call(t, http.MethodGet, "/session/"+id+"/request", nil)
-	if res.Status != http.StatusOK {
-		t.Fatalf("GET /session/%s/request = %d %v", id, res.Status, res.Body)
-	}
-	var out []string
-	for _, seg := range bodyOf(t, res)["system"].([]any) {
-		out = append(out, seg.(string))
-	}
-	return out
-}
-
 // toolResults is the content of every tool result of a session, in order.
 func toolResults(msgs []transcriptMessage) []transcriptPart {
 	var out []transcriptPart

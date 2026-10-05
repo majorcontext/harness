@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -64,5 +65,48 @@ func TestSyncCarriesTheAttachmentOfAnInput(t *testing.T) {
 	sum := sha256.Sum256(pdf)
 	if got := rec.blobs["attachment-"+hex.EncodeToString(sum[:])]; !slices.Equal(got, pdf) {
 		t.Errorf("receiver blob = %q, want the attachment", got)
+	}
+}
+
+// A Sync receiver also needs the blob of a retained tool result, because the
+// history that it builds holds only the preview.
+func TestSyncCarriesTheBlobOfARetainedResult(t *testing.T) {
+	skipShort(t)
+	t.Setenv("HARNESS_E2E_KEY", "k")
+	fake := harnesstest.NewChat(t,
+		harnesstest.Step{Name: "bash", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: ftArgs("command", seq5000)}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}})
+	rec := &recordSync{blobs: map[string][]byte{}}
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Sync: rec, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Create(t.Context(), protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(t.Context(), protocol.Input{ID: "a", Parts: []protocol.Part{{Type: protocol.PartText, Text: "go"}}}); err != nil {
+		t.Fatal(err)
+	}
+	for e, err := range s.Events(t.Context(), 0) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if e.Kind == "turn.ended" {
+			break
+		}
+	}
+	if err := r.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var kept []byte
+	for k, v := range rec.blobs {
+		if strings.HasPrefix(k, "trh_1-") {
+			kept = v
+		}
+	}
+	if want := "1\n2\n"; len(kept) != 23893 || !strings.HasPrefix(string(kept), want) {
+		t.Errorf("receiver blob of trh_1 = %d bytes starting %.10q, want the whole result of 23893 bytes", len(kept), kept)
 	}
 }

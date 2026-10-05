@@ -1,0 +1,721 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo out; exit 3"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "out\n\nexit status 3",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo out; exit 3"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "out\n\nexit status 3",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "exit 4"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "exit status 4",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo out; exit 3"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "out\n\nexit status 3",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "exit 4"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "exit status 4",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "bash: missing command argument",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "hi\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo out; exit 3"
+              },
+              "tool_use_id": "toolu#2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "out\n\nexit status 3",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "exit 4"
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "exit status 4",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#4"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "bash: missing command argument",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo x; sleep 3 \u0026"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "x\n\n[note: a backgrounded process may still be running; its output after this point was not captured]",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "hi\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "echo out; exit 3"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "out\n\nexit status 3"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "bash",
+            "arguments": {
+              "command": "exit 4"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#7",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "exit status 4"
+          }
+        ]
+      },
+      {
+        "id": "msg#8",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "bash",
+            "arguments": {}
+          }
+        ]
+      },
+      {
+        "id": "msg#9",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "bash: missing command argument"
+          }
+        ]
+      },
+      {
+        "id": "msg#10",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "bash",
+            "arguments": {
+              "command": "echo x; sleep 3 \u0026"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#11",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "content": "x\n\n[note: a backgrounded process may still be running; its output after this point was not captured]"
+          }
+        ]
+      },
+      {
+        "id": "msg#12",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  }
+}
