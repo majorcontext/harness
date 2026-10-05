@@ -1,11 +1,13 @@
 package e2e
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func startServeFlags(t *testing.T, workdir string, extra map[string]any, env map[string]string, args []string, steps ...harnesstest.Step) (*runtimeDriver, *harnesstest.Server) {
@@ -49,8 +51,16 @@ func TestContractServeBearer(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			if got := serveRequest(t, p, http.MethodGet, row.path, row.auth, "").StatusCode; got != row.want {
-				t.Errorf("GET %s with %q = %d, want %d", row.path, row.auth, got, row.want)
+			resp := serveRequest(t, p, http.MethodGet, row.path, row.auth, "")
+			if resp.StatusCode != row.want {
+				t.Errorf("GET %s with %q = %d, want %d", row.path, row.auth, resp.StatusCode, row.want)
+			}
+			if row.want != http.StatusUnauthorized {
+				return
+			}
+			var body protocol.ErrorBody
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Error.Code != "unauthorized" {
+				t.Errorf("GET %s with %q body = %+v (%v), want the error code unauthorized", row.path, row.auth, body, err)
 			}
 		})
 	}

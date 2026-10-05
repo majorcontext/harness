@@ -104,6 +104,7 @@ var boxesFeatures = []struct {
 	{"config plugins", []string{"plugin_tools_listed_and_run", "plugin_boxes_style_command_and_dir", "plugin_before_hook_rewrites_and_blocks"}},
 
 	{"config owner_epoch and sync", []string{"sync_conflict_is_final_and_ends_the_session", "sync_server_error_is_sent_again", "sync_splits_a_batch_under_the_body_cap", "catch_up_conflict_skips_the_session_and_reports_it"}},
+	{"GET /health capabilities", []string{"health_reports_the_delta_row_identity_capability"}},
 	{"GET /models", []string{"models_lists_the_configured_providers"}},
 	{"POST /sessions/{id}/answer", []string{"claudecode_question_parks_then_answer_resumes"}},
 	{"DELETE /sessions/{id}", []string{"end_session_semantics"}},

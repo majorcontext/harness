@@ -41,32 +41,47 @@ func TestContractRuntimeSessionSync(t *testing.T) {
 	})
 }
 
-func TestContractRuntimeHealthNamesTheBuildAndTheStart(t *testing.T) {
+func TestContractRuntimeHealth(t *testing.T) {
 	skipShort(t)
-	onHosts(t, func(t *testing.T, h host) {
-		before := time.Now().Add(-time.Minute)
-		d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil)
-		res := d.call(t, http.MethodGet, "/health", nil)
-		body := bodyOf(t, res)
-		if res.Status != http.StatusOK || body["status"] != "ok" {
-			t.Fatalf("/health = %d %v, want 200 ok", res.Status, body)
-		}
-		for _, key := range []string{"version", "vcs_revision", "vcs_time", "session_sync", "started_at", "capabilities"} {
-			if _, ok := body[key]; !ok {
-				t.Errorf("/health has no %s: %v", key, body)
+	rows := []struct {
+		name  string
+		check func(t *testing.T, body map[string]any, before time.Time)
+	}{
+		{"health_names_the_build_and_the_start", func(t *testing.T, body map[string]any, before time.Time) {
+			for _, key := range []string{"version", "vcs_revision", "vcs_time", "session_sync", "started_at", "capabilities"} {
+				if _, ok := body[key]; !ok {
+					t.Errorf("/health has no %s: %v", key, body)
+				}
 			}
-		}
-		if body["session_sync"] != "fsync" {
-			t.Errorf("/health session_sync = %v, want fsync", body["session_sync"])
-		}
-		if body["version"] == "" {
-			t.Errorf("/health version is empty")
-		}
-		if at, err := time.Parse(time.RFC3339, fmt.Sprint(body["started_at"])); err != nil || at.Before(before) || at.After(time.Now().Add(time.Minute)) {
-			t.Errorf("/health started_at = %v (%v), want the start of the host", body["started_at"], err)
-		}
-		if caps, _ := body["capabilities"].([]any); len(caps) != 1 || caps[0] != "delta_row_identity" {
-			t.Errorf("/health capabilities = %v, want [delta_row_identity]", body["capabilities"])
+			if body["session_sync"] != "fsync" {
+				t.Errorf("/health session_sync = %v, want fsync", body["session_sync"])
+			}
+			if body["version"] == "" {
+				t.Errorf("/health version is empty")
+			}
+			if at, err := time.Parse(time.RFC3339, fmt.Sprint(body["started_at"])); err != nil || at.Before(before) || at.After(time.Now().Add(time.Minute)) {
+				t.Errorf("/health started_at = %v (%v), want the start of the host", body["started_at"], err)
+			}
+		}},
+		{"health_reports_the_delta_row_identity_capability", func(t *testing.T, body map[string]any, _ time.Time) {
+			if caps, _ := body["capabilities"].([]any); len(caps) != 1 || caps[0] != "delta_row_identity" {
+				t.Errorf("/health capabilities = %v, want [delta_row_identity]", body["capabilities"])
+			}
+		}},
+	}
+	onHosts(t, func(t *testing.T, h host) {
+		for _, row := range rows {
+			t.Run(row.name, func(t *testing.T) {
+				t.Parallel()
+				before := time.Now().Add(-time.Minute)
+				d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil)
+				res := d.call(t, http.MethodGet, "/health", nil)
+				body := bodyOf(t, res)
+				if res.Status != http.StatusOK || body["status"] != "ok" {
+					t.Fatalf("/health = %d %v, want 200 ok", res.Status, body)
+				}
+				row.check(t, body, before)
+			})
 		}
 	})
 }
