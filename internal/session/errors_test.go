@@ -83,11 +83,24 @@ func lines(t *testing.T, l *memLog, after uint64) []string {
 	return out
 }
 
+// lastMessageContains matches a request whose last message holds substr in a
+// text part, also in an engine context part.
+func lastMessageContains(substr string) harnesstest.Matcher {
+	return func(r harnesstest.Request) bool {
+		for _, p := range r.Messages[len(r.Messages)-1].Parts {
+			if p.Kind == "text" && strings.Contains(p.Text, substr) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func TestModelCallErrors(t *testing.T) {
 	type step = harnesstest.Step
 	type reply = harnesstest.Reply
 	cut := func(name, after string, calls ...harnesstest.ToolCall) step {
-		return step{Name: name, Match: harnesstest.LastUserText(after), Reply: reply{Text: name, ToolCalls: calls, StopReason: "max_tokens"}}
+		return step{Name: name, Match: lastMessageContains(after), Reply: reply{Text: name, ToolCalls: calls, StopReason: "max_tokens"}}
 	}
 	const nudge = "auto-continue 1 of 1"
 	started := []string{"input.admitted", "turn.started"}
@@ -97,11 +110,11 @@ func TestModelCallErrors(t *testing.T) {
 		want  []string
 	}{
 		{"a response cut off at max_tokens continues",
-			[]step{cut("first half", "charlie"), {Name: "rest", Match: harnesstest.LastUserText(nudge), Reply: reply{Text: "second half"}}},
+			[]step{cut("first half", "charlie"), {Name: "rest", Match: lastMessageContains(nudge), Reply: reply{Text: "second half"}}},
 			[]string{"context.measured", "item.completed assistant first half", "context.measured", "item.completed assistant second half",
 				"turn.ended completed"}},
 		{"a tool call of a cut-off response does not run",
-			[]step{cut("call", "charlie", harnesstest.ToolCall{ID: "c1", Name: "write_file"}), {Name: "rest", Match: harnesstest.LastUserText(nudge), Reply: reply{Text: "ok"}}},
+			[]step{cut("call", "charlie", harnesstest.ToolCall{ID: "c1", Name: "write_file"}), {Name: "rest", Match: lastMessageContains(nudge), Reply: reply{Text: "ok"}}},
 			[]string{"context.measured", "item.completed assistant call c1", "item.completed tool c1 not run: the response was cut off at its output limit", "context.measured",
 				"item.completed assistant ok", "turn.ended completed"}},
 		{"a cut-off response past the continuations fails the turn",

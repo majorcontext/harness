@@ -88,8 +88,7 @@ func TestClaudeCodeReadsTheHistoryOfAnotherModel(t *testing.T) {
 func TestClaudeCodeReadsTheHistoryOfANativeTurnThatChangedModelInTheMiddle(t *testing.T) {
 	native := harnesstest.New(t,
 		harnesstest.Step{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Text: "checking", Block: true,
-			ToolCalls: []harnesstest.ToolCall{{ID: "toolu_n", Name: "echo", Input: map[string]any{}}}}},
-		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("echo"), Reply: harnesstest.Reply{Text: "native reply"}})
+			ToolCalls: []harnesstest.ToolCall{{ID: "toolu_n", Name: "echo", Input: map[string]any{}}}}})
 	argvLog := fakeClaude(t, "")
 	r := bridgeRuntime(t, native)
 	s := createClaude(t, r, nil)

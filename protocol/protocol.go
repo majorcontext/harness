@@ -227,6 +227,19 @@ type Resolution struct {
 	Dismiss bool            `json:"dismiss,omitempty"`
 }
 
+// Resolved is the receipt of a Resolution: the seq of its request.resolved
+// record, and whether an answer started a turn.
+type Resolved struct {
+	Seq    uint64 `json:"seq"`
+	Status string `json:"status"`
+}
+
+// The Status of a Resolved: an answer starts a turn, and a dismissal starts none.
+const (
+	ResolvedStarted   = "started"
+	ResolvedDismissed = "dismissed"
+)
+
 // Event is one durable record of a session log, or an ephemeral frame of a
 // live subscription. An ephemeral frame is never stored; its Seq is the last
 // durable seq when it was sent.
@@ -266,7 +279,7 @@ type StatusFrame struct {
 	NextAt  time.Time `json:"next_at,omitzero"`
 }
 
-// ListSessions selects a page of sessions in ID order.
+// ListSessions selects a page of sessions in creation order.
 type ListSessions struct {
 	After string `json:"after,omitempty"`
 	Limit int    `json:"limit,omitempty"`

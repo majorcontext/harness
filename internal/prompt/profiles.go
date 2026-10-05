@@ -2,6 +2,7 @@ package prompt
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -49,11 +50,12 @@ var profileKeys = []string{"name", "description", "tools", "model", "color"}
 
 // Profiles returns the built-in profiles and each valid *.md file of dirs in
 // the agent format of Claude Code, by name. A file replaces a built-in
-// profile of its name. A file that is not valid, or that repeats the name of
-// an earlier file, is skipped with a WARN log line.
-func Profiles(dirs []string) map[string]Profile {
+// profile of its name. A file that is not valid is skipped with a WARN log
+// line. A file that repeats the name of an earlier file, in one directory or
+// across dirs, fails the load, and the error names both files.
+func Profiles(dirs []string) (map[string]Profile, error) {
 	out := map[string]Profile{GeneralPurpose: generalPurpose, explore.Name: explore, plan.Name: plan}
-	seen := map[string]bool{}
+	source := map[string]string{}
 	read := map[string]bool{}
 	for _, dir := range dirs {
 		if dir = filepath.Clean(dir); read[dir] {
@@ -67,24 +69,21 @@ func Profiles(dirs []string) map[string]Profile {
 			}
 			path := filepath.Join(dir, e.Name())
 			p, err := profile(path)
-			if err == nil && seen[p.Name] {
-				err = errDuplicate
-			}
 			if err != nil {
 				slog.Warn("prompt: agent profile skipped", "path", path, "err", err)
 				continue
 			}
-			seen[p.Name] = true
+			if first, ok := source[p.Name]; ok {
+				return nil, fmt.Errorf("agent definition %s: name %q already defined in %s", path, p.Name, first)
+			}
+			source[p.Name] = path
 			out[p.Name] = p
 		}
 	}
-	return out
+	return out, nil
 }
 
-var (
-	errDuplicate = errors.New("the name repeats another profile")
-	errFields    = errors.New("name and description are required")
-)
+var errFields = errors.New("name and description are required")
 
 func profile(path string) (Profile, error) {
 	data, err := os.ReadFile(path)

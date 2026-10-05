@@ -77,7 +77,11 @@
       }
     },
     "answer_question.a#2": {
-      "status": 204
+      "status": 202,
+      "body": {
+        "seq": 10,
+        "status": "started"
+      }
     },
     "get_session.a": {
       "status": 200,

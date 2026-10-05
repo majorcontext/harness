@@ -202,7 +202,10 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		if step.Err() != nil {
 			return context.Cause(step)
 		}
-		if m, set := to.Settings(); m != "" && b.Capabilities(m).OwnsLoop == caps.OwnsLoop {
+		if m, set := to.Settings(); m != "" {
+			if b.Capabilities(m).OwnsLoop != caps.OwnsLoop {
+				return fmt.Errorf("turn: the model changed to %s, which another kind of backend runs, so this turn cannot call it", m)
+			}
 			req.Model, req.Settings = m, set
 		}
 		s, call := &sink{Turn: to}, req
@@ -246,7 +249,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 		case continued < lim.Continuations:
 			continued++
 			nudge = []eventlog.Message{{Role: eventlog.RoleUser,
-				Parts: []eventlog.Part{{Type: eventlog.PartText, Text: fmt.Sprintf(continuation, continued, lim.Continuations)}}}}
+				Parts: []eventlog.Part{{Type: eventlog.PartEngineContext, Text: fmt.Sprintf(continuation, continued, lim.Continuations)}}}}
 		case lim.Continuations <= 0:
 			return nil
 		default:

@@ -65,7 +65,7 @@ func TestClaudeCodeAnswerResumesTheParkedCall(t *testing.T) {
 	s, st, argvLog := parkedQuestion(t)
 	after := s.View().HeadSeq
 	answer := json.RawMessage(`{"Which database?":"SQLite"}`)
-	if err := s.Resolve(bg, "toolu_q", protocol.Resolution{Answer: answer}); err != nil {
+	if _, err := s.Resolve(bg, "toolu_q", protocol.Resolution{Answer: answer}); err != nil {
 		t.Fatal(err)
 	}
 	await(t, s, after, "turn.ended")

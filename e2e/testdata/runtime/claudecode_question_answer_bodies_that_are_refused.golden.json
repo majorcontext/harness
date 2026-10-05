@@ -77,7 +77,11 @@
       }
     },
     "answer_question.a#10": {
-      "status": 204
+      "status": 202,
+      "body": {
+        "seq": 10,
+        "status": "started"
+      }
     },
     "answer_question.a#11": {
       "status": 409,

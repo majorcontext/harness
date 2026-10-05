@@ -299,11 +299,11 @@ type resolveCall struct {
 	res protocol.Resolution
 }
 
-func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) error {
+func (s stub) Resolve(_ context.Context, id string, res protocol.Resolution) (protocol.Resolved, error) {
 	if s.resolved != nil {
 		*s.resolved = resolveCall{id, res}
 	}
-	return s.resolveErr
+	return protocol.Resolved{}, s.resolveErr
 }
 
 func (s stub) Create(context.Context, protocol.CreateSession) (stub, error) { return s, nil }

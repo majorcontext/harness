@@ -110,19 +110,20 @@ func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error {
 
 // Resolve answers or dismisses the open request requestID: with res.Answer, the
 // answer of the user, or with res.Dismiss. An answer runs a turn with no input,
-// which hands the answer to the backend that asked. A request that is not open
+// which hands the answer to the backend that asked. The receipt holds the seq of
+// the request.resolved record and says whether a turn started. A request that is not open
 // fails with ErrRequestNotPending. For a question of Claude Code the request
 // ID is the call ID of the AskUserQuestion item, and the answer maps each
 // question to the chosen label or free text.
-func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error {
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error) {
 	if res.Dismiss && len(res.Answer) > 0 || !res.Dismiss && !hasAnswer(res.Answer) || len(res.Answer) > 0 && !json.Valid(res.Answer) {
-		return fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
+		return protocol.Resolved{}, fmt.Errorf("%w: a resolution holds one answer, or a dismissal", ErrInvalidRequest)
 	}
-	err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
+	got, err := s.a.Resolve(ctx, requestID, res.Answer, res.Dismiss)
 	if errors.Is(err, session.ErrBadAnswer) {
-		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+		return protocol.Resolved{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return err
+	return got, err
 }
 
 // hasAnswer reports whether answer is a JSON value other than null, an empty

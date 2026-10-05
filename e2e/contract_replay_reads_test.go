@@ -178,6 +178,16 @@ func TestContractReplayReadsC(t *testing.T) {
 			),
 		},
 		{
+			name: "list_sessions_in_creation_order",
+			actions: []action{
+				create{as: "a", staysActive: true}, create{as: "b", staysActive: true}, create{as: "c", staysActive: true},
+				create{as: "d", staysActive: true}, create{as: "e", staysActive: true}, create{as: "f", staysActive: true},
+				listSessions{},
+				restart{},
+				listSessions{},
+			},
+		},
+		{
 			name:  "status_and_list_cold_after_restart",
 			model: []harnesstest.Step{text("one", "one", "1"), text("two", "two", "2")},
 			actions: []action{

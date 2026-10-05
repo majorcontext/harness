@@ -130,7 +130,7 @@ func (r *Runtime) Handler() http.Handler
 func (r *Runtime) Create(ctx context.Context, req protocol.CreateSession) (*Session, error)
 func (r *Runtime) Open(ctx context.Context, id string) (*Session, error) // acquire, fence, replay, resume
 func (r *Runtime) End(ctx context.Context, id string) error // end and unload; session_busy while a turn or a control command runs; the log stays
-func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
+func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) // creation order
 func (r *Runtime) Models() []protocol.Model
 func (r *Runtime) Commands() (protocol.Commands, error) // the slash-command menu
 // Close hands off every session, then returns once Sync has acknowledged
@@ -141,7 +141,7 @@ func (r *Runtime) Close(ctx context.Context) error
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
 func (s *Session) Interrupt(ctx context.Context, req protocol.Interrupt) error
-func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
+func (s *Session) Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
 func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
 func (s *Session) SetGoal(ctx context.Context, g protocol.Goal) error
 func (s *Session) ClearGoal(ctx context.Context) error
@@ -337,7 +337,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `Submit(input)` | Append `input.admitted`; start a turn, queue, or steer |
 | `Interrupt(turnID?)` | Cancel the turn; reply when it has stopped |
 | `Cancel()` | Append `input.withdrawn` for each queued input, then cancel the turn, in one step; reply when it has stopped |
-| `Update(settings)` | Check the model; append `settings.changed`. A running turn takes the new model and settings at its next model call, unless the new model has another kind of backend: one that owns its loop or one that does not |
+| `Update(settings)` | Check the model; append `settings.changed`. A running turn takes the new model and settings at its next model call. When the new model has another kind of backend, one that owns its loop or one that does not, the turn fails at its next model call |
 | `SetGoal(...)`, `StartGoal(...)`, `AdjustGoal(...)`, `ClearGoal()` | Append goal events |
 | `Compact(keep)` | Run a compaction as the run of the actor; `keep` replaces `compaction_keep_turns` |
 | `Spawn(child, agent)` | Append `child.spawned`; return the `session.created` of the child. A settled child spawns again before it gets an input from the `task` tool; a child that has not settled appends nothing |
@@ -346,7 +346,7 @@ Each live session is one goroutine. It holds the `Ownership` and the `State`. Co
 | `End()` | Fail with `session_busy` while a turn or a control command runs; else stop a compaction or an evaluation that runs, as `Release` does, stop each live child, then stop and release ownership. A child that this walk stops settles `canceled` with no report, and the `turn.ended` of its turn has cause `ended`, so a parent that opens later drops only those reports. The log stays |
 | `Record(command)` | Append `command.recorded`; a repeated input ID returns the newest status |
 | `Withdraw(id)` | Append `input.withdrawn` if still queued; otherwise append nothing |
-| `Resolve(requestID, resolution)` | Append `request.resolved`; an answer starts a turn with no input, and a dismissal starts none |
+| `Resolve(requestID, resolution)` | Append `request.resolved`; an answer starts a turn with no input, and a dismissal starts none. The receipt `protocol.Resolved` holds the `seq` of `request.resolved` and the `status`: `started` for an answer, `dismissed` for a dismissal |
 
 The actor appends with no other goroutine. It checks the batch with `eventlog.Check`, appends it with `Store.Append`, applies each record, and publishes a new view. A command that needs durability replies after `Apply`. The store write is the only wait on disk in the actor.
 
@@ -507,7 +507,7 @@ One `sync.WaitGroup` per runtime tracks every goroutine that the runtime starts.
 
 ```
 POST   /sessions                              create; client id optional
-GET    /sessions?after=&limit=                list
+GET    /sessions?after=&limit=                list in creation order
 GET    /sessions/{id}                         view
 PATCH  /sessions/{id}                         model, effort, service_tier
 DELETE /sessions/{id}                         end; 204; the log stays
@@ -518,7 +518,7 @@ POST   /sessions/{id}/interrupt               {turn_id?, tree?}
 POST   /sessions/{id}/compact                  {keep_turns?}; 200 with {from_seq, to_seq, by_backend, folded}
 PUT    /sessions/{id}/goal                    {condition, max_turns}; 200 with the view
 DELETE /sessions/{id}/goal                    204
-POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}
+POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}; an answer replies 202 {seq, status}, a dismissal 204
 GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream
 GET    /sessions/{id}/messages?before=&limit= projection, same seq
 GET    /models                                models and their capabilities
@@ -667,7 +667,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 - Retry, the stall watchdog, and compaction read `Capabilities`. No code compares a provider name.
 - A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times, when the call has recorded no item. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
 - The stall watchdog ends a model call that reports nothing for `stream_idle_timeout_s` (default 300, as Codex). A delta, an item, and `Sink.Alive` each reset it. `modelapi` calls `Alive` for each provider event with no delta, such as a keep-alive or a tool argument that still streams. The stall is retryable. A compaction summary has the same watchdog and no retry. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
-- `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
+- `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds, in `<harness-engine-context>` tags, so the model reads it as engine text. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
 - Private backend state is one `backend.state` event plus a blob, one blob key for each owner. The Claude Code transcript mirror is that blob. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
 - `Telemetry` carries the usage of one model call, its context reading, and the subscription snapshot that the provider reported with it. Cost is not built yet.
@@ -746,7 +746,7 @@ type Toolset struct {
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.
 
-Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `*.md` in each of `agent_defs_dirs` (default `<WorkDir>/.agents`; a relative path joins `WorkDir`; a file of an earlier dir wins a repeated name) at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. `session_info` joins the read-only set at the switch (see Decided); it is not built yet. Tool names differ by backend, so a spawn keeps only the names of a profile that `known` accepts for the model of the child: a runtime tool, a plugin tool, an MCP tool, or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid, or that repeats a name, is skipped with a WARN log line. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child. The runtime reads the profile once, when it starts the child, and the spawn uses that same read for the model and the tools of the child.
+Agent profiles name a kind of child, in the agent format of Claude Code so one file serves every backend: `name`, `description`, `tools` (comma separated; omitted allows every tool of the parent), `model` (a ref or an alias; omitted or `inherit` keeps the model of the parent), and a prompt body. `color` is read and ignored; any other key skips the file. `internal/prompt.Profiles` reads `*.md` in each of `agent_defs_dirs` (default `<WorkDir>/.agents`; a relative path joins `WorkDir`; a name that two files repeat fails the load) at each spawn, beside the built-in profiles, which a file of the same name replaces. The built-in `general-purpose` allows every tool of the parent. The built-in `explore` and `plan` allow only the read-only file tools, and `plan` asks for an implementation plan. `session_info` joins the read-only set at the switch (see Decided); it is not built yet. Tool names differ by backend, so a spawn keeps only the names of a profile that `known` accepts for the model of the child: a runtime tool, a plugin tool, an MCP tool, or a built-in tool of its model. A profile left with no tool logs a WARN line. A file that is not valid is skipped with a WARN log line. A name that two files repeat, in one directory or across `agent_defs_dirs`, fails the load, and the error names both files, with no `engine:` prefix: the spawn fails its tool call, and a session of that agent does not open until the repeat is gone. A profile applies through the allowed tools of the child (`turn.Restrict`) and its body as the last segment of the system prompt of the child. The runtime reads the profile once, when it starts the child, and the spawn uses that same read for the model and the tools of the child.
 
 ### Built-in tools
 
@@ -987,15 +987,10 @@ PR #359 closes unmerged; its design is in this doc. The meta home chat has no ol
 
 ## Open questions
 
-- Does the switch wrap the messages that the engine writes for the model in `<harness-engine-context>` tags? Serve wraps the `[continuation: …]` message of a max_tokens turn, so the model reads it as engine text. The runtime sends it as plain user text.
-- Does `GET /sessions` keep creation order? It lists in ID order, and a minted ID has a random suffix. Serve listed in creation order.
-- Does the answer route keep the serve receipt `202 {seq, status}`? The runtime answers `204`.
 - Does the switch keep the context gauge and the session cost of a Claude Code turn? Serve took the usage of the `result` frame as the last call when no assistant frame carried usage, and added `total_cost_usd` of each turn to `session_cost_usd` of `subscription_usage`, with provider `claude`. The runtime reads the gauge from an assistant frame only, and reports no cost.
 - Does a failed Claude Code turn run again? Serve ran the CLI once, and the turn failed with the text of the `result` frame. The runtime marks `error_during_execution` as retryable, so it runs the CLI again up to `prompt_retries` times before the turn fails.
-- Does a repeated agent definition name fail the load? The engine fails it and names both files. The runtime keeps the first file of that name, in one directory and across `agent_defs_dirs`, and logs a WARN line for the other.
 - What posts `SyncBatch` to the control plane in a box? The engine posted each journal record to `event_sink`. The runtime has `Options.Sync` and no HTTP client for it, and `New` refuses `event_sink`. The epoch of a batch is `claim_epoch` (see Decided).
 - Does the log keep a `task_report` part and an `engine_context` part? A report that a child writes is an input with its text and a `task_report` line, so the log holds the report twice, and the `log` of `task` and `get_conversation_history` show the segment. The turn that a busy parent runs takes the line as a user message of one `engine_context` part. The engine kept the segment out of its history, and `client/session.messages` of a plugin returns that message with no part.
-- Does a settings change to a model of another kind of backend take effect in the middle of a turn? Serve fails the turn at its next model call, because Claude Code has no model API. The runtime finishes the turn on its own backend, and the next turn uses the new model.
 
 ## Closed parity questions
 
@@ -1014,6 +1009,11 @@ Andy closed these on 2026-10-04 and 2026-10-05: the switch keeps each one, at pa
 - What does `DELETE /sessions/{id}` do? It matches the engine: `409 session_busy` while a turn or a control command runs, `404 session_not_found` for an unknown session, else it ends the session (a compaction or an evaluation that runs stops, as under `Release`) and answers `204`. It stops each live child, as `interrupt` with `tree` does, and unloads the session, as `Release` does. Only a child that this walk stopped loses its report: the walk marks the stop durably, as cause `ended` on the `turn.ended` of the child, so a parent that opens later drops only those reports. Every other child whose turn ended stopped, such as one that `interrupt` stopped before the `DELETE`, settles `canceled` and reports as "Children" says, as the engine did; the `DELETE` changes none of this. The log stays in the store, so a later `DELETE` of a stored session that is not loaded also answers `204`, and the session can open again. It is `Runtime.End` and an actor command.
 - What page `limit` does `GET /sessions/{id}/messages` take? The engine page route limit: default 100 when `limit` is absent or 0, at most 1000. A larger, negative, non-integer, or repeated `limit` fails with `invalid_request` (400), as the engine page route does; it does not clamp.
 - When does the runtime contract step of CI gate? At the phase 4 switch, as "Contract suite" says.
+- Does the switch wrap the messages that the engine writes for the model in `<harness-engine-context>` tags? Yes, built: the `[continuation: …]` message of a max_tokens turn is in the tags, as the engine sent it, and the log never holds it.
+- Does `GET /sessions` keep creation order? Yes, built: it lists by the time of the first record of each session, and equal times order by ID. `after` is the ID of the last session of the page before it.
+- Does the answer route keep the receipt `202 {seq, status}`? Yes, built: an answer replies `202` with the `seq` of `request.resolved` and the `status` `started`. A dismissal has no engine route and replies `204`.
+- Does a repeated agent definition name fail the load? Yes, built: see "tool, prompt, and config", the paragraph on agent profiles. The load fails and names both files, as the engine did.
+- Does a settings change to a model of another kind of backend fail the running turn? Yes, built, as the engine failed it: the turn fails at its next model call, and the next turn uses the new model.
 
 ## Deliberate parity breaks
 
@@ -1024,13 +1024,8 @@ Each row is a difference between the runtime and the engine that remains after t
 | Claude Code `/compact` | A `/compact` message and `compaction.claude_code` with the tokens before and after | `compaction.applied` with `by_backend`, and no `/compact` message | Decided by the Compaction rules above | `claudecode_compact_delegated` |
 | Claude Code gauge and cost | The gauge and the cost come from the `result` frame | The gauge comes from the assistant frames, and no cost | Open: see Open questions | `claudecode_turn_text_and_tool` and `claudecode_error_result_fails_turn` |
 | Claude Code failed turn | One run | A run again up to `prompt_retries` times | Open: see Open questions | `claudecode_error_result_fails_turn` |
-| `[continuation: …]` message of a max_tokens turn | In `<harness-engine-context>` tags | Plain user text | Open: see Open questions | `bifrost_max_tokens_continuation` and `max_tokens_continuation` wait, as pending rows |
-| Order of `GET /sessions` | Creation order | ID order | Open: see Open questions | `status_and_list_cold_after_restart` waits, as a pending row |
-| Receipt of the answer route | `202 {seq, status}` | `204` | Open: see Open questions | `claudecode_question_parks_then_answer_resumes` and `claudecode_question_unknown_call_id_conflicts` |
 | Log parts of a child report to a busy parent | The `[tasks: …]` segment pinned for the model calls and kept out of history | A `task_report` part in the input and a user message of one `engine_context` part in the log | Open: see Open questions | `child_report_reaches_a_busy_parent_at_the_tool_boundary` |
 | Cause of a child that `DELETE /sessions/{id}` stops | No `cause` field on a turn end | Cause `ended` on the `turn.ended` of the child | Decided by the cause list of State machines | `end_idle_parent_cancels_running_child` and `end_then_send_runs_no_report_of_the_stopped_child` |
-| Settings change to a model of another kind of backend in the middle of a turn | The turn fails at its next model call | The turn finishes on its own backend, and the next turn uses the new model | Open: see Open questions | None: no row changes between a model API and a delegated backend |
-| Repeated agent definition name | The load fails and names both files | The first file of that name wins, in one directory and across `agent_defs_dirs`, and a WARN log line names the other | Open: see Open questions | None: no row repeats a name |
 | `event_sink` | The engine posts each journal record to the URL | `New` refuses the key; `Options.Sync` is a Go interface, and no HTTP client implements it | Open: see Open questions | None: no row sets `event_sink` |
 
 ## Decided
@@ -1058,7 +1053,7 @@ Each row is a difference between the runtime and the engine that remains after t
 - The runtime ports questions (`AskUserQuestion` and `Resolve`) and Codex prewarm before the phase 4 switch. The first turn of a session waits for an in-flight warm-up, as the first prompt of the engine does.
 - `turn.ended` has a typed `cause` (2026-10-04), as Codex `TurnAborted.reason` and the Claude Code `result` subtype type it. `error` holds only the masked, capped message, and a reader uses `cause` and never parses the text of `error`.
 - A tool call that is still open when a turn completes, fails, or ends `provider_exhausted`, or when a handoff suspends the turn, gets a synthetic result that says the call did not finish (2026-10-04), as Codex and Claude Code do. This replaces the earlier rule that the runtime has no repair site for an orphan tool call.
-- The parity questions under Closed parity questions are closed (2026-10-04, and 2026-10-05 for the child report by backend and for `DELETE /sessions/{id}`): mid-turn delivery, `session_info` and `model`, the banner, the plugin inventory, the crash marker, the MCP connect reason, the child report in the `[tasks: …]` segment of the engine, read by backend as the mid-turn delivery bullet says, the history bridge and the frames of a subagent, questions and Codex prewarm, the warm-up wait, `DELETE /sessions/{id}`, the messages page limit, and the CI step of the contract suite. The questions under Open questions stay open.
+- The parity questions under Closed parity questions are closed (2026-10-04, and 2026-10-05 for the child report by backend and for `DELETE /sessions/{id}`): mid-turn delivery, `session_info` and `model`, the banner, the plugin inventory, the crash marker, the MCP connect reason, the child report in the `[tasks: …]` segment of the engine, read by backend as the mid-turn delivery bullet says, the history bridge and the frames of a subagent, questions and Codex prewarm, the warm-up wait, `DELETE /sessions/{id}`, the messages page limit, the CI step of the contract suite, the `[continuation: …]` tags, the creation order of `GET /sessions`, the receipt of the answer route, a repeated agent definition name, and a settings change to another kind of backend in the middle of a turn. The questions under Open questions stay open.
 - Boxes pins an exact harness commit for its box images (2026-10-04), and harness reaches boxes only through a bump PR (see Boxes integration).
 - The cutover is one quiesced cutover, as this spec says: no per-box canary, no `harness_api` column, and no dual stack. A rehearsal on a copy of production data and a tested rollback come first, so the `box_journal_*` tables of boxes drop one release after the cutover.
 - On start, a box harness replicates every stored session through `Sync`, not only the open ones. At the cutover, the converted archive logs load into `pgstore` through the same receiver, so there is one conversion path and no converter in the control plane.

@@ -52,12 +52,12 @@ const (
 
 	specPromptSwitch = "At the switch, the `runtime_prompt` contract rows change in three ways"
 
-	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
-	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
-	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
-	specOpenGauge         = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
-	specOpenRetry         = "Does a failed Claude Code turn run again?"
-	specOpenChildParts    = "Does the log keep a `task_report` part and an `engine_context` part?"
+	specContinuation   = "in `<harness-engine-context>` tags, so the model reads it as engine text"
+	specListOrder      = "list in creation order"
+	specAnswerReceipt  = "an answer replies 202 {seq, status}, a dismissal 204"
+	specOpenGauge      = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
+	specOpenRetry      = "Does a failed Claude Code turn run again?"
+	specOpenChildParts = "Does the log keep a `task_report` part and an `engine_context` part?"
 
 	specStopped       = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
 	specInterrupt     = "`interrupt` stops the running turn only. The next queued input then starts"
@@ -69,7 +69,8 @@ const (
 	specHandoff       = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
 	specToolsSerial   = "Tools run one at a time, so the tool-batching segment is gone."
 	specPromptOnce    = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
-	specOpenMidTurn   = "Does a settings change to a model of another kind of backend take effect in the middle of a turn?"
+	specRepeatName    = "fails the load, and the error names both files"
+	specMidTurnFails  = "When the new model has another kind of backend, one that owns its loop or one that does not, the turn fails at its next model call"
 	specTypedReceipt  = "A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command"
 	specCmdRepeat     = "A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`."
 	specCmdOps        = "`model`, `thinking`, and `tier` are `Update`"
@@ -137,7 +138,7 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_context_overflow":                                    reGolden(specView, specOverflowFails),
 	"bifrost_goal_met_first_turn":                                 reGolden(specItems),
 	"bifrost_goal_not_met_then_met":                               reGolden(specItems),
-	"bifrost_max_tokens_continuation":                             pendingOn(specOpenContinuation),
+	"bifrost_max_tokens_continuation":                             reGolden(specView, specContinuation),
 	"bifrost_prompt_attachments":                                  reGolden(specItems),
 	"bifrost_reasoning_and_effort":                                reGolden(specItems, specUpdate),
 	"bifrost_text_reply":                                          reGolden(specItems),
@@ -176,9 +177,9 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_interrupt_mid_turn":                               reGolden(specView),
 	"claudecode_question_dismissed_by_compact":                    reGolden(specWaiting, specView, specCompactResult),
 	"claudecode_question_dismissed_by_next_prompt":                reGolden(specWaiting, specView),
-	"claudecode_question_answer_run_takes_no_steer_input":         reGolden(specWaiting, specView, specAnswerNoSteer, specOpenAnswerReceipt),
-	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specOpenAnswerReceipt),
-	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specOpenAnswerReceipt),
+	"claudecode_question_answer_run_takes_no_steer_input":         reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt),
+	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specAnswerReceipt),
+	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specAnswerReceipt),
 	"claudecode_prompt_attachments":                               sameAsServe(),
 	"claudecode_queued_prompt_injected_mid_turn":                  reGolden(specView),
 	"claudecode_rate_limit_event_reaches_subscription_usage":      reGolden(specView),
@@ -236,7 +237,7 @@ var runtimeRows = map[string]runtimeRow{
 	"interrupt_idle_is_noop":                                      sameAsServe(),
 	"journal_pages_follow_cursor":                                 reGolden(specCursor, specEventsRoute),
 	"kill_mid_turn_then_continue":                                 sameAsServe(),
-	"max_tokens_continuation":                                     pendingOn(specOpenContinuation),
+	"max_tokens_continuation":                                     reGolden(specView, specContinuation),
 	"mcp_auto_default_threshold_defers_at_21_tools":               sameAsServe(),
 	"mcp_auto_default_threshold_stays_eager_at_20_tools":          sameAsServe(),
 	"mcp_auto_defers_over_threshold":                              sameAsServe(),
@@ -297,7 +298,8 @@ var runtimeRows = map[string]runtimeRow{
 	"session_settings_validation_and_persistence":                 reGolden(specModelCheck, specErrors, specUpdate, specView),
 	"sse_resume_after_kill":                                       reGolden(specCursor, specBoxGlobal),
 	"sse_resume_cursor":                                           reGolden(specCursor, specBoxGlobal),
-	"status_and_list_cold_after_restart":                          pendingOn(specOpenListOrder),
+	"list_sessions_in_creation_order":                             reGolden(specView, specListOrder),
+	"status_and_list_cold_after_restart":                          reGolden(specView, specListOrder),
 	"steer_joins_the_turn_at_the_tool_boundary":                   sameAsServe(),
 	"stream_stall":                                                reGolden(specView),
 	"task_child_result_reaches_parent":                            reGolden(specTaskInputs, specChildReport, specChildNoGoal),
@@ -308,39 +310,42 @@ var runtimeRows = map[string]runtimeRow{
 	"two_turns_keep_history":            sameAsServe(),
 	"usage_survives_a_mid_turn_restart": reGolden(specView, specHandoffResume),
 
-	"end_is_refused_while_a_typed_command_runs":                       reGolden(specTypedReceipt, specErrors, specReceipt),
-	"a_kill_interrupts_an_unfinished_command":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
-	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":       reGolden(specOverflowFolds, specBannerPrefix, specView),
-	"codex_http_truncated_and_empty_responses_are_retried":            reGolden(specView, specItems, specRetryable),
-	"codex_service_tier_reaches_the_request":                          reGolden(specView, specItems, specUpdate),
-	"codex_settings_switch_to_another_provider_keeps_the_history":     reGolden(specView, specItems, specUpdate),
-	"commands_menu_lists_builtin_and_prompt_commands":                 reGolden(specCmdMenuRoutes, specCmdUnsupport),
-	"create_checks_the_model":                                         reGolden(specModelCheck, specErrors, specView),
-	"create_without_a_model_takes_the_default_model":                  reGolden(specView),
-	"create_takes_an_unknown_model_when_no_window_is_required":        reGolden(specView),
-	"create_takes_an_unknown_model_with_a_configured_window":          reGolden(specView),
-	"goal_tool_actions_report_and_refuse":                             pendingOn(specGoalPrompt),
-	"goal_tool_adjust_after_set_runs_the_adjusted_condition":          pendingOn(specGoalOwnTurn, specGoalPrompt),
-	"goal_tool_adjust_keeps_the_turn_limit":                           pendingOn(specGoalPrompt),
-	"goal_tool_refusals_copy_the_engine_wording":                      pendingOn(specGoalWording),
-	"goal_tool_set_runs_the_condition_as_its_own_turn":                pendingOn(specGoalPrompt),
-	"input_receipts_and_conflicts":                                    reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
-	"instructions_are_read_when_the_session_starts":                   reGolden(specPromptOnce),
-	"interrupt_cuts_a_running_tool_then_queue_continues":              reGolden(specStopped, specInterrupt),
-	"interrupt_during_retry_backoff_ends_the_turn":                    reGolden(specView, specStopped),
-	"models_lists_the_configured_providers":                           reGolden(specModelsRoute, specView),
-	"no_goal_evaluator_means_no_goal":                                 reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
-	"plugin_inventory_reports_not_spawned_then_running":               reGolden(specView),
-	"plugin_sees_the_model_of_each_call":                              reGolden(specUpdate),
-	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":       reGolden(specView, specHandoff, specToolsSerial),
-	"retries_stop_after_prompt_retries":                               reGolden(specView, specRetryable),
-	"settings_change_to_claude_code_mid_turn_waits_for_the_next_turn": reGolden(specUpdate, specView, specOpenMidTurn),
-	"typed_commands_record_their_outcome":                             reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
-	"typed_compact_keeps_keep_turns_and_returns_the_range":            reGolden(specTypedReceipt, specCmdResult, specReceipt),
-	"unknown_tool_call_gets_an_error_result":                          reGolden(specMCPText),
-	"task_profile_sets_the_tools_model_and_prompt_of_the_child":       reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"agent_defs_dirs_replace_the_default_profile_dir":                 reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"task_explore_and_plan_children_get_read_only_tools":              pendingOn(specReadOnlyKinds),
+	"end_is_refused_while_a_typed_command_runs":                   reGolden(specTypedReceipt, specErrors, specReceipt),
+	"a_kill_interrupts_an_unfinished_command":                     reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
+	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":   reGolden(specOverflowFolds, specBannerPrefix, specView),
+	"codex_http_truncated_and_empty_responses_are_retried":        reGolden(specView, specItems, specRetryable),
+	"codex_service_tier_reaches_the_request":                      reGolden(specView, specItems, specUpdate),
+	"codex_settings_switch_to_another_provider_keeps_the_history": reGolden(specView, specItems, specUpdate),
+	"commands_menu_lists_builtin_and_prompt_commands":             reGolden(specCmdMenuRoutes, specCmdUnsupport),
+	"create_checks_the_model":                                     reGolden(specModelCheck, specErrors, specView),
+	"create_without_a_model_takes_the_default_model":              reGolden(specView),
+	"create_takes_an_unknown_model_when_no_window_is_required":    reGolden(specView),
+	"create_takes_an_unknown_model_with_a_configured_window":      reGolden(specView),
+	"goal_tool_actions_report_and_refuse":                         pendingOn(specGoalPrompt),
+	"goal_tool_adjust_after_set_runs_the_adjusted_condition":      pendingOn(specGoalOwnTurn, specGoalPrompt),
+	"goal_tool_adjust_keeps_the_turn_limit":                       pendingOn(specGoalPrompt),
+	"goal_tool_refusals_copy_the_engine_wording":                  pendingOn(specGoalWording),
+	"goal_tool_set_runs_the_condition_as_its_own_turn":            pendingOn(specGoalPrompt),
+	"input_receipts_and_conflicts":                                reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
+	"instructions_are_read_when_the_session_starts":               reGolden(specPromptOnce),
+	"interrupt_cuts_a_running_tool_then_queue_continues":          reGolden(specStopped, specInterrupt),
+	"interrupt_during_retry_backoff_ends_the_turn":                reGolden(specView, specStopped),
+	"models_lists_the_configured_providers":                       reGolden(specModelsRoute, specView),
+	"no_goal_evaluator_means_no_goal":                             reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
+	"plugin_inventory_reports_not_spawned_then_running":           reGolden(specView),
+	"plugin_sees_the_model_of_each_call":                          reGolden(specUpdate),
+	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":   reGolden(specView, specHandoff, specToolsSerial),
+	"retries_stop_after_prompt_retries":                           reGolden(specView, specRetryable),
+	"settings_change_to_claude_code_mid_turn_fails_the_turn":      reGolden(specUpdate, specView, specMidTurnFails),
+	"typed_commands_record_their_outcome":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
+	"typed_compact_keeps_keep_turns_and_returns_the_range":        reGolden(specTypedReceipt, specCmdResult, specReceipt),
+	"unknown_tool_call_gets_an_error_result":                      reGolden(specMCPText),
+	"task_profile_sets_the_tools_model_and_prompt_of_the_child":   reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_spawn_fails_on_an_agent_name_repeated_in_one_dir":       reGolden(specRepeatName, specErrors, specView),
+	"task_spawn_fails_on_an_agent_name_repeated_across_dirs":      reGolden(specRepeatName, specErrors, specView),
+	"session_of_a_child_opens_after_an_agent_name_is_repeated":    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specReceipt, specView),
+	"agent_defs_dirs_replace_the_default_profile_dir":             reGolden(specTaskInputs, specChildReport, specChildNoGoal),
+	"task_explore_and_plan_children_get_read_only_tools":          pendingOn(specReadOnlyKinds),
 	"task_refusals":                                                      pendingOn(specTaskWording),
 	"task_refusal_past_max_task_depth":                                   pendingOn(specLimitFails, specTaskWording),
 	"task_refusal_past_max_concurrent_tasks":                             pendingOn(specLimitFails, specTaskWording),
@@ -359,8 +364,8 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_turn_gets_no_plugin_system_segment":                      sameAsServe(),
 	"claudecode_question_dismissed_by_resolve":                           reGolden(specDismissed, specNoStart, specWaiting, specView),
 	"claudecode_question_dismissed_by_a_model_of_another_provider":       reGolden(specProviderSwap, specDismissed, specView, specErrors),
-	"claudecode_question_answer_bodies_that_are_refused":                 reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specOpenAnswerReceipt),
-	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specOpenAnswerReceipt),
+	"claudecode_question_answer_bodies_that_are_refused":                 reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specAnswerReceipt),
+	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specAnswerReceipt),
 	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView),
 	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
 
