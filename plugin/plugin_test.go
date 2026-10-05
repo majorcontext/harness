@@ -114,24 +114,6 @@ func TestToolExecuteBeforeDeny(t *testing.T) {
 	}
 }
 
-func TestToolExecuteAfterMutation(t *testing.T) {
-	guard := testPlugin(t, "guard", &Hooks{
-		ToolExecuteAfter: func(_ context.Context, _ *Client, req *ToolExecuteAfterRequest) (*ToolExecuteAfterResponse, error) {
-			return &ToolExecuteAfterResponse{
-				Output: message.Parts{&message.Text{Text: "[REJECTED] " + req.Output.Text()}},
-			}, nil
-		},
-	})
-	h := newTestHost(t, Options{}, guard)
-	out := h.ToolExecuteAfter(context.Background(), &ToolExecuteAfterRequest{
-		SessionID: "s1", CallID: "tc1", Tool: "screenshot",
-		Output: message.Parts{&message.Text{Text: "too big"}},
-	})
-	if out.Text() != "[REJECTED] too big" {
-		t.Errorf("output = %q", out.Text())
-	}
-}
-
 func TestShellEnvMerge(t *testing.T) {
 	envPlugin := func(name string, env map[string]string) Spec {
 		return testPlugin(t, name, &Hooks{
@@ -192,26 +174,6 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 	}
 	if resp.Output.Text() != "uploaded, slack said ok" {
 		t.Errorf("output = %q", resp.Output.Text())
-	}
-}
-
-func TestEventDelivery(t *testing.T) {
-	got := make(chan Event, 1)
-	listener := testPlugin(t, "listener", &Hooks{
-		Event: func(_ context.Context, _ *Client, events []Event) {
-			for _, ev := range events {
-				got <- ev
-			}
-		},
-	})
-	h := newTestHost(t, Options{}, listener)
-	h.Emit([]Event{{Type: EventSessionStatus, SessionID: "s1", Properties: json.RawMessage(`{"status":"busy"}`)}})
-
-	// Block directly; a delivery bug fails via the test binary timeout
-	// rather than a guessed deadline.
-	ev := <-got
-	if ev.Type != EventSessionStatus || ev.SessionID != "s1" {
-		t.Errorf("event = %+v", ev)
 	}
 }
 

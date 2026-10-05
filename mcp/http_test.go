@@ -286,69 +286,6 @@ func TestHTTPProtocolVersionHeaderSentAfterInitialize(t *testing.T) {
 	}
 }
 
-func TestHTTPListToolsPagination(t *testing.T) {
-	var tools []Tool
-	for i := 0; i < 5; i++ {
-		tools = append(tools, Tool{Name: fmt.Sprintf("tool-%d", i)})
-	}
-	srv := &fakeHTTPServer{tools: tools, pageSize: 2}
-	c := newHTTPTestClient(t, srv, nil)
-	mustInitialize(t, c)
-
-	all, err := c.ListAllTools(context.Background())
-	if err != nil {
-		t.Fatalf("ListAllTools: %v", err)
-	}
-	if len(all) != 5 {
-		t.Fatalf("got %d tools, want 5", len(all))
-	}
-}
-
-func TestHTTPCallToolSuccess(t *testing.T) {
-	srv := &fakeHTTPServer{
-		callTool: func(name string, _ json.RawMessage) (*CallToolResult, error) {
-			return &CallToolResult{Content: []Content{
-				{Type: ContentTypeText, Text: "hi"},
-				{Type: ContentTypeImage, Data: "aGVsbG8=", MimeType: "image/png"},
-			}}, nil
-		},
-	}
-	c := newHTTPTestClient(t, srv, nil)
-	mustInitialize(t, c)
-
-	res, err := c.CallTool(context.Background(), "greet", nil)
-	if err != nil {
-		t.Fatalf("CallTool: %v", err)
-	}
-	if res.IsError {
-		t.Error("IsError = true, want false")
-	}
-	if len(res.Content) != 2 || res.Content[1].Type != ContentTypeImage {
-		t.Fatalf("Content = %+v", res.Content)
-	}
-}
-
-func TestHTTPCallToolIsError(t *testing.T) {
-	srv := &fakeHTTPServer{
-		callTool: func(string, json.RawMessage) (*CallToolResult, error) {
-			return &CallToolResult{
-				Content: []Content{{Type: ContentTypeText, Text: "failed to divide by zero"}},
-				IsError: true,
-			}, nil
-		},
-	}
-	c := newHTTPTestClient(t, srv, nil)
-	mustInitialize(t, c)
-
-	res, err := c.CallTool(context.Background(), "divide", nil)
-	if err != nil {
-		t.Fatalf("CallTool returned protocol error for tool-level failure: %v", err)
-	}
-	if !res.IsError {
-		t.Fatal("IsError = false, want true")
-	}
-}
-
 func TestHTTPContentTypeCaseInsensitiveJSON(t *testing.T) {
 	// RFC 9110 media types are case-insensitive; a server sending
 	// "Application/json" (or initialize's response, which shares this

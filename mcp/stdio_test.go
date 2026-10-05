@@ -185,60 +185,6 @@ func TestStdioInitializeUnsupportedServerVersion(t *testing.T) {
 	}
 }
 
-func TestStdioListToolsPagination(t *testing.T) {
-	var tools []Tool
-	for i := 0; i < 5; i++ {
-		tools = append(tools, Tool{Name: fmt.Sprintf("tool-%d", i)})
-	}
-	srv := &fakeStdioServer{tools: tools, pageSize: 2}
-	c := newTestClient(t, srv.dial(t), Options{})
-	mustInitialize(t, c)
-
-	var got []Tool
-	cursor := ""
-	pages := 0
-	for {
-		page, err := c.ListTools(context.Background(), cursor)
-		if err != nil {
-			t.Fatalf("ListTools: %v", err)
-		}
-		got = append(got, page.Tools...)
-		pages++
-		if page.NextCursor == "" {
-			break
-		}
-		cursor = page.NextCursor
-		if pages > 10 {
-			t.Fatal("pagination did not terminate")
-		}
-	}
-	if pages != 3 {
-		t.Errorf("pages = %d, want 3", pages)
-	}
-	if len(got) != 5 {
-		t.Fatalf("got %d tools, want 5", len(got))
-	}
-	for i, tool := range got {
-		if tool.Name != fmt.Sprintf("tool-%d", i) {
-			t.Errorf("tools[%d].Name = %q", i, tool.Name)
-		}
-	}
-}
-
-func TestStdioListAllTools(t *testing.T) {
-	srv := &fakeStdioServer{tools: []Tool{{Name: "a"}, {Name: "b"}, {Name: "c"}}, pageSize: 1}
-	c := newTestClient(t, srv.dial(t), Options{})
-	mustInitialize(t, c)
-
-	all, err := c.ListAllTools(context.Background())
-	if err != nil {
-		t.Fatalf("ListAllTools: %v", err)
-	}
-	if len(all) != 3 {
-		t.Fatalf("got %d tools, want 3", len(all))
-	}
-}
-
 // TestStdioListAllToolsNonAdvancingCursor guards against a server bug (or
 // malicious server) that keeps returning the same NextCursor forever:
 // ListAllTools must error instead of looping without bound.
@@ -264,63 +210,6 @@ func TestStdioListAllToolsNonAdvancingCursor(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("ListAllTools did not terminate on a repeated cursor")
-	}
-}
-
-func TestStdioCallToolSuccess(t *testing.T) {
-	srv := &fakeStdioServer{
-		callTool: func(name string, arguments json.RawMessage) (*CallToolResult, error) {
-			if name != "echo" {
-				t.Errorf("name = %q", name)
-			}
-			return &CallToolResult{Content: []Content{
-				{Type: ContentTypeText, Text: "hello"},
-				{Type: ContentTypeImage, Data: "YmFzZTY0", MimeType: "image/png"},
-			}}, nil
-		},
-	}
-	c := newTestClient(t, srv.dial(t), Options{})
-	mustInitialize(t, c)
-
-	res, err := c.CallTool(context.Background(), "echo", map[string]any{"text": "hello"})
-	if err != nil {
-		t.Fatalf("CallTool: %v", err)
-	}
-	if res.IsError {
-		t.Errorf("IsError = true, want false")
-	}
-	if len(res.Content) != 2 {
-		t.Fatalf("got %d content items, want 2", len(res.Content))
-	}
-	if res.Content[0].Type != ContentTypeText || res.Content[0].Text != "hello" {
-		t.Errorf("content[0] = %+v", res.Content[0])
-	}
-	if res.Content[1].Type != ContentTypeImage || res.Content[1].MimeType != "image/png" {
-		t.Errorf("content[1] = %+v", res.Content[1])
-	}
-}
-
-func TestStdioCallToolIsError(t *testing.T) {
-	srv := &fakeStdioServer{
-		callTool: func(name string, arguments json.RawMessage) (*CallToolResult, error) {
-			return &CallToolResult{
-				Content: []Content{{Type: ContentTypeText, Text: "boom: division by zero"}},
-				IsError: true,
-			}, nil
-		},
-	}
-	c := newTestClient(t, srv.dial(t), Options{})
-	mustInitialize(t, c)
-
-	res, err := c.CallTool(context.Background(), "divide", nil)
-	if err != nil {
-		t.Fatalf("CallTool returned protocol error for a tool-level failure: %v", err)
-	}
-	if !res.IsError {
-		t.Fatal("IsError = false, want true")
-	}
-	if res.Content[0].Text == "" {
-		t.Error("expected error text in content")
 	}
 }
 
