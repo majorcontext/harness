@@ -22,7 +22,10 @@ const (
 	lostToRestart = "[harness: this turn was interrupted by a process restart and could not complete]"
 )
 
-var errStopTurn = errors.New("harness: turn stopped")
+var (
+	errStopTurn = errors.New("harness: turn stopped")
+	errEndTurn  = errors.New("harness: turn stopped by the end of a session")
+)
 
 // Submit admits in and returns the seq of its input.admitted record. A
 // repeated input ID returns the original seq and repeat set.
@@ -199,6 +202,9 @@ func (a *Actor) ended(r *running, runErr error) {
 	case errors.Is(cause, errStopTurn):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseStopped, "", interrupted)
 		next = true
+	case errors.Is(cause, errEndTurn):
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseEnded, "", interrupted)
+		next = true
 	case errors.Is(cause, errGoalCleared):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopInterrupted, eventlog.CauseGoalCleared, "", interrupted)
 		next = true
@@ -323,13 +329,20 @@ func (a *Actor) dismissRequests() []eventlog.Event {
 // Interrupt stops the running turn, or only turnID when it is set, and
 // returns after the turn has ended.
 func (a *Actor) Interrupt(ctx context.Context, turnID string) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) { a.interrupt(turnID, reply) })
+	_, err := call(ctx, a, func(reply func(struct{}, error)) { a.interrupt(turnID, errStopTurn, reply) })
 	return err
 }
 
 // Cancel withdraws each queued input and stops the running turn in one
 // step, so no queued input starts, and returns after the turn has ended.
-func (a *Actor) Cancel(ctx context.Context) error {
+func (a *Actor) Cancel(ctx context.Context) error { return a.cancel(ctx, errStopTurn) }
+
+// CancelForEnd is Cancel for a session that the end of an ancestor stops. It
+// ends the turn with cause ended, which tells Recover that the stop sends no
+// report to the parent.
+func (a *Actor) CancelForEnd(ctx context.Context) error { return a.cancel(ctx, errEndTurn) }
+
+func (a *Actor) cancel(ctx context.Context, why error) error {
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		var events []eventlog.Event
 		for _, in := range a.state.Queue() {
@@ -341,12 +354,12 @@ func (a *Actor) Cancel(ctx context.Context) error {
 				return
 			}
 		}
-		a.interrupt("", reply)
+		a.interrupt("", why, reply)
 	})
 	return err
 }
 
-func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
+func (a *Actor) interrupt(turnID string, why error, reply func(struct{}, error)) {
 	r := a.run
 	if r != nil && r.kind == kindJudge {
 		r = nil
@@ -357,7 +370,7 @@ func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 	case r == nil || turnID != "" && turnID != r.id:
 		reply(struct{}{}, ErrTurnMismatch)
 	default:
-		r.cancel(errStopTurn)
+		r.cancel(why)
 		r.waiters = append(r.waiters, replyAppend(reply))
 	}
 }
@@ -367,14 +380,58 @@ func (a *Actor) interrupt(turnID string, reply func(struct{}, error)) {
 // and releases the ownership. An actor that Sync stopped returns the
 // rejection.
 func (a *Actor) Release(ctx context.Context) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) {
-		a.releasing = append(a.releasing, reply)
-		if a.run == nil {
-			a.stop(nil)
+	return a.halt(ctx, a.beginRelease)
+}
+
+func (a *Actor) beginRelease(reply func(struct{}, error)) {
+	a.releasing = append(a.releasing, reply)
+	if a.run == nil {
+		a.stop(nil)
+		return
+	}
+	a.run.handoff(turn.ErrHandoff)
+}
+
+// End stops the actor and releases its ownership, as Release does, and
+// appends nothing. It fails with ErrBusy while a turn runs; a compaction or an
+// evaluation stops as under Release. An actor that has stopped is ended
+// already, so it returns nil.
+func (a *Actor) End(ctx context.Context) error {
+	err := a.halt(ctx, func(reply func(struct{}, error)) {
+		if a.turnRuns() {
+			reply(struct{}{}, ErrBusy)
 			return
 		}
-		a.run.handoff(turn.ErrHandoff)
+		a.beginRelease(reply)
 	})
+	if errors.Is(err, ErrNotOwned) {
+		return nil
+	}
+	return err
+}
+
+// Idle fails with ErrBusy while a turn runs. It changes nothing, and a turn can
+// start right after it returns.
+func (a *Actor) Idle(ctx context.Context) error {
+	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+		if a.turnRuns() {
+			reply(struct{}{}, ErrBusy)
+			return
+		}
+		reply(struct{}{}, nil)
+	})
+	if errors.Is(err, ErrNotOwned) {
+		return nil
+	}
+	return err
+}
+
+func (a *Actor) turnRuns() bool { return a.run != nil && a.run.kind == kindTurn }
+
+// halt runs begin on the actor goroutine, and returns once the actor that
+// begin stopped has released its ownership.
+func (a *Actor) halt(ctx context.Context, begin func(reply func(struct{}, error))) error {
+	_, err := call(ctx, a, begin)
 	if err != nil && !errors.Is(err, ErrNotOwned) {
 		return err
 	}

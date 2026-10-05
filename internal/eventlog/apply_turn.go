@@ -125,7 +125,7 @@ func (s *State) applyEnded(e TurnEnded) error {
 			return illegal("turn %s has failure cause %q", e.TurnID, e.Cause)
 		}
 	case StopInterrupted:
-		if c := e.Cause; c != CauseStopped && c != CauseGoalCleared && c != CauseCrashed {
+		if c := e.Cause; c != CauseStopped && c != CauseEnded && c != CauseGoalCleared && c != CauseCrashed {
 			return illegal("turn %s has interrupt cause %q", e.TurnID, e.Cause)
 		}
 	case StopAwaitingInput:

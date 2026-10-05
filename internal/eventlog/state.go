@@ -49,9 +49,11 @@ const (
 type Cause string
 
 // Causes. Only CauseHandoff suspends a turn and only CauseProviderExhausted
-// fails it; the others interrupt it.
+// fails it; the others interrupt it. CauseEnded marks a turn that the end of
+// a session stopped in one of its descendants.
 const (
 	CauseStopped           Cause = "stopped"
+	CauseEnded             Cause = "ended"
 	CauseGoalCleared       Cause = "goal_cleared"
 	CauseHandoff           Cause = "handoff"
 	CauseCrashed           Cause = "crashed"

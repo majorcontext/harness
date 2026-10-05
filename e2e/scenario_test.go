@@ -174,6 +174,7 @@ type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
 type endSession struct{ as string }
+type endMissingSession struct{}
 type sendToSession struct{ as, text string }
 
 // tryCreate creates a session that names model and records the response. It binds no alias.
@@ -268,6 +269,9 @@ func (a setServiceTier) run(t *testing.T, r *run) {
 }
 func (a endSession) run(t *testing.T, r *run) {
 	r.record(t, "end_session", a.as, r.drv.EndSession(t, r.id(t, a.as)))
+}
+func (endMissingSession) run(t *testing.T, r *run) {
+	r.record(t, "end_missing_session", "", r.drv.EndSession(t, "missing"))
 }
 func (a sendToSession) run(t *testing.T, r *run) {
 	r.record(t, "send", a.as, r.drv.Send(t, r.id(t, a.as), a.text))

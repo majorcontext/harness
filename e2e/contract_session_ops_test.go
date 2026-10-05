@@ -282,6 +282,7 @@ func TestContractSessionOpsEnd(t *testing.T) {
 				waitIdle{as: "a"},
 				endSession{as: "a"},
 				endSession{as: "a"},
+				endMissingSession{},
 				getSession{as: "a"},
 				listSessions{},
 				// Ending only evicts residency: the session stays on disk and a send runs a new turn.
