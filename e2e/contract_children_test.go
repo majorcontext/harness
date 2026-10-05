@@ -155,6 +155,17 @@ func TestContractChildReportText(t *testing.T) {
 			actions: busyActions,
 		},
 		{
+			name:       "child_rate_limit_reaches_a_busy_parent",
+			concurrent: true,
+			config:     map[string]any{"prompt_retries": 0},
+			model: []harnesstest.Step{
+				delegate, childLooks,
+				{Name: "child_wall", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}},
+				busyAck, after,
+			},
+			actions: busyActions,
+		},
+		{
 			name:       "child_long_result_reaches_a_busy_parent",
 			concurrent: true,
 			model: []harnesstest.Step{
@@ -164,6 +175,14 @@ func TestContractChildReportText(t *testing.T) {
 			},
 			actions: busyActions,
 		},
+	})
+}
+
+func TestContractChildCrashReport(t *testing.T) {
+	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+	}}}}
+	runScenarios(t, []scenario{
 		{
 			// A parent that a restart reopens runs its queued input, and the reopened child ends crashed into that busy turn.
 			name:       "child_crash_reaches_a_busy_parent",

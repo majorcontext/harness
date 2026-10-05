@@ -295,7 +295,7 @@ func failedEnd(turnID string, err error) eventlog.TurnEnded {
 		}
 		return ended
 	}
-	ended.Error = plugin.SanitizeSessionError(err.Error())
+	ended.Error = plugin.SanitizeSessionError(strings.TrimPrefix(err.Error(), turn.ErrRetryable.Error()+": "))
 	ended.ErrorClass = errorClass(err)
 	return ended
 }

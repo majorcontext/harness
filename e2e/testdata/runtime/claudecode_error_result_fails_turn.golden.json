@@ -64,7 +64,7 @@
         "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
-          "error": "turn: retryable backend error: claudecode: the turn failed (error_during_execution): fake failure",
+          "error": "claudecode: the turn failed (error_during_execution): fake failure",
           "stop_reason": "failed",
           "turn_id": "turn#1"
         },

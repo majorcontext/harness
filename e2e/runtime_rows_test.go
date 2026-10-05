@@ -129,6 +129,7 @@ var runtimeRows = map[string]runtimeRow{
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording, specOpenChildParts),
 	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_usage_limit_reaches_a_busy_parent":                     reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
+	"child_rate_limit_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specOpenChildLong, specChildWording, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_child_report_waits_for_the_next_turn":             reGolden(specTaskInputs, specChildReport, specChildClaude),
