@@ -3,7 +3,10 @@ package migrate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,7 +64,8 @@ func oldTranscript(t *testing.T, dir, id string) []string {
 			case *message.Text:
 				line += "|text:" + p.Text
 			case *message.Blob:
-				line += "|text:" + blobText(p)
+				sum := sha256.Sum256(p.Data)
+				line += fmt.Sprintf("|blob:%s:%d:attachment-%x", p.MediaType, len(p.Data), sum)
 			case *message.Reasoning:
 				line += "|reasoning:" + p.Text
 			case *message.ToolCall:
@@ -95,6 +99,8 @@ func newTranscript(s *eventlog.State) []string {
 				line += "|call:" + p.CallID + ":" + p.Name + ":" + compactJSON(p.Arguments)
 			case eventlog.PartToolResult:
 				line += "|result:" + p.CallID + ":" + p.Text
+			case eventlog.PartBlob:
+				line += fmt.Sprintf("|blob:%s:%d:%s", p.MediaType, p.Bytes, p.BlobKey)
 			default:
 				line += "|" + p.Type + ":" + p.Text
 			}
@@ -102,6 +108,15 @@ func newTranscript(s *eventlog.State) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+func attachmentBytes(t *testing.T, b64 string) string {
+	t.Helper()
+	b, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func readBlob(t *testing.T, st harness.Store, id, key string) string {
@@ -132,6 +147,19 @@ var journalCases = []struct {
 		if s.Status() != eventlog.StatusIdle || len(s.OpenToolCalls()) != 0 {
 			t.Errorf("status %s, open calls %v", s.Status(), s.OpenToolCalls())
 		}
+		first := s.History()[0].Parts
+		if len(first) != 3 || first[1].Type != eventlog.PartBlob || first[2].Type != eventlog.PartBlob {
+			t.Fatalf("the first message holds %+v, want text, png, and pdf blob parts", first)
+		}
+		if got := readBlob(t, st, "ses_000000000000000a", first[1].BlobKey); got != attachmentBytes(t, "iVBORw0K") || first[1].MediaType != "image/png" {
+			t.Errorf("png blob %q (%s)", got, first[1].MediaType)
+		}
+		if got := readBlob(t, st, "ses_000000000000000a", first[2].BlobKey); got != attachmentBytes(t, "JVBERi0xLjQKJSVFT0YK") || first[2].MediaType != "application/pdf" {
+			t.Errorf("pdf blob %q (%s)", got, first[2].MediaType)
+		}
+		if again := s.History()[4].Parts[1]; again.BlobKey != first[1].BlobKey {
+			t.Errorf("equal bytes have keys %q and %q, want one", again.BlobKey, first[1].BlobKey)
+		}
 		if p := s.History()[1].Parts[0]; p.ProviderData == nil {
 			t.Errorf("reasoning lost its provider data: %+v", p)
 		}
@@ -154,6 +182,10 @@ var journalCases = []struct {
 		}
 		if q := s.Queue(); len(q) != 1 || q[0].Parts[0].Text != "and add docs" || q[0].Source != "api" {
 			t.Errorf("queue %+v", q)
+		}
+		if p := s.Queue()[0].Parts; len(p) != 2 || p[1].Type != eventlog.PartBlob || p[1].MediaType != "image/png" ||
+			readBlob(t, st, "ses_000000000000000b", p[1].BlobKey) != attachmentBytes(t, "iVBORw0K") {
+			t.Errorf("queued prompt parts %+v", p)
 		}
 		r := s.Retained()
 		if len(r) != 1 || r[0].Handle != "trh_1" || r[0].Tool != "read" || r[0].Lines != 3 {
@@ -320,7 +352,7 @@ func TestDirGivesTheFallbackModelToAJournalThatNamesNone(t *testing.T) {
 
 func TestConvertMessageKeepsTheSubagentParent(t *testing.T) {
 	m := message.Message{Role: message.RoleAssistant, ParentToolUseID: "toolu_parent", Parts: message.Parts{&message.Text{Text: "inside"}}}
-	if got := convertMessage(m, map[string]string{}); got.ParentCallID != "toolu_parent" {
+	if got := convertMessage(m, map[string]string{}, map[string][]byte{}); got.ParentCallID != "toolu_parent" {
 		t.Errorf("converted ParentCallID = %q, want toolu_parent", got.ParentCallID)
 	}
 }

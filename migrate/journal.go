@@ -86,7 +86,7 @@ func readJournal(dir, id string, model message.ModelRef) (old, error) {
 	for _, p := range s.QueuedPrompts() {
 		parts := []eventlog.Part{{Type: eventlog.PartText, Text: p.Text}}
 		for _, b := range p.Blobs {
-			parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: blobText(b)})
+			parts = append(parts, attachment(b, o.blobs))
 		}
 		o.tail = append(o.tail, eventlog.InputAdmitted{InputID: cmp.Or(p.MessageID, fmt.Sprintf("queued_%d", p.ID)),
 			Delivery: eventlog.DeliveryQueue, Source: cmp.Or(string(p.Source), "user"), Parts: parts})
