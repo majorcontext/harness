@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"iter"
+	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
@@ -45,6 +46,9 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	v.CompactionCount = s.CompactionCount()
 	if sub := s.SubscriptionUsage(); sub != nil {
 		v.SubscriptionUsage = subscriptionView(sub)
+		if v.SubscriptionUsage.CapturedAt == 0 {
+			v.SubscriptionUsage.CapturedAt = time.Now().Unix()
+		}
 	}
 	if g, ok := s.Goal(); ok {
 		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},

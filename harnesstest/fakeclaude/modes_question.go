@@ -11,6 +11,7 @@ import (
 var preInitModes = map[string]func(f *fake) bool{
 	"crash_before_init":         crashBeforeInit,
 	"compact_turn":              compactTurn,
+	"compact_after_tokens":      compactAfterTokens,
 	"queued_empty_result":       queuedEmptyResult,
 	"queued_empty_result_error": queuedEmptyResult,
 	"question":                  question,
@@ -66,6 +67,15 @@ func compactTurn(f *fake) bool {
 		res,
 	)
 	return true
+}
+
+// compactAfterTokens runs a /compact command as compactTurn does, and any
+// other turn as the normal turn, with usage.
+func compactAfterTokens(f *fake) bool {
+	if strings.Contains(f.first, "/compact") {
+		return compactTurn(f)
+	}
+	return false
 }
 
 // queuedEmptyResult prints a task notification, init, and an empty zero-turn

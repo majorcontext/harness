@@ -11,7 +11,7 @@ import (
 func TestClaudeCodeRecordsOneMeasurementForTheCallThatTheRateLimitEventPrecedes(t *testing.T) {
 	fakeClaude(t, "rate_limit_event")
 	st := harness.NewMemStore()
-	r := retryingRuntime(t, st, nil, false, 0, nil)
+	r := claudeRuntimeWith(t, st, nil, false, nil)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	turnOf(t, s, text("a", "hi"))

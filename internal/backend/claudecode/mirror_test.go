@@ -32,7 +32,7 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 				t.Setenv("FAKE_CLAUDE_MODE", tc.next)
 				t.Setenv("FAKE_CLAUDE_MIRROR_HANG_AFTER", "")
 			}
-			r := retryingRuntime(t, st, nil, mirror, 0, nil)
+			r := claudeRuntimeWith(t, st, nil, mirror, nil)
 			defer closeRuntime(t, r)
 			if tc.next == "" {
 				turnOf(t, createClaude(t, r, nil), text("a", "hi"))

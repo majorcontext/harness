@@ -427,10 +427,11 @@ func (a claudeToolCall) run(t *testing.T, r *run) {
 	r.record(t, "tool_call", a.as, claudeDriverOf(t, r).lastToolCall(t))
 }
 
-// claudeSession records GET /session/{id} without the journal seq, and with
-// the wall-clock capture time of the subscription usage replaced by a marker.
 var fakeBinPath = regexp.MustCompile(`"[^"\s]*fakeclaude"`)
 
+// claudeSession records GET /session/{id} without the journal seq, with the
+// wall-clock capture time of the subscription usage replaced by a marker, and
+// with the path of the fakeclaude binary in last_turn.error masked.
 type claudeSession struct{ as string }
 
 func (a claudeSession) run(t *testing.T, r *run) {

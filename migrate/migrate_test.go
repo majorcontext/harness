@@ -255,6 +255,9 @@ var journalCases = []struct {
 		if err != nil || m.SessionID != "cli-123" || m.Parked != "toolu_q1" {
 			t.Errorf("mirror %+v %v", m, err)
 		}
+		if sub := s.SubscriptionUsage(); sub == nil || sub.SessionCostUSD == nil || *sub.SessionCostUSD != 0.25 {
+			t.Errorf("subscription usage %+v, want a session cost of 0.25", sub)
+		}
 	}},
 }
 

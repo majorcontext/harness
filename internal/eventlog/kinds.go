@@ -239,7 +239,8 @@ type CommandRecorded struct {
 
 // ContextMeasured records what one model call measured: the context size,
 // the usage of the call, a subscription snapshot, and the cost of the call. A
-// call with no prompt tokens records no context size.
+// record with a Source sets the context reading, zero included. A record with
+// no Source leaves the reading as it was.
 type ContextMeasured struct {
 	Tokens            int64              `json:"tokens"`
 	Window            int64              `json:"window"`

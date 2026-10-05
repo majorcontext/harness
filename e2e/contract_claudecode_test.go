@@ -61,6 +61,16 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 			},
 		},
 		{
+			name:   "claudecode_compact_after_tokens_reads_zero",
+			driver: claudeLaneDriver("compact_after_tokens"),
+			actions: []action{
+				create{as: "a"}, submit{as: "a", text: "run it"}, waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				compact{as: "a"},
+				claudeSession{as: "a"},
+			},
+		},
+		{
 			name:   "claudecode_queued_prompt_injected_mid_turn",
 			driver: claudeLaneDriver("queue_injection"),
 			actions: []action{

@@ -48,9 +48,9 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 	return nil
 }
 
-func (s *State) applyMeasured(e ContextMeasured, at time.Time) {
+func (s *State) applyMeasured(e ContextMeasured) {
 	s.usage = s.usage.Add(e.Usage)
-	if e.Tokens > 0 {
+	if e.Tokens > 0 || e.Source != "" {
 		s.context = ContextMeasured{Tokens: e.Tokens, Window: e.Window, Source: e.Source}
 	}
 	if e.SubscriptionUsage != nil {
@@ -61,7 +61,7 @@ func (s *State) applyMeasured(e ContextMeasured, at time.Time) {
 		if s.cost != nil {
 			sum += *s.cost
 		}
-		s.cost, s.costAt = &sum, at
+		s.cost = &sum
 	}
 }
 

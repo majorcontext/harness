@@ -103,7 +103,7 @@ type Delta struct {
 // Telemetry is what a backend measured during one model call.
 type Telemetry struct {
 	Usage eventlog.Usage
-	// Context is a context reading; the zero value is none.
+	// Context is a context reading; an empty Source is none.
 	Context eventlog.ContextMeasured
 	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
 	SubscriptionUsage *eventlog.SubscriptionUsage
@@ -195,7 +195,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn, lim Limits) error {
 	caps := b.Capabilities(req.Model)
 	if caps.OwnsLoop {
-		lim.Idle = 0
+		lim.Idle, lim.Retries = 0, 0
 	}
 	continued := 0
 	var nudge []eventlog.Message
@@ -265,15 +265,10 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 }
 
 // callModel runs one model call. It calls b again, at most lim.Retries
-// times, after an ErrRetryable error that came before any item. A backend
-// that owns the loop runs once.
+// times, after an ErrRetryable error that came before any item.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
 	res, err := watch(ctx, b, req, s, lim.Idle)
-	retries := lim.Retries
-	if b.Capabilities(req.Model).OwnsLoop {
-		retries = 0
-	}
-	for n := 0; n < retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
 		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
 			res, err = watch(ctx, b, req, s, lim.Idle)

@@ -203,7 +203,6 @@ type State struct {
 	context    ContextMeasured
 	subscribed *SubscriptionUsage
 	cost       *float64
-	costAt     time.Time
 	compaction CompactionApplied
 	compacted  int
 	children   map[string]Outcome
@@ -342,7 +341,7 @@ func (s *State) Usage() Usage { return s.usage }
 func (s *State) Context() ContextMeasured { return s.context }
 
 // SubscriptionUsage returns the newest snapshot with the summed cost, or nil.
-// A cost with no snapshot gets an empty snapshot of the claude lane.
+// A cost with no snapshot gets an empty snapshot of the claude lane, with no capture time.
 func (s *State) SubscriptionUsage() *SubscriptionUsage {
 	if s.cost == nil {
 		return s.subscribed
@@ -351,7 +350,7 @@ func (s *State) SubscriptionUsage() *SubscriptionUsage {
 	if s.subscribed != nil {
 		u = *s.subscribed
 	} else {
-		u = SubscriptionUsage{Provider: "claude", Windows: []SubscriptionUsageWindow{}, CapturedAt: s.costAt.Unix()}
+		u = SubscriptionUsage{Provider: "claude", Windows: []SubscriptionUsageWindow{}}
 	}
 	cost := *s.cost
 	u.SessionCostUSD = &cost
@@ -461,7 +460,7 @@ func (s *State) step(env Envelope) error {
 	case CommandRecorded:
 		return s.applyCommand(e, env.Seq)
 	case ContextMeasured:
-		s.applyMeasured(e, env.Time)
+		s.applyMeasured(e)
 		return nil
 	case BackendState:
 		return s.applyBackendState(e)

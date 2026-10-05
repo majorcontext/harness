@@ -60,17 +60,16 @@ func fakeClaude(t *testing.T, mode string, env ...string) string {
 
 func claudeRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool) *harness.Runtime {
 	t.Helper()
-	return retryingRuntime(t, st, owner, mirror, 0, nil)
+	return claudeRuntimeWith(t, st, owner, mirror, nil)
 }
 
-func retryingRuntime(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, retries int, system []string, tools ...harness.Tool) *harness.Runtime {
+func claudeRuntimeWith(t *testing.T, st harness.Store, owner harness.Owner, mirror bool, system []string, tools ...harness.Tool) *harness.Runtime {
 	t.Helper()
 	bin, err := fakeClaudeBin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: tools, Config: config.Config{PromptRetries: &retries,
-		AppendSystemPrompt: system, Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
+	r, err := harness.New(harness.Options{Store: st, Owner: owner, Tools: tools, Config: config.Config{AppendSystemPrompt: system, Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin, SessionMirror: mirror}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +181,7 @@ func TestClaudeCodeTurn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			argvLog := fakeClaude(t, tc.mode, tc.env...)
 			st := harness.NewMemStore()
-			r := retryingRuntime(t, st, nil, false, 0, tc.system)
+			r := claudeRuntimeWith(t, st, nil, false, tc.system)
 			defer closeRuntime(t, r)
 			s := createClaude(t, r, tc.allowed)
 			turnOf(t, s, text("a", "hi"))
@@ -226,7 +225,7 @@ func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
 func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 	for _, name := range []string{"bash", "nope"} {
 		t.Run(name, func(t *testing.T) {
-			r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, nil, lookup{})
+			r := claudeRuntimeWith(t, harness.NewMemStore(), nil, false, nil, lookup{})
 			defer closeRuntime(t, r)
 			_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: []string{"Read", name}})
 			if !errors.Is(err, harness.ErrInvalidRequest) {
@@ -238,7 +237,7 @@ func TestClaudeCodeCreateRefusesAnUnknownTool(t *testing.T) {
 
 func TestClaudeCodeCreateRefusesAnEmbedderToolNamedLikeABuiltin(t *testing.T) {
 	for _, allowed := range [][]string{nil, {"Read"}} {
-		r := retryingRuntime(t, harness.NewMemStore(), nil, false, 0, nil, newProbe("Read", false))
+		r := claudeRuntimeWith(t, harness.NewMemStore(), nil, false, nil, newProbe("Read", false))
 		defer closeRuntime(t, r)
 		_, err := r.Create(bg, protocol.CreateSession{Model: "claude-code/sonnet", AllowedTools: allowed})
 		if !errors.Is(err, harness.ErrInvalidRequest) {

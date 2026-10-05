@@ -438,8 +438,6 @@ func (r *run) telemetry(env envelope) {
 	if last == nil {
 		last = env.Usage
 	}
-	if w, tokens := env.ModelUsage[r.mainModel].ContextWindow, last.prompt(); w > 0 || tokens > 0 {
-		t.Context = eventlog.ContextMeasured{Tokens: tokens, Window: w, Source: stateKey}
-	}
+	t.Context = eventlog.ContextMeasured{Tokens: last.prompt(), Window: env.ModelUsage[r.mainModel].ContextWindow, Source: stateKey}
 	r.out.Telemetry(t)
 }
