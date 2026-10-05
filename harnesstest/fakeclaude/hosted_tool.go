@@ -13,11 +13,16 @@ import (
 const toolUseMeta = "claudecode/toolUseId"
 
 // callHostedTool runs when FAKE_CLAUDE_CALL_TOOL names a tool and
-// FAKE_CLAUDE_TOOL_LOG a file. It waits for harness to close stdin, which it
-// does after it has recorded the result, calls the tool on the harness MCP
+// FAKE_CLAUDE_TOOL_LOG a file, or when FAKE_CLAUDE_LIST_TOOLS names a file.
+// It waits for harness to close stdin, which it does after it has recorded
+// the result, then calls the tool or lists the tools on the harness MCP
 // server of --mcp-config, and appends the response body to the file.
 func callHostedTool(f *fake) {
 	name, log := os.Getenv("FAKE_CLAUDE_CALL_TOOL"), os.Getenv("FAKE_CLAUDE_TOOL_LOG")
+	method, params := "tools/call", obj{"name": name, "arguments": obj{}, "_meta": obj{toolUseMeta: "toolu_hosted"}}
+	if list := os.Getenv("FAKE_CLAUDE_LIST_TOOLS"); list != "" {
+		name, log, method, params = "tools/list", list, "tools/list", obj{}
+	}
 	if name == "" || log == "" {
 		return
 	}
@@ -31,8 +36,7 @@ func callHostedTool(f *fake) {
 		appendFile(log, "no harness server in --mcp-config\n")
 		return
 	}
-	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": obj{"name": name, "arguments": obj{}, "_meta": obj{toolUseMeta: "toolu_hosted"}}})
+	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
 	if err != nil {
 		appendFile(log, err.Error()+"\n")

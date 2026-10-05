@@ -26,6 +26,9 @@ type claudeLane struct {
 	// historyTool makes each turn of the CLI call get_conversation_history on
 	// the hosted MCP server after the result, for a host with no route to it.
 	historyTool bool
+	// listTools makes each turn of the CLI list the tools of the hosted MCP
+	// server after the result.
+	listTools bool
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
@@ -33,7 +36,7 @@ type claudeLogs struct {
 	argvLog, stdinLog, mcpLog, toolLog, stateDir string
 }
 
-func (l claudeLogs) env(mode string, historyTool bool) map[string]string {
+func (l claudeLogs) env(mode string, historyTool, listTools bool) map[string]string {
 	env := map[string]string{
 		"FAKE_CLAUDE_MODE":           mode,
 		"FAKE_CLAUDE_LOG":            l.argvLog,
@@ -43,6 +46,9 @@ func (l claudeLogs) env(mode string, historyTool bool) map[string]string {
 	}
 	if historyTool {
 		env["FAKE_CLAUDE_CALL_TOOL"], env["FAKE_CLAUDE_TOOL_LOG"] = "get_conversation_history", l.toolLog
+	}
+	if listTools {
+		env["FAKE_CLAUDE_LIST_TOOLS"] = l.toolLog
 	}
 	return env
 }
@@ -72,7 +78,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	if l.ask {
 		args = append(args, "--ask-user-question")
 	}
-	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode, l.historyTool), args...), claudeLogs: logs}
+	return &claudeDriver{laneHost: h.open(t, writeGoalConfigWith(t, modelURL, cfg), logs.env(l.mode, l.historyTool, l.listTools), args...), claudeLogs: logs}
 }
 
 func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
@@ -299,6 +305,24 @@ func (d *httpDriver) historyTool(t *testing.T, id string) callResult {
 		"params": map[string]any{"name": "get_conversation_history", "arguments": map[string]any{}},
 	}
 	return d.call(t, http.MethodPost, "/session/"+id+"/mcp", rpc)
+}
+
+// claudeOfferedTools records the sorted names of the tools that the hosted
+// MCP server offered the CLI after its newest run.
+type claudeOfferedTools struct{ as string }
+
+func (a claudeOfferedTools) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).lastToolCall(t).Body.(map[string]any)
+	result, _ := body["result"].(map[string]any)
+	list, _ := result["tools"].([]any)
+	names := []string{}
+	for _, tool := range list {
+		m, _ := tool.(map[string]any)
+		name, _ := m["name"].(string)
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	r.record(t, "offered_tools", a.as, callResult{Status: http.StatusOK, Body: names})
 }
 
 // claudeSession records GET /session/{id} without the journal seq, and with
