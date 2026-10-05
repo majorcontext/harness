@@ -478,10 +478,6 @@
               "text": "(no output)",
               "tool_name": "bash",
               "tool_use_id": "toolu#2"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -497,6 +493,10 @@
         {
           "role": "user",
           "parts": [
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done (usage: 10 in / 6 out)\n]\n\u003c/harness-engine-context\u003e"
+            },
             {
               "kind": "text",
               "text": "next"

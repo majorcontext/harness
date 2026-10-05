@@ -33,7 +33,9 @@ const (
 	specPinInTurn     = "A compaction that a running turn makes settles the segment there at once"
 	specPinRestart    = "A pin is fixed to the messages around it and replay rebuilds it from the log, so a pin survives a restart."
 	specPinCompact    = "A compaction moves each pinned segment that it folds to the end of the history"
-	specOpenPinSlot   = "Where does a pinned segment sit after a compaction, and does it survive a restart?"
+	specPinCut        = "A compaction moves a pinned segment after the cut to the end of the kept history, so the next input follows it"
+	specPinPaired     = "the runtime keeps the call and its result paired"
+	specPinKept       = "so a restart lost the report; the runtime keeps it"
 	specAnswerNoSteer = "A run that answers a question takes no steer input"
 	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
@@ -231,10 +233,10 @@ var runtimeRows = map[string]runtimeRow{
 	"child_report_to_a_busy_parent_stays_through_a_compaction":            reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult),
 	"prompt_and_child_report_in_one_drain_are_two_messages":               reGolden(specChildReport, specChildWording, specChildPinned, specPinDrain),
 	"task_log_of_a_child_shows_no_pinned_report":                          reGolden(specTaskInputs, specChildReport, specChildWording, specChildPinned, specPinReaders, specItems, specOneResult),
-	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":         reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specOpenPinSlot),
-	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":          reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specOpenPinSlot),
+	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":         reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinCut),
+	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":          reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinPaired),
 	"child_report_to_a_busy_parent_stays_through_an_in_turn_compaction":   reGolden(specChildReport, specChildWording, specChildPinned, specPinInTurn, specOverflowFolds),
-	"child_report_to_a_busy_parent_survives_a_restart":                    reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specOpenPinSlot),
+	"child_report_to_a_busy_parent_survives_a_restart":                    reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specPinKept),
 	"child_rate_limit_reaches_a_busy_parent":                              reGolden(specChildReport, specChildReason, specChildWording),
 	"child_result_within_the_byte_limit_reaches_a_busy_parent":            reGolden(specChildReport, specChildLong, specChildWording),
 	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":            reGolden(specChildReport, specChildReason, specChildHint, specChildWording),

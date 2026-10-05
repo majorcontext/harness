@@ -563,13 +563,15 @@ func (p *printer) markExisting(ctx context.Context, id string, seen map[string]b
 }
 
 // openChild opens a child that its parent has just spawned. The runtime
-// creates the child after the parent records the spawn, so an open can fail
-// until then; it ends when the run settles.
+// creates the child after the parent records the spawn, so it waits for the
+// log of the child to hold a record before it opens the child; it ends when
+// the run settles.
 func (p *printer) openChild(ctx context.Context, id string) *harness.Session {
 	for {
-		cs, err := p.open(ctx, id)
-		if err == nil {
-			return cs
+		if head, err := p.store.Head(ctx, id); err == nil && head > 0 {
+			if cs, err := p.open(ctx, id); err == nil {
+				return cs
+			}
 		}
 		select {
 		case <-p.closing:

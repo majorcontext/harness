@@ -325,3 +325,44 @@ func TestNewRejectsAKeyThatTheRuntimeIgnores(t *testing.T) {
 		})
 	}
 }
+
+// gatedRead is a Store whose first Read after arm stalls until release.
+type gatedRead struct {
+	harness.Store
+	armed   atomic.Bool
+	reading chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedRead) Read(ctx context.Context, id string, after uint64, limit int) ([]harness.Record, error) {
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.reading)
+		<-g.release
+	}
+	return g.Store.Read(ctx, id, after, limit)
+}
+
+func TestCreateWaitsForAnOpenOfTheSameIDThatFindsNoSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		st := &gatedRead{Store: harness.NewMemStore(), reading: make(chan struct{}), release: make(chan struct{})}
+		st.armed.Store(true)
+		r := runtime(t, st, newFake())
+		opened, created := make(chan error, 1), make(chan error, 1)
+		go func() { _, err := r.Open(bg, "s1"); opened <- err }()
+		<-st.reading
+		go func() {
+			_, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model", Origin: "test"})
+			created <- err
+		}()
+		synctest.Wait()
+		close(st.release)
+		synctest.Wait()
+		if err := <-opened; !errors.Is(err, harness.ErrSessionNotFound) {
+			t.Errorf("Open = %v, want ErrSessionNotFound", err)
+		}
+		if err := <-created; err != nil {
+			t.Errorf("Create = %v, want success", err)
+		}
+		closeRuntime(t, r)
+	})
+}

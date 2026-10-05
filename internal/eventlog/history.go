@@ -161,13 +161,33 @@ func (s *State) remember(env Envelope) {
 			i = len(s.history)
 		}
 		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
-		s.history = slices.Clone(s.history[i:])
-		s.turnAt = max(0, s.turnAt-i)
+		s.history, s.turnAt = movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)
 		s.stranded = slices.Concat(s.stranded, folded)
 		if s.turn.ID != "" {
 			s.settle(env.Seq)
 		}
 	}
+}
+
+// movePins returns h with each pinned segment after the other messages, in
+// their order, and the start of the running turn less the pins that moved
+// from before it. A pin that a compaction keeps follows the last message of
+// the kept history, as the engine clamped its slot to the end.
+func movePins(h []entry, turnAt int, seq uint64) ([]entry, int) {
+	out := make([]entry, 0, len(h))
+	var pins []entry
+	for i, e := range h {
+		if !e.pinned {
+			out = append(out, e)
+			continue
+		}
+		e.seq = seq
+		pins = append(pins, e)
+		if i < turnAt {
+			turnAt--
+		}
+	}
+	return append(out, pins...), turnAt
 }
 
 // settle puts the stranded pinned segments at the end of the history. A
