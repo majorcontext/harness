@@ -10,13 +10,6 @@ func TestContractDriver(t *testing.T) {
 	text := func(name, user, reply string) harnesstest.Step {
 		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: reply}}
 	}
-	twoTurns := []action{
-		create{as: "a"},
-		submit{as: "a", text: "one"},
-		waitIdle{as: "a"},
-		submit{as: "a", text: "two"},
-		waitIdle{as: "a"},
-	}
 	runScenarios(t, []scenario{
 		{
 			name:  "driver_settings_and_reads",

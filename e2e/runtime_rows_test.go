@@ -36,6 +36,7 @@ const (
 	specEventsRoute   = "GET    /sessions/{id}/events?after=&limit=    page; SSE with Accept: text/event-stream"
 	specBoxGlobal     = "| Box-global `events.jsonl` | Delete |"
 	specModelCheck    = "An unknown model fails with `model_unavailable` at create and at a settings change."
+	specThreshold     = "A setting at or below 0 is the default."
 	specOverflowFails = "When no turn can fold or the summary fails, the turn fails."
 	specCompactResult = "`Compact()` returns `protocol.Compacted`"
 	specChildResend   = "changes by design in one way: a later send is not refused"
@@ -94,6 +95,27 @@ const (
 	specProviderSwap  = "A settings change to a model of another provider dismisses it too."
 	specRequestRoute  = "POST   /sessions/{id}/requests/{request}      {answer} | {dismiss}"
 	specBannerPrefix  = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier."
+)
+
+// Lines of docs/architecture.md that the session rows cite.
+const (
+	specWindow          = "of the window of the session model, or of the window of the reading when the model reports none"
+	specFailedSummary   = "A failed summary appends nothing, and the turn starts on the full history."
+	specOpenStarts      = "The next owner thus runs the input that waited for a stopped summary"
+	specInterruptTable  = "| `Interrupt` | Stops the turn | Stops it and appends nothing | Stops nothing |"
+	specCompactBusy     = "| `Compact` | `session_busy` | `session_busy` | `session_busy` |"
+	specOverflowTwice   = "With no new input in the turn, a second overflow fails it"
+	specFailedRuns      = "After any other failed turn, the next queued input runs, as after a completed turn."
+	specExhaustedHolds  = "Only `provider_exhausted` leaves the queue waiting, and `Open` follows the same rule"
+	specExhaustedQueue  = "queued inputs wait for the next input"
+	specGoalImpossible  = "`met` yields `achieved`, and `impossible` yields `failed`."
+	specGoalBusy        = "`SetGoal` while a turn runs, or with queued input, starts nothing. The next turn that ends is the first one evaluated."
+	specGoalClear       = "`ClearGoal` during a goal turn or its evaluation stops it with cause `goal_cleared` and returns after it ends."
+	specGoalWithdraw    = "`SetGoal`, `ClearGoal`, each verdict, and each pause or failure withdraw the queued inputs with `source: goal`."
+	specGoalInterrupted = "An interrupt during an evaluation stops nothing."
+	specGoalRestart     = "An `active` goal on an idle session judges the last turn when the goal has not judged it"
+	specNarrow          = "and the allowed tools of the parent narrowed by the profile"
+	specAskRule         = "Claude Code asks with `AskUserQuestion` when `Options.AskUserQuestion` is set and the session is not a child and has no active goal."
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -339,4 +361,27 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specOpenAnswerReceipt),
 	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView),
 	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
+
+	"a_negative_compaction_threshold_is_the_default_threshold":               reGolden(specView, specThreshold),
+	"auto_compaction_with_a_failed_summary_keeps_the_history":                reGolden(specView, specFailedSummary),
+	"restart_during_auto_compaction_runs_the_queued_input_on_the_next_owner": reGolden(specView, specOpenStarts),
+	"interrupt_stops_an_auto_compaction":                                     reGolden(specView, specErrors, specInterruptTable, specCompactBusy),
+	"auto_compaction_uses_the_window_of_the_session_model":                   reGolden(specView, specWindow),
+	"context_overflow_compacts_and_runs_the_turn_again":                      reGolden(specView, specOverflowFolds),
+	"context_overflow_after_the_compaction_fails_the_turn":                   reGolden(specView, specOverflowFolds, specOverflowTwice),
+	"a_stalled_summary_fails_the_overflowed_turn":                            reGolden(specView, specOverflowFails),
+	"compact_during_a_turn_is_session_busy":                                  reGolden(specView, specErrors, specCompactBusy),
+	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue),
+	"a_failed_turn_runs_the_next_queued_input":                               reGolden(specView, specFailedRuns),
+	"session_usage_counts_every_model_call_but_the_evaluation":               reGolden(specView, specCompactResult),
+	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),
+	"goal_set_on_a_busy_session_judges_the_running_turn":                     reGolden(specView, specGoalBusy),
+	"goal_clear_and_input_during_a_goal_turn":                                reGolden(specView, specGoalClear, specGoalWithdraw),
+	"interrupt_during_goal_evaluation_keeps_the_goal":                        reGolden(specView, specErrors, specGoalInterrupted, specCompactBusy),
+	"goal_judges_the_last_turn_after_a_restart":                              reGolden(specView, specGoalRestart),
+	"claudecode_child_and_goal_sessions_ask_no_question":                     reGolden(specTaskInputs, specChildReport, specChildNoGoal, specAskRule),
+	"codex_ws_restart_warms_the_websocket_again":                             reGolden(specItems, specWarm),
+	"codex_ws_prewarm_carries_the_plugin_system_segment":                     reGolden(specItems, specWarm),
+	"task_profile_of_a_grandchild_keeps_the_tools_its_parent_allows":         reGolden(specTaskInputs, specChildReport, specChildNoGoal, specNarrow),
+	"a_failed_summary_keeps_its_usage_in_the_session":                        reGolden(specView, specOverflowFails),
 }

@@ -86,53 +86,32 @@ func lines(t *testing.T, l *memLog, after uint64) []string {
 func TestModelCallErrors(t *testing.T) {
 	type step = harnesstest.Step
 	type reply = harnesstest.Reply
-	answer := func(in string) step {
-		return step{Name: in, Match: harnesstest.LastUserText(in), Reply: reply{Text: "re " + in}}
-	}
 	cut := func(name, after string, calls ...harnesstest.ToolCall) step {
 		return step{Name: name, Match: harnesstest.LastUserText(after), Reply: reply{Text: name, ToolCalls: calls, StopReason: "max_tokens"}}
 	}
-	overflow := step{Name: "overflow", Match: harnesstest.LastUserText("charlie"),
-		Reply: reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}}
-	summary := step{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: reply{Text: "sum"}}
-	summarized := step{Name: "charlie", Reply: reply{Text: "re charlie"}, Match: func(r harnesstest.Request) bool {
-		return r.Messages[0].Parts[0].Text == turn.SummaryBanner+"sum" && harnesstest.LastUserText("charlie")(r)
-	}}
-	const nudge, overflowed = "auto-continue 1 of 1", "turn.ended failed turn: context overflow: context exhausted: prompt 205102 tokens > limit 200000"
+	const nudge = "auto-continue 1 of 1"
 	started := []string{"input.admitted", "turn.started"}
 	for _, tc := range []struct {
-		name   string
-		before []string
-		steps  []step
-		want   []string
+		name  string
+		steps []step
+		want  []string
 	}{
-		{"a response cut off at max_tokens continues", nil,
+		{"a response cut off at max_tokens continues",
 			[]step{cut("first half", "charlie"), {Name: "rest", Match: harnesstest.LastUserText(nudge), Reply: reply{Text: "second half"}}},
 			[]string{"context.measured", "item.completed assistant first half", "context.measured", "item.completed assistant second half",
 				"turn.ended completed"}},
-		{"a tool call of a cut-off response does not run", nil,
+		{"a tool call of a cut-off response does not run",
 			[]step{cut("call", "charlie", harnesstest.ToolCall{ID: "c1", Name: "write_file"}), {Name: "rest", Match: harnesstest.LastUserText(nudge), Reply: reply{Text: "ok"}}},
 			[]string{"context.measured", "item.completed assistant call c1", "item.completed tool c1 not run: the response was cut off at its output limit", "context.measured",
 				"item.completed assistant ok", "turn.ended completed"}},
-		{"a cut-off response past the continuations fails the turn", nil,
+		{"a cut-off response past the continuations fails the turn",
 			[]step{cut("first half", "charlie"), cut("second half", nudge)},
 			[]string{"context.measured", "item.completed assistant first half", "context.measured", "item.completed assistant second half",
 				"turn.ended failed turn: the response reached max_tokens after 1 continuations"}},
-		{"a context overflow compacts and runs the turn once more", []string{"alpha", "bravo"},
-			[]step{answer("alpha"), answer("bravo"), overflow, summary, summarized},
-			[]string{"compaction.applied", "context.measured", "item.completed assistant re charlie", "turn.ended completed"}},
-		{"a context overflow with no turn to fold fails the turn", nil, []step{overflow}, []string{overflowed}},
-		{"a context overflow after the compaction fails the turn", []string{"alpha", "bravo"},
-			[]step{answer("alpha"), answer("bravo"), overflow, summary, {Name: "again", Reply: overflow.Reply}},
-			[]string{"compaction.applied", overflowed}},
-		{"a provider usage limit ends the turn with its cause", nil,
-			[]step{{Name: "limit", Reply: reply{HTTPStatus: 400, ErrorMessage: "You have reached your specified API usage limits."}}},
-			[]string{"turn.ended failed provider_exhausted [permanent] anthropic: You have reached your specified API usage limits. (invalid_request_error, HTTP 400)"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := harnesstest.New(t, tc.steps...)
 			a, log := runOn(t, &anthropic.Client{APIKey: "k", BaseURL: s.URL()}, turn.Limits{Retries: 1, Continuations: 1})
-			converse(t, a, tc.before...)
 			head := uint64(len(lines(t, log, 0)))
 			converse(t, a, "charlie")
 			if got, want := lines(t, log, head), append(started, tc.want...); !slices.Equal(got, want) {
@@ -142,13 +121,8 @@ func TestModelCallErrors(t *testing.T) {
 	}
 }
 
-// modelCall is one model call of a wire: its events, one each tick, then a clean
-// end, or with hang a wait for the end of the call.
-type modelCall struct {
-	events []provider.Event
-	hang   bool
-	err    error
-}
+// modelCall is one model call of a wire: its events, one each tick, then a clean end.
+type modelCall struct{ events []provider.Event }
 
 // wire is a provider that answers each model call with the next call.
 type wire struct {
@@ -166,7 +140,7 @@ func (w *wire) Stream(ctx context.Context, _ *provider.Request) (provider.Stream
 	}
 	c := w.calls[0]
 	w.calls = w.calls[1:]
-	return &stream{ctx: ctx, c: c}, c.err
+	return &stream{ctx: ctx, c: c}, nil
 }
 
 type stream struct {
@@ -175,7 +149,7 @@ type stream struct {
 }
 
 func (s *stream) Next() (provider.Event, error) {
-	if len(s.c.events) == 0 && !s.c.hang {
+	if len(s.c.events) == 0 {
 		return provider.Event{}, io.EOF
 	}
 	tick := time.NewTimer(100 * time.Millisecond)
@@ -184,10 +158,6 @@ func (s *stream) Next() (provider.Event, error) {
 	case <-s.ctx.Done():
 		return provider.Event{}, s.ctx.Err()
 	case <-tick.C:
-	}
-	if len(s.c.events) == 0 {
-		<-s.ctx.Done()
-		return provider.Event{}, s.ctx.Err()
 	}
 	ev := s.c.events[0]
 	s.c.events = s.c.events[1:]
@@ -208,37 +178,28 @@ func TestModelStreams(t *testing.T) {
 	}
 	activity := modelCall{events: slices.Repeat([]provider.Event{{Type: provider.EventActivity}}, 15)}
 	activity.events = append(activity.events, done(provider.StopEndTurn, &message.Text{Text: "written"}))
-	overflow := modelCall{err: &provider.Error{Kind: provider.ErrKindContextOverflow, Raw: "too long"}}
 	const notRun, noTool = "item.completed tool c1 not run: the response was cut off at its output limit", "item.completed tool c1 no such tool available: write_file"
 	for _, tc := range []struct {
 		name          string
 		continuations int
-		before        []string
 		calls         []modelCall
 		want          []string
 	}{
-		{"a stalled stream runs the call again", 1, nil,
-			[]modelCall{{events: []provider.Event{{Type: provider.EventTextDelta, Text: "partial"}}, hang: true}, say("re charlie", provider.StopEndTurn)},
-			[]string{"item.completed assistant re charlie", "turn.ended completed"}},
-		{"tool arguments that stream past the idle limit keep the call alive", 1, nil, []modelCall{activity},
+		{"tool arguments that stream past the idle limit keep the call alive", 1, []modelCall{activity},
 			[]string{"item.completed assistant written", "turn.ended completed"}},
-		{"a tool call with arguments cut off at max_tokens does not run", 1, nil,
+		{"a tool call with arguments cut off at max_tokens does not run", 1,
 			[]modelCall{write(`{"path":"a","content":"abc`, provider.StopMaxTokens), say("ok", provider.StopEndTurn)},
 			[]string{"item.completed assistant c1", notRun, "item.completed assistant ok", "turn.ended completed"}},
-		{"a response that is not cut off keeps the continuations spent", 1, nil,
+		{"a response that is not cut off keeps the continuations spent", 1,
 			[]modelCall{say("a", provider.StopMaxTokens), write("{}", provider.StopToolUse), say("b", provider.StopMaxTokens)},
 			[]string{"item.completed assistant a", "item.completed assistant c1", noTool, "item.completed assistant b",
 				"turn.ended failed turn: the response reached max_tokens after 1 continuations"}},
-		{"negative continuations end the turn at the cut", -1, nil, []modelCall{say("a", provider.StopMaxTokens)},
+		{"negative continuations end the turn at the cut", -1, []modelCall{say("a", provider.StopMaxTokens)},
 			[]string{"item.completed assistant a", "turn.ended completed"}},
-		{"a stalled summary fails the overflowed turn", 1, []string{"alpha", "bravo"},
-			[]modelCall{say("re alpha", provider.StopEndTurn), say("re bravo", provider.StopEndTurn), overflow, {hang: true}},
-			[]string{"turn.ended failed turn: context overflow: too long"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				a, log := runOn(t, &wire{calls: tc.calls}, turn.Limits{Retries: 1, Continuations: tc.continuations, Idle: 500 * time.Millisecond})
-				converse(t, a, tc.before...)
 				head := uint64(len(lines(t, log, 0)))
 				converse(t, a, "charlie")
 				if got, want := lines(t, log, head), append([]string{"input.admitted", "turn.started"}, tc.want...); !slices.Equal(got, want) {

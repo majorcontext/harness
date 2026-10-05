@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -217,12 +219,39 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 }
 
 func TestContractCodex(t *testing.T) {
-	runCodexScenarios(t, append(codexWebSocketRows(), codexHTTPRows()...))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexHTTPRows(), codexPluginRows(t)))
+}
+
+// recordPrewarmHas records, for each websocket prewarm of the Responses
+// server, whether its instructions hold text.
+type recordPrewarmHas struct{ contains string }
+
+func (recordPrewarmHas) run(t *testing.T, _ *run) {
+	t.Fatal("recordPrewarmHas runs only under runCodexScenario")
+}
+func (a recordPrewarmHas) runWire(t *testing.T, r *run, o *harnesstest.OpenAI) {
+	got := []any{}
+	for _, instructions := range o.PrewarmInstructions() {
+		got = append(got, strings.Contains(instructions, a.contains))
+	}
+	r.record(t, "prewarm_instructions_have", "", callResult{Status: 200, Body: got})
+}
+
+func codexPluginRows(t *testing.T) []codexScenario {
+	return []codexScenario{{
+		scenario: scenario{
+			name:    "codex_ws_prewarm_carries_the_plugin_system_segment",
+			config:  pluginConfig(t, nil),
+			model:   codexHi,
+			actions: codexSession(codexTurn("a", "hello"), []action{recordPrewarmHas{contains: fixtureSegment}, recordWire{}}),
+		},
+		websocket: true,
+	}}
 }
 
 func codexWebSocketRows() []codexScenario {
 	wire := []action{recordWire{}}
-	twoTurns := []harnesstest.Step{
+	twoSteps := []harnesstest.Step{
 		{Name: "one", Match: harnesstest.LastUserText("one"), Reply: codexText("1")},
 		{Name: "two", Match: harnesstest.LastUserText("two"), Reply: codexText("2")},
 	}
@@ -232,11 +261,19 @@ func codexWebSocketRows() []codexScenario {
 			websocket: true,
 		},
 		{
+			scenario: scenario{
+				name:    "codex_ws_restart_warms_the_websocket_again",
+				model:   twoSteps,
+				actions: codexSession(codexTurn("a", "one"), []action{restart{}}, codexTurn("a", "two"), wire),
+			},
+			websocket: true,
+		},
+		{
 			scenario:  scenario{name: "codex_ws_tool_round_trip", model: codexToolSteps, actions: codexSession(codexTurn("a", "run"), wire)},
 			websocket: true,
 		},
 		{
-			scenario:  scenario{name: "codex_ws_chains_two_turns", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_chains_two_turns", model: twoSteps, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 		},
 		{
@@ -258,12 +295,12 @@ func codexWebSocketRows() []codexScenario {
 			opts:      codexUsage(false),
 		},
 		{
-			scenario:  scenario{name: "codex_ws_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_chain_miss_resends_full_history", model: twoSteps, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
 		},
 		{
-			scenario:  scenario{name: "codex_ws_uncoded_chain_miss_resends_full_history", model: twoTurns, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
+			scenario:  scenario{name: "codex_ws_uncoded_chain_miss_resends_full_history", model: twoSteps, actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), wire)},
 			websocket: true,
 			opts:      harnesstest.OpenAIOptions{UncodedChainMiss: true, Replies: map[string]harnesstest.CodexReply{"one": {Forget: true}}},
 		},
@@ -271,7 +308,7 @@ func codexWebSocketRows() []codexScenario {
 			scenario: scenario{
 				name: "codex_ws_drop_mid_turn_resends_full_history",
 				model: []harnesstest.Step{
-					twoTurns[0],
+					twoSteps[0],
 					{Name: "dropped", Match: harnesstest.LastUserText("two"), Reply: codexText("partial")},
 					{Name: "retry", Match: harnesstest.LastUserText("two"), Reply: codexText("2")},
 				},

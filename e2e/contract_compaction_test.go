@@ -41,13 +41,6 @@ func TestContractCompaction(t *testing.T) {
 	}
 	summary := harnesstest.Step{Name: "summary", Reply: harnesstest.Reply{Text: "gist"}}
 	keepOne := map[string]any{"compaction_keep_turns": 1}
-	twoTurns := []action{
-		create{as: "a"},
-		submit{as: "a", text: "one"},
-		waitIdle{as: "a"},
-		submit{as: "a", text: "two"},
-		waitIdle{as: "a"},
-	}
 	runScenarios(t, []scenario{
 		{
 			name:   "compact_manual",
