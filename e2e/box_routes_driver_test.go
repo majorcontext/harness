@@ -38,28 +38,6 @@ func changesPath(root, scope, dir string) string {
 	return root + "?" + q.Encode()
 }
 
-func (d *httpDriver) Processes(t *testing.T) callResult {
-	t.Helper()
-	return d.call(t, http.MethodGet, "/process", nil)
-}
-
-func (d *httpDriver) ProcessAction(t *testing.T, name, action string) callResult {
-	t.Helper()
-	return d.call(t, http.MethodPost, processPath("/process", name, "/"+action), nil)
-}
-
-func (d *httpDriver) ProcessLogs(t *testing.T, name string, tail int) callResult {
-	t.Helper()
-	return d.call(t, http.MethodGet, logsPath("/process", name, tail), nil)
-}
-
-func (d *httpDriver) WorkspaceChanges(t *testing.T, scope, dir string) callResult {
-	t.Helper()
-	path := changesPath("/git/changes", scope, dir)
-	resp, data := d.p.do(http.MethodGet, path, nil)
-	return changesResult(t, path, resp.StatusCode, data)
-}
-
 func (d *runtimeDriver) Processes(t *testing.T) callResult {
 	t.Helper()
 	return d.call(t, http.MethodGet, "/processes", nil)
