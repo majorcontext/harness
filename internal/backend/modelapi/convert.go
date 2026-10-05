@@ -19,6 +19,8 @@ func toMessage(ctx context.Context, req turn.Request, m eventlog.Message) (messa
 		switch p.Type {
 		case eventlog.PartText:
 			out.Parts = append(out.Parts, &message.Text{Text: p.Text})
+		case eventlog.PartEngineContext:
+			out.Parts = append(out.Parts, &message.EngineContext{Text: p.Text})
 		case eventlog.PartReasoning:
 			out.Parts = append(out.Parts, &message.Reasoning{Text: p.Text, ProviderData: p.ProviderData})
 		case eventlog.PartToolCall:

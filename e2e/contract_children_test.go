@@ -34,6 +34,40 @@ func TestContractChildren(t *testing.T) {
 			},
 		},
 		{
+			name:       "child_error_delivered",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate,
+				// The child holds its tool call until the parent's ack request exists, so
+				// the failure cannot ride on that request.
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{{
+					ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."},
+				}}}},
+				{Name: "child_error", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "child request rejected"}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
+				{Name: "parent", Match: harnesstest.LastUserText("A background task"), Reply: harnesstest.Reply{Text: "parent done"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 3},
+				release{step: "child"},
+				awaitRequests{n: 5},
+				waitIdle{as: "a"},
+				bindChild{as: "kid", parent: "a", record: true},
+				getSession{as: "kid"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}
+
+func TestContractChildrenBusyParent(t *testing.T) {
+	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+	}}}}
+	runScenarios(t, []scenario{
+		{
 			name:       "child_report_reaches_a_busy_parent_at_the_tool_boundary",
 			concurrent: true,
 			model: []harnesstest.Step{
@@ -60,29 +94,27 @@ func TestContractChildren(t *testing.T) {
 			},
 		},
 		{
-			name:       "child_error_delivered",
+			name:       "child_error_reaches_a_busy_parent_at_the_tool_boundary",
 			concurrent: true,
 			model: []harnesstest.Step{
 				delegate,
-				// The child holds its tool call until the parent's ack request exists, so
-				// the failure cannot ride on that request.
-				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{{
-					ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."},
-				}}}},
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."}},
+				}}},
 				{Name: "child_error", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "child request rejected"}},
-				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
-				{Name: "parent", Match: harnesstest.LastUserText("A background task"), Reply: harnesstest.Reply{Text: "parent done"}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+				}}},
+				{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true},
 			},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "delegate"},
 				awaitRequests{n: 3},
 				release{step: "child"},
-				awaitRequests{n: 5},
+				awaitRequests{n: 4},
+				release{step: "ack"},
 				waitIdle{as: "a"},
-				bindChild{as: "kid", parent: "a", record: true},
-				getSession{as: "kid"},
-				getSession{as: "a"},
 			},
 		},
 	})

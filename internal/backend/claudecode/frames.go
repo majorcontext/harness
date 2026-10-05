@@ -261,7 +261,7 @@ func userLine(m eventlog.Message, read func(key string) ([]byte, error)) (input,
 	var attachments []contentBlock
 	for _, p := range m.Parts {
 		switch p.Type {
-		case eventlog.PartText:
+		case eventlog.PartText, eventlog.PartEngineContext:
 			texts = append(texts, p.Text)
 		case eventlog.PartBlob:
 			data, err := read(p.BlobKey)

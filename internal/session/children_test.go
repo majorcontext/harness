@@ -18,14 +18,15 @@ func TestSettlement(t *testing.T) {
 		events  []eventlog.Event
 		outcome eventlog.Outcome
 		text    string
+		line    string
 	}{
 		{"a completed turn is done with its last text", []eventlog.Event{said, ended(eventlog.StopCompleted, "", "")},
-			eventlog.OutcomeDone, head + "done\n\nfound it"},
-		{"a failed turn names its error", []eventlog.Event{ended(eventlog.StopFailed, "", "boom")}, eventlog.OutcomeFailed, head + "failed: boom"},
+			eventlog.OutcomeDone, head + "done\n\nfound it", "kid (agent=explore) done: found it (usage: 0 in / 0 out)"},
+		{"a failed turn names its error", []eventlog.Event{ended(eventlog.StopFailed, "", "boom")}, eventlog.OutcomeFailed, head + "failed: boom", "kid (agent=explore) failed: boom (usage: 0 in / 0 out)"},
 		{"a crashed turn failed", []eventlog.Event{said, ended(eventlog.StopInterrupted, eventlog.CauseCrashed, "")},
-			eventlog.OutcomeFailed, head + "failed: crashed\n\nfound it"},
-		{"a stopped turn is canceled", []eventlog.Event{ended(eventlog.StopInterrupted, eventlog.CauseStopped, "")}, eventlog.OutcomeCanceled, head + "canceled: stopped"},
-		{"a running turn has not settled", []eventlog.Event{said}, "", ""},
+			eventlog.OutcomeFailed, head + "failed: crashed\n\nfound it", "kid (agent=explore) failed: crashed (usage: 0 in / 0 out)"},
+		{"a stopped turn is canceled", []eventlog.Event{ended(eventlog.StopInterrupted, eventlog.CauseStopped, "")}, eventlog.OutcomeCanceled, head + "canceled: stopped", "kid (agent=explore) failed: canceled (usage: 0 in / 0 out)"},
+		{"a running turn has not settled", []eventlog.Event{said}, "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &eventlog.State{}
@@ -41,10 +42,10 @@ func TestSettlement(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, text, ok := Settlement("kid", s)
+			got, report, ok := Settlement("kid", s)
 			want := eventlog.ChildSettled{ChildID: "kid", Outcome: tc.outcome, ResultRef: "t1"}
-			if ok != (tc.outcome != "") || ok && (got != want || text != tc.text) {
-				t.Errorf("Settlement = %+v, %q, %v; want %+v, %q", got, text, ok, want, tc.text)
+			if ok != (tc.outcome != "") || ok && (got != want || report[0].Text != tc.text || tc.line != "" && report[1].Text != tc.line) {
+				t.Errorf("Settlement = %+v, %+v, %v; want %+v, %q", got, report, ok, want, tc.text)
 			}
 		})
 	}

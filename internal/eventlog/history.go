@@ -21,12 +21,15 @@ type entry struct {
 
 // SteerMessage is the message that the model reads for inputs that join a
 // running turn at an item boundary: one numbered block that tells the model
-// to address them and then to continue its task.
+// to address them and then to continue its task. An input that reports a
+// child is not in the block; the model reads its task lines in one engine
+// context part, as the engine pinned them.
 func SteerMessage(inputs [][]Part) Message {
 	var b strings.Builder
 	var blobs []Part
-	b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
-	for i, parts := range inputs {
+	var tasks []string
+	n := 0
+	for _, parts := range inputs {
 		var text []string
 		for _, p := range parts {
 			switch p.Type {
@@ -34,11 +37,33 @@ func SteerMessage(inputs [][]Part) Message {
 				text = append(text, p.Text)
 			case PartBlob:
 				blobs = append(blobs, p)
+			case PartTaskReport:
+				tasks = append(tasks, p.Text)
 			}
 		}
-		fmt.Fprintf(&b, "%d. %s\n", i+1, strings.Join(text, "\n"))
+		if slices.ContainsFunc(parts, func(p Part) bool { return p.Type == PartTaskReport }) {
+			continue
+		}
+		if n++; n == 1 {
+			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
+		}
+		fmt.Fprintf(&b, "%d. %s\n", n, strings.Join(text, "\n"))
 	}
-	return Message{Role: RoleUser, Parts: append([]Part{{Type: PartText, Text: b.String()}}, blobs...)}
+	var out []Part
+	if n > 0 {
+		out = append(out, Part{Type: PartText, Text: b.String()})
+	}
+	out = append(out, blobs...)
+	if len(tasks) > 0 {
+		out = append(out, Part{Type: PartEngineContext, Text: "[tasks:\n- " + strings.Join(tasks, "\n- ") + "\n]"})
+	}
+	return Message{Role: RoleUser, Parts: out}
+}
+
+// withoutTaskReports returns parts with the task lines left out: a turn that
+// an input starts reads the text of the input.
+func withoutTaskReports(parts []Part) []Part {
+	return slices.DeleteFunc(slices.Clone(parts), func(p Part) bool { return p.Type == PartTaskReport })
 }
 
 // History returns the conversation that the model sees: the summary of the
@@ -59,7 +84,7 @@ func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
 	case TurnStarted:
 		for _, id := range e.InputIDs {
-			s.say(env.Seq, Message{Role: RoleUser, Parts: s.inputs[id].event.Parts})
+			s.say(env.Seq, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
 		}
 	case InputPromoted:
 		parts := s.inputs[e.InputID].event.Parts

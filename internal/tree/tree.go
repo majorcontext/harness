@@ -110,7 +110,7 @@ func (t *Tree) spawn(ctx context.Context, parent, agent, task string) (string, e
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: task}}}
 	ctx = context.WithoutCancel(ctx)
 	if err := t.s.Create(ctx, id, c, first, p); err != nil {
-		return "", errors.Join(err, ps.Actor.Settle(ctx, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, ""))
+		return "", errors.Join(err, ps.Actor.Settle(ctx, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil))
 	}
 	return id, nil
 }
@@ -259,13 +259,13 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // when the runtime does not run it, even when the child has settled. It
 // never waits for the child. A child that a tree interrupt stops settles
 // with no report input, so no parent inside the tree starts a turn.
-func (t *Tree) Report(parent string, s eventlog.ChildSettled, text string) {
+func (t *Tree) Report(parent string, s eventlog.ChildSettled, report []eventlog.Part) {
 	if t.quieted(s.ChildID) {
-		text = ""
+		report = nil
 	}
 	t.cfg.Go(func() {
 		if p, err := t.s.Open(t.cfg.Base, parent); err == nil {
-			_ = p.Actor.Settle(t.cfg.Base, s, text)
+			_ = p.Actor.Settle(t.cfg.Base, s, report)
 		}
 	})
 }
@@ -277,15 +277,15 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, text string) {
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
-		var text string
+		var report []eventlog.Part
 		var ended bool
-		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) { s, text, ended = session.Settlement(id, st) })
+		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) { s, report, ended = session.Settlement(id, st) })
 		switch {
 		case errors.Is(err, session.ErrNotFound):
-			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, "")
+			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
-			_ = a.Settle(t.cfg.Base, s, text)
+			_ = a.Settle(t.cfg.Base, s, report)
 		default:
 			_, _ = t.s.Open(t.cfg.Base, id)
 		}

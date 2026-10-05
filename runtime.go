@@ -427,8 +427,8 @@ func (r *Runtime) appended(id string, plug *pluginsrc.Session) func([]eventlog.E
 		if parent == "" || !slices.ContainsFunc(events, func(e eventlog.Event) bool { _, ok := e.(eventlog.TurnEnded); return ok }) {
 			return
 		}
-		if s, text, ok := session.Settlement(id, st); ok {
-			r.tree.Report(parent, s, text)
+		if s, report, ok := session.Settlement(id, st); ok {
+			r.tree.Report(parent, s, report)
 		}
 	}
 }

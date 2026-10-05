@@ -285,7 +285,7 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 		Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 	if _, _, err := c.Actor.Submit(ctx, in, ""); err != nil {
 		if rearm {
-			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, ""))
+			err = errors.Join(err, p.Actor.Settle(context.WithoutCancel(ctx), eventlog.ChildSettled{ChildID: child, Outcome: eventlog.OutcomeFailed}, nil))
 		}
 		return false, err
 	}
