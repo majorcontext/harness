@@ -2,12 +2,12 @@
 
 Read the root AGENTS.md.
 
-- Keep this package a thin composition root. `serve` builds one `harness.Runtime` from `harness.Options` and wraps its handler. Move no runtime behavior into it.
+- Keep this package a thin composition root. `serve`, `run`, `sessions`, and `plugin probe` build one `harness.Runtime` from `harness.Options`; `serve` wraps its handler. Import neither `engine` nor `server`. Move no runtime behavior into it.
 - Inject dependencies through options.
 - Scan no skills or project instructions at `NewSession`.
 - Keep plugin manifests and model metadata local and static on the hot path.
 - After a change to command initialization, run the `Startup budget` step of `.github/workflows/ci.yml`.
-- This package resolves environment variables: `serve` applies them with `config.ApplyEnv`. Neither the engine nor the runtime reads them.
+- This package resolves environment variables: `serve` and `run` apply them with `config.ApplyEnv`, then their flags. The runtime reads none.
 - Keep one decision point for each precedence rule. Preserve explicit zero, negative, and unset.
 - The provider-map key is the model-reference family. Pass it into native Responses clients.
 - Allow empty-token service only when `resolveUnauthenticated` proves loopback or gets the opt-in.

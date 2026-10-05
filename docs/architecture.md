@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 3 are built. Phase 4 has begun: `Runtime.Handler`, the box routes and slash commands, the MCP tools, the plugins, the processes, the prompt builder, `harness/migrate`, and `cmd/harness-migrate` are merged, and the switch of `cmd/harness` is not. The new runtime runs beside `engine` and `server` until the phase 4 switch. A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`, and imports neither `engine` nor `server`. `engine` and `server` stay in the tree until phase 6, and nothing in `cmd` calls them. A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -142,6 +142,8 @@ func (r *Runtime) Close(ctx context.Context) error
 
 // CatchUp replicates every stored session through Sync, opening none. A box harness calls it at start.
 func (r *Runtime) CatchUp(ctx context.Context) error
+// ProbePlugins reads the manifest of each configured plugin, as the first Create or Open does, and returns each plugin with its tools and hooks.
+func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 
 func (s *Session) View() protocol.Session // includes HeadSeq and SyncedSeq
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) // Admitted.Repeat: the input was admitted before
@@ -159,6 +161,8 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error)
 func (v *View) Session() protocol.Session
 func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
 func (v *View) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
+// Resumable reports whether Open would resume something: a running or suspended turn, a queued input, an active or paused goal, a command that no owner finished, or a child that has not settled.
+func (v *View) Resumable() bool
 
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
@@ -536,9 +540,9 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
-A route that only reads a session, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, and the page form of `GET /sessions/{id}/events`, answers from the view of a session that this runtime runs, and replays the log of any other session as `OpenView` does. It never opens a session, so it appends nothing and starts no turn. `Runtime.Open` runs for each route that changes a session and for the SSE stream of its events, which tails them as they happen. `DELETE /sessions/{id}` calls `Runtime.End`, which opens nothing: it stops a session that this runtime runs when no run is on, and stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`. A session that this runtime does not run stays closed, also when a descendant of it settles, and the child settles when the session opens, with no report input for a turn that ended with cause `ended`. A child that a direct interrupt stops still reports `canceled` to its parent; a tree interrupt keeps its rule of no report input. It answers 204 for any session that has a log, and 404 for an ID with no log. A restart opens no session by itself: the embedder opens each session that has work to resume, `cmd/harness` when it starts and boxes when it wakes the box.
+A route that only reads a session, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, and the page form of `GET /sessions/{id}/events`, answers from the view of a session that this runtime runs, and replays the log of any other session as `OpenView` does. It never opens a session, so it appends nothing and starts no turn. `Runtime.Open` runs for each route that changes a session and for the SSE stream of its events, which tails them as they happen. `DELETE /sessions/{id}` calls `Runtime.End`, which opens nothing: it stops a session that this runtime runs when no run is on, and stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`. A session that this runtime does not run stays closed, also when a descendant of it settles, and the child settles when the session opens, with no report input for a turn that ended with cause `ended`. A child that a direct interrupt stops still reports `canceled` to its parent; a tree interrupt keeps its rule of no report input. It answers 204 for any session that has a log, and 404 for an ID with no log. A restart opens no session by itself: the embedder opens each session that has work to resume (`View.Resumable`), `cmd/harness` when it starts and boxes when it wakes the box. A session that has no work stays closed and gets no `owner.acquired`; a log that does not replay is skipped and logged.
 
-`Runtime.Handler` serves these routes today: `POST` and `GET /sessions`, `GET`, `PATCH`, and `DELETE /sessions/{id}`, `POST` and `GET /sessions/{id}/inputs`, `DELETE /sessions/{id}/inputs/{input}`, `POST /sessions/{id}/interrupt`, `POST /sessions/{id}/compact`, `POST /sessions/{id}/requests/{request}`, `PUT` and `DELETE /sessions/{id}/goal`, `GET /sessions/{id}/events`, `GET /models`, `GET /processes`, `POST /processes/{name}/start`, `stop`, and `restart`, `GET /processes/{name}/logs`, `GET /workspace/changes` with a `WorkDir`, `GET /commands`, and `GET /health`. `interrupt` takes `tree`. Phase 4 adds the other routes. The handler has no authentication; the embedder wraps it.
+`Runtime.Handler` serves every route above. A route that answers with more than one success status has one entry for each status in the route table: `POST /sessions/{id}/inputs` answers 201 for a new input and 200 for a repeat, with the same body, and `POST /sessions/{id}/requests/{request}` answers 202 with `{seq, status}` for an answer and 204 for a dismissal. `interrupt` takes `tree`. `GET /health` answers `protocol.Health`: `status`, `version`, `vcs_revision`, `vcs_time`, `session_sync` (`fsync` or `volume`), `started_at` (the start of the runtime, RFC 3339 UTC), and `capabilities` (`delta_row_identity`, which says that each `item.delta` frame names its item). The handler has no authentication; the embedder wraps it.
 
 Today harness has 36 routes and seven ways to read a session. This has one log and one cursor.
 
@@ -618,7 +622,18 @@ As the engine did, the actor masks and bounds each error text that it writes to 
 
 ### Contract source
 
-Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `server` exports. CI regenerates and fails on a diff. A `server` test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted.
+Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `server` exports. CI regenerates and fails on a diff. A test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted. The generated contract holds what the handler does: each request body is optional, because the handler reads an empty body as the zero request; a type that only a request holds refuses unknown fields, as the handler answers `invalid_request`; and each success status of a route is an entry of the table. The process, logs, and health bodies are `protocol` types (`ProcessInfo`, `ProcessStatus`, `ProcessLogs`, and `Health`).
+
+### Command
+
+`cmd/harness` is the composition root of the runtime. It resolves environment variables and flags, builds one `harness.Runtime`, and holds no runtime behavior.
+
+- `serve` applies the `HARNESS_*` variables with `config.ApplyEnv`, then the flags `-no-instructions`, `-skills-dir`, and `-agent-def-dir`, so a flag wins. It keeps the sessions in a `DiskStore` at `HARNESS_SESSION_DIR`, else `session_dir`, else `~/.harness/sessions`, and passes `Options.ServeURL` and `Options.RunToken` to the plugins. It serves `Runtime.Handler` behind the bearer token of `HARNESS_RUN_TOKEN`; `GET /health` needs no token, and an empty token is allowed only on a loopback bind or with `-unauthenticated` or `HARNESS_UNAUTHENTICATED`. With `-cors-origin` it adds the CORS headers, and a preflight skips the token. It listens first. Then it calls `CatchUp` and opens each session that has work to resume, and a failure of either is logged and never stops `serve`.
+- `serve` wraps its store to log what the engine hooks logged: a store operation that takes over 1 s (`slow store phase`), an operation that still runs after 5 s, repeated every 5 s (`store phase in flight`), the append that creates a session (`session created`, with its time), and the append of `child.spawned` (`task spawned`, with the count of the process). It also logs the config summary at start, and each GC pause of 200 ms or more.
+- `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, and `-system` appends a prompt segment. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session to stdout, each tool call and each failed tool to stderr, or each event as a JSON line with `-json`. It returns when the session has settled. It exits 1 when the turn failed or a typed command did not succeed, and 3 when `-goal` does not reach `achieved`. It prints `session: <id>` on stderr when it saved the session.
+- `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
+- `plugin probe` calls `Runtime.ProbePlugins` and prints each plugin with its hooks. There is no manifest cache to refresh.
+- `serve` closes the runtime and the HTTP server within 5 s of a signal. How `boxinit` learns from the stop whether each session handed off and whether `Sync` has every record is open.
 
 ## turn and backend
 
@@ -859,7 +874,7 @@ One `Config` struct. `Defaults` is the one defaults table, and each accessor rea
 
 `owner_epoch` (a number) and `sync {url, token_file}` are the keys of a box harness; `Validate` requires an `http` or `https` URL with no userinfo, and a token file. Only the user file sets them: a project file cannot. A project file is still read as a file, so an invalid `sync` there fails the load, and a valid one is dropped.
 
-`ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. The phase 4 switch wires `ApplyEnv` into `cmd/harness`.
+`ApplyEnv` sets each top-level string, number, or bool key from `HARNESS_<KEY>`. An empty variable keeps the key. A map, slice, or struct key has no variable. A parse error names the variable and never the value. There are no env-only knobs. `cmd/harness` applies it in `serve` and `run`, and a flag wins over a variable.
 
 The package imports only the standard library. The `config-leaf` depguard rule enforces it.
 

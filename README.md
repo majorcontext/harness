@@ -6,7 +6,7 @@ A fast, extensible, composable agent harness in Go.
 
 - **Fast** — millisecond startup, CI-enforced budgets
 - **Extensible** — language-agnostic process plugins with a Go SDK
-- **Composable** — headless engine, event streams, client/server, MCP both directions
+- **Composable** — headless runtime, event streams, client/server, MCP both directions
 - **Model-fluid** — swap providers/models mid-session or per-subagent with no migration
 
 ## Install
@@ -57,34 +57,57 @@ Run `harness --help` for all commands and flags.
 
 ## Use the library
 
-The engine is a Go package. The CLI and server are clients of it. Add it to your module:
+The runtime is a Go package. The CLI and the HTTP server are clients of it. Add it to your module:
 
 ```bash
-go get github.com/majorcontext/harness/engine@latest
+go get github.com/majorcontext/harness@latest
 ```
 
-Then create a session and send it a prompt:
+Then create a runtime and a session, send the session a prompt, and read its events:
 
 ```go
-s := engine.NewSession(engine.Config{
-	Providers: provider.Registry{
-		anthropic.Family: &anthropic.Client{APIKey: os.Getenv("ANTHROPIC_API_KEY")},
-	},
-	Model:   message.ModelRef{Provider: anthropic.Family, Model: "claude-fable-5"},
+rt, err := harness.New(harness.Options{
+	Store:   harness.NewMemStore(),
 	WorkDir: ".",
-	OnEvent: func(e engine.Event) {
-		if e.Type == engine.EventTextDelta {
-			fmt.Print(e.Text)
-		}
-	},
 })
-if _, err := s.Prompt(context.Background(), "List the files in this directory."); err != nil {
+if err != nil {
 	log.Fatal(err)
+}
+defer rt.Close(ctx)
+
+s, err := rt.Create(ctx, protocol.CreateSession{})
+if err != nil {
+	log.Fatal(err)
+}
+head := s.View().HeadSeq
+_, err = s.Submit(ctx, protocol.Input{
+	ID:    "prompt-1",
+	Parts: []protocol.Part{{Type: protocol.PartText, Text: "List the files in this directory."}},
+})
+if err != nil {
+	log.Fatal(err)
+}
+for e, err := range s.Events(ctx, head) {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if e.Kind == protocol.KindItemDelta {
+		var f protocol.ItemFrame
+		if json.Unmarshal(e.Data, &f) == nil {
+			fmt.Print(f.Text)
+		}
+	}
+	if e.Kind == "turn.ended" {
+		break
+	}
 }
 ```
 
+`WorkDir` gives each session the built-in tools, bash among them. Leave it empty for a session with no file access.
+`Runtime.Handler` serves the same sessions over HTTP, and `harness.NewDiskStore` keeps them on disk.
+
 See [examples/](examples) for programs that run, and the
-[API reference](https://pkg.go.dev/github.com/majorcontext/harness/engine) for
+[API reference](https://pkg.go.dev/github.com/majorcontext/harness) for
 everything else.
 
 ## Configuration
@@ -102,8 +125,8 @@ includes every OpenRouter and local model: set `context_window_tokens`, which
 applies to every session. To run such a model without a window, set
 `context_window_required: false`; automatic compaction is then off.
 `claude-code` models are the exception: the Claude Code CLI reports its own
-window after each turn, so do not set one for them. The library requires a
-window only when `engine.Config.RequireContextWindow` is set.
+window after each turn, so do not set one for them. The library applies the same rule through `context_window_required` of the
+`config.Config` that you pass to `harness.New`.
 
 ### OpenAI-compatible endpoints
 

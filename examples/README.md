@@ -13,5 +13,5 @@ Each directory is a small program. Run it from the repository root.
 ANTHROPIC_API_KEY=... go run ./examples/prompt "Summarize README.md"
 ```
 
-The engine writes diagnostic logs to stderr. Set `Config.OnTurnMetrics` and
-the default `slog` logger to silence them.
+The runtime writes diagnostic logs to stderr through the default `slog`
+logger. Call `slog.SetDefault` to redirect them.
