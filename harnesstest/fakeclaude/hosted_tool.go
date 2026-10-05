@@ -36,11 +36,20 @@ func callHostedTool(f *fake) {
 		appendFile(log, "no harness server in --mcp-config\n")
 		return
 	}
-	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
-	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	out, err := hostedPost(srv, method, params)
 	if err != nil {
 		appendFile(log, err.Error()+"\n")
 		return
+	}
+	appendFile(log, fmt.Sprintf("%s\n", out))
+}
+
+// hostedPost sends one JSON-RPC request to srv and returns the response body.
+func hostedPost(srv hostedEntry, method string, params obj) ([]byte, error) {
+	body, _ := json.Marshal(obj{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	req, err := http.NewRequest(http.MethodPost, srv.URL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -49,12 +58,11 @@ func callHostedTool(f *fake) {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		appendFile(log, err.Error()+"\n")
-		return
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	out, _ := io.ReadAll(resp.Body)
-	appendFile(log, fmt.Sprintf("%s\n", bytes.TrimSpace(out)))
+	out, err := io.ReadAll(resp.Body)
+	return bytes.TrimSpace(out), err
 }
 
 type hostedEntry struct {

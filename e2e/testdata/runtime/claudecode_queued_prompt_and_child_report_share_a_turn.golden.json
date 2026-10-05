@@ -1,0 +1,89 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delegate"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delegating."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "no second message received"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "next step"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done slow"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "noted"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "delegate",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "child work slow",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "next step\n\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: child done slow (usage: 1 in / 1 out)\n]",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    }
+  }
+}

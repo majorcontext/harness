@@ -342,10 +342,39 @@ func effortArg(e message.Effort) (string, bool) {
 func (r *run) prompt(req turn.Request) (input, error) {
 	m := eventlog.Message{Parts: []eventlog.Part{{Type: eventlog.PartText, Text: continuation}}}
 	if !r.continues {
-		m.Parts = nil
-		for _, in := range req.Input {
-			m.Parts = append(m.Parts, in.Parts...)
-		}
+		m.Parts = startParts(req.Input)
 	}
 	return userLine(m, r.read)
+}
+
+// startParts returns the parts of the line that starts a turn. When only
+// reports of children start it, the line is their text. When the turn also
+// has another input, the task lines of the reports follow the text of that
+// input in one segment, as the engine appended the reports that waited for
+// the turn; the text of a report is left out, because its task line holds the
+// result.
+func startParts(inputs []eventlog.Message) []eventlog.Part {
+	report := func(m eventlog.Message) bool {
+		return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })
+	}
+	only := !slices.ContainsFunc(inputs, func(m eventlog.Message) bool { return !report(m) })
+	var parts []eventlog.Part
+	var tasks []string
+	for _, in := range inputs {
+		for _, p := range in.Parts {
+			switch {
+			case p.Type == eventlog.PartTaskReport:
+				if !only {
+					tasks = append(tasks, p.Text)
+				}
+			case report(in) && !only:
+			default:
+				parts = append(parts, p)
+			}
+		}
+	}
+	if len(tasks) > 0 {
+		parts = append(parts, eventlog.Part{Type: eventlog.PartEngineContext, Text: eventlog.TaskSegment(tasks)})
+	}
+	return parts
 }

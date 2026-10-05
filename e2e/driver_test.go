@@ -37,6 +37,9 @@ type driver interface {
 	// Attach submits text with the attachments after it.
 	Attach(t *testing.T, id, text string, atts []attachment)
 	Enqueue(t *testing.T, id, text string)
+	// EnqueueNext enqueues text for the next turn. Serve has one queue, so it
+	// is Enqueue there.
+	EnqueueNext(t *testing.T, id, text string)
 	WaitIdle(t *testing.T, id string)
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)
@@ -263,6 +266,11 @@ func (d *httpDriver) CommandRecords(t *testing.T, id string) callResult {
 func (d *httpDriver) Models(t *testing.T) callResult {
 	t.Helper()
 	return notInEngine("GET /models")
+}
+
+func (d *httpDriver) EnqueueNext(t *testing.T, id, text string) {
+	t.Helper()
+	d.Enqueue(t, id, text)
 }
 
 func (d *httpDriver) Stderr() string { return d.p.stderr.String() }
