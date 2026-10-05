@@ -210,6 +210,10 @@ type State struct {
 	retained   []ToolResultRetained
 	commands   map[string]command
 	history    []entry
+	// stranded holds the pinned segments that a compaction folded. The model
+	// reads them at the end of the history, and the next turn start settles
+	// them there, after its inputs.
+	stranded []entry
 	// turnAt is the length of history when the current turn started.
 	turnAt int
 	// turnBy is the provider of the model when the newest turn started, turnN
@@ -233,6 +237,7 @@ func (s *State) clone() *State {
 	c.commands = maps.Clone(s.commands)
 	// A full cap makes an append to c copy, so c never writes into s.history.
 	c.history = s.history[:len(s.history):len(s.history)]
+	c.stranded = slices.Clip(s.stranded)
 	c.retained = slices.Clip(s.retained)
 	c.unran = slices.Clip(s.unran)
 	return &c

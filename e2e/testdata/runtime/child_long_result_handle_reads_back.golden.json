@@ -451,16 +451,6 @@
       },
       {
         "id": "msg#6",
-        "role": "user",
-        "parts": [
-          {
-            "type": "engine_context",
-            "text": "[tasks:\n- \u003csession\u003e (agent=general-purpose) done: long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long … [full result retained — read the rest with read_tool_result(handle=\"trh_1\")] (usage: 10 in / 6 out)\n]"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
@@ -474,7 +464,7 @@
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#7",
         "role": "tool",
         "parts": [
           {
@@ -485,7 +475,7 @@
         ]
       },
       {
-        "id": "msg#9",
+        "id": "msg#8",
         "role": "assistant",
         "parts": [
           {

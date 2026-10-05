@@ -94,7 +94,7 @@ func sameJSON(x, y any) bool {
 func (a *Actor) start(id string, inputIDs []string) {
 	r := a.newRun(kindTurn, id)
 	req := turn.Request{SessionID: a.cfg.ID, TurnID: id, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
-		History: a.state.History(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model()), Blob: a.blob}
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), Foreign: a.state.Foreign(a.state.Model()), Blob: a.blob}
 	caps := a.cfg.Backend.Capabilities(req.Model)
 	r.steering, r.ownsLoop = caps.Steering || !caps.OwnsLoop, caps.OwnsLoop
 	if r.steering {
@@ -162,21 +162,28 @@ func (a *Actor) steer(r *running) ([]eventlog.Message, error) {
 	if !r.steering || r.step.Err() != nil {
 		return nil, nil
 	}
-	var events []eventlog.Event
+	var ops, reports []eventlog.Event
 	var steered [][]eventlog.Part
 	for _, in := range a.state.Queue() {
-		if in.Delivery == eventlog.DeliverySteer {
-			events = append(events, eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id})
-			steered = append(steered, in.Parts)
+		if in.Delivery != eventlog.DeliverySteer {
+			continue
 		}
+		e := eventlog.InputPromoted{InputID: in.InputID, TurnID: r.id}
+		if eventlog.IsReport(in.Parts) {
+			reports = append(reports, e)
+		} else {
+			ops = append(ops, e)
+		}
+		steered = append(steered, in.Parts)
 	}
+	events := append(ops, reports...)
 	if len(events) == 0 {
 		return nil, nil
 	}
 	if err := a.append(events...); err != nil {
 		return nil, err
 	}
-	return []eventlog.Message{eventlog.SteerMessage(steered)}, nil
+	return eventlog.SteerMessages(steered), nil
 }
 
 func isCall(p eventlog.Part) bool { return p.Type == eventlog.PartToolCall }
@@ -243,18 +250,11 @@ func (a *Actor) startInputs(q []eventlog.InputAdmitted) []string {
 		return ids
 	}
 	for _, in := range q[1:] {
-		if isReport(in.Parts) {
+		if eventlog.IsReport(in.Parts) {
 			ids = append(ids, in.InputID)
 		}
 	}
 	return ids
-}
-
-// isReport reports whether parts hold the report of a child. A caller cannot
-// write a task report part, so this tells a report from a prompt that names
-// source child.
-func isReport(parts []eventlog.Part) bool {
-	return slices.ContainsFunc(parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })
 }
 
 // ownsLoop reports whether the backend that runs the current turn runs its
