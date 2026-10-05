@@ -54,8 +54,9 @@ type run struct {
 	pendingID string
 	deferred  []eventlog.Message
 	// steer reports a steer input that waits for Sink.Steer. A resolution
-	// run takes none: the CLI would queue it behind its own continuation and
-	// answer it in a second result.
+	// run takes none and leaves the notification for the run after it: the
+	// CLI would queue the input behind its own continuation and answer it in a
+	// second result.
 	steer      bool
 	mainModel  string
 	lastCall   *usage
@@ -88,6 +89,10 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		}
 		r.sendErr = r.proc.Send(line)
 	}
+	steered := req.Steered
+	if r.resolution != nil {
+		steered = nil
+	}
 	for {
 		select {
 		case line, ok := <-r.proc.Lines():
@@ -97,8 +102,8 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 			if err := r.frame(line); err != nil || r.result != nil {
 				return err
 			}
-		case <-req.Steered:
-			r.steer = r.resolution == nil
+		case <-steered:
+			r.steer = true
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
