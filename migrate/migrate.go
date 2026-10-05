@@ -100,7 +100,3 @@ func write(ctx context.Context, st harness.Store, id string, o old) (int, error)
 }
 
 func toolResultDir(dir, id string) string { return filepath.Join(dir, "toolresults", id) }
-
-// lostToRestart is the failure that engine recovery reports for a child
-// turn that was running when the process stopped.
-const lostToRestart = "lost to restart: turn was in flight when the process last stopped"

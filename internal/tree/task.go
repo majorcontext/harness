@@ -243,7 +243,7 @@ func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error
 			h := st.History()
 			k.total, k.tail = len(h), h[max(0, len(h)-tail):]
 		}
-		s, _, ok := session.Settlement(id, st)
+		s, rep, ok := session.Settlement(id, st)
 		if !ok {
 			return
 		}
@@ -252,7 +252,7 @@ func (t *Tree) child(ctx context.Context, id string, tail int) (childView, error
 		case eventlog.OutcomeDone:
 			k.result, _ = session.CapRunes(session.LastText(st.History()), session.ResultCap)
 		case eventlog.OutcomeFailed:
-			k.reason = last.Detail()
+			k.reason = rep.Reason()
 			if last.Cause == eventlog.CauseProviderExhausted {
 				k.kind = string(eventlog.CauseProviderExhausted)
 			}

@@ -289,15 +289,25 @@ func failedEnd(turnID string, err error) eventlog.TurnEnded {
 	ended := eventlog.TurnEnded{TurnID: turnID, StopReason: eventlog.StopFailed}
 	if errors.Is(err, turn.ErrExhausted) {
 		ended.Cause = eventlog.CauseProviderExhausted
-		ended.Error = plugin.SanitizeSessionError(strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": "))
+		ended = withError(ended, strings.TrimPrefix(err.Error(), turn.ErrExhausted.Error()+": "))
 		if pe, ok := provider.AsProviderExhausted(err); ok {
-			ended.RecoverHint = plugin.SanitizeSessionError(pe.RecoverHint)
+			ended.RecoverHint = boundedText(pe.RecoverHint, hintCap)
 		}
 		return ended
 	}
-	ended.Error = plugin.SanitizeSessionError(strings.TrimPrefix(err.Error(), turn.ErrRetryable.Error()+": "))
+	ended = withError(ended, strings.TrimPrefix(err.Error(), turn.ErrRetryable.Error()+": "))
 	ended.ErrorClass = errorClass(err)
 	return ended
+}
+
+// withError gives e the message of a failure at the bound of the log, and at
+// the longer bound of a report to a parent when that differs.
+func withError(e eventlog.TurnEnded, msg string) eventlog.TurnEnded {
+	e.Error = plugin.SanitizeSessionError(msg)
+	if detail := boundedText(msg, reasonCap); detail != e.Error {
+		e.ErrorDetail = detail
+	}
+	return e
 }
 
 // errorClass types a failure that is not a usage limit, in the order that the

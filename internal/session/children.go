@@ -32,40 +32,54 @@ func (a *Actor) Spawn(ctx context.Context, child, agent string) (eventlog.Sessio
 	})
 }
 
-// Settle appends the outcome of an unsettled child, and admits report as an
-// input with source child when report is not empty. A report joins a busy
-// turn at its next item boundary, except for a backend that owns the loop:
-// that report waits in the queue and reaches the model when the next turn
-// starts. A child that is not unsettled changes nothing, so a repeated
-// report is safe.
-func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, report []eventlog.Part) error {
+// Settle appends the outcome of an unsettled child, and admits rep as an
+// input with source child when rep is not nil. A report joins a busy turn at
+// its next item boundary, except for a backend that owns the loop: that
+// report waits in the queue and reaches the model when the next turn starts.
+// A child that is not unsettled changes nothing, so a repeated report is
+// safe.
+func (a *Actor) Settle(ctx context.Context, s eventlog.ChildSettled, rep *Report) error {
+	var big bigResult
+	if rep != nil {
+		big = a.stage(ctx, s.ChildID, rep)
+	}
 	_, err := call(ctx, a, func(reply func(struct{}, error)) {
 		switch {
 		case !slices.Contains(a.state.Unsettled(), s.ChildID):
 			reply(struct{}{}, nil)
-		case len(report) == 0:
+		case rep == nil:
 			reply(struct{}{}, a.append(s))
 		default:
 			delivery := eventlog.DeliverySteer
 			if a.ownsLoop() {
 				delivery = eventlog.DeliveryQueue
 			}
-			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: report}
-			_, err := a.admit(in, "", append(a.resumed(), s)...)
+			text, retained := a.shown(rep, big)
+			in := eventlog.InputAdmitted{InputID: newID("input"), Delivery: delivery, Source: sourceChild, Parts: rep.Parts(text)}
+			_, err := a.admit(in, "", append(append(a.resumed(), s), retained...)...)
 			reply(struct{}{}, err)
 		}
 	})
 	return err
 }
 
+// Report is the outcome of a child as its parent reads it.
+type Report struct {
+	child, agent, turn string
+	outcome            eventlog.Outcome
+	reason, guidance   string
+	result             string
+	usage              eventlog.Usage
+}
+
+// Reason returns why the child failed, as the report gives it.
+func (r *Report) Reason() string { return r.reason }
+
 // Settlement returns the outcome of the last ended turn of child session
-// id, and the parts that report it to the parent: the text for a parent that
-// starts a turn with it, which holds the last assistant text as the Task tool
-// of Claude Code returns, and the task line for a parent that takes it in a
-// running turn. The text holds at most ResultCap runes. ok is false while a
-// turn runs, is suspended, or waits for an answer, and after a completed turn
-// while an input waits: the next turn reports.
-func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, []eventlog.Part, bool) {
+// id, and its report. ok is false while a turn runs, is suspended, or waits
+// for an answer, and after a completed turn while an input waits: the next
+// turn reports.
+func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, *Report, bool) {
 	last := s.LastEnded()
 	_, busy := s.Turn()
 	if busy || last.TurnID == "" || last.StopReason == eventlog.StopAwaitingInput || last.StopReason == eventlog.StopCompleted && len(s.Queue()) > 0 {
@@ -78,18 +92,26 @@ func Settlement(id string, s *eventlog.State) (eventlog.ChildSettled, []eventlog
 	case last.StopReason == eventlog.StopInterrupted:
 		out = eventlog.OutcomeCanceled
 	}
+	r := &Report{child: id, agent: s.Agent(), turn: last.TurnID, outcome: out, reason: failReason(last), guidance: failGuidance(id, last),
+		result: LastText(s.History()), usage: s.Usage()}
+	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, r, true
+}
+
+// Parts returns the report as the parts of an input: the text for a parent
+// that starts a turn with it, which holds result as the Task tool of Claude
+// Code returns the last assistant text, and the task line for a parent that
+// takes it in a running turn. result is the text of the child as the parent
+// reads it.
+func (r *Report) Parts(result string) []eventlog.Part {
 	var b strings.Builder
-	fmt.Fprintf(&b, "A background task you started has finished.\n\ntask: %s (agent %s)\noutcome: %s", id, s.Agent(), out)
-	reason, guidance := failReason(last), failGuidance(id, last)
-	if reason != "" {
-		b.WriteString(": " + reason + guidance)
+	fmt.Fprintf(&b, "A background task you started has finished.\n\ntask: %s (agent %s)\noutcome: %s", r.child, r.agent, r.outcome)
+	if r.reason != "" {
+		b.WriteString(": " + r.reason + r.guidance)
 	}
-	text, _ := CapRunes(LastText(s.History()), ResultCap)
-	if text != "" {
-		b.WriteString("\n\n" + text)
+	if result != "" {
+		b.WriteString("\n\n" + result)
 	}
-	report := []eventlog.Part{{Type: eventlog.PartText, Text: b.String()}, {Type: eventlog.PartTaskReport, Text: taskLine(id, s, out, reason, guidance, text)}}
-	return eventlog.ChildSettled{ChildID: id, Outcome: out, ResultRef: last.TurnID}, report, true
+	return []eventlog.Part{{Type: eventlog.PartText, Text: b.String()}, {Type: eventlog.PartTaskReport, Text: r.line(result)}}
 }
 
 // The reasons that a report gives for a failed turn, by the class of its error.
@@ -98,8 +120,10 @@ const (
 	ReasonExhausted = "provider capacity exhausted for this account"
 	// ReasonRateLimited is the reason of a turn that a rate limit failed after its retries.
 	ReasonRateLimited = "provider rate limit outlasted the retry budget for this account"
-	reasonPermanent   = "turn failed with a permanent provider error and cannot succeed on retry"
-	reasonUnrecovered = "turn failed and did not recover"
+	// ReasonLostToRestart is the reason of a child whose turn a restart ended before it recorded an outcome.
+	ReasonLostToRestart = "lost to restart: turn was in flight when the process last stopped"
+	reasonPermanent     = "turn failed with a permanent provider error and cannot succeed on retry"
+	reasonUnrecovered   = "turn failed and did not recover"
 )
 
 // failReason is the reason that the report of a child gives for the end of
@@ -107,24 +131,28 @@ const (
 // knows which response fits. A turn with no error reads its cause. An error
 // with no class, such as one that an engine journal gave, reads as it is.
 func failReason(last eventlog.TurnEnded) string {
+	if last.Error == "" && last.Cause == eventlog.CauseCrashed {
+		return ReasonLostToRestart
+	}
 	if last.Error == "" {
 		return last.Detail()
 	}
+	detail := last.ReportError()
 	switch {
 	case last.ErrorClass == eventlog.ErrorRateLimited:
-		return ReasonRateLimited + ": " + last.Error
+		return ReasonRateLimited + ": " + detail
 	case last.Cause == eventlog.CauseProviderExhausted:
-		return ReasonExhausted + ": " + last.Error
+		return ReasonExhausted + ": " + detail
 	case last.ErrorClass == "":
-		return last.Error
+		return detail
 	case last.ErrorClass == eventlog.ErrorTimedOut:
 		return "timed out"
 	case last.ErrorClass == eventlog.ErrorPermanent:
-		return reasonPermanent + ": " + last.Error
+		return reasonPermanent + ": " + detail
 	case last.ErrorClass == eventlog.ErrorUnrecovered:
-		return reasonUnrecovered + ": " + last.Error
+		return reasonUnrecovered + ": " + detail
 	}
-	return fmt.Sprintf("provider %s errors exhausted the retry budget: %s", last.ErrorClass, last.Error)
+	return fmt.Sprintf("provider %s errors exhausted the retry budget: %s", last.ErrorClass, detail)
 }
 
 // failGuidance is what the parent of a child that a wall of the provider
@@ -141,21 +169,20 @@ func failGuidance(id string, last eventlog.TurnEnded) string {
 	return " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child" + when + " with task send on session_id " + id
 }
 
-// taskLine is the line of a child in the task segment: its agent, its outcome
+// line is the line of the child in the task segment: its agent, its outcome
 // word, its result or its reason, its token usage, and the guidance for its
 // parent. A newline in the text of the child becomes a space, so the child
 // cannot start a line of its own.
-func taskLine(id string, s *eventlog.State, out eventlog.Outcome, reason, guidance, text string) string {
-	word, body := "done", text
-	switch out {
+func (r *Report) line(result string) string {
+	word, body, guidance := "done", result, r.guidance
+	switch r.outcome {
 	case eventlog.OutcomeFailed:
-		word, body = "failed", reason
+		word, body = "failed", r.reason
 	case eventlog.OutcomeCanceled:
 		word, body, guidance = "failed", "canceled", ""
 	}
 	oneLine := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace
-	u := s.Usage()
-	return fmt.Sprintf("%s (agent=%s) %s: %s (usage: %d in / %d out)%s", id, s.Agent(), word, oneLine(body), u.InputTokens, u.OutputTokens, oneLine(guidance))
+	return fmt.Sprintf("%s (agent=%s) %s: %s (usage: %d in / %d out)%s", r.child, r.agent, word, oneLine(body), r.usage.InputTokens, r.usage.OutputTokens, oneLine(guidance))
 }
 
 // ResultCap bounds the result of a child in a report, in runes.

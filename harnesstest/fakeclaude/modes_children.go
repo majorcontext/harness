@@ -15,6 +15,7 @@ const (
 	reportMarker = "[tasks:"
 	reportText   = "A background task you started has finished"
 	slowSuffix   = "slow"
+	longSuffix   = "long"
 	gateFile     = "child.gate"
 	gateWait     = 20 * time.Second
 	settleWait   = 30 * time.Second
@@ -26,6 +27,7 @@ var childModes = map[string]mode{
 	"child_report":              childParent(childPrompt),
 	"child_reports":             childParent(childPrompt+" a", childPrompt+" b"),
 	"child_report_after_prompt": childParent(childPrompt + " " + slowSuffix),
+	"child_report_long":         childParent(childPrompt + " " + longSuffix),
 }
 
 // childParent is the parent of children that end while the parent runs. The
@@ -47,6 +49,9 @@ func childParent(prompts ...string) mode {
 				awaitGate()
 			}
 			answer := strings.TrimSpace("child done " + strings.TrimSpace(strings.TrimPrefix(text, childPrompt)))
+			if strings.HasSuffix(text, longSuffix) {
+				answer = strings.Repeat("long result ", 400)
+			}
 			f.emit(say(answer), success(answer, 1, 1))
 		case strings.Contains(text, reportMarker), strings.Contains(text, reportText):
 			f.emit(say("noted"), success("noted", 1, 1))

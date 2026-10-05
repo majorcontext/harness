@@ -283,7 +283,7 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // with no report input, so no parent inside the tree starts a turn. A child
 // that the end of a session stopped (cause ended) leaves a parent that the
 // runtime does not run closed: the end never opens a session.
-func (t *Tree) Report(parent string, s eventlog.ChildSettled, report []eventlog.Part) {
+func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
 	quiet := t.quieted(s.ChildID)
 	if quiet {
 		report = nil
@@ -315,7 +315,7 @@ func (t *Tree) endedBy(id string) bool {
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
-		var report []eventlog.Part
+		var report *session.Report
 		var ended, byEnd bool
 		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
 			s, report, ended = session.Settlement(id, st)

@@ -124,58 +124,52 @@ func TestContractChildrenBusyParent(t *testing.T) {
 }
 
 func TestContractChildReportText(t *testing.T) {
-	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
-		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
-	}}}}
-	busyAck := harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
-		{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+	longError := "request rejected api_key=abcd1234efgh5678 " + strings.Repeat("detail ", 100)
+	longHint := "You have reached your specified API usage limits. You will regain access on api_key=abcd1234efgh5678 " + strings.Repeat("later ", 60)
+	readHandle := harnesstest.Step{Name: "read", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+		{ID: "toolu_read", Name: "read_tool_result", Input: map[string]any{"handle": "trh_1"}},
 	}}}
-	childLooks := harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{
-		{ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."}},
-	}}}
-	after := harnesstest.Step{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true}
-	busyActions := []action{
-		create{as: "a"},
-		submit{as: "a", text: "delegate"},
-		awaitRequests{n: 3},
-		release{step: "child"},
-		awaitRequests{n: 4},
-		release{step: "ack"},
-		waitIdle{as: "a"},
-	}
 	runScenarios(t, []scenario{
-		{
-			name:       "child_usage_limit_reaches_a_busy_parent",
-			concurrent: true,
-			model: []harnesstest.Step{
-				delegate, childLooks,
-				{Name: "child_wall", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}},
-				busyAck, after,
-			},
-			actions: busyActions,
-		},
-		{
-			name:       "child_rate_limit_reaches_a_busy_parent",
-			concurrent: true,
-			config:     map[string]any{"prompt_retries": 0},
-			model: []harnesstest.Step{
-				delegate, childLooks,
-				{Name: "child_wall", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}},
-				busyAck, after,
-			},
-			actions: busyActions,
-		},
-		{
-			name:       "child_long_result_reaches_a_busy_parent",
-			concurrent: true,
-			model: []harnesstest.Step{
-				delegate, childLooks,
-				{Name: "child_done", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{Text: strings.Repeat("long result ", 400)}},
-				busyAck, after,
-			},
-			actions: busyActions,
-		},
+		busyChildReport("child_usage_limit_reaches_a_busy_parent", nil, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}),
+		busyChildReport("child_rate_limit_reaches_a_busy_parent", map[string]any{"prompt_retries": 0}, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: "slow down"}),
+		busyChildReport("child_long_result_reaches_a_busy_parent", nil, harnesstest.Reply{Text: strings.Repeat("long result ", 400)}),
+		busyChildReport("child_result_within_the_byte_limit_reaches_a_busy_parent", nil, harnesstest.Reply{Text: strings.Repeat("wide result ", 337)}),
+		busyChildReport("child_long_error_reaches_a_busy_parent", nil, harnesstest.Reply{HTTPStatus: 400, ErrorMessage: longError}),
+		busyChildReport("child_usage_limit_with_a_long_hint_reaches_a_busy_parent", nil, harnesstest.Reply{HTTPStatus: 429, ErrorMessage: longHint}),
+		busyChildReport("child_long_result_handle_reads_back", nil, harnesstest.Reply{Text: strings.Repeat("long result ", 400)}, readHandle),
 	})
+}
+
+// busyChildReport is a child that ends with finish while its parent runs a tool.
+func busyChildReport(name string, config map[string]any, finish harnesstest.Reply, parentSteps ...harnesstest.Step) scenario {
+	model := []harnesstest.Step{
+		{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+			ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+		}}}},
+		{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{
+			{ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."}},
+		}}},
+		{Name: "child_end", Match: harnesstest.LastToolResult("ls"), Reply: finish},
+		{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+			{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+		}}},
+	}
+	model = append(append(model, parentSteps...), harnesstest.Step{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true})
+	return scenario{
+		name:       name,
+		concurrent: true,
+		config:     config,
+		model:      model,
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "delegate"},
+			awaitRequests{n: 3},
+			release{step: "child"},
+			awaitRequests{n: 4},
+			release{step: "ack"},
+			waitIdle{as: "a"},
+		},
+	}
 }
 
 func TestContractChildCrashReport(t *testing.T) {
