@@ -180,7 +180,7 @@ func (s *State) applyRequestResolved(e RequestResolved, seq uint64) error {
 		if e.Resolution == ResolutionAnswered {
 			calls[k].answered = true
 		} else {
-			s.say(seq, dismissal(calls[k]))
+			s.say(seq, "msg_resolved_"+calls[k].CallID, dismissal(calls[k]))
 			calls = slices.Delete(calls, k, k+1)
 		}
 	}

@@ -378,58 +378,42 @@
           "turns"
         ]
       },
-      "Info": {
+      "Health": {
         "properties": {
-          "name": {
-            "type": "string"
-          },
-          "origin": {
-            "type": "string"
-          },
-          "command": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "dir": {
-            "type": "string"
-          },
-          "env_names": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
-          "ports": {
-            "items": {
-              "type": "integer"
-            },
-            "type": "array"
-          },
-          "ready_regex": {
-            "type": "string"
-          },
-          "ready_port": {
-            "type": "integer"
-          },
-          "ready_http": {
-            "type": "string"
-          },
-          "ready_timeout": {
-            "type": "string"
-          },
           "status": {
-            "$ref": "#/components/schemas/Status"
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "vcs_revision": {
+            "type": "string"
+          },
+          "vcs_time": {
+            "type": "string"
+          },
+          "session_sync": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "origin",
-          "command",
-          "ready_timeout",
-          "status"
+          "status",
+          "version",
+          "vcs_revision",
+          "vcs_time",
+          "session_sync",
+          "started_at",
+          "capabilities"
         ]
       },
       "Input": {
@@ -512,6 +496,141 @@
           "stop_reason"
         ]
       },
+      "Message": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/MessagePart"
+            },
+            "type": "array"
+          },
+          "parent_call_id": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "parts"
+        ]
+      },
+      "MessageCommand": {
+        "properties": {
+          "input_id": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "result": true,
+          "result_truncated": {
+            "type": "boolean"
+          },
+          "after_message_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "input_id",
+          "line",
+          "name",
+          "status",
+          "seq"
+        ]
+      },
+      "MessagePage": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "type": "array"
+          },
+          "first_seq": {
+            "type": "integer"
+          },
+          "last_seq": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/MessageCommand"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "messages",
+          "first_seq",
+          "last_seq",
+          "total",
+          "has_more",
+          "commands"
+        ]
+      },
+      "MessagePart": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "arguments": true,
+          "content": {
+            "type": "string"
+          },
+          "is_error": {
+            "type": "boolean"
+          },
+          "media_type": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type"
+        ]
+      },
       "Model": {
         "properties": {
           "id": {
@@ -579,6 +698,120 @@
           "state",
           "tools",
           "hooks"
+        ]
+      },
+      "ProcessInfo": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "env_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "ports": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "ready_regex": {
+            "type": "string"
+          },
+          "ready_port": {
+            "type": "integer"
+          },
+          "ready_http": {
+            "type": "string"
+          },
+          "ready_timeout": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcessStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "origin",
+          "command",
+          "ready_timeout",
+          "status"
+        ]
+      },
+      "ProcessLogs": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProcessStatus"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "status"
+        ]
+      },
+      "ProcessStatus": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "log": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "ports": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "ready",
+          "log"
         ]
       },
       "Resolution": {
@@ -714,51 +947,6 @@
         },
         "type": "object"
       },
-      "Status": {
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "state": {
-            "type": "string"
-          },
-          "pid": {
-            "type": "integer"
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "finished_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "exit_code": {
-            "type": "integer"
-          },
-          "ready": {
-            "type": "boolean"
-          },
-          "log": {
-            "type": "string"
-          },
-          "note": {
-            "type": "string"
-          },
-          "ports": {
-            "items": {
-              "type": "integer"
-            },
-            "type": "array"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "ready",
-          "log"
-        ]
-      },
       "StatusFrame": {
         "properties": {
           "status": {
@@ -819,6 +1007,9 @@
           },
           "captured_at": {
             "type": "integer"
+          },
+          "session_cost_usd": {
+            "type": "number"
           }
         },
         "type": "object",
@@ -1002,10 +1193,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object"
+                  "$ref": "#/components/schemas/Health"
                 }
               }
             },
@@ -1063,7 +1251,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/Info"
+                    "$ref": "#/components/schemas/ProcessInfo"
                   },
                   "type": "array"
                 }
@@ -1110,19 +1298,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "content": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "$ref": "#/components/schemas/Status"
-                    }
-                  },
-                  "type": "object",
-                  "required": [
-                    "content",
-                    "status"
-                  ]
+                  "$ref": "#/components/schemas/ProcessLogs"
                 }
               }
             },
@@ -1159,7 +1335,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/ProcessStatus"
                 }
               }
             },
@@ -1196,7 +1372,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/ProcessStatus"
                 }
               }
             },
@@ -1233,7 +1409,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/ProcessStatus"
                 }
               }
             },
@@ -1770,6 +1946,59 @@
         },
         "responses": {
           "204": {
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
+    "/sessions/{id}/messages": {
+      "get": {
+        "operationId": "listMessages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagePage"
+                }
+              }
+            },
             "description": "Success"
           },
           "default": {

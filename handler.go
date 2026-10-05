@@ -6,6 +6,7 @@ import (
 	"iter"
 	"net/http"
 
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -19,7 +20,7 @@ func (r *Runtime) Handler() http.Handler {
 	if r.procs != nil {
 		procs = processRoutes{r}
 	}
-	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Codes: codes})
+	return server.New[withdrawing](reads{r}, server.Options{WorkDir: r.workDir, Processes: procs, Health: r.health, Codes: codes})
 }
 
 // codes maps each sentinel error of the runtime to its wire code.
@@ -94,6 +95,15 @@ func (c cold) Session() protocol.Session {
 type live struct{ s *Session }
 
 func (l live) Session() protocol.Session { return l.s.View() }
+
+func (l live) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error) {
+	if err := checkMessageLimit(limit); err != nil {
+		return protocol.MessagePage{}, err
+	}
+	var page protocol.MessagePage
+	err := l.s.a.Read(ctx, func(s *eventlog.State) { page = s.MessagePage(before, limit) })
+	return page, err
+}
 
 func (l live) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {
 	return l.s.Events(ctx, after)

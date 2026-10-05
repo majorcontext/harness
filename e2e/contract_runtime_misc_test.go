@@ -3,9 +3,12 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestContractRuntimeSessionSync(t *testing.T) {
@@ -30,7 +33,37 @@ func TestContractRuntimeSessionSync(t *testing.T) {
 				if got := fake.Requests()[0].LastUserText(); !strings.Contains(got, " · session_sync="+row.want+" · ") {
 					t.Errorf("engine status line = %q, want session_sync=%s", got, row.want)
 				}
+				if got := bodyOf(t, d.call(t, http.MethodGet, "/health", nil))["session_sync"]; got != row.want {
+					t.Errorf("/health session_sync = %v, want %q", got, row.want)
+				}
 			})
+		}
+	})
+}
+
+func TestContractRuntimeHealthNamesTheBuildAndTheStart(t *testing.T) {
+	skipShort(t)
+	onHosts(t, func(t *testing.T, h host) {
+		before := time.Now().Add(-time.Minute)
+		d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil)
+		res := d.call(t, http.MethodGet, "/health", nil)
+		body := bodyOf(t, res)
+		if res.Status != http.StatusOK || body["status"] != "ok" {
+			t.Fatalf("/health = %d %v, want 200 ok", res.Status, body)
+		}
+		for _, key := range []string{"version", "vcs_revision", "vcs_time", "session_sync", "started_at", "capabilities"} {
+			if _, ok := body[key]; !ok {
+				t.Errorf("/health has no %s: %v", key, body)
+			}
+		}
+		if body["version"] == "" {
+			t.Errorf("/health version is empty")
+		}
+		if at, err := time.Parse(time.RFC3339, fmt.Sprint(body["started_at"])); err != nil || at.Before(before) || at.After(time.Now().Add(time.Minute)) {
+			t.Errorf("/health started_at = %v (%v), want the start of the host", body["started_at"], err)
+		}
+		if caps, _ := body["capabilities"].([]any); len(caps) != 1 || caps[0] != "delta_row_identity" {
+			t.Errorf("/health capabilities = %v, want [delta_row_identity]", body["capabilities"])
 		}
 	})
 }

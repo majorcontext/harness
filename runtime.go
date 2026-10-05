@@ -118,6 +118,7 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	health  protocol.Health
 	// banner is the engine status that a model call sends; empty: none.
 	banner string
 	// questions lets a backend ask the user a question.
@@ -167,7 +168,7 @@ func New(opts Options) (*Runtime, error) {
 		return nil, err
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),

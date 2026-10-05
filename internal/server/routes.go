@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/majorcontext/harness/command"
-	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -34,11 +33,6 @@ type Param struct {
 	Integer bool
 }
 
-type logsReply = struct {
-	Content string         `json:"content"`
-	Status  process.Status `json:"status"`
-}
-
 var (
 	afterParam = Param{Name: "after"}
 	limitParam = Param{Name: "limit", Integer: true}
@@ -63,15 +57,16 @@ var Table = []Route{
 	{Name: "clearGoal", Method: "DELETE", Path: "/sessions/{id}/goal", Status: 204, Ops: []command.Op{command.OpClearGoal}},
 	{Name: "listEvents", Method: "GET", Path: "/sessions/{id}/events", Query: []Param{afterParam, limitParam}, Response: protocol.EventPage{}, Status: 200},
 	{Name: "streamEvents", Method: "GET", Path: "/sessions/{id}/events", Query: []Param{afterParam}, Response: protocol.Event{}, Status: 200, Stream: true},
+	{Name: "listMessages", Method: "GET", Path: "/sessions/{id}/messages", Query: []Param{{Name: "before", Integer: true}, limitParam}, Response: protocol.MessagePage{}, Status: 200},
 	{Name: "listModels", Method: "GET", Path: "/models", Response: []protocol.Model{}, Status: 200},
 	{Name: "listCommands", Method: "GET", Path: "/commands", Response: protocol.Commands{}, Status: 200},
-	{Name: "listProcesses", Method: "GET", Path: "/processes", Response: []process.Info{}, Status: 200, Ops: []command.Op{command.OpProcessList}},
-	{Name: "startProcess", Method: "POST", Path: "/processes/{name}/start", Response: process.Status{}, Status: 200},
-	{Name: "stopProcess", Method: "POST", Path: "/processes/{name}/stop", Response: process.Status{}, Status: 200},
-	{Name: "restartProcess", Method: "POST", Path: "/processes/{name}/restart", Response: process.Status{}, Status: 200},
-	{Name: "processLogs", Method: "GET", Path: "/processes/{name}/logs", Query: []Param{{Name: "tail", Integer: true}}, Response: logsReply{}, Status: 200},
+	{Name: "listProcesses", Method: "GET", Path: "/processes", Response: []protocol.ProcessInfo{}, Status: 200, Ops: []command.Op{command.OpProcessList}},
+	{Name: "startProcess", Method: "POST", Path: "/processes/{name}/start", Response: protocol.ProcessStatus{}, Status: 200},
+	{Name: "stopProcess", Method: "POST", Path: "/processes/{name}/stop", Response: protocol.ProcessStatus{}, Status: 200},
+	{Name: "restartProcess", Method: "POST", Path: "/processes/{name}/restart", Response: protocol.ProcessStatus{}, Status: 200},
+	{Name: "processLogs", Method: "GET", Path: "/processes/{name}/logs", Query: []Param{{Name: "tail", Integer: true}}, Response: protocol.ProcessLogs{}, Status: 200},
 	{Name: "workspaceChanges", Method: "GET", Path: "/workspace/changes", Query: []Param{{Name: "scope"}, {Name: "dir"}}, Response: protocol.WorkspaceChanges{}, Status: 200, WorkDir: true},
-	{Name: "health", Method: "GET", Path: "/health", Response: map[string]string{}, Status: 200},
+	{Name: "health", Method: "GET", Path: "/health", Response: protocol.Health{}, Status: 200},
 }
 
 // bind registers each route of Table on mux with its handler in handlers,

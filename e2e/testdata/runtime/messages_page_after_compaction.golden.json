@@ -1,0 +1,575 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "three"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": null,
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "one"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "two"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "2"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Summarize the conversation above, following the system prompt's instructions."
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "cmpsum#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[compacted summary of earlier conversation]\n\ngist"
+          }
+        ]
+      },
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "three"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "3"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "bootstrap.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 2,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "bootstrap.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 2,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "compact.a": {
+      "status": 200,
+      "body": {
+        "folded": true,
+        "from_seq": 1,
+        "to_seq": 13
+      }
+    },
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "text": "2",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 11,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 12,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in3",
+              "parts": [
+                {
+                  "text": "three",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 13,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in3"
+              ],
+              "turn_id": "turn#2"
+            },
+            "k": "turn.started",
+            "seq": 14,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 15,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "text": "3",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#2"
+            },
+            "k": "item.completed",
+            "seq": 16,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#2"
+            },
+            "k": "turn.ended",
+            "seq": 17,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "by_backend": false,
+              "from_seq": 1,
+              "summary": "[compacted summary of earlier conversation]\n\ngist",
+              "to_seq": 13,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              }
+            },
+            "k": "compaction.applied",
+            "seq": 18,
+            "t": "\u003ctime\u003e"
+          }
+        ]
+      }
+    },
+    "messages_page.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 3,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 2,
+        "has_more": true,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#3": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "cmpsum#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            }
+          ]
+        },
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#4": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 3,
+        "total": 3
+      },
+      "messages": [
+        {
+          "id": "cmpsum#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[compacted summary of earlier conversation]\n\ngist"
+            }
+          ]
+        },
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "three"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "3"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

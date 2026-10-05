@@ -204,12 +204,14 @@ type State struct {
 	subscribed *SubscriptionUsage
 	cost       *float64
 	compaction CompactionApplied
-	compacted  int
-	children   map[string]Outcome
-	backends   map[string]string
-	retained   []ToolResultRetained
-	commands   map[string]command
-	history    []entry
+	// compactedAt is the seq of the record of the newest compaction.
+	compactedAt uint64
+	compacted   int
+	children    map[string]Outcome
+	backends    map[string]string
+	retained    []ToolResultRetained
+	commands    map[string]command
+	history     []entry
 	// stranded holds the pinned segments that a compaction outside a turn
 	// folded. The model reads them at the end of the history, and the next
 	// turn start settles them there, after its inputs.

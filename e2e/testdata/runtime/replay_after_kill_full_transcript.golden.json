@@ -1,0 +1,1001 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "run"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "echo replay"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "replay\n",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "again"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "run"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "bash",
+            "arguments": {
+              "command": "echo replay"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "replay\n"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ran"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "again"
+          }
+        ]
+      },
+      {
+        "id": "msg#6",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "bootstrap.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 4,
+        "total": 4
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        }
+      ]
+    },
+    "bootstrap.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 6,
+        "total": 6
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "id": "msg#5",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "msg#6",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+            }
+          ]
+        }
+      ]
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 10,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 6
+        }
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 15,
+        "id": "ses:a",
+        "last_turn": {
+          "cause": "crashed",
+          "stop_reason": "interrupted",
+          "turn_id": "turn#2"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 10,
+          "output_tokens": 6
+        }
+      }
+    },
+    "journal_page.a": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "model": "anthropic/claude-fable-5",
+              "origin": "",
+              "settings": {}
+            },
+            "k": "session.created",
+            "seq": 1,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 2,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "run",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in1"
+              ],
+              "turn_id": "turn#1"
+            },
+            "k": "turn.started",
+            "seq": 4,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "arguments": {
+                      "command": "echo replay"
+                    },
+                    "call_id": "toolu#1",
+                    "name": "bash",
+                    "type": "tool_call"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "call_id": "toolu#1",
+                    "name": "bash",
+                    "text": "replay\n",
+                    "type": "tool_result"
+                  }
+                ],
+                "role": "tool"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#3",
+              "message": {
+                "parts": [
+                  {
+                    "text": "ran",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 9,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 10,
+            "t": "\u003ctime\u003e"
+          }
+        ]
+      }
+    },
+    "journal_page.a#2": {
+      "status": 200,
+      "body": {
+        "events": [
+          {
+            "d": {
+              "model": "anthropic/claude-fable-5",
+              "origin": "",
+              "settings": {}
+            },
+            "k": "session.created",
+            "seq": 1,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 2,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in1",
+              "parts": [
+                {
+                  "text": "run",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 3,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in1"
+              ],
+              "turn_id": "turn#1"
+            },
+            "k": "turn.started",
+            "seq": 4,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 5,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#1",
+              "message": {
+                "parts": [
+                  {
+                    "arguments": {
+                      "command": "echo replay"
+                    },
+                    "call_id": "toolu#1",
+                    "name": "bash",
+                    "type": "tool_call"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 6,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#2",
+              "message": {
+                "parts": [
+                  {
+                    "call_id": "toolu#1",
+                    "name": "bash",
+                    "text": "replay\n",
+                    "type": "tool_result"
+                  }
+                ],
+                "role": "tool"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 7,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "source": "anthropic",
+              "tokens": 5,
+              "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3
+              },
+              "window": 1000000
+            },
+            "k": "context.measured",
+            "seq": 8,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#3",
+              "message": {
+                "parts": [
+                  {
+                    "text": "ran",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#1"
+            },
+            "k": "item.completed",
+            "seq": 9,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "k": "turn.ended",
+            "seq": 10,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "delivery": "steer",
+              "input_id": "in2",
+              "parts": [
+                {
+                  "text": "again",
+                  "type": "text"
+                }
+              ],
+              "source": "user"
+            },
+            "k": "input.admitted",
+            "seq": 11,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "input_ids": [
+                "in2"
+              ],
+              "turn_id": "turn#2"
+            },
+            "k": "turn.started",
+            "seq": 12,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "epoch": 1,
+              "owner": "\u003cowner\u003e"
+            },
+            "k": "owner.acquired",
+            "seq": 13,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "item_id": "item#4",
+              "message": {
+                "parts": [
+                  {
+                    "text": "[harness: this turn was interrupted by a process restart and could not complete]",
+                    "type": "text"
+                  }
+                ],
+                "role": "assistant"
+              },
+              "turn_id": "turn#2"
+            },
+            "k": "item.completed",
+            "seq": 14,
+            "t": "\u003ctime\u003e"
+          },
+          {
+            "d": {
+              "cause": "crashed",
+              "stop_reason": "interrupted",
+              "turn_id": "turn#2"
+            },
+            "k": "turn.ended",
+            "seq": 15,
+            "t": "\u003ctime\u003e"
+          }
+        ]
+      }
+    },
+    "list_sessions": {
+      "status": 200,
+      "body": {
+        "sessions": [
+          {
+            "context": {
+              "tokens": 5,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "head_seq": 10,
+            "id": "ses:a",
+            "last_turn": {
+              "stop_reason": "completed",
+              "turn_id": "turn#1"
+            },
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 6
+            }
+          }
+        ]
+      }
+    },
+    "list_sessions#2": {
+      "status": 200,
+      "body": {
+        "sessions": [
+          {
+            "context": {
+              "tokens": 5,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "head_seq": 15,
+            "id": "ses:a",
+            "last_turn": {
+              "cause": "crashed",
+              "stop_reason": "interrupted",
+              "turn_id": "turn#2"
+            },
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 6
+            }
+          }
+        ]
+      }
+    },
+    "messages_page.a": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 4,
+        "total": 4
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        }
+      ]
+    },
+    "messages_page.a#2": {
+      "status": 200,
+      "body": {
+        "commands": [],
+        "first_seq": 1,
+        "has_more": false,
+        "last_seq": 6,
+        "total": 6
+      },
+      "messages": [
+        {
+          "id": "msg#1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "run"
+            }
+          ]
+        },
+        {
+          "id": "msg#2",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool_call",
+              "call_id": "toolu#1",
+              "name": "bash",
+              "arguments": {
+                "command": "echo replay"
+              }
+            }
+          ]
+        },
+        {
+          "id": "msg#3",
+          "role": "tool",
+          "parts": [
+            {
+              "type": "tool_result",
+              "call_id": "toolu#1",
+              "content": "replay\n"
+            }
+          ]
+        },
+        {
+          "id": "msg#4",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "ran"
+            }
+          ]
+        },
+        {
+          "id": "msg#5",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "again"
+            }
+          ]
+        },
+        {
+          "id": "msg#6",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+            }
+          ]
+        }
+      ]
+    },
+    "session_status": {
+      "status": 0,
+      "body": {
+        "deleted_by_design": "GET /session/status"
+      }
+    },
+    "session_status#2": {
+      "status": 0,
+      "body": {
+        "deleted_by_design": "GET /session/status"
+      }
+    }
+  }
+}

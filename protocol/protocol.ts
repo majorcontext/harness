@@ -115,18 +115,14 @@ export interface GoalView {
   retry_at?: string;
 }
 
-export interface Info {
-  name: string;
-  origin: string;
-  command: string[];
-  dir?: string;
-  env_names?: string[];
-  ports?: number[];
-  ready_regex?: string;
-  ready_port?: number;
-  ready_http?: string;
-  ready_timeout: string;
-  status: Status;
+export interface Health {
+  status: string;
+  version: string;
+  vcs_revision: string;
+  vcs_time: string;
+  session_sync: string;
+  started_at: string;
+  capabilities: string[];
 }
 
 export interface Input {
@@ -156,6 +152,47 @@ export interface LastTurn {
   error?: string;
 }
 
+export interface Message {
+  id: string;
+  role: string;
+  parts: MessagePart[];
+  parent_call_id?: string;
+}
+
+export interface MessageCommand {
+  input_id: string;
+  line: string;
+  name: string;
+  args?: Record<string, unknown>;
+  status: string;
+  text?: string;
+  result?: unknown;
+  result_truncated?: boolean;
+  after_message_id?: string;
+  seq: number;
+}
+
+export interface MessagePage {
+  messages: Message[];
+  first_seq: number;
+  last_seq: number;
+  total: number;
+  has_more: boolean;
+  commands: MessageCommand[];
+}
+
+export interface MessagePart {
+  type: string;
+  text?: string;
+  call_id?: string;
+  name?: string;
+  arguments?: unknown;
+  content?: string;
+  is_error?: boolean;
+  media_type?: string;
+  bytes?: number;
+}
+
 export interface Model {
   id: string;
   provider: string;
@@ -174,6 +211,38 @@ export interface Plugin {
   state: string;
   tools: string[];
   hooks: string[];
+}
+
+export interface ProcessInfo {
+  name: string;
+  origin: string;
+  command: string[];
+  dir?: string;
+  env_names?: string[];
+  ports?: number[];
+  ready_regex?: string;
+  ready_port?: number;
+  ready_http?: string;
+  ready_timeout: string;
+  status: ProcessStatus;
+}
+
+export interface ProcessLogs {
+  content: string;
+  status: ProcessStatus;
+}
+
+export interface ProcessStatus {
+  name: string;
+  state?: string;
+  pid?: number;
+  started_at?: string;
+  finished_at?: string;
+  exit_code?: number;
+  ready: boolean;
+  log: string;
+  note?: string;
+  ports?: number[];
 }
 
 export interface Resolution {
@@ -215,19 +284,6 @@ export interface SettingsPatch {
   service_tier?: string;
 }
 
-export interface Status {
-  name: string;
-  state?: string;
-  pid?: number;
-  started_at?: string;
-  finished_at?: string;
-  exit_code?: number;
-  ready: boolean;
-  log: string;
-  note?: string;
-  ports?: number[];
-}
-
 export interface StatusFrame {
   status: string;
   turn_id: string;
@@ -247,6 +303,7 @@ export interface SubscriptionUsage {
   windows: SubscriptionUsageWindow[];
   overage?: SubscriptionOverage;
   captured_at: number;
+  session_cost_usd?: number;
 }
 
 export interface SubscriptionUsageWindow {
@@ -301,15 +358,16 @@ export interface Operations {
   setGoal: { query: Record<string, never>; request: Goal; response: Session };
   clearGoal: { query: Record<string, never>; request: void; response: void };
   listEvents: { query: { after?: string; limit?: number }; request: void; response: EventPage };
+  listMessages: { query: { before?: number; limit?: number }; request: void; response: MessagePage };
   listModels: { query: Record<string, never>; request: void; response: Model[] };
   listCommands: { query: Record<string, never>; request: void; response: Commands };
-  listProcesses: { query: Record<string, never>; request: void; response: Info[] };
-  startProcess: { query: Record<string, never>; request: void; response: Status };
-  stopProcess: { query: Record<string, never>; request: void; response: Status };
-  restartProcess: { query: Record<string, never>; request: void; response: Status };
-  processLogs: { query: { tail?: number }; request: void; response: { content: string; status: Status; } };
+  listProcesses: { query: Record<string, never>; request: void; response: ProcessInfo[] };
+  startProcess: { query: Record<string, never>; request: void; response: ProcessStatus };
+  stopProcess: { query: Record<string, never>; request: void; response: ProcessStatus };
+  restartProcess: { query: Record<string, never>; request: void; response: ProcessStatus };
+  processLogs: { query: { tail?: number }; request: void; response: ProcessLogs };
   workspaceChanges: { query: { scope?: string; dir?: string }; request: void; response: WorkspaceChanges };
-  health: { query: Record<string, never>; request: void; response: Record<string, string> };
+  health: { query: Record<string, never>; request: void; response: Health };
 }
 
 export const routes = [
@@ -328,6 +386,7 @@ export const routes = [
   { name: "clearGoal", method: "DELETE", path: "/sessions/{id}/goal", status: 204, stream: false },
   { name: "listEvents", method: "GET", path: "/sessions/{id}/events", status: 200, stream: false },
   { name: "streamEvents", method: "GET", path: "/sessions/{id}/events", status: 200, stream: true },
+  { name: "listMessages", method: "GET", path: "/sessions/{id}/messages", status: 200, stream: false },
   { name: "listModels", method: "GET", path: "/models", status: 200, stream: false },
   { name: "listCommands", method: "GET", path: "/commands", status: 200, stream: false },
   { name: "listProcesses", method: "GET", path: "/processes", status: 200, stream: false },

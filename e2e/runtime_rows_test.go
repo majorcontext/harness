@@ -4,6 +4,8 @@ package e2e
 const (
 	specView          = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
 	specUpdate        = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
+	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that the model reads, oldest first, as the engine answered its message page"
+	specBootstrapGone = "The engine bootstrap form (`stream_from`, `live_from`, `seqs`) has no counterpart: one page route and one event cursor replace it."
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt       = "| New id | `201 {input_id, seq}` |"
 	specItems         = "| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |"
@@ -213,9 +215,9 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_tool_error_marker":                                           reGolden(specItems),
 	"bifrost_tool_round_trip":                                             reGolden(specItems),
 	"bifrost_two_tool_calls_one_turn":                                     reGolden(specItems, specOneResult),
-	"bootstrap_cold_then_resident_windows":                                pendingOn("phase 4"),
-	"bootstrap_cold_window_after_kill":                                    pendingOn("phase 4"),
-	"builtin_commands_run_and_record": reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
+	"bootstrap_cold_then_resident_windows":                                reGolden(specMessages, specBootstrapGone, specErrors),
+	"bootstrap_cold_window_after_kill":                                    reGolden(specMessages, specBootstrapGone, specErrors),
+	"builtin_commands_run_and_record":                                     reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
 	"busy_deferred_goal_with_max_turns":                                   deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                               reGolden(specView, specCrash, specChildReport),
 	"child_crash_reaches_a_busy_parent":                                   reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording),
@@ -282,8 +284,8 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_uncoded_chain_miss_resends_full_history":                    reGolden(specItems, specWarm),
 	"codex_ws_usage_frame_reaches_session":                                reGolden(specView, specItems),
 	"codex_http_usage_headers_reach_session":                              reGolden(specView, specItems),
-	"compact_manual":                                                      pendingOn("phase 4"),
-	"compact_survives_restart":                                            pendingOn("phase 4"),
+	"compact_manual":                                                      reGolden(specMessages, specBootstrapGone, specErrors),
+	"compact_survives_restart":                                            reGolden(specMessages, specBootstrapGone, specErrors),
 	"context_overflow":                                                    reGolden(specView, specOverflowFails),
 	"deferred_goal_judges_finished_turn":                                  deletedBy(specGoalDeferred),
 	"deferred_goal_with_max_turns":                                        deletedBy(specGoalDeferred),
@@ -292,7 +294,7 @@ var runtimeRows = map[string]runtimeRow{
 	"driver_compact":                                                      reGolden(specView, specCompactResult),
 	"driver_queue_goal_and_end":                                           reGolden(specView, specReceipt, specClearGoal),
 	"driver_resume_streams":                                               reGolden(specCursor, specBoxGlobal),
-	"driver_settings_and_reads":                                           pendingOn("phase 4"),
+	"driver_settings_and_reads":                                           reGolden(specMessages, specBootstrapGone, specErrors),
 	"end_then_send_runs_no_report_of_the_stopped_child":                   reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_then_open_before_the_child_turn_ends_runs_no_report":             reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_idle_parent_cancels_running_child":                               reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
@@ -341,8 +343,8 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_two_servers_share_a_tool_name":                                   sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                               reGolden(specMCPNoStatus),
 	"mcp_unavailable_connect_fails_with_classified_reason":                reGolden(specMCPNoStatus, specMCPText),
-	"messages_page_after_compaction":                                      pendingOn("phase 4"),
-	"messages_page_windows":                                               pendingOn("phase 4"),
+	"messages_page_after_compaction":                                      reGolden(specMessages, specBootstrapGone, specErrors),
+	"messages_page_windows":                                               reGolden(specMessages, specBootstrapGone, specErrors),
 	"model_tool_false_removes_the_model_tool":                             sameAsServe(),
 	"model_tool_lists_the_registry_and_sets_native":                       sameAsServe(),
 	"model_tool_reports_lists_and_switches_the_model":                     sameAsServe(),
@@ -368,7 +370,7 @@ var runtimeRows = map[string]runtimeRow{
 	"queued_input_runs_after_kill":                                        reGolden(specCrash, specCrashQueue),
 	"queued_input_survives_kill":                                          deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":                         deletedBy(specGoalDeferred),
-	"replay_after_kill_full_transcript":                                   pendingOn("phase 4"),
+	"replay_after_kill_full_transcript":                                   reGolden(specMessages, specBootstrapGone, specErrors),
 	"send_to_child_and_cancel_tree":                                       reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn":         reGolden(specUpdate),
 	"session_info_reports_the_session":                                    reGolden(specPromptSwitch),

@@ -8,6 +8,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/workspace"
 	"github.com/majorcontext/harness/process"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // boxHandlers returns the handlers of the routes of the box that hosts the
@@ -15,7 +16,7 @@ import (
 func (h *handler[S]) boxHandlers() map[string]http.HandlerFunc {
 	m := map[string]http.HandlerFunc{
 		"listProcesses": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-			list := []process.Info{}
+			list := []protocol.ProcessInfo{}
 			if h.procs != nil {
 				list = h.procs.List()
 			}
@@ -33,7 +34,7 @@ func (h *handler[S]) boxHandlers() map[string]http.HandlerFunc {
 			return nil
 		}),
 	}
-	for name, run := range map[string]func(Processes, context.Context, string) (process.Status, error){
+	for name, run := range map[string]func(Processes, context.Context, string) (protocol.ProcessStatus, error){
 		"startProcess": Processes.Start, "stopProcess": Processes.Stop, "restartProcess": Processes.Restart,
 	} {
 		m[name] = h.process(func(p Processes, w http.ResponseWriter, r *http.Request) error {
@@ -62,10 +63,10 @@ func (h *handler[S]) process(f func(Processes, http.ResponseWriter, *http.Reques
 // positive number, and the status of the process.
 func logs(m Processes, w http.ResponseWriter, r *http.Request) error {
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
-	content, st, err := m.Logs(r.PathValue("name"), tail)
+	out, err := m.Logs(r.PathValue("name"), tail)
 	if err != nil {
 		return err
 	}
-	reply(w, http.StatusOK, logsReply{content, st})
+	reply(w, http.StatusOK, out)
 	return nil
 }

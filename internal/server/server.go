@@ -39,6 +39,8 @@ type Session interface {
 // Reader is a session for reads: its state and its events, with no owner.
 type Reader interface {
 	Session() protocol.Session
+	// Messages returns the page of the conversation before seq before.
+	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 	// Events yields the events after seq, and ends at the head when the
 	// session is not running.
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
@@ -59,11 +61,11 @@ type Runtime[S Session] interface {
 
 // Processes runs the processes of the box.
 type Processes interface {
-	List() []process.Info
-	Start(ctx context.Context, name string) (process.Status, error)
-	Stop(ctx context.Context, name string) (process.Status, error)
-	Restart(ctx context.Context, name string) (process.Status, error)
-	Logs(name string, tail int) (string, process.Status, error)
+	List() []protocol.ProcessInfo
+	Start(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Stop(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Restart(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Logs(name string, tail int) (protocol.ProcessLogs, error)
 }
 
 // Options configures the handler.
@@ -75,6 +77,8 @@ type Options struct {
 	WorkDir string
 	// Processes serves the /processes routes. nil: no process runs.
 	Processes Processes
+	// Health is the body of GET /health.
+	Health protocol.Health
 }
 
 // Code is the wire code of a sentinel error.
@@ -117,6 +121,7 @@ type handler[S Session] struct {
 	codes   []Code
 	workDir string
 	procs   Processes
+	health  protocol.Health
 	// routes names the route that runs each control command.
 	routes map[command.Op]route
 }
@@ -147,9 +152,10 @@ func (h *handler[S]) handlers() map[string]http.HandlerFunc {
 			reply(w, http.StatusOK, h.rt.Models())
 			return nil
 		}),
+		"listMessages": h.serve(h.messages),
 		"listCommands": h.serve(h.commands),
 		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-			reply(w, http.StatusOK, map[string]string{"status": "ok"})
+			reply(w, http.StatusOK, h.health)
 			return nil
 		}),
 	}
@@ -172,7 +178,7 @@ func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
 		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
@@ -335,6 +341,31 @@ func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	reply(w, http.StatusOK, rd.Session())
+	return nil
+}
+
+// messages answers a page of the conversation. It only reads the session.
+func (h *handler[S]) messages(w http.ResponseWriter, r *http.Request) error {
+	before, err := number(r, "before")
+	if err != nil {
+		return err
+	}
+	n, err := number(r, "limit")
+	if err != nil {
+		return err
+	}
+	if n > protocol.MaxMessageLimit {
+		return fmt.Errorf("%w: limit must be at most %d", errInvalid, protocol.MaxMessageLimit)
+	}
+	rd, err := h.rt.Read(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	page, err := rd.Messages(r.Context(), before, int(n))
+	if err != nil {
+		return err
+	}
+	replyRaw(w, page)
 	return nil
 }
 

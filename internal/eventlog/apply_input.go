@@ -79,18 +79,20 @@ func (s *State) applyCommand(e CommandRecorded, seq uint64) error {
 		return illegal("command %s is %s", e.InputID, prior.rec.Status)
 	}
 	if !ok {
-		prior.seq = seq
+		prior.seq, prior.after = seq, s.lastMessageID()
 	}
 	if s.commands == nil {
 		s.commands = map[string]command{}
 	}
-	s.commands[e.InputID] = command{e, prior.seq}
+	s.commands[e.InputID] = command{e, prior.seq, prior.after}
 	return nil
 }
 
 type command struct {
 	rec CommandRecorded
 	seq uint64
+	// after is the ID of the newest message when the first record was appended.
+	after string
 }
 
 const commandAccepted = "accepted"

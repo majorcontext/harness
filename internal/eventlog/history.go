@@ -8,6 +8,8 @@ import (
 
 type entry struct {
 	seq uint64
+	// id is the ID that a reader sees for the message.
+	id  string
 	msg Message
 	// by is the provider that ran the turn of the message, and turn counts
 	// the turns that started before it.
@@ -133,7 +135,7 @@ func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
 	case TurnStarted:
 		for _, id := range e.InputIDs {
-			s.say(env.Seq, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
+			s.say(env.Seq, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
 		}
 		s.settle(env.Seq)
 	case InputPromoted:
@@ -150,9 +152,9 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
+		s.history = append(s.history, entry{seq: env.Seq, id: "msg_" + e.InputID, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
 	case ItemCompleted:
-		s.say(env.Seq, e.Message)
+		s.say(env.Seq, "msg_"+e.ItemID, e.Message)
 	case CompactionApplied:
 		i := slices.IndexFunc(s.history, func(h entry) bool { return h.seq > e.ToSeq })
 		if i < 0 {
@@ -179,8 +181,8 @@ func (s *State) settle(seq uint64) {
 	s.stranded = nil
 }
 
-func (s *State) say(seq uint64, m Message) {
-	s.history = append(s.history, entry{seq: seq, msg: m, by: s.turnBy, turn: s.turnN})
+func (s *State) say(seq uint64, id string, m Message) {
+	s.history = append(s.history, entry{seq: seq, id: id, msg: m, by: s.turnBy, turn: s.turnN})
 }
 
 // ProviderOf returns the provider of a model reference.
