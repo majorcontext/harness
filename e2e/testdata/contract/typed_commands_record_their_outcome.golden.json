@@ -4,7 +4,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "thinking_type": "enabled",
-      "thinking_budget_tokens": 4096,
+      "thinking_budget_tokens": 16384,
       "tools": [
         "bash",
         "edit_file",
@@ -40,61 +40,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "thinking_type": "enabled",
-      "thinking_budget_tokens": 4096,
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
-        "goal",
-        "grep",
-        "ls",
-        "model",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "session_info",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "/nosuch x"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "/compact"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "thinking_type": "enabled",
-      "thinking_budget_tokens": 4096,
+      "thinking_budget_tokens": 16384,
       "tools": [
         "bash",
         "edit_file",
@@ -141,24 +87,6 @@
               "text": "/compact"
             }
           ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "Review HEAD now.\n"
-            }
-          ]
         }
       ]
     },
@@ -166,7 +94,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "thinking_type": "enabled",
-      "thinking_budget_tokens": 4096,
+      "thinking_budget_tokens": 16384,
       "tools": [
         "bash",
         "edit_file",
@@ -231,6 +159,78 @@
               "text": "Review HEAD now.\n"
             }
           ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "/nosuch x"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "/compact"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "ok"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "Review HEAD now.\n"
+            }
+          ]
         },
         {
           "role": "assistant",
@@ -256,7 +256,7 @@
       "system_has_goal_evaluator": false,
       "model": "claude-fable-5",
       "thinking_type": "enabled",
-      "thinking_budget_tokens": 4096,
+      "thinking_budget_tokens": 16384,
       "tools": [
         "bash",
         "edit_file",
@@ -463,14 +463,15 @@
           "id": "cmd#1",
           "status": "accepted"
         },
-        "status": "command"
+        "status": "command",
+        "watermark": 1
       }
     },
     "command.a#10": {
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#9",
+          "id": "cmd#7",
           "status": "refused"
         },
         "status": "command"
@@ -480,7 +481,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#10",
+          "id": "cmd#8",
           "status": "accepted"
         },
         "status": "command"
@@ -490,7 +491,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#4",
+          "id": "cmd#2",
           "status": "failed"
         },
         "status": "command"
@@ -500,7 +501,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#5",
+          "id": "cmd#3",
           "status": "unsupported"
         },
         "status": "command"
@@ -510,7 +511,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#6",
+          "id": "cmd#4",
           "status": "accepted"
         },
         "status": "command"
@@ -520,7 +521,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#7",
+          "id": "cmd#5",
           "status": "accepted"
         },
         "status": "command"
@@ -530,7 +531,7 @@
       "status": 202,
       "body": {
         "command": {
-          "id": "cmd#8",
+          "id": "cmd#6",
           "status": "accepted"
         },
         "status": "command"
@@ -565,24 +566,6 @@
           "name": "thinking",
           "result": {
             "effort": "high"
-          },
-          "status": "succeeded",
-          "text": "/thinking succeeded"
-        },
-        {
-          "line": "/thinking high",
-          "name": "thinking",
-          "result": {
-            "effort": "high"
-          },
-          "status": "succeeded",
-          "text": "/thinking succeeded"
-        },
-        {
-          "line": "/thinking low",
-          "name": "thinking",
-          "result": {
-            "effort": "low"
           },
           "status": "succeeded",
           "text": "/thinking succeeded"
@@ -632,29 +615,24 @@
       ]
     },
     "repeat_input.a": {
-      "status": 202,
+      "status": 200,
       "body": {
-        "command": {
-          "id": "cmd#2",
-          "status": "accepted"
-        },
-        "status": "command"
+        "status": "duplicate",
+        "watermark": 1
       }
     },
     "repeat_input.a#2": {
-      "status": 202,
+      "status": 200,
       "body": {
-        "command": {
-          "id": "cmd#3",
-          "status": "accepted"
-        },
-        "status": "command"
+        "status": "duplicate",
+        "watermark": 1
       }
     },
     "repeat_input.a#3": {
-      "status": 0,
+      "status": 200,
       "body": {
-        "not_in_engine": "an input id that another input holds"
+        "status": "duplicate",
+        "watermark": 1
       }
     }
   }

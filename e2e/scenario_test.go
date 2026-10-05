@@ -202,7 +202,14 @@ type cancelTree struct{ as string }
 type deleteQueued struct{ as string }
 type updateGoal struct{ as, condition string }
 type clearGoal struct{ as string }
-type command struct{ as, text string }
+
+// command sends a typed slash command. A repeatable command is one that a
+// later repeatInput names again: serve sends it through the enqueue route
+// with a stored sequence, as the runtime sends it under an input id.
+type command struct {
+	as, text   string
+	repeatable bool
+}
 
 // Observations. A zero beforeSeq, from, or limit is left out of the request.
 // listSessions needs at most one resident session: the server lists them in map order.
@@ -302,7 +309,7 @@ func (a clearGoal) run(t *testing.T, r *run) {
 	r.record(t, "clear_goal", a.as, r.drv.ClearGoal(t, r.id(t, a.as)))
 }
 func (a command) run(t *testing.T, r *run) {
-	r.record(t, "command", a.as, r.drv.Command(t, r.id(t, a.as), a.text))
+	r.record(t, "command", a.as, r.drv.Command(t, r.id(t, a.as), a.text, a.repeatable))
 }
 func (commands) run(t *testing.T, r *run) {
 	r.record(t, "commands", "", r.drv.Commands(t))

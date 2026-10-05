@@ -174,6 +174,7 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				setModel{as: "a", model: "anthropic/claude-haiku-4-5"},
 				setThinking{as: "a", level: "bogus"},
 				setThinking{as: "a", level: "high"},
+				setThinking{as: "a", level: "high"},
 				// Defect: any service tier is accepted.
 				setServiceTier{as: "a", tier: "bogus"},
 				// Defect: the anthropic adapter sends no service_tier.

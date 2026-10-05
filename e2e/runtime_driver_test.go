@@ -266,7 +266,7 @@ func (d *runtimeDriver) Send(t *testing.T, id, text string) callResult {
 	return d.call(t, http.MethodPost, path, body)
 }
 
-func (d *runtimeDriver) Command(t *testing.T, id, text string) callResult {
+func (d *runtimeDriver) Command(t *testing.T, id, text string, _ bool) callResult {
 	t.Helper()
 	path, body := d.input(id, text, protocol.DeliveryQueue, protocol.SourceTyped)
 	return d.call(t, http.MethodPost, path, body)

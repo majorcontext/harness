@@ -68,7 +68,7 @@ type driver interface {
 	JournalPage(t *testing.T, id string, from, limit int) callResult
 	SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult
 	Child(t *testing.T, parentID string, nth int) string
-	Command(t *testing.T, id, text string) callResult
+	Command(t *testing.T, id, text string, repeatable bool) callResult
 	Commands(t *testing.T) callResult
 }
 
@@ -115,6 +115,7 @@ type httpDriver struct {
 	args                     []string
 	p                        *serveProc
 	enqSeq                   map[string]int64
+	typedSeq                 map[string]int64
 }
 
 func newHTTPDriver(t *testing.T, modelURL string) *httpDriver {
@@ -138,7 +139,7 @@ func scenarioConfig(extra map[string]any) map[string]any {
 // environment and args after its flags.
 func newHTTPDriverAt(t *testing.T, configPath string, env map[string]string, args ...string) *httpDriver {
 	t.Helper()
-	d := &httpDriver{sessDir: t.TempDir(), workDir: t.TempDir(), config: configPath, env: env, args: args, enqSeq: map[string]int64{}}
+	d := &httpDriver{sessDir: t.TempDir(), workDir: t.TempDir(), config: configPath, env: env, args: args, enqSeq: map[string]int64{}, typedSeq: map[string]int64{}}
 	d.p = d.serve(t)
 	return d
 }
@@ -191,27 +192,33 @@ func (d *httpDriver) CreateModel(t *testing.T, model string) callResult {
 	return withoutSeq(d.call(t, http.MethodPost, "/session", body))
 }
 
-func (d *httpDriver) enqueueCall(t *testing.T, id, text string, seq int64) callResult {
+func (d *httpDriver) enqueueCall(t *testing.T, id, text string, seq int64, typed bool) callResult {
 	t.Helper()
 	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": text}}, "seq": seq}
+	if typed {
+		body["source"] = "typed"
+	}
 	return d.call(t, http.MethodPost, "/session/"+id+"/enqueue", body)
 }
 
 func (d *httpDriver) PostInput(t *testing.T, id, text string) callResult {
 	t.Helper()
 	d.enqSeq[id]++
-	return d.enqueueCall(t, id, text, d.enqSeq[id])
+	return d.enqueueCall(t, id, text, d.enqSeq[id], false)
 }
 
 func (d *httpDriver) Repeat(t *testing.T, id, text string, typed bool) callResult {
 	t.Helper()
 	if typed {
-		return d.Command(t, id, text)
+		if d.typedSeq[id] == 0 {
+			return notInEngine("an input id that a typed command holds")
+		}
+		return d.enqueueCall(t, id, text, d.typedSeq[id], true)
 	}
 	if d.enqSeq[id] == 0 {
 		return notInEngine("an input id that another input holds")
 	}
-	return d.enqueueCall(t, id, text, d.enqSeq[id])
+	return d.enqueueCall(t, id, text, d.enqSeq[id], false)
 }
 
 func (d *httpDriver) SteerOtherTurn(t *testing.T, id, text string) callResult {
@@ -524,8 +531,13 @@ func (d *httpDriver) JournalPage(t *testing.T, id string, from, limit int) callR
 	return d.call(t, http.MethodGet, withQuery("/session/"+id+"/journal", "from", from, "limit", limit), nil)
 }
 
-func (d *httpDriver) Command(t *testing.T, id, text string) callResult {
+func (d *httpDriver) Command(t *testing.T, id, text string, repeatable bool) callResult {
 	t.Helper()
+	if repeatable {
+		d.enqSeq[id]++
+		d.typedSeq[id] = d.enqSeq[id]
+		return d.enqueueCall(t, id, text, d.enqSeq[id], true)
+	}
 	body := map[string]any{"parts": []map[string]string{{"type": "text", "text": text}}, "source": "typed"}
 	return withoutSeq(d.call(t, http.MethodPost, "/session/"+id+"/prompt_async", body))
 }

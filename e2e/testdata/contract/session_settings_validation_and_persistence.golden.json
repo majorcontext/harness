@@ -282,6 +282,12 @@
     "set_thinking.a#3": {
       "status": 200,
       "body": {
+        "effort": "high"
+      }
+    },
+    "set_thinking.a#4": {
+      "status": 200,
+      "body": {
         "effort": ""
       }
     }

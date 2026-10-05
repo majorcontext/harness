@@ -119,56 +119,32 @@
           ]
         }
       ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": null,
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "one"
-            }
-          ]
-        },
-        {
-          "role": "assistant",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "ok"
-            }
-          ]
-        },
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "Summarize the conversation above, following the system prompt's instructions."
-            }
-          ]
-        }
-      ]
     }
   ],
   "sessions": {
     "a": [
       {
-        "id": "cmpsum#1",
+        "id": "msg#1",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "[compacted summary of earlier conversation]\n\ngist"
+            "text": "one"
           }
         ]
       },
       {
-        "id": "msg#1",
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
         "role": "user",
         "parts": [
           {
@@ -178,7 +154,7 @@
         ]
       },
       {
-        "id": "msg#2",
+        "id": "msg#4",
         "role": "assistant",
         "parts": [
           {
@@ -197,7 +173,8 @@
           "id": "cmd#1",
           "status": "accepted"
         },
-        "status": "command"
+        "status": "command",
+        "watermark": 1
       }
     },
     "command_records.a": {
@@ -208,22 +185,14 @@
           "name": "compact",
           "status": "interrupted",
           "text": "harness restarted before /compact finished; it will not run again"
-        },
-        {
-          "line": "/compact",
-          "name": "compact",
-          "status": "accepted"
         }
       ]
     },
     "repeat_input.a": {
-      "status": 202,
+      "status": 200,
       "body": {
-        "command": {
-          "id": "cmd#2",
-          "status": "accepted"
-        },
-        "status": "command"
+        "status": "duplicate",
+        "watermark": 1
       }
     }
   }
