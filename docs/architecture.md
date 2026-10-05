@@ -125,7 +125,7 @@ type Options struct {
 	AskUserQuestion bool
 	// ServeURL and RunToken go to each plugin in its initialize call. A token needs a URL.
 	ServeURL, RunToken string
-	// MaxTokens caps the response of each model call of a turn. 0: the backend default.
+	// MaxTokens caps the response of each model call of a turn. 0 or less: the backend default.
 	MaxTokens int
 }
 
@@ -605,7 +605,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `unauthorized` | 401 |
 | `internal` | 500 |
 
-Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error and a `protocol` constant. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `server`. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `server`. The session codes are sentinels in `harness`. `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 As the engine did, the actor masks and bounds each error text that it writes to the log (`turn.ended` error, `goal.changed` reason): recognized credential shapes are redacted (best effort: a free-form text can hold a shape that the fixed patterns miss), and a text longer than 256 runes keeps its first 256 runes and ends with `...[truncated]`. A failed `turn.ended` also holds the message as a report to a parent reads it, in `error_detail`, when that differs from `error`: masked by the secret patterns of the engine, and cut at 500 runes with `… [truncated]` (see Settle).
 

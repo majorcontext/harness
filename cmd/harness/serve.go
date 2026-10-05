@@ -250,7 +250,7 @@ func bearer(next http.Handler, token string, unauthenticated bool) http.Handler 
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.Error{Code: "unauthorized", Message: "unauthorized", Details: map[string]any{}}})
+		_ = json.NewEncoder(w).Encode(protocol.ErrorBody{Error: protocol.Error{Code: protocol.CodeUnauthorized, Message: "unauthorized", Details: map[string]any{}}})
 	})
 }
 

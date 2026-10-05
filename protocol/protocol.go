@@ -347,6 +347,7 @@ const (
 	CodeNoBase            = "no_base"
 	CodeTooManyChanges    = "too_many_changes"
 	CodeProcessNotFound   = "process_not_found"
+	CodeUnauthorized      = "unauthorized"
 )
 
 // ErrorBody is the body of every HTTP error response.

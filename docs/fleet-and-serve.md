@@ -235,11 +235,13 @@ threshold-gated WARN lines answer that, and nothing runs always-on.
   lifecycle as `inFlightWatchdog` — one cancelable context, cancelled when
   `serveCmd` returns.
 - **`/debug/pprof/`** (`server/pprof.go`, `Options.PProf`, `harness serve
-  -pprof`). OFF by default, and authed like every other route when on. It
-  is the third step, not the first: `GET /debug/goroutines` needs no flag
-  and already answers "what is this process blocked on". Turn `-pprof` on
-  for a process under investigation when the CPU, heap, block, or mutex
-  profile is what is missing.
+  -pprof`). Engine only: `harness serve` on the runtime has no `-pprof`
+  flag and serves no `/debug` route, and the engine package goes in phase 6.
+  On the engine, it is OFF by default, and authed like every other route
+  when on. It is the third step, not the first: `GET /debug/goroutines`
+  needs no flag and already answers "what is this process blocked on". Turn
+  `-pprof` on for a process under investigation when the CPU, heap, block,
+  or mutex profile is what is missing.
   - **Never import `net/http/pprof` in this repository.** That package's
     `init` registers `/debug/pprof/*` on `http.DefaultServeMux` for the
     whole linked binary, so importing it — even to borrow its handler
