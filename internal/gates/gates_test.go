@@ -403,6 +403,11 @@ var checkCases = []struct {
 		want: []string{"a/a_test.go:contract_tests", exceptionsFile + ":test_exceptions"},
 	},
 	{
+		name: "unchanged_malformed_exceptions_file_passes",
+		head: fstest.MapFS{exceptionsFile: exceptions("a/a_test.go")},
+		base: fstest.MapFS{exceptionsFile: exceptions("a/a_test.go")},
+	},
+	{
 		name: "empty_exceptions_file_passes",
 		head: fstest.MapFS{exceptionsFile: file("")},
 	},

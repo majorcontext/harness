@@ -379,6 +379,9 @@ func Check(head, base Report, changed map[string]bool, renames map[string]string
 		}
 	}
 	for _, line := range head.BadExceptions {
+		if !changed[exceptionsFile] {
+			break
+		}
 		vs = append(vs, Violation{exceptionsFile, "test_exceptions", fmt.Sprintf("%q names no reason", line)})
 	}
 	for p, n := range head.Agents {
