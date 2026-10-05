@@ -65,6 +65,37 @@ func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 	}
 }
 
+func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
+	skipShort(t)
+	fake := harnesstest.New(t, replyText("ok"))
+	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
+	id := runTurn(t, d, "go")
+	first, err := os.ReadFile(filepath.Join(d.store, id, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, _, _ := strings.Cut(string(first), "\n")
+	bad := filepath.Join(d.store, "ses_torn")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, "log.jsonl"), []byte(line+"\nnot a record\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var page struct {
+		Sessions []struct {
+			ID string `json:"id"`
+		} `json:"sessions"`
+	}
+	d.expect(t, http.StatusOK, http.MethodGet, "/sessions", nil, &page)
+	if len(page.Sessions) != 1 || page.Sessions[0].ID != id {
+		t.Errorf("GET /sessions lists %+v, want only %s: a log that does not replay is skipped", page.Sessions, id)
+	}
+	if log := d.Stderr(); !strings.Contains(log, "ses_torn") {
+		t.Errorf("serve did not log the skipped session\n%s", log)
+	}
+}
+
 func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
 	skipShort(t)
 	fake := harnesstest.New(t, replyText("ok"))

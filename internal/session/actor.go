@@ -24,6 +24,8 @@ var (
 	ErrConflict = errors.New("harness: append conflict")
 	// ErrNotFound reports a session with an empty log.
 	ErrNotFound = errors.New("harness: session not found")
+	// ErrUnreplayable reports a log that does not replay: a record that does not decode or break a rule of the log.
+	ErrUnreplayable = errors.New("harness: log does not replay")
 	// ErrExists reports a create of a session that has a log.
 	ErrExists = errors.New("harness: session exists")
 	// ErrNotOwned reports a session whose actor stopped: it was fenced, lost, or released.
@@ -292,11 +294,11 @@ func replay(ctx context.Context, log Log, s *eventlog.State, through uint64) err
 			return err
 		}
 		if len(recs) == 0 {
-			return fmt.Errorf("harness: log ends at %d before seq %d", s.Head(), through)
+			return fmt.Errorf("%w: log ends at %d before seq %d", ErrUnreplayable, s.Head(), through)
 		}
 		for _, r := range recs {
 			if err := s.Apply(r); err != nil {
-				return err
+				return fmt.Errorf("%w: %w", ErrUnreplayable, err)
 			}
 		}
 	}

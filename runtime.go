@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -533,6 +534,10 @@ func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.S
 	page := protocol.SessionPage{Sessions: []protocol.Session{}}
 	for _, id := range ids {
 		v, err := r.describe(ctx, id)
+		if errors.Is(err, session.ErrUnreplayable) {
+			slog.Warn("harness: session skipped in the list", "session", id, "err", err)
+			continue
+		}
 		if err != nil {
 			return protocol.SessionPage{}, err
 		}
