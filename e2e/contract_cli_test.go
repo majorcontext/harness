@@ -243,6 +243,35 @@ func TestContractCLIRunFailedTurnExitsOne(t *testing.T) {
 	}
 }
 
+func TestContractCLIRunJSONExitsOneWhenATurnFails(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
+	out, errOut, code := h.run("run", "-json", "-p", "hi")
+	if code != 1 || !strings.Contains(errOut, "bad request body") || !strings.Contains(out, `"k":"turn.ended"`) {
+		t.Errorf("run -json with a failed turn = %d, want 1, the error, and the events\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+func TestContractCLIRunGoalExitsOneWhenATurnFails(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
+	out, errOut, code := h.run("run", "-goal", "say done")
+	if code != 1 || !strings.Contains(errOut, "bad request body") || strings.Contains(errOut, "goal not achieved") {
+		t.Errorf("run -goal with a failed turn = %d, want 1 and the error\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+func TestContractCLIRunRetryBeforeAnyTextPrintsNoRestartNotice(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil,
+		harnesstest.Step{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
+		replyText("recovered"))
+	out, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 || out != "recovered\n" || strings.Contains(errOut, "re-streaming") {
+		t.Errorf("run after a retry before any text = %d %q, want 0, the text, and no restart notice\n%s", code, out, errOut)
+	}
+}
+
 func TestContractCLISessionsOfAnEmptyDir(t *testing.T) {
 	skipShort(t)
 	h := newCLIHost(t, nil)

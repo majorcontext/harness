@@ -56,6 +56,9 @@ func TestContractRuntimeHealthNamesTheBuildAndTheStart(t *testing.T) {
 				t.Errorf("/health has no %s: %v", key, body)
 			}
 		}
+		if body["session_sync"] != "fsync" {
+			t.Errorf("/health session_sync = %v, want fsync", body["session_sync"])
+		}
 		if body["version"] == "" {
 			t.Errorf("/health version is empty")
 		}

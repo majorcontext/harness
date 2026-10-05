@@ -259,7 +259,9 @@ type printer struct {
 	streamed    map[string]bool
 	names       map[string]string
 	printedText bool
-	command     *protocol.Event
+	// streamedThis is set when text streamed since the last completed item.
+	streamedThis bool
+	command      *protocol.Event
 }
 
 // stream prints each event after seq, and returns when the session has
@@ -350,15 +352,14 @@ func (p *printer) handle(ev protocol.Event) {
 		var f protocol.ItemFrame
 		if json.Unmarshal(ev.Data, &f) == nil && f.Type == "text" {
 			_, _ = fmt.Fprint(p.out, f.Text)
-			p.printedText, p.streamed[f.ItemID] = true, true
+			p.printedText, p.streamedThis, p.streamed[f.ItemID] = true, true, true
 		}
 	case protocol.KindStatus:
 		var f protocol.StatusFrame
-		if json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusRetrying {
-			if p.printedText {
-				_, _ = fmt.Fprintln(p.out)
-			}
+		if json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusRetrying && p.streamedThis {
+			_, _ = fmt.Fprintln(p.out)
 			_, _ = fmt.Fprintln(p.errW, "[re-streaming after a transient provider error]")
+			p.streamedThis = false
 		}
 	case "item.completed":
 		p.item(ev)
@@ -368,6 +369,7 @@ func (p *printer) handle(ev protocol.Event) {
 // item prints the tools of a completed item, and the text of an item that
 // streamed no delta.
 func (p *printer) item(ev protocol.Event) {
+	p.streamedThis = false
 	var it struct {
 		ItemID  string `json:"item_id"`
 		Message struct {
@@ -407,8 +409,10 @@ func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol
 		case g.State == "achieved":
 			fmt.Fprintf(os.Stderr, "goal achieved in %d turn(s): %s\n", g.Turns, g.Reason)
 			return nil
+		case v.LastTurn != nil && v.LastTurn.Error != "":
+			return errors.New(v.LastTurn.Error)
 		default:
-			fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s (%s)\n", g.Turns, g.Reason, g.State)
+			fmt.Fprintf(os.Stderr, "goal not achieved after %d turn(s): %s\n", g.Turns, g.Reason)
 			return errGoalNotAchieved
 		}
 	}
