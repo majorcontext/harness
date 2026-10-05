@@ -138,7 +138,7 @@ func (r *run) finish(ctx context.Context, err error) error {
 	if r.resolution != nil && err == nil && r.mirror.Parked == r.resolution.callID {
 		r.mirror.Parked = ""
 	}
-	if r.taken && err != nil && (errors.Is(context.Cause(ctx), turn.ErrHandoff) || errors.Is(err, turn.ErrRetryable)) {
+	if r.taken && err != nil && errors.Is(context.Cause(ctx), turn.ErrHandoff) {
 		r.mirror.Turn = r.turnID
 	}
 	if r.mirror.SessionID != "" {
@@ -178,7 +178,7 @@ func (r *run) outcome(err, exit error) error {
 	if res := r.result; res.IsError {
 		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, res.Result)
 		if retryable(res.Subtype, res.Result) {
-			err = turn.Once(fmt.Errorf("%w: %w", turn.ErrRetryable, err))
+			err = fmt.Errorf("%w: %w", turn.ErrRetryable, err)
 		}
 	}
 	return err

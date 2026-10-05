@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -428,6 +429,8 @@ func (a claudeToolCall) run(t *testing.T, r *run) {
 
 // claudeSession records GET /session/{id} without the journal seq, and with
 // the wall-clock capture time of the subscription usage replaced by a marker.
+var fakeBinPath = regexp.MustCompile(`"[^"\s]*fakeclaude"`)
+
 type claudeSession struct{ as string }
 
 func (a claudeSession) run(t *testing.T, r *run) {
@@ -435,6 +438,11 @@ func (a claudeSession) run(t *testing.T, r *run) {
 	if body, ok := res.Body.(map[string]any); ok {
 		if sub, ok := body["subscription_usage"].(map[string]any); ok && sub["captured_at"] != json.Number("0") {
 			sub["captured_at"] = "<time>"
+		}
+		if last, ok := body["last_turn"].(map[string]any); ok {
+			if msg, ok := last["error"].(string); ok {
+				last["error"] = fakeBinPath.ReplaceAllString(msg, "<fakeclaude>")
+			}
 		}
 	}
 	r.record(t, "get_session", a.as, res)

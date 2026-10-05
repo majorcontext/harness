@@ -17,14 +17,12 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode, next string
 		hangAfter, seen  string
-		retries          int
 		want             string
 	}{
 		{name: "a handoff after init", mode: "hang", next: "thinking", seen: "backend.state", want: continuation},
 		{name: "a mirrored handoff after a transcript", mode: "mirror", next: "mirror", hangAfter: "3", seen: "item.completed",
 			want: continuation},
 		{name: "a mirrored handoff before a transcript", mode: "mirror", next: "mirror", hangAfter: "0", seen: "backend.state", want: "hi"},
-		{name: "a retry after init", mode: "crash", retries: 1, want: continuation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeClaude(t, tc.mode, "FAKE_CLAUDE_MIRROR_FIXTURE", fixtures+"run1.stdout.jsonl", "FAKE_CLAUDE_MIRROR_HANG_AFTER", tc.hangAfter)
@@ -34,7 +32,7 @@ func TestClaudeCodeContinuesATurnThatTheCLITook(t *testing.T) {
 				t.Setenv("FAKE_CLAUDE_MODE", tc.next)
 				t.Setenv("FAKE_CLAUDE_MIRROR_HANG_AFTER", "")
 			}
-			r := retryingRuntime(t, st, nil, mirror, tc.retries, nil)
+			r := retryingRuntime(t, st, nil, mirror, 0, nil)
 			defer closeRuntime(t, r)
 			if tc.next == "" {
 				turnOf(t, createClaude(t, r, nil), text("a", "hi"))

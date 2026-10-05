@@ -150,6 +150,7 @@ func TestContractClaudeCodeFrames(t *testing.T) {
 		row("claudecode_thinking_block_is_reasoning", "thinking", session),
 		row("claudecode_subagent_frames_keep_parent", "subagent", claudeMessageParents{as: "a"}),
 		row("claudecode_error_result_fails_turn", "error", session, claudeInvocations{as: "a"}),
+		row("claudecode_cli_exit_runs_once", "crash", session, claudeInvocations{as: "a"}),
 		row("claudecode_rate_limit_event_reaches_subscription_usage", "rate_limit_event", session),
 		row("claudecode_context_window_from_model_usage", "per_call_usage", session),
 	})
