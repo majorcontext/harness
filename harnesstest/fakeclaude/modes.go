@@ -115,11 +115,11 @@ var basicModes = map[string]mode{
 	"hang_after_text":             hangAfterText,
 	"hang_after_listing":          hangAfterListing,
 	"hang_in_tool":                hangInTool,
-	"tool_on_interrupt":           hang,
-	"tool_result_on_interrupt":    hang,
-	"success_on_interrupt":        hang,
-	"placeholder_on_interrupt":    hang,
-	"exit_on_interrupt":           hang,
+	"tool_on_interrupt":           hangAfterText,
+	"tool_result_on_interrupt":    hangAfterText,
+	"success_on_interrupt":        hangAfterText,
+	"placeholder_on_interrupt":    hangAfterText,
+	"exit_on_interrupt":           hangAfterText,
 	"crash":                       crashAfter(),
 	"fast_no_drain":               frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
 	"error":                       frames(result("error_during_execution", true, "fake failure", 11, 3)),
@@ -136,10 +136,10 @@ func hangAfterText(f *fake) {
 	hang(f)
 }
 
-// hangInTool sends a text and a tool call of one API response, as the CLI
-// does, then hangs while the tool runs.
+// hangInTool sends a text, then a text and a tool call of one API response,
+// as the CLI does, and hangs while the tool runs.
 func hangInTool(f *fake) {
-	f.emit(say("Checking.").inMessage("id", "msg_A"),
+	f.emit(say("Working on it.").inMessage("id", "msg_0"), say("Checking.").inMessage("id", "msg_A"),
 		assistant(toolUse("toolu_h", "Bash", obj{"command": "sleep 60"})).inMessage("id", "msg_A"))
 	hang(f)
 }

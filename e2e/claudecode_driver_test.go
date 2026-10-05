@@ -2,7 +2,11 @@ package e2e
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -40,11 +44,21 @@ type claudeLane struct {
 	// initTools is the JSON list of tools in the init frame of the CLI, which a
 	// session with an allowed list checks.
 	initTools string
+	// mirror sets session_mirror on the claude-code provider.
+	mirror bool
+	// signals makes the CLI handle a SIGINT as the real one does, by printing
+	// the frames of its mode and exiting.
+	signals bool
+	// spawnModes runs the CLI in another mode in the spawns that it lists,
+	// as "n=mode,...", counting spawns from 1.
+	spawnModes string
+	// env adds FAKE_CLAUDE_* and FAKECLAUDE_* variables to the environment of the CLI.
+	env map[string]string
 }
 
 // claudeLogs are the files where fakeclaude records what it received.
 type claudeLogs struct {
-	argvLog, stdinLog, mcpLog, toolLog, stateDir string
+	argvLog, stdinLog, mcpLog, toolLog, cwdLog, seenLog, signalLog, stateDir string
 }
 
 func (l claudeLogs) env(lane claudeLane) map[string]string {
@@ -54,7 +68,16 @@ func (l claudeLogs) env(lane claudeLane) map[string]string {
 		"FAKE_CLAUDE_STDIN_LOG":      l.stdinLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG": l.mcpLog,
 		"FAKE_CLAUDE_STATE":          filepath.Join(l.stateDir, "parked"),
+		"FAKE_CLAUDE_CWD_LOG":        l.cwdLog,
+		"FAKE_CLAUDE_MIRROR_SEEN":    l.seenLog,
 	}
+	if lane.signals {
+		env["FAKE_CLAUDE_SIGNAL_LOG"] = l.signalLog
+	}
+	if lane.spawnModes != "" {
+		env["FAKE_CLAUDE_SPAWN_MODES"] = lane.spawnModes
+	}
+	maps.Copy(env, lane.env)
 	if lane.historyTool {
 		env["FAKE_CLAUDE_CALL_TOOL"], env["FAKE_CLAUDE_TOOL_LOG"] = "get_conversation_history", l.toolLog
 	}
@@ -83,7 +106,7 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 		"model": "claude-code/sonnet",
 		"providers": map[string]any{
 			"anthropic":   map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "base_url": modelURL},
-			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath()},
+			"claude-code": map[string]any{"type": "claude-code-cli", "binary_path": fakeClaudePath(), "session_mirror": l.mirror},
 		},
 	}
 	if l.mcp != nil {
@@ -92,7 +115,8 @@ func (l claudeLane) newDriver(t *testing.T, h host, modelURL string) driver {
 	maps.Copy(cfg, l.extra)
 	stateDir := t.TempDir()
 	logs := claudeLogs{stateDir: stateDir, mcpLog: filepath.Join(stateDir, "mcp-config.jsonl"), toolLog: filepath.Join(stateDir, "tool.jsonl"),
-		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl")}
+		argvLog: filepath.Join(stateDir, "argv.jsonl"), stdinLog: filepath.Join(stateDir, "stdin.jsonl"),
+		cwdLog: filepath.Join(stateDir, "cwd"), seenLog: filepath.Join(stateDir, "seen.jsonl"), signalLog: filepath.Join(stateDir, "signals")}
 	var args []string
 	if l.ask {
 		args = append(args, "--ask-user-question")
@@ -151,7 +175,7 @@ func argvFacts(argv []string) map[string]any {
 		return nil
 	}
 	appended, _ := value("--append-system-prompt").(string)
-	return map[string]any{
+	facts := map[string]any{
 		"model":              value("--model"),
 		"resume":             value("--resume"),
 		"history_directive":  strings.Contains(appended, "get_conversation_history"),
@@ -163,7 +187,19 @@ func argvFacts(argv []string) map[string]any {
 		"disallowed_tools":      value("--disallowedTools"),
 		"strict_mcp_config":     slices.Contains(argv, "--strict-mcp-config"),
 	}
+	settings, _ := value("--settings").(string)
+	if strings.Contains(settings, "defer") {
+		facts["defer_hook"] = true
+		if call := deferredCall.FindString(settings); call != "" {
+			facts["deferred_call"] = call
+		}
+	}
+	return facts
 }
+
+// deferredCall matches the id of the tool call that a resumed run lets pass
+// its defer hook.
+var deferredCall = regexp.MustCompile(`toolu_\w+`)
 
 // claudeSystemPrompt records, for each fakeclaude spawn in order, whether the
 // system prompt that harness appended holds text.
@@ -597,4 +633,143 @@ func (d *runtimeDriver) messageParents(t *testing.T, id string) callResult {
 		}
 	}
 	return callResult{Status: http.StatusOK, Body: out}
+}
+
+// claudeMirror records, for each fakeclaude spawn in order, the session that
+// it resumed, whether it ran with the session mirror, and a digest of each
+// transcript file that it found in its config dir at start.
+type claudeMirror struct{ as string }
+
+func (a claudeMirror) run(t *testing.T, r *run) {
+	d := claudeDriverOf(t, r)
+	var seen []struct {
+		Files map[string]string `json:"files"`
+	}
+	for _, line := range fileLines(t, d.seenLog) {
+		var s struct {
+			Files map[string]string `json:"files"`
+		}
+		if err := json.Unmarshal([]byte(line), &s); err != nil {
+			t.Fatalf("decode seen line %q: %v", line, err)
+		}
+		seen = append(seen, s)
+	}
+	out := []any{}
+	for i, line := range fileLines(t, d.argvLog) {
+		var argv []string
+		if err := json.Unmarshal([]byte(line), &argv); err != nil {
+			t.Fatalf("decode argv line %q: %v", line, err)
+		}
+		transcripts := map[string]string{}
+		if i < len(seen) {
+			for name, content := range seen[i].Files {
+				sum := sha256.Sum256([]byte(content))
+				transcripts[name] = fmt.Sprintf("%d lines, sha256 %s", strings.Count(content, "\n"), hex.EncodeToString(sum[:6]))
+			}
+		}
+		out = append(out, map[string]any{
+			"resume":         argvFacts(argv)["resume"],
+			"session_mirror": slices.Contains(argv, "--session-mirror"),
+			"transcripts":    transcripts,
+		})
+	}
+	r.record(t, "claude_mirror", a.as, callResult{Status: http.StatusOK, Body: out})
+}
+
+// fileLines reads the lines of a log that fakeclaude appends to. A log that
+// no spawn wrote is empty.
+func fileLines(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+// claudeUsage records the input and output tokens that the session has used,
+// the one part of the session view that serve and the runtime share.
+type claudeUsage struct{ as string }
+
+func (a claudeUsage) run(t *testing.T, r *run) {
+	body, _ := claudeDriverOf(t, r).GetSession(t, r.id(t, a.as)).Body.(map[string]any)
+	usage, _ := body["usage"].(map[string]any)
+	r.record(t, "claude_usage", a.as, callResult{Status: http.StatusOK, Body: map[string]any{
+		"input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"],
+	}})
+}
+
+// claudeSignals records how many SIGINT the CLI handled, which only a lane
+// with signals set counts.
+type claudeSignals struct{ as string }
+
+func (a claudeSignals) run(t *testing.T, r *run) {
+	n := len(fileLines(t, claudeDriverOf(t, r).signalLog))
+	r.record(t, "claude_signals", a.as, callResult{Status: http.StatusOK, Body: map[string]any{"sigint": n}})
+}
+
+// claudeWorkDir records whether each fakeclaude spawn ran in the work dir of
+// the host.
+type claudeWorkDir struct{ as string }
+
+func (a claudeWorkDir) run(t *testing.T, r *run) {
+	d := claudeDriverOf(t, r)
+	want, err := filepath.EvalSymlinks(d.Workdir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := []any{}
+	for _, line := range fileLines(t, d.cwdLog) {
+		got, err := filepath.EvalSymlinks(line)
+		out = append(out, err == nil && got == want)
+	}
+	r.record(t, "claude_work_dir", a.as, callResult{Status: http.StatusOK, Body: out})
+}
+
+// claudeBackendStates records the number of distinct blobs that the
+// backend.state events of the session name.
+type claudeBackendStates struct{ as string }
+
+func (a claudeBackendStates) run(t *testing.T, r *run) {
+	r.record(t, "backend_states", a.as, claudeDriverOf(t, r).backendStateKeys(t, r.id(t, a.as)))
+}
+
+func (d *httpDriver) backendStateKeys(*testing.T, string) callResult {
+	return notInEngine("a backend state blob")
+}
+
+func (d *runtimeDriver) backendStateKeys(t *testing.T, id string) callResult {
+	t.Helper()
+	keys := map[string]bool{}
+	for _, ev := range d.events(t, id) {
+		if ev.Kind == "backend.state" {
+			keys[decodeEvent[struct {
+				BlobKey string `json:"blob_key"`
+			}](t, ev).BlobKey] = true
+		}
+	}
+	return callResult{Status: http.StatusOK, Body: map[string]any{"blobs": len(keys)}}
+}
+
+// claudeCompactKeeping asks the session to compact and keep its newest turns.
+type claudeCompactKeeping struct {
+	as   string
+	keep int
+}
+
+func (a claudeCompactKeeping) run(t *testing.T, r *run) {
+	r.record(t, "compact_keeping", a.as, claudeDriverOf(t, r).compactKeeping(t, r.id(t, a.as), a.keep))
+}
+
+func (d *httpDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/session/"+id+"/compact", map[string]any{"keep_turns": keep})
+}
+
+func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
+	t.Helper()
+	return d.call(t, http.MethodPost, "/sessions/"+id+"/compact", map[string]any{"keep_turns": keep})
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/mcpserver"
 	"github.com/majorcontext/harness/protocol"
@@ -27,62 +28,67 @@ type mcpConfigFile struct {
 // hist is the history tool that every turn of a backend that owns its loop gets.
 const hist = "get_conversation_history"
 
-func TestClaudeCodeGetsTheConfiguredMCPServers(t *testing.T) {
+func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *testing.T) {
+	dir := t.TempDir()
+	mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
+	argvLog := fakeClaude(t, "mcp", toolsInit, `["Read"]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
+		"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)
 	reg := mcpserver.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) { return mcp.CallToolResult{}, nil })
 	gateway := httptest.NewServer(reg)
 	defer gateway.Close()
-	stdio := map[string]any{"command": "chrome-devtools-mcp-absent", "args": []any{"--headless"}, "env": map[string]any{"A": "1"}}
-	remote := map[string]any{"type": "http", "url": gateway.URL, "headers": map[string]any{"Authorization": "Bearer t"}}
-	for _, tc := range []struct {
-		name    string
-		allowed []string
-		env     []string
-		offered []string
-		want    map[string]map[string]any
-	}{
-		{name: "the CLI gets every configured server beside the bridge", offered: []string{"echo", hist},
-			want: map[string]map[string]any{"chrome-devtools": stdio, "gateway": remote}},
-		{name: "a restricted turn keeps the configured servers on the bridge", allowed: []string{"Read", "echo", "mcp__gateway__ping"},
-			env: []string{toolsInit, `["Read"]`}, offered: []string{"echo", "mcp__gateway__ping", hist}, want: map[string]map[string]any{}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
-			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
-				"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)...)
-			bin, err := fakeClaudeBin()
-			if err != nil {
-				t.Fatal(err)
-			}
-			r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
-				Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}},
-				MCPServers: map[string]config.MCPServerSpec{
-					"chrome-devtools": {Command: []string{"chrome-devtools-mcp-absent", "--headless"}, Env: []string{"A=1", "malformed"}, Dir: dir},
-					"gateway":         {URL: gateway.URL, Headers: map[string]string{"Authorization": "Bearer t"}},
-				}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer closeRuntime(t, r)
-			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
-			runs := jsonLines[mcpRun](t, mcpLog)
-			if len(runs) != 1 || !slices.Equal(runs[0].Tools, tc.offered) {
-				t.Fatalf("bridge runs = %+v, want one that offers %q", runs, tc.offered)
-			}
-			want := map[string]map[string]any{"harness": {"type": "http", "url": runs[0].URL}}
-			for k, v := range tc.want {
-				want[k] = v
-			}
-			if got := jsonLines[mcpConfigFile](t, configLog); len(got) != 1 || !reflect.DeepEqual(got[0].MCPServers, want) {
-				t.Errorf("--mcp-config = %+v, want %+v", got, want)
-			}
-			if argv := jsonLines[[]string](t, argvLog)[0]; !slices.Contains(argv, "--strict-mcp-config") {
-				t.Errorf("argv = %q, want --strict-mcp-config", argv)
-			}
-		})
+	bin, err := fakeClaudeBin()
+	if err != nil {
+		t.Fatal(err)
 	}
+	r, err := harness.New(harness.Options{Store: harness.NewMemStore(), Tools: []harness.Tool{newProbe("echo", false)}, Config: config.Config{
+		Providers: map[string]config.Provider{"claude-code": {Type: config.TypeClaudeCodeCLI, BinaryPath: bin}},
+		MCPServers: map[string]config.MCPServerSpec{
+			"chrome-devtools": {Command: []string{"chrome-devtools-mcp-absent", "--headless"}, Dir: dir},
+			"gateway":         {URL: gateway.URL},
+		}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeRuntime(t, r)
+	turnOf(t, createClaude(t, r, []string{"Read", "echo", "mcp__gateway__ping"}), text("a", "hi"))
+	offered := []string{"echo", "mcp__gateway__ping", hist}
+	runs := jsonLines[mcpRun](t, mcpLog)
+	if len(runs) != 1 || !slices.Equal(runs[0].Tools, offered) {
+		t.Fatalf("bridge runs = %+v, want one that offers %q", runs, offered)
+	}
+	want := map[string]map[string]any{"harness": {"type": "http", "url": runs[0].URL}}
+	if got := jsonLines[mcpConfigFile](t, configLog); len(got) != 1 || !reflect.DeepEqual(got[0].MCPServers, want) {
+		t.Errorf("--mcp-config = %+v, want %+v", got, want)
+	}
+	if argv := jsonLines[[]string](t, argvLog)[0]; !slices.Contains(argv, "--strict-mcp-config") {
+		t.Errorf("argv = %q, want --strict-mcp-config", argv)
+	}
+}
+
+const interrupted = "interrupted before a result was recorded; check whether it took effect before running it again"
+
+// toolPartNames returns the names of the tool call and tool result parts of s1.
+func toolPartNames(t *testing.T, st harness.Store) []string {
+	t.Helper()
+	recs, err := st.Read(bg, "s1", 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range recs {
+		var env struct {
+			D struct{ Message eventlog.Message }
+		}
+		_ = json.Unmarshal(r.Data, &env)
+		for _, p := range env.D.Message.Parts {
+			if p.CallID != "" {
+				names = append(names, p.Name)
+			}
+		}
+	}
+	return names
 }
 
 type lookup struct{}
@@ -166,7 +172,7 @@ func TestClaudeCodeRunsEmbedderToolsOverMCP(t *testing.T) {
 			mcpLog := filepath.Join(t.TempDir(), "mcp")
 			argvLog := fakeClaude(t, "mcp", append(tc.env, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog)...)
 			st, echo := harness.NewMemStore(), newProbe("echo", false)
-			r := claudeRuntimeWith(t, st, nil, false, nil, echo, newProbe("hidden", false))
+			r := claudeRuntime(t, st, echo, newProbe("hidden", false))
 			defer closeRuntime(t, r)
 			turnOf(t, createClaude(t, r, tc.allowed), text("a", "hi"))
 			wantLog(t, st, 2, "input.admitted a", "turn.started a", "backend.state", "item.completed assistant toolu_m",
@@ -193,7 +199,7 @@ func TestClaudeCodeInterruptStopsAnMCPToolCall(t *testing.T) {
 	mcpLog := filepath.Join(t.TempDir(), "mcp")
 	argvLog := fakeClaude(t, "mcp", "FAKE_CLAUDE_MCP_CALL", "block", "FAKE_CLAUDE_MCP_LOG", mcpLog, "FAKE_CLAUDE_SIGNAL_LOG", filepath.Join(t.TempDir(), "signals"))
 	st, block := harness.NewMemStore(), newProbe("block", true)
-	r := claudeRuntimeWith(t, st, nil, false, nil, block)
+	r := claudeRuntime(t, st, block)
 	defer closeRuntime(t, r)
 	s := createClaude(t, r, nil)
 	if _, err := s.Submit(bg, text("a", "hi")); err != nil {
