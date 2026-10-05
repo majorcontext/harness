@@ -73,7 +73,7 @@ rt, err := harness.New(harness.Options{
 if err != nil {
 	log.Fatal(err)
 }
-defer rt.Close(ctx)
+defer func() { _ = rt.Close(ctx) }()
 
 s, err := rt.Create(ctx, protocol.CreateSession{})
 if err != nil {

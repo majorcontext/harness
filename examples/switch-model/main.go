@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rt.Close(ctx)
+	defer func() { _ = rt.Close(ctx) }()
 	s, err := rt.Create(ctx, protocol.CreateSession{Model: *first})
 	if err != nil {
 		log.Fatal(err)

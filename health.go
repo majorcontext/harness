@@ -43,15 +43,14 @@ func buildInfo() (revision, at string) {
 	if revision != "" {
 		return revision, at
 	}
-	switch v := info.Main.Version; {
-	case v == "" || v == "(devel)":
+	v := info.Main.Version
+	if v == "" || v == "(devel)" {
 		return "", ""
-	default:
-		if m := pseudoVersion.FindStringSubmatch(v); m != nil {
-			if t, err := time.Parse("20060102150405", m[1]); err == nil {
-				return m[2], t.UTC().Format(time.RFC3339)
-			}
-		}
-		return v, ""
 	}
+	if m := pseudoVersion.FindStringSubmatch(v); m != nil {
+		if t, err := time.Parse("20060102150405", m[1]); err == nil {
+			return m[2], t.UTC().Format(time.RFC3339)
+		}
+	}
+	return v, ""
 }

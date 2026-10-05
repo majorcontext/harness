@@ -349,16 +349,16 @@ func (p *printer) handle(ev protocol.Event) {
 	case protocol.KindItemDelta:
 		var f protocol.ItemFrame
 		if json.Unmarshal(ev.Data, &f) == nil && f.Type == "text" {
-			fmt.Fprint(p.out, f.Text)
+			_, _ = fmt.Fprint(p.out, f.Text)
 			p.printedText, p.streamed[f.ItemID] = true, true
 		}
 	case protocol.KindStatus:
 		var f protocol.StatusFrame
 		if json.Unmarshal(ev.Data, &f) == nil && f.Status == protocol.StatusRetrying {
 			if p.printedText {
-				fmt.Fprintln(p.out)
+				_, _ = fmt.Fprintln(p.out)
 			}
-			fmt.Fprintln(p.errW, "[re-streaming after a transient provider error]")
+			_, _ = fmt.Fprintln(p.errW, "[re-streaming after a transient provider error]")
 		}
 	case "item.completed":
 		p.item(ev)
@@ -381,15 +381,15 @@ func (p *printer) item(ev protocol.Event) {
 		switch part.Type {
 		case "text":
 			if !p.streamed[it.ItemID] {
-				fmt.Fprint(p.out, part.Text)
+				_, _ = fmt.Fprint(p.out, part.Text)
 				p.printedText = true
 			}
 		case "tool_call":
 			p.names[part.CallID] = part.Name
-			fmt.Fprintf(p.errW, "\n[tool %s] %s\n", part.Name, part.Arguments)
+			_, _ = fmt.Fprintf(p.errW, "\n[tool %s] %s\n", part.Name, part.Arguments)
 		case "tool_result":
 			if part.IsError {
-				fmt.Fprintf(p.errW, "[tool %s failed] %s\n", p.names[part.CallID], part.Text)
+				_, _ = fmt.Fprintf(p.errW, "[tool %s failed] %s\n", p.names[part.CallID], part.Text)
 			}
 		}
 	}
