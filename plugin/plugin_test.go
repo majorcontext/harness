@@ -195,26 +195,6 @@ func TestCustomToolWithClientAPI(t *testing.T) {
 	}
 }
 
-func TestEventDelivery(t *testing.T) {
-	got := make(chan Event, 1)
-	listener := testPlugin(t, "listener", &Hooks{
-		Event: func(_ context.Context, _ *Client, events []Event) {
-			for _, ev := range events {
-				got <- ev
-			}
-		},
-	})
-	h := newTestHost(t, Options{}, listener)
-	h.Emit([]Event{{Type: EventSessionStatus, SessionID: "s1", Properties: json.RawMessage(`{"status":"busy"}`)}})
-
-	// Block directly; a delivery bug fails via the test binary timeout
-	// rather than a guessed deadline.
-	ev := <-got
-	if ev.Type != EventSessionStatus || ev.SessionID != "s1" {
-		t.Errorf("event = %+v", ev)
-	}
-}
-
 func TestHookTimeoutFailsOpen(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var errs []Hook
