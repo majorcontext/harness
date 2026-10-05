@@ -135,6 +135,7 @@ func mcpDocs() harnesstest.MCPSpec {
 type expectSystem struct {
 	req        int // 1-based index of the model request
 	has, lacks []string
+	sameAs     int // when set, the 1-based index of the request whose system prompt this one equals
 }
 
 func (a expectSystem) run(t *testing.T, r *run) {
@@ -153,6 +154,9 @@ func (a expectSystem) run(t *testing.T, r *run) {
 		if strings.Contains(sys, s) {
 			t.Errorf("request %d system prompt holds %q:\n%s", a.req, s, sys)
 		}
+	}
+	if a.sameAs > 0 && a.sameAs <= len(reqs) && reqs[a.sameAs-1].System != sys {
+		t.Errorf("request %d system prompt differs from request %d:\n%s\n---\n%s", a.req, a.sameAs, sys, reqs[a.sameAs-1].System)
 	}
 }
 
@@ -181,6 +185,17 @@ func (a stopMCPServer) run(t *testing.T, r *run) {
 		t.Fatalf("no HTTP MCP server %q", a.server)
 	}
 	srv.Close()
+}
+
+type refuseMCPServer struct{ server string }
+
+func (a refuseMCPServer) run(t *testing.T, r *run) {
+	t.Helper()
+	srv, ok := r.fx[a.server].(*harnesstest.MCPServer)
+	if !ok {
+		t.Fatalf("no HTTP MCP server %q", a.server)
+	}
+	srv.SetAvailable(false)
 }
 
 // mcpEchoTools is a spec of n tools named t01, t02, ...
@@ -422,6 +437,20 @@ func TestContractMCPAvailability(t *testing.T) {
 			),
 		},
 		{
+			name: "mcp_connect_adds_tools_but_not_instructions",
+			setup: mcpSetup(nil,
+				mcpServerDef{name: "weather", spec: mcpWeather("Call forecast before alerts."), failInit: 1},
+				mcpServerDef{name: "docs", spec: mcpDocs()}),
+			model: toolChain(
+				mcpAction("action", "connect", "server", "weather"),
+				mcpTool("weather", "forecast", "city", "Oslo"),
+			),
+			actions: append(append([]action{}, oneTurn...),
+				expectSystem{req: 1, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts."}},
+				expectSystem{req: 3, has: []string{"Read doc://guide before searching."}, lacks: []string{"Call forecast before alerts."}, sameAs: 1},
+			),
+		},
+		{
 			name:  "mcp_unavailable_connect_fails_with_classified_reason",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: mcpWeather(""), down: true}),
 			model: toolChain(
@@ -465,6 +494,52 @@ func TestContractMCPRuntime(t *testing.T) {
 				mcpServerDef{name: "weather", spec: mcpWeather("")},
 				mcpServerDef{name: "docs", spec: mcpDocs(), down: true}),
 			model:   toolChain(mcpAction("action", "status")),
+			actions: oneTurn,
+		},
+	})
+}
+
+func TestContractMCPRefusals(t *testing.T) {
+	weather := mcpServerDef{name: "weather", spec: mcpWeather("")}
+	forecast := mcpTool("weather", "forecast", "city", "Oslo")
+	lazy := map[string]any{"mcp_tool_loading": "lazy"}
+	runScenarios(t, []scenario{
+		{
+			name:  "mcp_tool_action_refusals",
+			setup: mcpSetup(nil, weather, mcpServerDef{name: "docs", spec: mcpDocs()}),
+			model: toolChain(
+				mcpAction("action", "search", "query", "forecast"),
+				mcpAction("action", "connect", "server", "weather"),
+				mcpAction("action", "connect", "server", "docs"),
+			),
+			actions: append([]action{stopMCPServer{server: "docs"}}, oneTurn...),
+		},
+		{
+			name:  "mcp_refused_call_hides_the_response_body",
+			setup: mcpSetup(nil, weather),
+			model: append(callThenDone(0, forecast), callThenDone(2, forecast)...),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+				refuseMCPServer{server: "weather"},
+				submit{as: "a", text: "again"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name:    "mcp_select_of_a_down_server_is_pending",
+			setup:   mcpSetup(lazy, weather),
+			model:   toolChain(mcpAction("action", "select", "tools", []string{"mcp__weather__forecast"})),
+			actions: append([]action{stopMCPServer{server: "weather"}}, oneTurn...),
+		},
+		{
+			name:  "mcp_search_ranks_the_tools",
+			setup: mcpSetup(lazy, weather),
+			model: toolChain(
+				mcpTool("weather", "alerts"),
+				mcpAction("action", "search", "query", "weather alerts", "limit", 2),
+			),
 			actions: oneTurn,
 		},
 	})

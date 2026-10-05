@@ -1,0 +1,16 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": []
+  },
+  "calls": {
+    "system_tail": {
+      "status": 200,
+      "body": {
+        "batching_segment": false,
+        "blank_line_join": false,
+        "sent": false
+      }
+    }
+  }
+}

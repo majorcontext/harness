@@ -99,12 +99,6 @@ func callTool(id string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleAssistant, Parts: []eventlog.Part{{Type: eventlog.PartToolCall, CallID: id, Name: "x"}}}
 }
 
-type source struct{ ts turn.Toolset }
-
-func (s source) Toolset(context.Context, []eventlog.Message, []string, string) turn.Toolset {
-	return s.ts
-}
-
 func steerInput(text string) eventlog.Message {
 	return eventlog.Message{Role: eventlog.RoleUser, Parts: []eventlog.Part{{Type: eventlog.PartText, Text: text}}}
 }

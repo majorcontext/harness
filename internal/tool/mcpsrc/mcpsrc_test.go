@@ -8,7 +8,6 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/mcp"
@@ -69,12 +68,6 @@ func source(t *testing.T, edit func(*config.Config, map[string]*harnesstest.MCPS
 
 func lazy(c *config.Config, _ map[string]*harnesstest.MCPServer) { c.MCPToolLoading = "lazy" }
 
-func auto(threshold int) func(*config.Config, map[string]*harnesstest.MCPServer) {
-	return func(c *config.Config, _ map[string]*harnesstest.MCPServer) {
-		c.MCPToolLoading, c.MCPToolLoadingThreshold = "auto", threshold
-	}
-}
-
 func names(tools []turn.Tool) string {
 	var out []string
 	for _, t := range tools {
@@ -83,70 +76,28 @@ func names(tools []turn.Tool) string {
 	return strings.Join(out, " ")
 }
 
-func calls(cs ...protocol.ToolCall) []eventlog.Message {
-	m := eventlog.Message{Role: eventlog.RoleAssistant}
-	for _, c := range cs {
-		m.Parts = append(m.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: c.ID, Name: c.Name, Arguments: c.Arguments})
-	}
-	return []eventlog.Message{m}
-}
-
 func call(name, args string) protocol.ToolCall {
 	return protocol.ToolCall{ID: "c1", Name: name, Arguments: json.RawMessage(args)}
 }
 
-const (
-	all         = "mcp list_mcp_resources read_mcp_resource mcp__docs__search mcp__weather__alerts mcp__weather__flaky mcp__weather__forecast mcp__weather__mixed mcp__weather__strict"
-	forecastRow = "mcp__weather__forecast — Get the weather forecast for a city"
-)
+const forecastRow = "mcp__weather__forecast — Get the weather forecast for a city"
 
-func TestToolset(t *testing.T) {
-	selectForecast := calls(call("mcp", `{"action":"select","tools":["mcp__weather__forecast"]}`))
+func TestToolsetRestrictedByAllowedTools(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
 		edit            func(*config.Config, map[string]*harnesstest.MCPServer)
-		history         []eventlog.Message
 		allowed         []string
 		tools, deferred string
 		has, lacks      []string
 	}{
-		{name: "eager describes every tool and the instructions once", tools: all,
-			has:   []string{"<mcp_instructions>\nThis session can also list and read MCP resources", `<server name="weather" tools="mcp__weather__alerts, mcp__weather__flaky, mcp__weather__forecast, mcp__weather__mixed, mcp__weather__strict">` + "\nCall forecast first.\n</server>"},
-			lacks: []string{"Deferred MCP tools", `name="docs"`}},
-		{name: "lazy defers every tool to the catalog", edit: lazy, tools: "mcp list_mcp_resources read_mcp_resource",
-			deferred: "mcp__docs__search mcp__weather__alerts mcp__weather__flaky mcp__weather__forecast mcp__weather__mixed mcp__weather__strict",
-			has:      []string{"Deferred MCP tools", forecastRow + "\n"}, lacks: []string{"more detail"}},
-		{name: "a select in the history loads the tool", edit: lazy, history: selectForecast,
-			tools:    "mcp list_mcp_resources read_mcp_resource mcp__weather__forecast",
-			deferred: "mcp__docs__search mcp__weather__alerts mcp__weather__flaky mcp__weather__mixed mcp__weather__strict",
-			lacks:    []string{forecastRow}},
-		{name: "a call in the history loads the tool", edit: lazy, history: calls(call("mcp__weather__alerts", `{}`)),
-			tools:    "mcp list_mcp_resources read_mcp_resource mcp__weather__alerts",
-			deferred: "mcp__docs__search mcp__weather__flaky mcp__weather__forecast mcp__weather__mixed mcp__weather__strict"},
-		{name: "auto stays eager at the threshold", tools: all,
-			edit: auto(6)},
-		{name: "auto defers over the threshold", tools: "mcp list_mcp_resources read_mcp_resource",
-			deferred: "mcp__docs__search mcp__weather__alerts mcp__weather__flaky mcp__weather__forecast mcp__weather__mixed mcp__weather__strict",
-			edit:     auto(5)},
-		{name: "a server mode overrides the global mode", tools: "mcp list_mcp_resources read_mcp_resource mcp__docs__search",
-			deferred: "mcp__weather__alerts mcp__weather__flaky mcp__weather__forecast mcp__weather__mixed mcp__weather__strict",
-			edit: func(c *config.Config, _ map[string]*harnesstest.MCPServer) {
-				c.MCPServers["weather"] = config.MCPServerSpec{URL: c.MCPServers["weather"].URL, ToolLoading: "lazy"}
-			}},
 		{name: "allowed tools restrict the tools and the catalog", edit: lazy, allowed: []string{"mcp__weather__alerts"},
 			deferred: "mcp__weather__alerts", lacks: []string{forecastRow}},
 		{name: "allowed tools restrict the tool names of the instructions", allowed: []string{"mcp__weather__alerts"},
 			tools: "mcp__weather__alerts", has: []string{`tools="mcp__weather__alerts">`}, lacks: []string{"mcp__weather__forecast"}},
-		{name: "a server down at start has no tools", tools: "mcp mcp__docs__search", lacks: []string{"list_mcp_resources"},
-			edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) {
-				s["weather"].FailInitialize(1)
-				c.MCPServers["docs"] = config.MCPServerSpec{URL: harnesstest.NewMCPServer(t, harnesstest.MCPSpec{Name: "docs",
-					Tools: []harnesstest.MCPTool{{Def: mcp.Tool{Name: "search"}}}}).URL()}
-			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := source(t, tc.edit)
-			ts := s.Toolset(bg, tc.history, tc.allowed, "")
+			ts := s.Toolset(bg, nil, tc.allowed, "")
 			if got := names(ts.Tools); got != tc.tools {
 				t.Errorf("tools = %q, want %q", got, tc.tools)
 			}
@@ -167,70 +118,6 @@ func TestToolset(t *testing.T) {
 	}
 }
 
-func TestToolCalls(t *testing.T) {
-	stop := func(_ *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].Close() }
-	for _, tc := range []struct {
-		name    string
-		edit    func(*config.Config, map[string]*harnesstest.MCPServer)
-		history []eventlog.Message
-		call    protocol.ToolCall
-		want    string
-		isError bool
-		lose    string
-		refuse  string
-	}{
-		{name: "a tool result", call: call("mcp__weather__forecast", `{"city":"Oslo"}`), want: "Oslo: 3C, snow"},
-		{name: "a tool error", call: call("mcp__weather__flaky", `{}`), want: "upstream timeout", isError: true},
-		{name: "an RPC error", call: call("mcp__weather__strict", `{}`), want: "error: mcp: tools/call strict: mcp: rpc error -32602: city is required"},
-		{name: "binary content becomes a line", call: call("mcp__weather__mixed", `{}`),
-			want: "plain\n[image content, 5 bytes, image/png]\nresource: doc://x (x)\nembedded"},
-		{name: "a lost server hides its endpoint", lose: "docs", call: call("mcp__docs__search", `{}`), want: `error: mcp: server "docs": call failed: connection refused`},
-		{name: "a refused call hides the response body", refuse: "weather", call: call("mcp__weather__forecast", `{}`), want: `error: mcp: server "weather": call failed: request failed`},
-		{name: "paged resources of every server", call: call("list_mcp_resources", `{}`),
-			want: `{"resources":[{"uri":"doc://guide","name":"guide","mimeType":"text/markdown","server":"docs"},{"uri":"doc://logo","name":"logo","mimeType":"image/png","server":"docs"}]}`},
-		{name: "resources of an unknown server", call: call("list_mcp_resources", `{"server":"nope"}`),
-			want: `error: list_mcp_resources: mcp: server "nope" is not configured`},
-		{name: "a text resource", call: call("read_mcp_resource", `{"server":"docs","uri":"doc://guide"}`), want: "# Guide"},
-		{name: "a binary resource", call: call("read_mcp_resource", `{"server":"docs","uri":"doc://logo"}`),
-			want: "[binary resource: doc://logo, 5 bytes, image/png]"},
-		{name: "a missing resource", call: call("read_mcp_resource", `{"server":"docs","uri":"doc://missing"}`),
-			want: "error: read_mcp_resource: mcp: resources/read doc://missing: mcp: rpc error -32002: resource not found: doc://missing"},
-		{name: "select sorts each name", edit: lazy, history: calls(call("mcp__weather__alerts", `{}`)),
-			call: call("mcp", `{"action":"select","tools":["mcp__weather__forecast","mcp__weather__alerts","mcp__weather__nope","bogus","mcp__weather__forecast"]}`),
-			want: `{"selected":["mcp__weather__forecast"],"already":["mcp__weather__alerts"],"pending":[],"missing":["mcp__weather__nope","bogus"],"note":"selected tools are callable from the next request in this turn"}`},
-		{name: "select of a server that is down is pending", edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) { lazy(c, s); stop(c, s) },
-			call: call("mcp", `{"action":"select","tools":["mcp__weather__forecast"]}`),
-			want: `{"selected":[],"already":[],"pending":["mcp__weather__forecast"],"missing":[],"note":"no tool was loaded: every name you selected belongs to a server that is not connected. They load once that server connects; see the mcp tool's connect action"}`},
-		{name: "select needs names", edit: lazy, call: call("mcp", `{"action":"select","tools":[]}`), want: `error: mcp: select requires a non-empty "tools" array`},
-		{name: "search ranks the tools", edit: lazy, history: calls(call("mcp__weather__alerts", `{}`)), call: call("mcp", `{"action":"search","query":"weather alerts","limit":2}`),
-			want: `{"matches":[{"name":"mcp__weather__alerts","server":"weather","description":"List active weather alerts","loaded":true},` +
-				`{"name":"mcp__weather__forecast","server":"weather","description":"Get the weather forecast for a city","loaded":false}],"total":5,"truncated":true}`},
-		{name: "search needs a query", edit: lazy, call: call("mcp", `{"action":"search","query":"  "}`), want: `error: mcp: search requires a non-empty "query" argument`},
-		{name: "an eager source has no search", call: call("mcp", `{"action":"search","query":"x"}`), want: `error: mcp: unknown action "search" (want "connect")`},
-		{name: "connect of an unknown server", call: call("mcp", `{"action":"connect","server":"nope"}`), want: `error: mcp: unknown server "nope" (configured: docs, weather)`},
-		{name: "connect of a connected server", call: call("mcp", `{"action":"connect","server":"docs"}`), want: `{"server":"docs","connected":true,"message":"already connected"}`},
-		{name: "connect of a server that refuses", edit: func(c *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].SetAvailable(false) },
-			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: initialize failed`},
-		{name: "connect of a server that is down", edit: stop,
-			call: call("mcp", `{"action":"connect","server":"weather"}`), want: `error: mcp: connect for "weather" failed: connection refused`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, srv := source(t, tc.edit)
-			ts := s.Toolset(bg, tc.history, nil, "")
-			if tc.lose != "" {
-				srv[tc.lose].Close()
-			}
-			if tc.refuse != "" {
-				srv[tc.refuse].SetAvailable(false)
-			}
-			got, isError := run(ts, tc.call)
-			if got != tc.want || isError != tc.isError {
-				t.Errorf("result = %q (error %v), want %q (error %v)", got, isError, tc.want, tc.isError)
-			}
-		})
-	}
-}
-
 func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 	for _, tool := range append(ts.Tools, ts.Deferred...) {
 		if tool.Spec().Name == c.Name {
@@ -242,19 +129,6 @@ func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 		}
 	}
 	return "no tool " + c.Name, false
-}
-
-func TestConnectAddsToolsButNotInstructions(t *testing.T) {
-	s, _ := source(t, func(_ *config.Config, s map[string]*harnesstest.MCPServer) { s["weather"].FailInitialize(1) })
-	before := s.Toolset(bg, nil, nil, "")
-	got, _ := run(before, call("mcp", `{"action":"connect","server":"weather"}`))
-	after := s.Toolset(bg, nil, nil, "")
-	if want := `{"server":"weather","connected":true,"message":"connected"}`; got != want {
-		t.Errorf("connect = %q, want %q", got, want)
-	}
-	if names(after.Tools) != all || after.Prompt != before.Prompt || strings.Contains(after.Prompt, "Call forecast first.") {
-		t.Errorf("after connect: tools %q, prompt %q; want every tool and the prompt of the first connect %q", names(after.Tools), after.Prompt, before.Prompt)
-	}
 }
 
 func TestSearchScoresEachField(t *testing.T) {

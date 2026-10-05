@@ -1,0 +1,273 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "refuse it"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "refuse it"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "x",
+                "prompt": "a"
+              },
+              "tool_use_id": "toolu#1"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "y",
+                "prompt": "a"
+              },
+              "tool_use_id": "toolu#2"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "z",
+                "prompt": "a"
+              },
+              "tool_use_id": "toolu#3"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "s",
+                "prompt": "a"
+              },
+              "tool_use_id": "toolu#4"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "task",
+              "tool_input": {
+                "agent": "n",
+                "prompt": "a"
+              },
+              "tool_use_id": "toolu#5"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'",
+              "tool_name": "task",
+              "tool_use_id": "toolu#1",
+              "is_error": true
+            },
+            {
+              "kind": "tool_result",
+              "text": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'",
+              "tool_name": "task",
+              "tool_use_id": "toolu#2",
+              "is_error": true
+            },
+            {
+              "kind": "tool_result",
+              "text": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'",
+              "tool_name": "task",
+              "tool_use_id": "toolu#3",
+              "is_error": true
+            },
+            {
+              "kind": "tool_result",
+              "text": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'",
+              "tool_name": "task",
+              "tool_use_id": "toolu#4",
+              "is_error": true
+            },
+            {
+              "kind": "tool_result",
+              "text": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'",
+              "tool_name": "task",
+              "tool_use_id": "toolu#5",
+              "is_error": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "refuse it"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "task",
+            "arguments": {
+              "agent": "x",
+              "prompt": "a"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "task",
+            "arguments": {
+              "agent": "y",
+              "prompt": "a"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#3",
+            "name": "task",
+            "arguments": {
+              "agent": "z",
+              "prompt": "a"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#4",
+            "name": "task",
+            "arguments": {
+              "agent": "s",
+              "prompt": "a"
+            }
+          },
+          {
+            "type": "tool_call",
+            "call_id": "toolu#5",
+            "name": "task",
+            "arguments": {
+              "agent": "n",
+              "prompt": "a"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "is_error": true,
+            "content": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'"
+          },
+          {
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "is_error": true,
+            "content": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'"
+          },
+          {
+            "type": "tool_result",
+            "call_id": "toolu#3",
+            "is_error": true,
+            "content": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'"
+          },
+          {
+            "type": "tool_result",
+            "call_id": "toolu#4",
+            "is_error": true,
+            "content": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'"
+          },
+          {
+            "type": "tool_result",
+            "call_id": "toolu#5",
+            "is_error": true,
+            "content": "task: loading agent definitions: engine: agent definition \u003cworkdir\u003e/.agents/y.md: frontmatter missing required 'name'"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  }
+}
