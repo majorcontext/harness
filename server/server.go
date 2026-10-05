@@ -1,6 +1,6 @@
 // Package server is the HTTP+SSE surface that `harness serve` exposes inside a
 // sandbox. It is a protocol, not a product: a single external orchestrator
-// drives many harness instances through it (see server/openapi.yaml).
+// drives many harness instances through it.
 //
 // The server owns an orchestrator-facing event journal (<SessionDir>/events.jsonl):
 // an append-only log of durable records — session lifecycle, canonical

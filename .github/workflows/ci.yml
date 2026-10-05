@@ -37,6 +37,11 @@ jobs:
 
       - run: go build ./...
 
+      - name: Protocol drift
+        run: |
+          go generate ./protocol
+          git diff --exit-code -- protocol/
+
       - run: go test -race -skip '^TestRepository$' ./...
 
       - run: go vet ./...

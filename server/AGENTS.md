@@ -2,7 +2,6 @@
 
 Read the root AGENTS.md. Read `engine/AGENTS.md` for session state machines.
 
-- Update `server/openapi.yaml` with every API contract change.
 - Resolve a live session only through `Server.resolveLive`. Read one `liveSession` snapshot.
 - Never hold `server.mu` while acquiring `SessionManager.mu`.
 - The durable journal is the source of truth. Index and snapshot are caches.
