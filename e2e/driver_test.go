@@ -41,8 +41,8 @@ type driver interface {
 	// is Enqueue there.
 	EnqueueNext(t *testing.T, id, text string)
 	WaitIdle(t *testing.T, id string)
-	// AwaitTurnEnd returns once the log of the session holds the end of a turn. WaitIdle does not wait for it: a canceled session reads idle before its turn.ended is appended.
-	AwaitTurnEnd(t *testing.T, id string)
+	// AwaitTurnEnd returns once the log of the session holds the end of a turn. On serve, WaitIdle does not wait for it: a canceled session reads idle before its turn.ended is appended. It returns an error instead of failing the test, so a goroutine that the test starts may call it.
+	AwaitTurnEnd(id string) error
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)
 	Messages(t *testing.T, id string) []transcriptMessage
@@ -301,17 +301,17 @@ func (d *httpDriver) WaitIdle(t *testing.T, id string) {
 	}
 }
 
-func (d *httpDriver) AwaitTurnEnd(t *testing.T, id string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+func (d *httpDriver) AwaitTurnEnd(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), waitBound)
 	defer cancel()
 	err := d.p.scanEventsFrom(ctx, 0, false, id, func(_ string, raw []byte) bool {
 		var ev apiEvent
 		return json.Unmarshal(raw, &ev) == nil && ev.SessionID == id && (ev.Type == "session.aborted" || ev.Type == "turn.end")
 	})
 	if err != nil {
-		t.Fatalf("no turn end of %s: %v\nstderr:\n%s", id, err, d.Stderr())
+		return fmt.Errorf("no turn end of %s: %w", id, err)
 	}
+	return nil
 }
 
 func (d *httpDriver) Interrupt(t *testing.T, id string) {

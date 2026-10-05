@@ -282,8 +282,9 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // Report delivers the outcome of a child to its parent, which it opens
 // when the runtime does not run it, even when the child has settled. It
 // never waits for the child. A child that a tree interrupt stops settles
-// with no report input. A child that the end of its parent stops leaves a
-// parent that the runtime does not run closed: it settles when the parent opens.
+// with no report input. A child that an end walk marked reaches only a parent
+// that the runtime runs, and never opens one: the end never opens a session,
+// and a parent that has stopped settles the child when it opens.
 func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
 	quiet, ending := t.hushed(s.ChildID)
 	if quiet {
@@ -294,7 +295,10 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 		if quiet {
 			defer t.mute(s.ChildID, -1)
 		}
-		if _, ok := t.s.Running(parent); ending && !ok {
+		if ending {
+			if p, ok := t.s.Running(parent); ok {
+				_ = p.Actor.Settle(t.cfg.Base, s, report)
+			}
 			return
 		}
 		if p, err := t.s.Open(t.cfg.Base, parent); err == nil {
