@@ -303,6 +303,20 @@ func number(r *http.Request, key string) (uint64, error) {
 	return n, nil
 }
 
+// count parses the query parameter key as a non-negative int, or returns 0
+// when the request does not name it. A name with an empty value is an error.
+func count(r *http.Request, key string) (int, error) {
+	vs, ok := r.URL.Query()[key]
+	if !ok {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(vs[0])
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%w: %s must be a non-negative integer", errInvalid, key)
+	}
+	return n, nil
+}
+
 // once rejects a query parameter that the request gives more than once.
 func once(r *http.Request, keys ...string) error {
 	q := r.URL.Query()
@@ -362,11 +376,11 @@ func (h *handler[S]) messages(w http.ResponseWriter, r *http.Request) error {
 	if err := once(r, "before", "limit"); err != nil {
 		return err
 	}
-	before, err := number(r, "before")
+	before, err := count(r, "before")
 	if err != nil {
 		return err
 	}
-	n, err := number(r, "limit")
+	n, err := count(r, "limit")
 	if err != nil {
 		return err
 	}
@@ -377,7 +391,7 @@ func (h *handler[S]) messages(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	page, err := rd.Messages(r.Context(), before, int(n))
+	page, err := rd.Messages(r.Context(), uint64(before), n)
 	if err != nil {
 		return err
 	}

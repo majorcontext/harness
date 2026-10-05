@@ -254,6 +254,76 @@
         }
       ]
     },
+    "messages_page.a#10": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: limit must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#11": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: before must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#12": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: limit must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#13": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: limit must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#14": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: limit must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#15": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: before must be a non-negative integer"
+        }
+      }
+    },
+    "messages_page.a#16": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: before must be a non-negative integer"
+        }
+      }
+    },
     "messages_page.a#2": {
       "status": 200,
       "body": {
