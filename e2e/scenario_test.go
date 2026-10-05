@@ -56,8 +56,6 @@ type setGoal struct {
 type release struct{ step string }
 type awaitRequests struct{ n int }
 
-// awaitRequestsOn waits for serve requests on serve and for runtime requests on the runtime host, for a row where only the runtime spawns a child.
-type awaitRequestsOn struct{ serve, runtime int }
 type restart struct{ kill bool }
 type expectQueued struct {
 	as    string
@@ -79,7 +77,6 @@ type run struct {
 	calls   []recordedCall
 	keys    map[string]int
 	fx      map[string]any
-	runtime bool
 }
 
 // recordedCall is the outcome of one action that reports a result. Its key is
@@ -162,15 +159,6 @@ func (a awaitRequests) run(t *testing.T, r *run) {
 		reqs := r.fake.Requests()
 		t.Fatalf("waited %s for %d model requests; saw %d: %s\nserve stderr:\n%s", waitBound, a.n, len(reqs), requestSummary(reqs), r.drv.Stderr())
 	}
-}
-
-func (a awaitRequestsOn) run(t *testing.T, r *run) {
-	t.Helper()
-	n := a.serve
-	if r.runtime {
-		n = a.runtime
-	}
-	awaitRequests{n: n}.run(t, r)
 }
 
 func requestSummary(reqs []harnesstest.Request) string {
@@ -440,13 +428,12 @@ func runScenario(t *testing.T, sc scenario, h host) observation {
 		drv = h.newDriver(t, fake.URL(), config)
 	}
 	r := &run{
-		drv:     drv,
-		fake:    fake,
-		ids:     map[string]string{},
-		noIdle:  map[string]bool{},
-		keys:    map[string]int{},
-		fx:      fx,
-		runtime: h.runtime,
+		drv:    drv,
+		fake:   fake,
+		ids:    map[string]string{},
+		noIdle: map[string]bool{},
+		keys:   map[string]int{},
+		fx:     fx,
 	}
 	for _, a := range sc.actions {
 		a.run(t, r)
