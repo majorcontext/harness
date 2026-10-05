@@ -273,91 +273,6 @@ func noRun(t *testing.T, f *fake) {
 	}
 }
 
-func TestSubmitRunsATurn(t *testing.T) {
-	eachStore(t, func(t *testing.T, open func() harness.Store) {
-		st, f := open(), newFake()
-		r := runtime(t, st, f)
-		s := create(t, r)
-		if got := submit(t, s, text("a", "hi")); got != (protocol.Admitted{InputID: "a", Seq: 3}) {
-			t.Fatalf("Submit = %+v", got)
-		}
-		run := <-f.runs
-		if run.req.Input[0].Parts[0].Text != "hi" {
-			t.Fatalf("Request.Input = %+v", run.req.Input)
-		}
-		run.emit(say("hello"))
-		run.end()
-		wantLog(t, st, 0, "session.created", "owner.acquired 1", "input.admitted a", "turn.started a",
-			"item.completed assistant hello", "turn.ended completed")
-		v := s.View()
-		if v.Status != protocol.StatusIdle || v.HeadSeq != 6 {
-			t.Fatalf("View = %+v", v)
-		}
-		closeRuntime(t, r)
-	})
-}
-
-func TestSubmitIsIdempotent(t *testing.T) {
-	eachStore(t, func(t *testing.T, open func() harness.Store) {
-		st, f := open(), newFake()
-		r := runtime(t, st, f)
-		s := create(t, r)
-		first := submit(t, s, text("a", "hi"))
-		run := <-f.runs
-		again := submit(t, s, text("a", "hi"))
-		if want := (protocol.Admitted{InputID: first.InputID, Seq: first.Seq, Repeat: true}); again != want {
-			t.Fatalf("repeated Submit = %+v, want %+v", again, want)
-		}
-		if _, err := s.Submit(bg, text("a", "other")); !errors.Is(err, harness.ErrInputConflict) {
-			t.Fatalf("Submit with another body = %v, want ErrInputConflict", err)
-		}
-		run.end()
-		wantLog(t, st, 2, "input.admitted a", "turn.started a", "turn.ended completed")
-		closeRuntime(t, r)
-	})
-}
-
-func TestQueuedInputsRunInOrder(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		finish func(t *testing.T, s *harness.Session, run fakeRun)
-		want   []string
-	}{
-		{"a turn that ends starts the next input", func(t *testing.T, _ *harness.Session, run fakeRun) {
-			run.emit(toolResult("c1"))
-			run.end()
-		}, []string{"item.completed tool c1 ok", "turn.ended completed"}},
-		{"an interrupt keeps the partial and starts the next input", func(t *testing.T, s *harness.Session, run fakeRun) {
-			if err := s.Interrupt(bg, protocol.Interrupt{TurnID: run.req.TurnID}); err != nil {
-				t.Fatal(err)
-			}
-		}, []string{"item.completed tool c1 " + interrupted, "turn.ended interrupted stopped"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			eachStore(t, func(t *testing.T, open func() harness.Store) {
-				st, f := open(), newFake()
-				r := runtime(t, st, f)
-				s := create(t, r)
-				submit(t, s, text("a", "one"))
-				run := <-f.runs
-				run.emit(say("partial"))
-				run.emit(callTool("c1"))
-				submit(t, s, text("b", "two"))
-				if q := s.View().Queued; len(q) != 1 || q[0] != "b" {
-					t.Fatalf("Queued = %v, want [b]", q)
-				}
-				tc.finish(t, s, run)
-				next := <-f.runs
-				next.end()
-				want := append([]string{"input.admitted a", "turn.started a", "item.completed assistant partial",
-					"item.completed assistant c1", "input.admitted b"}, tc.want...)
-				wantLog(t, st, 2, append(want, "turn.started b", "turn.ended completed")...)
-				closeRuntime(t, r)
-			})
-		})
-	}
-}
-
 // scripted is a Backend whose Run calls the next step, then repeats the last.
 type scripted struct {
 	steps []func(turn.Sink) error
@@ -371,69 +286,23 @@ func (b *scripted) Run(_ context.Context, _ turn.Request, out turn.Sink) (turn.R
 	return turn.Result{}, b.steps[min(n, len(b.steps)-1)](out)
 }
 
-func TestRetryableErrors(t *testing.T) {
-	errFlaky := fmt.Errorf("%w: flaky", turn.ErrRetryable)
-	flaky := func(turn.Sink) error { return errFlaky }
-	failed := "turn.ended failed " + errFlaky.Error()
-	for _, tc := range []struct {
-		name      string
-		steps     []func(turn.Sink) error
-		interrupt bool
-		runs      int32
-		want      []string
-	}{
-		{name: "a retryable error runs the turn again",
-			steps: []func(turn.Sink) error{flaky, func(out turn.Sink) error { return out.Item(say("done")) }},
-			runs:  2, want: []string{"item.completed assistant done", "turn.ended completed"}},
-		{name: "a retryable error after an item ends the turn",
-			steps: []func(turn.Sink) error{func(out turn.Sink) error { _ = out.Item(callTool("c1")); return errFlaky }},
-			runs:  1, want: []string{"item.completed assistant c1", "item.completed tool c1 " + cutOff, failed}},
-		{name: "the attempts stop after Config.PromptRetries retries",
-			steps: []func(turn.Sink) error{flaky},
-			runs:  4, want: []string{failed}},
-		{name: "an interrupt during the backoff ends the turn",
-			steps: []func(turn.Sink) error{flaky}, interrupt: true,
-			runs: 1, want: []string{"turn.ended interrupted stopped"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				st, b, retries := harness.NewMemStore(), &scripted{steps: tc.steps}, 3
-				r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{PromptRetries: &retries}}, b)
-				if err != nil {
-					t.Fatal(err)
-				}
-				s := create(t, r)
-				if tc.interrupt {
-					submit(t, s, text("a", "hi"))
-					if err := s.Interrupt(bg, protocol.Interrupt{}); err != nil {
-						t.Fatal(err)
-					}
-				} else {
-					converse(t, s, "hi")
-				}
-				wantLog(t, st, 2, append([]string{"input.admitted a", "turn.started a"}, tc.want...)...)
-				if got := b.runs.Load(); got != tc.runs {
-					t.Errorf("runs = %d, want %d", got, tc.runs)
-				}
-				closeRuntime(t, r)
-			})
-		})
-	}
-}
-
-func TestRuntimeOnABackendValidatesModelsAsProductionDoes(t *testing.T) {
-	r := runtime(t, harness.NewMemStore(), newFake())
-	t.Cleanup(func() { _ = r.Close(bg) })
-	if _, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "nope/model"}); !errors.Is(err, harness.ErrModelUnavailable) {
-		t.Errorf("Create on a provider that no backend serves = %v, want %v", err, harness.ErrModelUnavailable)
-	}
-	s, err := r.Create(bg, protocol.CreateSession{ID: "s2", Model: "fake/model"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Update(bg, protocol.SettingsPatch{Model: new("nope/model")}); !errors.Is(err, harness.ErrModelUnavailable) {
-		t.Errorf("Update to a provider that no backend serves = %v, want %v", err, harness.ErrModelUnavailable)
-	}
+func TestARetryableErrorAfterAnItemEndsTheTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		errFlaky := fmt.Errorf("%w: flaky", turn.ErrRetryable)
+		st, retries := harness.NewMemStore(), 3
+		b := &scripted{steps: []func(turn.Sink) error{func(out turn.Sink) error { _ = out.Item(callTool("c1")); return errFlaky }}}
+		r, err := harness.NewWithBackend(harness.Options{Store: st, Config: config.Config{PromptRetries: &retries}}, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		converse(t, create(t, r), "hi")
+		wantLog(t, st, 2, "input.admitted a", "turn.started a", "item.completed assistant c1", "item.completed tool c1 "+cutOff,
+			"turn.ended failed "+errFlaky.Error())
+		if got := b.runs.Load(); got != 1 {
+			t.Errorf("runs = %d, want 1", got)
+		}
+		closeRuntime(t, r)
+	})
 }
 
 func TestNewRejectsAKeyThatTheRuntimeIgnores(t *testing.T) {

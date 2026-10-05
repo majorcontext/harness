@@ -1,6 +1,8 @@
 package e2e
 
 import (
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -172,6 +174,7 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				setModel{as: "a", model: "anthropic/claude-haiku-4-5"},
 				setThinking{as: "a", level: "bogus"},
 				setThinking{as: "a", level: "high"},
+				setThinking{as: "a", level: "high"},
 				// Defect: any service tier is accepted.
 				setServiceTier{as: "a", tier: "bogus"},
 				// Defect: the anthropic adapter sends no service_tier.
@@ -219,6 +222,47 @@ func TestContractSessionOpsSettings(t *testing.T) {
 			},
 		},
 	})
+}
+
+// recordSystem records the instruction line of the system prompt of each model request.
+type recordSystem struct{}
+
+func (recordSystem) run(t *testing.T, r *run) {
+	const header = "Project instructions from AGENTS.md:\n\n"
+	lines := []any{}
+	for _, req := range r.fake.Requests() {
+		_, rest, _ := strings.Cut(req.System, header)
+		first, _, _ := strings.Cut(rest, "\n")
+		lines = append(lines, first)
+	}
+	r.record(t, "system_instructions", "", callResult{Status: http.StatusOK, Body: lines})
+}
+
+func TestContractSessionStart(t *testing.T) {
+	turn := func(user string) harnesstest.Step {
+		return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "ok"}}
+	}
+	runScenarios(t, []scenario{{
+		name:  "instructions_are_read_when_the_session_starts",
+		model: []harnesstest.Step{turn("q1"), turn("q2"), turn("q3"), turn("q4")},
+		actions: []action{
+			writeFile{path: "AGENTS.md", body: "RULES-ALPHA\n"},
+			create{as: "a"},
+			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
+			submit{as: "a", text: "q1"},
+			waitIdle{as: "a"},
+			submit{as: "a", text: "q2"},
+			waitIdle{as: "a"},
+			writeFile{path: "AGENTS.md", body: "RULES-BRAVO\n"},
+			create{as: "b"},
+			writeFile{path: "AGENTS.md", body: "RULES-LATE\n"},
+			submit{as: "b", text: "q3"},
+			waitIdle{as: "b"},
+			submit{as: "b", text: "q4"},
+			waitIdle{as: "b"},
+			recordSystem{},
+		},
+	}})
 }
 
 func TestContractSessionOpsEnd(t *testing.T) {

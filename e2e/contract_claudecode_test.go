@@ -119,6 +119,31 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 	}})
 }
 
+func TestContractClaudeCodeSettings(t *testing.T) {
+	runScenarios(t, []scenario{{
+		name:   "settings_change_to_claude_code_mid_turn_waits_for_the_next_turn",
+		driver: claudeLaneDriver("normal"),
+		model: []harnesstest.Step{
+			{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+				{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "echo hi"}},
+			}}},
+			{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done"}, Repeat: true},
+		},
+		actions: []action{
+			create{as: "a", model: "anthropic/claude-fable-5"},
+			submit{as: "a", text: "native"},
+			awaitRequests{n: 1},
+			setModel{as: "a", model: "claude-code/sonnet"},
+			release{step: "call"},
+			waitIdle{as: "a"},
+			submit{as: "a", text: "again"},
+			waitIdle{as: "a"},
+			claudeSession{as: "a"},
+			claudeInvocations{as: "a"},
+		},
+	}})
+}
+
 func TestContractClaudeCodeQuestions(t *testing.T) {
 	lane := claudeLane{mode: "question", ask: true}.newDriver
 	parked := []action{create{as: "a"}, submit{as: "a", text: "pick a db"}, waitIdle{as: "a"}, claudeSession{as: "a"}}

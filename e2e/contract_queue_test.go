@@ -1,10 +1,27 @@
 package e2e
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 )
+
+// awaitFile waits for a file of the work dir that a tool creates, which marks
+// the tool as running.
+type awaitFile struct{ path string }
+
+func (a awaitFile) run(t *testing.T, r *run) {
+	t.Helper()
+	path := filepath.Join(r.drv.Workdir(), a.path)
+	testpoll.Until(t, waitBound, "tool never created "+a.path, func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	}, 15*time.Millisecond)
+}
 
 func TestContractQueue(t *testing.T) {
 	slow := func(text string) harnesstest.Step {
@@ -42,6 +59,38 @@ func TestContractQueue(t *testing.T) {
 				awaitRequests{n: 1},
 				enqueue{as: "a", text: "second"},
 				interrupt{as: "a"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name: "interrupt_cuts_a_running_tool_then_queue_continues",
+			model: []harnesstest.Step{
+				{Name: "call", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_wait", Name: "bash", Input: map[string]any{"command": "touch tool-running; sleep 30"}},
+				}}},
+				{Name: "second", Match: harnesstest.LastUserText("second"), Reply: harnesstest.Reply{Text: "2"}, Repeat: true},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitFile{path: "tool-running"},
+				enqueue{as: "a", text: "second"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name:  "input_receipts_and_conflicts",
+			model: []harnesstest.Step{slow("1"), second},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				awaitRequests{n: 1},
+				postInput{as: "a", text: "second"},
+				repeatInput{as: "a", text: "second"},
+				repeatInput{as: "a", text: "other"},
+				steerOtherTurn{as: "a", text: "late"},
+				release{step: "slow"},
 				waitIdle{as: "a"},
 			},
 		},

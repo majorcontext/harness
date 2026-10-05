@@ -1,0 +1,308 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "fixture_config",
+        "fixture_crash",
+        "fixture_echo",
+        "fixture_fail",
+        "fixture_report",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "fixture_config",
+        "fixture_crash",
+        "fixture_echo",
+        "fixture_fail",
+        "fixture_report",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "go"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool_use",
+              "tool_name": "fixture_echo",
+              "tool_input": {
+                "text": "hi"
+              },
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "echo: hi",
+              "tool_name": "fixture_echo",
+              "tool_use_id": "toolu#1"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "go"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_call",
+            "call_id": "toolu#1",
+            "name": "fixture_echo",
+            "arguments": {
+              "text": "hi"
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "call_id": "toolu#1",
+            "content": "echo: hi"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "done"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "anthropic/claude-fable-5",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "not-spawned",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
+          "used_tokens": 5,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "outcome": "completed"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 4,
+        "model": "anthropic/claude-fable-5",
+        "plugins": [
+          {
+            "hooks": [
+              "system.transform",
+              "tool.execute.before",
+              "tool.execute.after",
+              "event"
+            ],
+            "name": "fixture",
+            "state": "running",
+            "tools": [
+              "fixture_echo",
+              "fixture_fail",
+              "fixture_config",
+              "fixture_crash",
+              "fixture_report"
+            ]
+          }
+        ],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 10,
+          "last_input_tokens": 5,
+          "messages": 4,
+          "output_tokens": 6
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "list_sessions": {
+      "status": 200,
+      "body": [
+        {
+          "context": {
+            "used_tokens": 5,
+            "window_tokens": 1000000
+          },
+          "created_at": "\u003ctime\u003e",
+          "id": "ses:a",
+          "last_activity_at": "\u003ctime\u003e",
+          "last_turn": {
+            "outcome": "completed"
+          },
+          "lineage": {
+            "children": [],
+            "status": "idle"
+          },
+          "messages": 4,
+          "model": "anthropic/claude-fable-5",
+          "plugins": [
+            {
+              "hooks": [
+                "system.transform",
+                "tool.execute.before",
+                "tool.execute.after",
+                "event"
+              ],
+              "name": "fixture",
+              "state": "running",
+              "tools": [
+                "fixture_echo",
+                "fixture_fail",
+                "fixture_config",
+                "fixture_crash",
+                "fixture_report"
+              ]
+            }
+          ],
+          "queued": 0,
+          "state": "idle",
+          "status": "idle",
+          "subscription_usage": null,
+          "usage": {
+            "input_tokens": 10,
+            "last_input_tokens": 5,
+            "messages": 4,
+            "output_tokens": 6
+          },
+          "workdir": "\u003cworkdir\u003e"
+        }
+      ]
+    }
+  }
+}

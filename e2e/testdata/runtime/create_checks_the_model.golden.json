@@ -1,0 +1,154 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create.(default)": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"nope\" is configured for nope/gpt-5"
+        }
+      }
+    },
+    "create.anthropic/claude-opus-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#1",
+        "model": "anthropic/claude-opus-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "create.anthropic/no-such-model": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: modelmeta does not know anthropic/no-such-model"
+        }
+      }
+    },
+    "create.bifrost/fireworks/accounts/fireworks/routers/firerouter": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#4",
+        "model": "bifrost/fireworks/accounts/fireworks/routers/firerouter",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "create.codex/gpt-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 400000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#2",
+        "model": "codex/gpt-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "create.codex/no-such-model": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: modelmeta does not know codex/no-such-model"
+        }
+      }
+    },
+    "create.fast": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "harness: invalid request: message: model ref \"fast\" is not of the form \"provider/model\""
+        }
+      }
+    },
+    "create.gpt-5": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "harness: invalid request: message: model ref \"gpt-5\" is not of the form \"provider/model\""
+        }
+      }
+    },
+    "create.nope/gpt-5": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "model_unavailable",
+          "details": {},
+          "message": "harness: model unavailable: no provider \"nope\" is configured for nope/gpt-5"
+        }
+      }
+    },
+    "create.openai/gpt-5": {
+      "status": 201,
+      "body": {
+        "context": {
+          "tokens": 0,
+          "window": 400000
+        },
+        "created_at": "\u003ctime\u003e",
+        "head_seq": 2,
+        "id": "ses#3",
+        "model": "openai/gpt-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    }
+  }
+}

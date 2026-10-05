@@ -1,0 +1,259 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "commands": {
+      "status": 200,
+      "body": {
+        "commands": [
+          {
+            "available_during_task": true,
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "method": "POST",
+            "name": "abort",
+            "op": "abort",
+            "path": "/sessions/{id}/interrupt",
+            "summary": "Stop the running turn"
+          },
+          {
+            "category": "info",
+            "kind": "prompt",
+            "name": "bad",
+            "summary": ""
+          },
+          {
+            "arg_hint": "[keep_turns]",
+            "args": [
+              {
+                "name": "keep_turns",
+                "optional": true,
+                "type": "int"
+              }
+            ],
+            "available_during_task": false,
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "method": "POST",
+            "name": "compact",
+            "op": "compact",
+            "path": "/sessions/{id}/compact",
+            "summary": "Summarize history and keep the last turns"
+          },
+          {
+            "arg_hint": "\u003ccondition\u003e",
+            "args": [
+              {
+                "name": "condition",
+                "type": "rest"
+              }
+            ],
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "PUT",
+            "name": "goal",
+            "op": "set_goal",
+            "path": "/sessions/{id}/goal",
+            "summary": "Pursue a goal until its condition holds"
+          },
+          {
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "DELETE",
+            "name": "goal-clear",
+            "op": "clear_goal",
+            "path": "/sessions/{id}/goal",
+            "summary": "Stop pursuing the current goal"
+          },
+          {
+            "arg_hint": "\u003cprovider/model\u003e",
+            "args": [
+              {
+                "name": "model",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "model",
+            "op": "set_model",
+            "path": "/sessions/{id}",
+            "summary": "Change the session model"
+          },
+          {
+            "aliases": [
+              "clear"
+            ],
+            "category": "frontend",
+            "destructive": true,
+            "kind": "frontend",
+            "name": "new",
+            "summary": "Start a new session"
+          },
+          {
+            "available_during_task": true,
+            "category": "info",
+            "kind": "control",
+            "method": "GET",
+            "name": "processes",
+            "op": "process_list",
+            "path": "/processes",
+            "summary": "List managed processes"
+          },
+          {
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "GET",
+            "name": "queue",
+            "op": "queue_list",
+            "path": "/sessions/{id}/inputs",
+            "summary": "Show queued prompts"
+          },
+          {
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "name": "queue-clear",
+            "op": "queue_clear",
+            "summary": "Drop every queued prompt"
+          },
+          {
+            "category": "frontend",
+            "kind": "frontend",
+            "name": "quit",
+            "summary": "Leave the session"
+          },
+          {
+            "arg_hint": "\u003csession-id\u003e",
+            "args": [
+              {
+                "name": "session_id",
+                "type": "string"
+              }
+            ],
+            "category": "frontend",
+            "kind": "frontend",
+            "name": "resume",
+            "summary": "Talk to an existing session"
+          },
+          {
+            "arg_hint": "\u003cref\u003e",
+            "category": "info",
+            "kind": "prompt",
+            "name": "review",
+            "summary": "Review a ref"
+          },
+          {
+            "available_during_task": true,
+            "category": "info",
+            "kind": "control",
+            "method": "GET",
+            "name": "status",
+            "op": "status",
+            "path": "/sessions/{id}",
+            "summary": "Show the session state"
+          },
+          {
+            "arg_hint": "\u003ceffort\u003e",
+            "args": [
+              {
+                "name": "effort",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "thinking",
+            "op": "set_thinking",
+            "path": "/sessions/{id}",
+            "summary": "Set the reasoning effort"
+          },
+          {
+            "arg_hint": "\u003ctier\u003e",
+            "args": [
+              {
+                "name": "service_tier",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "tier",
+            "op": "set_service_tier",
+            "path": "/sessions/{id}",
+            "summary": "Set the provider service tier"
+          }
+        ],
+        "discovery_errors": [
+          "\u003cworkdir\u003e/.agents/commands/Bad Name.md: invalid prompt command name \"Bad Name\""
+        ],
+        "serve_support": {
+          "abort": {
+            "supported": true
+          },
+          "bad": {
+            "reason": "\u003cworkdir\u003e/.agents/commands/bad.md: missing frontmatter: file must begin with a '---' delimiter line",
+            "supported": false
+          },
+          "compact": {
+            "supported": true
+          },
+          "goal": {
+            "supported": true
+          },
+          "goal-clear": {
+            "supported": true
+          },
+          "model": {
+            "supported": true
+          },
+          "new": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "processes": {
+            "supported": true
+          },
+          "queue": {
+            "supported": true
+          },
+          "queue-clear": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "quit": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "resume": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "review": {
+            "supported": true
+          },
+          "status": {
+            "supported": true
+          },
+          "thinking": {
+            "supported": true
+          },
+          "tier": {
+            "supported": true
+          }
+        }
+      }
+    }
+  }
+}

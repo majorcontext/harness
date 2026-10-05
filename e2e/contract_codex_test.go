@@ -25,6 +25,8 @@ type codexScenario struct {
 	// bareKey configures the lane under the built-in "openai" provider key
 	// with no type, as a deployment that points "openai" at the endpoint.
 	bareKey bool
+	// alsoOpenAI configures the endpoint under provider "openai" as well as "codex".
+	alsoOpenAI bool
 }
 
 const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email":{"type":"string","format":"email","pattern":"^a"},"tags":{"type":"array","items":{"type":"string","minLength":1}}}}`
@@ -127,6 +129,10 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 	cfg := codexConfig(o.URL(), sc.websocket, extra)
 	if sc.bareKey {
 		cfg = bareOpenAIKey(cfg)
+	}
+	if sc.alsoOpenAI {
+		providers := cfg["providers"].(map[string]any)
+		providers["openai"] = providers["codex"]
 	}
 	r := &run{
 		drv:    h.newDriver(t, o.URL(), cfg),
@@ -283,7 +289,43 @@ func codexWebSocketRows() []codexScenario {
 }
 
 func codexHTTPRows() []codexScenario {
+	turn := func(name, user, reply string) harnesstest.Step {
+		return harnesstest.Step{Name: name, Match: harnesstest.LastUserText(user), Reply: codexText(reply)}
+	}
 	return []codexScenario{
+		{
+			scenario: scenario{
+				name:  "codex_settings_switch_to_another_provider_keeps_the_history",
+				model: []harnesstest.Step{turn("hi", "hi", "hello"), turn("again", "again", "ok")},
+				actions: codexSession(codexTurn("a", "hi"),
+					[]action{setModel{as: "a", model: "openai/gpt-5"}, setThinking{as: "a", level: "high"}},
+					codexTurn("a", "again"), []action{recordWire{}}),
+			},
+			opts:       harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{"hi": {Reasoning: []string{"plan"}}}},
+			alsoOpenAI: true,
+		},
+		{
+			scenario: scenario{
+				name: "codex_http_truncated_and_empty_responses_are_retried",
+				model: []harnesstest.Step{
+					turn("dropped", "one", "partial"), turn("one", "one", "1"),
+					{Name: "empty", Match: harnesstest.LastUserText("two")}, turn("two", "two", "2"),
+					{Name: "plan_only", Match: harnesstest.LastUserText("three")}, turn("three", "three", "3"),
+				},
+				actions: codexSession(codexTurn("a", "one"), codexTurn("a", "two"), codexTurn("a", "three"), []action{getSession{as: "a"}}),
+			},
+			opts: harnesstest.OpenAIOptions{Replies: map[string]harnesstest.CodexReply{
+				"dropped":   {Drop: true},
+				"plan_only": {Reasoning: []string{"plan"}},
+			}},
+		},
+		{
+			scenario: scenario{
+				name:    "codex_service_tier_reaches_the_request",
+				model:   codexHi,
+				actions: codexSession([]action{setServiceTier{as: "a", tier: "priority"}}, codexTurn("a", "hello"), []action{recordWire{}}),
+			},
+		},
 		{
 			scenario:  scenario{name: "codex_http_mcp_tool_schema_is_sanitized", model: codexHi, actions: codexSession(codexTurn("a", "hello"), []action{recordWire{}})},
 			mcpSchema: mcpToolSchemaWithRejectedKeywords,

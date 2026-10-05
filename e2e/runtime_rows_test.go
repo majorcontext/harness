@@ -47,6 +47,32 @@ const (
 	specOpenRetry         = "Does a failed Claude Code turn run again?"
 	specOpenChildFailure  = "Does a failed child, an exhausted child, or a long result in a report to a busy parent keep the engine text?"
 	specOpenChildParts    = "Does the log keep a `task_report` part and an `engine_context` part?"
+
+	specStopped       = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
+	specInterrupt     = "`interrupt` stops the running turn only. The next queued input then starts"
+	specSameBody      = "| Same id, same body | `200` with the original receipt |"
+	specOtherBody     = "| Same id, other body | `409 input_conflict` |"
+	specTurnMismatch  = "A `steer` input with `expected_turn_id` fails with `turn_mismatch` if that turn is not running."
+	specRetryable     = "`ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times"
+	specModelsRoute   = "GET    /models                                models and their capabilities"
+	specHandoff       = "admit no new tool call, let running tools finish within the budget, append `turn.suspended`"
+	specToolsSerial   = "Tools run one at a time, so the tool-batching segment is gone."
+	specPromptOnce    = "It reads them once, when the session is created or opened, and sends them as `turn.Request.Instructions` on each model call."
+	specOpenMidTurn   = "Does a settings change to a model of another kind of backend take effect in the middle of a turn?"
+	specTypedReceipt  = "A typed slash command answers the same way. Its receipt adds `command`, the newest status of the command"
+	specCmdRepeat     = "A repeat of the input ID with the same line returns the newest status; another line, or an input ID of another input, is `input_conflict`."
+	specCmdOps        = "`model`, `thinking`, and `tier` are `Update`"
+	specCmdFailed     = "`failed` (the error text of a sentinel error"
+	specCmdResult     = "Its result is the `protocol.Compacted` of `Compact`."
+	specCmdInterrupt  = "`Open` records `interrupted` for each command that an earlier owner accepted and never finished"
+	specCmdUnsupport  = "A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`"
+	specCmdMenuRoutes = "A control command names its operation and `available_during_task`; the handler adds the route of the same operation, where one exists."
+	specGoalOwnTurn   = "So the turn that calls `set` is not judged; the condition runs as a turn of its own after it"
+	specGoalPrompt    = "Its prompt copies the engine prompt, with a third form for `impossible`."
+	specGoalWording   = "The tool copies the engine description and error wording."
+	specGoalNoEval    = "`SetGoal` without it is an invalid request."
+	specOverflowFolds = "A model call that overflows the context window compacts while its turn runs, for a backend without `OwnsContext`, and the turn calls the model again on the new history."
+	specBannerPrefix  = "Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier."
 )
 
 func sameAsServe() runtimeRow { return runtimeRow{kind: rowSame} }
@@ -217,4 +243,34 @@ var runtimeRows = map[string]runtimeRow{
 	"two_tool_calls_one_turn":                                     reGolden(specOneResult),
 	"two_turns_keep_history":                                      sameAsServe(),
 	"usage_survives_a_mid_turn_restart":                           reGolden(specView, specHandoffResume),
+
+	"a_kill_interrupts_an_unfinished_command":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
+	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":       reGolden(specOverflowFolds, specBannerPrefix, specView),
+	"codex_http_truncated_and_empty_responses_are_retried":            reGolden(specView, specItems, specRetryable),
+	"codex_service_tier_reaches_the_request":                          reGolden(specView, specItems, specUpdate),
+	"codex_settings_switch_to_another_provider_keeps_the_history":     reGolden(specView, specItems, specUpdate),
+	"commands_menu_lists_builtin_and_prompt_commands":                 reGolden(specCmdMenuRoutes, specCmdUnsupport),
+	"create_checks_the_model":                                         reGolden(specModelCheck, specErrors, specView),
+	"create_without_a_model_takes_the_default_model":                  reGolden(specView),
+	"create_takes_an_unknown_model_when_no_window_is_required":        reGolden(specView),
+	"create_takes_an_unknown_model_with_a_configured_window":          reGolden(specView),
+	"goal_tool_actions_report_and_refuse":                             pendingOn(specGoalPrompt),
+	"goal_tool_adjust_after_set_runs_the_adjusted_condition":          pendingOn(specGoalOwnTurn, specGoalPrompt),
+	"goal_tool_adjust_keeps_the_turn_limit":                           pendingOn(specGoalPrompt),
+	"goal_tool_refusals_copy_the_engine_wording":                      pendingOn(specGoalWording),
+	"goal_tool_set_runs_the_condition_as_its_own_turn":                pendingOn(specGoalPrompt),
+	"input_receipts_and_conflicts":                                    reGolden(specReceipt, specSameBody, specOtherBody, specTurnMismatch, specErrors),
+	"instructions_are_read_when_the_session_starts":                   reGolden(specPromptOnce),
+	"interrupt_cuts_a_running_tool_then_queue_continues":              reGolden(specStopped, specInterrupt),
+	"interrupt_during_retry_backoff_ends_the_turn":                    reGolden(specView, specStopped),
+	"models_lists_the_configured_providers":                           reGolden(specModelsRoute, specView),
+	"no_goal_evaluator_means_no_goal":                                 reGolden(specGoalNoEval, specErrors, specCmdFailed, specView),
+	"plugin_inventory_reports_not_spawned_then_running":               reGolden(specView),
+	"plugin_sees_the_model_of_each_call":                              reGolden(specUpdate),
+	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":       reGolden(specView, specHandoff, specToolsSerial),
+	"retries_stop_after_prompt_retries":                               reGolden(specView, specRetryable),
+	"settings_change_to_claude_code_mid_turn_waits_for_the_next_turn": reGolden(specUpdate, specView, specOpenMidTurn),
+	"typed_commands_record_their_outcome":                             reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
+	"typed_compact_keeps_keep_turns_and_returns_the_range":            reGolden(specTypedReceipt, specCmdResult, specReceipt),
+	"unknown_tool_call_gets_an_error_result":                          reGolden(specMCPText),
 }

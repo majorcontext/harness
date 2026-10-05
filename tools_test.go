@@ -7,11 +7,10 @@ import (
 	"slices"
 	"sync"
 	"testing"
-	"testing/synctest"
 
 	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -122,110 +121,35 @@ func TestEmbedderTools(t *testing.T) {
 	}
 }
 
-func TestInterruptStopsARunningTool(t *testing.T) {
-	wait := newProbe("wait", true)
-	s := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{}, callStep("wait"))
-	r, st, _ := codexRuntime(t, s, false, false, "", wait)
-	sess, err := r.Create(bg, protocol.CreateSession{ID: "s1", Model: "codex/gpt-5"})
-	if err != nil {
-		t.Fatal(err)
+// calls is one assistant message that calls tool once for each argument set.
+func calls(tool string, args ...map[string]any) eventlog.Message {
+	m := eventlog.Message{Role: eventlog.RoleAssistant}
+	for i, a := range args {
+		raw, _ := json.Marshal(a)
+		m.Parts = append(m.Parts, eventlog.Part{Type: eventlog.PartToolCall, CallID: "g" + string(rune('0'+i)), Name: tool, Arguments: raw})
 	}
-	if _, err := sess.Submit(bg, text("a", "run")); err != nil {
-		t.Fatal(err)
-	}
-	<-wait.started
-	if err := sess.Interrupt(bg, protocol.Interrupt{}); err != nil {
-		t.Fatal(err)
-	}
-	wantLog(t, st, 2, "input.admitted a", "turn.started a", "context.measured", "item.completed assistant call_1",
-		"item.completed tool call_1 "+interrupted, "turn.ended interrupted stopped")
+	return m
 }
 
-// TestHandoffLetsARunningToolFinish runs on the fake backend: a synctest
-// bubble cannot wait on the network I/O of the OpenAI server.
-func TestHandoffLetsARunningToolFinish(t *testing.T) {
-	eachStore(t, func(t *testing.T, openStore func() harness.Store) {
-		bash := newProbe("bash", true)
-		start := func(f *fake) *harness.Runtime {
-			f.ownsLoop = false
-			tools := []harness.Tool{bash, newProbe("hidden", false)}
-			r, err := harness.NewWithBackend(harness.Options{Store: openStore(), Tools: tools}, f)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return r
-		}
-		f1, f2 := newFake(), newFake()
-		r1 := start(f1)
-		s, err := r1.Create(bg, protocol.CreateSession{ID: "s1", Model: "fake/model", AllowedTools: []string{"bash"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		submit(t, s, text("a", "hi"))
-		run := <-f1.runs
-		two := callTool("c1")
-		two.Parts = append(two.Parts, callTool("c2").Parts...)
-		run.emit(two)
-		run.end()
-		closed := make(chan error)
-		go func() { closed <- r1.Close(bg) }()
-		synctest.Wait()
-		close(bash.release)
-		if err := <-closed; err != nil {
-			t.Fatalf("Close: %v", err)
-		}
-		r2 := start(f2)
-		open(t, r2)
-		next := <-f2.runs
-		for _, req := range []turn.Request{run.req, next.req} {
-			if len(req.Tools) != 1 || req.Tools[0].Name != "bash" {
-				t.Fatalf("Request.Tools = %+v, want bash", req.Tools)
+// results returns the tool results in the newest request of session that has any.
+func (f *family) results(session string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, req := range f.reqs {
+		var got []string
+		for _, m := range req.History {
+			for _, p := range m.Parts {
+				if p.Type == eventlog.PartToolResult && req.SessionID == session {
+					got = append(got, p.Text)
+				}
 			}
 		}
-		h := next.req.History
-		if next.req.TurnID != run.req.TurnID || h[len(h)-2].Parts[0].CallID != "c1" {
-			t.Fatalf("resumed Request = %+v, want turn %s again with the result of c1", next.req, run.req.TurnID)
+		if len(got) > 0 {
+			out = got
 		}
-		next.emit(say("rest"))
-		next.end()
-		wantLog(t, openStore(), 2, "input.admitted a", "turn.started a", "item.completed assistant c1 c2",
-			"item.completed tool c1 bash ran {}", "item.completed tool c2 "+cutOff, "turn.suspended handoff",
-			"owner.acquired 1", "turn.resumed 1", "item.completed assistant rest", "turn.ended completed")
-		if got := bash.Calls(); !slices.Equal(got, []string{"c1 bash"}) {
-			t.Errorf("tool runs = %q, want c1 once", got)
-		}
-		closeRuntime(t, r2)
-	})
-}
-
-func TestSteerInputJoinsANativeTurnAtTheNextItemBoundary(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		st, f, bash := harness.NewMemStore(), newFake(), newProbe("bash", true)
-		f.ownsLoop = false
-		r, err := harness.NewWithBackend(harness.Options{Store: st, Tools: []harness.Tool{bash}}, f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		s := create(t, r)
-		submit(t, s, text("a", "hi"))
-		run := <-f.runs
-		run.emit(callTool("c1"))
-		run.end()
-		<-bash.started
-		steer := text("s", "now")
-		steer.Delivery = protocol.DeliverySteer
-		submit(t, s, steer)
-		close(bash.release)
-		next := <-f.runs
-		if h := next.req.History; len(h) < 2 || h[len(h)-2].Parts[0].CallID != "c1" || h[len(h)-1].Role != "user" || h[len(h)-1].Parts[0].Text != "OPERATOR MESSAGES (address these, then continue the task):\n1. now\n" {
-			t.Fatalf("history of the next model call = %+v, want the result of c1, then the steer input", h)
-		}
-		next.emit(say("done"))
-		next.end()
-		wantLog(t, st, 4, "item.completed assistant c1", "input.admitted s", "item.completed tool c1 bash ran {}",
-			"input.promoted s", "item.completed assistant done", "turn.ended completed")
-		closeRuntime(t, r)
-	})
+	}
+	return out
 }
 
 func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {

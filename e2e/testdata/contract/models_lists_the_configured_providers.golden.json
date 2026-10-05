@@ -1,0 +1,70 @@
+{
+  "requests": null,
+  "sessions": {},
+  "calls": {
+    "create.claude-code/sonnet": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#2",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "create.codex/gpt-6-luna": {
+      "status": 201,
+      "body": {
+        "context": {
+          "used_tokens": 0,
+          "window_tokens": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses#1",
+        "last_activity_at": "\u003ctime\u003e",
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 0,
+        "model": "codex/gpt-6-luna",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 0,
+          "messages": 0,
+          "output_tokens": 0
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "models": {
+      "status": 0,
+      "body": {
+        "not_in_engine": "GET /models"
+      }
+    }
+  }
+}

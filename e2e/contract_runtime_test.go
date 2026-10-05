@@ -39,10 +39,11 @@ func startRuntime(t *testing.T, workdir string, extra map[string]any, steps ...h
 	cfg := map[string]any{"context_window_tokens": 1_000_000}
 	maps.Copy(cfg, extra)
 	d := &httpDriver{
-		sessDir: t.TempDir(),
-		workDir: workdir,
-		config:  writeGoalConfigWith(t, fake.URL(), cfg),
-		enqSeq:  map[string]int64{},
+		sessDir:  t.TempDir(),
+		workDir:  workdir,
+		config:   writeGoalConfigWith(t, fake.URL(), cfg),
+		enqSeq:   map[string]int64{},
+		typedSeq: map[string]int64{},
 	}
 	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
 	return d, fake

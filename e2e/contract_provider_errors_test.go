@@ -92,3 +92,35 @@ func TestContractProviderErrors(t *testing.T) {
 		},
 	})
 }
+
+func TestContractProviderRetries(t *testing.T) {
+	oneTurn := func(extra ...action) []action {
+		return append([]action{create{as: "a"}, submit{as: "a", text: "go"}, waitIdle{as: "a"}}, extra...)
+	}
+	runScenarios(t, []scenario{
+		{
+			name:   "retries_stop_after_prompt_retries",
+			config: map[string]any{"prompt_retries": 1},
+			model: []harnesstest.Step{
+				{Name: "broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke"}},
+				{Name: "still_broken", Reply: harnesstest.Reply{HTTPStatus: 500, ErrorMessage: "upstream broke again"}},
+			},
+			actions: oneTurn(getSession{as: "a"}),
+		},
+		{
+			name: "interrupt_during_retry_backoff_ends_the_turn",
+			model: []harnesstest.Step{
+				{Name: "limited", Reply: harnesstest.Reply{HTTPStatus: 429, RetryAfter: "30", ErrorMessage: "slow down"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "go"},
+				awaitRequests{n: 1},
+				getSession{as: "a"},
+				interrupt{as: "a"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}

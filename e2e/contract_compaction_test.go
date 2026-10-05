@@ -1,10 +1,39 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
 )
+
+func TestContractBanner(t *testing.T) {
+	answer := func(in string) harnesstest.Step {
+		return harnesstest.Step{Name: in, Match: harnesstest.LastUserText(in), Reply: harnesstest.Reply{Text: "re " + in}}
+	}
+	summarized := func(r harnesstest.Request) bool {
+		return strings.Contains(r.Messages[0].Parts[0].Text, "gist") && harnesstest.LastUserText("charlie")(r) && !harnesstest.LastToolResult("bash")(r)
+	}
+	runScenarios(t, []scenario{{
+		name: "banner_holds_its_place_when_a_turn_compacts_in_the_middle",
+		model: []harnesstest.Step{
+			answer("alpha"), answer("bravo"),
+			{Name: "overflow", Match: harnesstest.LastUserText("charlie"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
+			{Name: "summary", Match: harnesstest.SystemContains("You are summarizing a prefix"), Reply: harnesstest.Reply{Text: "gist"}, Repeat: true},
+			{Name: "call", Match: summarized, Repeat: true, Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+				{ID: "toolu_echo", Name: "bash", Input: map[string]any{"command": "echo banner"}},
+			}}},
+			{Name: "done", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "done"}, Repeat: true},
+		},
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "alpha"}, waitIdle{as: "a"},
+			submit{as: "a", text: "bravo"}, waitIdle{as: "a"},
+			restart{},
+			submit{as: "a", text: "charlie"}, waitIdle{as: "a"},
+		},
+	}})
+}
 
 func TestContractCompaction(t *testing.T) {
 	text := func(name, user, reply string) harnesstest.Step {

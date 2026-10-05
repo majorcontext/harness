@@ -169,6 +169,41 @@ func TestContractPluginTools(t *testing.T) {
 	})
 }
 
+func TestContractPluginSession(t *testing.T) {
+	cfg := pluginConfig(t, nil)
+	runScenarios(t, []scenario{
+		{
+			name:   "plugin_sees_the_model_of_each_call",
+			config: pluginConfig(t, map[string]any{"model": true}),
+			model: []harnesstest.Step{
+				{Name: "first", Match: pluginMatchAll(harnesstest.LastUserText("first"), harnesstest.SystemContains("MODEL: anthropic/claude-fable-5")), Reply: harnesstest.Reply{Text: "ok1"}},
+				{Name: "second", Match: pluginMatchAll(harnesstest.LastUserText("second"), harnesstest.SystemContains("MODEL: anthropic/claude-haiku-4-5")), Reply: harnesstest.Reply{Text: "ok2"}},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "first"},
+				waitIdle{as: "a"},
+				setModel{as: "a", model: "anthropic/claude-haiku-4-5"},
+				submit{as: "a", text: "second"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
+			name:   "plugin_inventory_reports_not_spawned_then_running",
+			config: cfg,
+			model:  toolChain(ftTool("fixture_echo", ftArgs("text", "hi"))),
+			actions: []action{
+				create{as: "a"},
+				getSession{as: "a"},
+				submit{as: "a", text: "go"},
+				waitIdle{as: "a"},
+				getSession{as: "a"},
+				listSessions{},
+			},
+		},
+	})
+}
+
 func TestContractPluginHooks(t *testing.T) {
 	cfg := pluginConfig(t, nil)
 	runScenarios(t, []scenario{
