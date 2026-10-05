@@ -10,7 +10,6 @@ import (
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
-	"github.com/majorcontext/harness/provider/openai"
 )
 
 const modelToolName = "model"
@@ -56,6 +55,7 @@ const (
 	billingSubscription = "subscription"
 	billingAPI          = "api"
 	claudeCodeFamily    = "claude-code"
+	codexFamily         = "codex"
 )
 
 type providerInfo struct {
@@ -66,7 +66,7 @@ type providerInfo struct {
 // billing classifies a configured provider: the claude-code and codex
 // families run on a subscription, every other provider bills each API call.
 func billing(provider string) string {
-	if provider == claudeCodeFamily || provider == openai.CodexFamily {
+	if provider == claudeCodeFamily || provider == codexFamily {
 		return billingSubscription
 	}
 	return billingAPI
