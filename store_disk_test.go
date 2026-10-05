@@ -15,6 +15,27 @@ func TestDiskStore(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) harness.Store { return harness.NewDiskStore(t.TempDir()) })
 }
 
+func BenchmarkDiskStoreTailRead(b *testing.B) {
+	const records, size, batch = 20000, 4 << 10, 100
+	ctx, st := context.Background(), harness.NewDiskStore(b.TempDir())
+	data := make([][]byte, batch)
+	for i := range data {
+		data[i] = []byte(strings.Repeat("x", size))
+	}
+	for at := 0; at < records; at += batch {
+		if err := st.Append(ctx, "s", uint64(at), data...); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		got, err := st.Read(ctx, "s", records-1, 100)
+		if err != nil || len(got) != 1 {
+			b.Fatalf("Read = %d records, %v, want 1", len(got), err)
+		}
+	}
+}
+
 func TestDiskStoreRepairsTornTail(t *testing.T) {
 	root, ctx := t.TempDir(), context.Background()
 	log := writeLog(t, root, "s", "a\nb\ntor")
