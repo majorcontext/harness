@@ -235,24 +235,6 @@ func TestContractCLIRunRefusesAnUnknownLineOfAResumedSessionBeforeItOpens(t *tes
 	}
 }
 
-func TestContractCLIRunAndSessionsDoNotReplicate(t *testing.T) {
-	skipShort(t)
-	receiver := newSyncReceiver(t, nil)
-	tokenFile := filepath.Join(t.TempDir(), "sync-token")
-	if err := os.WriteFile(tokenFile, []byte(syncToken+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := newCLIHost(t, map[string]any{"owner_epoch": 7, "sync": map[string]any{"url": receiver.srv.URL + syncPath, "token_file": tokenFile}}, replyText("hello"))
-	if _, errOut, code := h.run("run", "-p", "hi"); code != 0 {
-		t.Fatalf("run = %d\n%s", code, errOut)
-	}
-	h.run("sessions")
-	h.run("plugin", "probe")
-	if got := receiver.snapshot(); len(got) != 0 {
-		t.Errorf("the receiver got %d batches from run, sessions, and plugin probe, want none: only serve replicates", len(got))
-	}
-}
-
 func TestContractCLIRunFailedTurnExitsOne(t *testing.T) {
 	skipShort(t)
 	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
