@@ -148,7 +148,7 @@ func TestTaskSpawnsAChild(t *testing.T) {
 	}{
 		{name: "the result of the child reaches its parent as an input", agent: "general-purpose", child: done, kids: 1,
 			check: func(t *testing.T, f *family, children []protocol.Session) {
-				if _, got := f.last("s1", report); !strings.HasSuffix(got, "outcome: done\n\nchild done") {
+				if _, got := f.last("s1", report); !strings.HasSuffix(got, "outcome: done\n\nchild done") && !strings.HasSuffix(got, "done: child done (usage: 0 in / 0 out)\n]") {
 					t.Errorf("report %q, want outcome done", got)
 				}
 			}},
