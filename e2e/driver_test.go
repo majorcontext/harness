@@ -41,6 +41,8 @@ type driver interface {
 	// is Enqueue there.
 	EnqueueNext(t *testing.T, id, text string)
 	WaitIdle(t *testing.T, id string)
+	// AwaitTurnEnd returns once the log of the session holds the end of a turn, which the session records only after the turn has settled its parent.
+	AwaitTurnEnd(t *testing.T, id string)
 	Interrupt(t *testing.T, id string)
 	SetGoal(t *testing.T, id, condition string, maxTurns int, deferred bool)
 	Messages(t *testing.T, id string) []transcriptMessage
@@ -296,6 +298,19 @@ func (d *httpDriver) WaitIdle(t *testing.T, id string) {
 	}
 	if w.State != "idle" {
 		t.Fatalf("session %s wait returned state %q, want idle\nstderr:\n%s", id, w.State, d.p.stderr.String())
+	}
+}
+
+func (d *httpDriver) AwaitTurnEnd(t *testing.T, id string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
+	defer cancel()
+	err := d.p.scanEventsFrom(ctx, 0, false, id, func(_ string, raw []byte) bool {
+		var ev apiEvent
+		return json.Unmarshal(raw, &ev) == nil && ev.SessionID == id && (ev.Type == "session.aborted" || ev.Type == "turn.end")
+	})
+	if err != nil {
+		t.Fatalf("no turn end of %s: %v\nstderr:\n%s", id, err, d.Stderr())
 	}
 }
 

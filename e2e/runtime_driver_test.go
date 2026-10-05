@@ -374,6 +374,11 @@ func (d *runtimeDriver) Models(t *testing.T) callResult {
 	return d.call(t, http.MethodGet, "/models", nil)
 }
 
+func (d *runtimeDriver) AwaitTurnEnd(t *testing.T, id string) {
+	t.Helper()
+	d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool { return ev.Kind == "turn.ended" })
+}
+
 func (d *runtimeDriver) Interrupt(t *testing.T, id string) {
 	t.Helper()
 	d.expect(t, http.StatusNoContent, http.MethodPost, "/sessions/"+id+"/interrupt", map[string]any{}, nil)

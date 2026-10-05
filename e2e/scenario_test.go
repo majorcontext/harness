@@ -45,6 +45,9 @@ type enqueueNext struct{ as, text string }
 // submitAttachments submits text with the PNG and the PDF of rowAttachments.
 type submitAttachments struct{ as, text string }
 type waitIdle struct{ as string }
+
+// awaitTurnEnd waits for the end of a turn in the log of the session, which waitIdle does not: a session that was canceled reads idle before its turn finalizes.
+type awaitTurnEnd struct{ as string }
 type interrupt struct{ as string }
 type setGoal struct {
 	as, condition string
@@ -134,9 +137,10 @@ func (a submit) run(t *testing.T, r *run) { r.drv.Submit(t, r.id(t, a.as), a.tex
 func (a submitAttachments) run(t *testing.T, r *run) {
 	r.drv.Attach(t, r.id(t, a.as), a.text, rowAttachments())
 }
-func (a enqueue) run(t *testing.T, r *run)     { r.drv.Enqueue(t, r.id(t, a.as), a.text) }
-func (a enqueueNext) run(t *testing.T, r *run) { r.drv.EnqueueNext(t, r.id(t, a.as), a.text) }
-func (a waitIdle) run(t *testing.T, r *run)    { r.drv.WaitIdle(t, r.id(t, a.as)) }
+func (a enqueue) run(t *testing.T, r *run)      { r.drv.Enqueue(t, r.id(t, a.as), a.text) }
+func (a enqueueNext) run(t *testing.T, r *run)  { r.drv.EnqueueNext(t, r.id(t, a.as), a.text) }
+func (a waitIdle) run(t *testing.T, r *run)     { r.drv.WaitIdle(t, r.id(t, a.as)) }
+func (a awaitTurnEnd) run(t *testing.T, r *run) { r.drv.AwaitTurnEnd(t, r.id(t, a.as)) }
 func (a interrupt) run(t *testing.T, r *run) {
 	r.drv.Interrupt(t, r.id(t, a.as))
 }
