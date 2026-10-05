@@ -113,7 +113,7 @@ func batch(ctx context.Context, st Storage, epoch uint64, id string, from, head 
 		return nil, errors.New("harness: log ends before the published head")
 	}
 	b := &protocol.SyncBatch{Epoch: epoch, Session: id, FromSeq: from}
-	size := 0
+	size := jsonOverhead + len(id)*6
 	for _, r := range recs {
 		blobs, err := recordBlobs(ctx, st, r)
 		if err != nil {
