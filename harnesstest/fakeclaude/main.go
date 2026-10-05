@@ -137,6 +137,16 @@ func perSpawn(list string, n int, repeat bool) string {
 	return entries[n-1]
 }
 
+// exitWithParent ends the process once its parent is gone, as the real CLI
+// ends when its stdin closes, so a killed harness leaves no CLI behind.
+func exitWithParent() {
+	ppid := os.Getppid()
+	for os.Getppid() == ppid {
+		time.Sleep(100 * time.Millisecond)
+	}
+	os.Exit(1)
+}
+
 func main() {
 	spawn := 0
 	mode := os.Getenv("FAKE_CLAUDE_MODE")
@@ -151,6 +161,7 @@ func main() {
 	if mode == "fast_no_drain" {
 		_ = os.Stdin.Close()
 	}
+	go exitWithParent()
 	logArgv()
 	logMCPConfig()
 	logCwd()
