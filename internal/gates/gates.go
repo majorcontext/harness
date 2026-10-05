@@ -234,10 +234,15 @@ func sourceLines(src []byte) [][]byte {
 	return lines
 }
 
-// commentLines returns the line numbers that hold only a comment, and the
-// count of history markers in comments.
+// commentLines returns the line numbers that hold a comment and no other
+// text, and the count of history markers in comments. It masks the exact
+// byte range of each comment and classifies what remains on the line.
 func commentLines(fset *token.FileSet, f *ast.File, lines [][]byte) (map[int]bool, int) {
-	commentLine := map[int]bool{}
+	masked := make([][]byte, len(lines))
+	for i, l := range lines {
+		masked[i] = bytes.Clone(l)
+	}
+	hasComment := map[int]bool{}
 	history := 0
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
@@ -246,12 +251,25 @@ func commentLines(fset *token.FileSet, f *ast.File, lines [][]byte) (map[int]boo
 			}
 			history += len(historyRE.FindAllString(c.Text, -1))
 			start, end := fset.PositionFor(c.Pos(), false), fset.PositionFor(c.End(), false)
-			if len(bytes.TrimSpace(lines[start.Line-1][:start.Column-1])) > 0 {
-				continue
-			}
 			for l := start.Line; l <= end.Line; l++ {
-				commentLine[l] = true
+				from, to := 0, len(masked[l-1])
+				if l == start.Line {
+					from = start.Column - 1
+				}
+				if l == end.Line {
+					to = end.Column - 1
+				}
+				for i := from; i < to && i < len(masked[l-1]); i++ {
+					masked[l-1][i] = ' '
+				}
+				hasComment[l] = true
 			}
+		}
+	}
+	commentLine := map[int]bool{}
+	for l := range hasComment {
+		if len(bytes.TrimSpace(masked[l-1])) == 0 {
+			commentLine[l] = true
 		}
 	}
 	return commentLine, history
@@ -404,7 +422,7 @@ func Check(head, base Report, changed map[string]bool, renames map[string]string
 		}
 		added := head.TestScope[p] - base.TestScope[baseOf(p)]
 		if _, ok := head.Exceptions[p]; added > 0 && !ok && !testMayGrow(p) {
-			vs = append(vs, Violation{p, "contract_tests", fmt.Sprintf("%d lines added in test functions outside the contract suite and pure code; write a contract row in e2e/ or list the file with a reason in %s", added, exceptionsFile)})
+			vs = append(vs, Violation{p, "contract_tests", fmt.Sprintf("%d lines added in test functions and package-level vars outside the contract suite and pure code; write a contract row in e2e/ or list the file with a reason in %s", added, exceptionsFile)})
 		}
 	}
 	for _, line := range head.BadExceptions {
