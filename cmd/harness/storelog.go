@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/majorcontext/harness"
+	"github.com/majorcontext/harness/internal/eventlog"
 )
 
 const (
@@ -104,32 +103,23 @@ func (s *observedStore) Append(ctx context.Context, session string, expectedSeq 
 	return err
 }
 
-var (
-	createdKind = []byte(`"k":"session.created"`)
-	spawnedKind = []byte(`"k":"child.spawned"`)
-)
-
 // observe logs the creation of a session, with the time that its first append
 // took, and each task that a session spawns, with the count of the process.
 func (s *observedStore) observe(session string, elapsed time.Duration, records [][]byte) {
 	for _, r := range records {
-		switch {
-		case bytes.Contains(r, createdKind):
+		env, err := eventlog.Decode(r)
+		if err != nil {
+			continue
+		}
+		switch e := env.Event.(type) {
+		case eventlog.SessionCreated:
 			s.log.Info("session created", "session", session, "persist_ms", elapsed.Milliseconds())
-		case bytes.Contains(r, spawnedKind):
-			var env struct {
-				D struct {
-					ChildID string `json:"child_id"`
-				} `json:"d"`
-			}
-			if json.Unmarshal(r, &env) != nil {
-				continue
-			}
+		case eventlog.ChildSpawned:
 			s.mu.Lock()
 			s.spawned++
 			n := s.spawned
 			s.mu.Unlock()
-			s.log.Info("task spawned", "event", "spawned", "parent", session, "child", env.D.ChildID, "count", n)
+			s.log.Info("task spawned", "event", "spawned", "parent", session, "child", e.ChildID, "count", n)
 		}
 	}
 }

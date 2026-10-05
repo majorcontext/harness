@@ -117,10 +117,7 @@ func runCmd(args []string) error {
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
-	s, err := runSession(ctx, rt, cfg, opts, modelSet)
-	if err == nil && line != nil {
-		err = line.refuseOn(s.View().Model)
-	}
+	s, err := runSession(ctx, rt, store, cfg, opts, modelSet, line)
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
@@ -149,8 +146,9 @@ func runStore(cfg *config.Config, noSave bool) (harness.Store, error) {
 }
 
 // runSession creates the session of the run, or opens the one that -r or -c
-// names. An explicit -model replaces the model of an opened session.
-func runSession(ctx context.Context, rt *harness.Runtime, cfg *config.Config, opts runOptions, modelSet bool) (*harness.Session, error) {
+// names. An explicit -model replaces the model of an opened session. A line
+// that the model of that session cannot take is refused before the open.
+func runSession(ctx context.Context, rt *harness.Runtime, store harness.Store, cfg *config.Config, opts runOptions, modelSet bool, line *unknownLine) (*harness.Session, error) {
 	model := ""
 	if modelSet {
 		model = cfg.ResolveModel(opts.model)
@@ -165,6 +163,15 @@ func runSession(ctx context.Context, rt *harness.Runtime, cfg *config.Config, op
 	}
 	if id == "" {
 		return rt.Create(ctx, protocol.CreateSession{Model: model})
+	}
+	if line != nil {
+		v, err := harness.OpenView(ctx, store, id)
+		if err != nil {
+			return nil, err
+		}
+		if err := line.refuseOn(v.Session().Model); err != nil {
+			return nil, err
+		}
 	}
 	s, err := rt.Open(ctx, id)
 	if err != nil {

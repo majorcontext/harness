@@ -150,10 +150,7 @@ func serveURLForAddr(addr string) string {
 func startWork(ctx context.Context, rt *harness.Runtime, store harness.Store, logger *slog.Logger) {
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		switch err := rt.CatchUp(ctx); {
-		case err == nil:
-			logger.Info("caught up stored sessions")
-		case !errors.Is(err, harness.ErrDraining) && ctx.Err() == nil:
+		if err := rt.CatchUp(ctx); err != nil && !errors.Is(err, harness.ErrDraining) && ctx.Err() == nil {
 			logger.Error("catch up stored sessions", "error", err.Error())
 		}
 	})

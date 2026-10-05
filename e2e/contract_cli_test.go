@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,6 +198,40 @@ func TestContractCLIRunRefusesALineBeforeItCreatesASession(t *testing.T) {
 				t.Errorf("session dir holds %d entries, want none", len(entries))
 			}
 		})
+	}
+}
+
+func dirBytes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		out[path] = string(data)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestContractCLIRunRefusesAnUnknownLineOfAResumedSessionBeforeItOpens(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	_, errOut, _ := h.run("run", "-p", "hi")
+	id := sessionID(t, errOut)
+	before := dirBytes(t, h.dir)
+	for _, args := range [][]string{{"-r", id}, {"-c"}} {
+		_, errOut, code := h.run(append([]string{"run"}, append(args, "-p", "/nope")...)...)
+		if code != 1 || !strings.Contains(errOut, `unknown command "nope"`) {
+			t.Errorf("run %v = %d, want 1 and the unknown command\n%s", args, code, errOut)
+		}
+		if after := dirBytes(t, h.dir); !maps.Equal(before, after) {
+			t.Errorf("run %v changed the session dir, want the log as it was: a refused line opens nothing", args)
+		}
 	}
 }
 
