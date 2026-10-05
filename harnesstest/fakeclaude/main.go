@@ -43,12 +43,9 @@ type fake struct {
 	sessionID string
 	out       *bufio.Writer
 	stdin     *bufio.Reader
-	// held is the init frame; the next emit writes it with its own frames.
-	held []byte
+	held      []byte
 }
 
-// emit writes the held init frame and frames in one write, so a SIGINT that
-// follows the first frame the driver reads never cuts the rest of them off.
 func (f *fake) emit(frames ...obj) {
 	buf := f.held
 	f.held = nil
@@ -60,7 +57,6 @@ func (f *fake) emit(frames ...obj) {
 	_ = f.out.Flush()
 }
 
-// hold keeps the init frame for the first emit.
 func (f *fake) hold(v obj) {
 	b, _ := json.Marshal(v)
 	f.held = append(append(f.held, b...), '\n')
