@@ -19,7 +19,9 @@ var rowNamePattern = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)+$`)
 func contractRowNames(t *testing.T) map[string]string {
 	t.Helper()
 	files, err := filepath.Glob("contract_*_test.go")
-	if err != nil || len(files) == 0 {
+	syncFiles, serr := filepath.Glob("runtime_sync*_test.go")
+	files = append(files, syncFiles...)
+	if err != nil || serr != nil || len(files) == 0 {
 		t.Fatalf("no contract test files: %v", err)
 	}
 	names := map[string]string{}
@@ -101,6 +103,10 @@ var boxesFeatures = []struct {
 	{"config append_system_prompt", []string{"system_segments_order_append_layers_then_instructions_then_skills"}},
 	{"config plugins", []string{"plugin_tools_listed_and_run", "plugin_boxes_style_command_and_dir", "plugin_before_hook_rewrites_and_blocks"}},
 
+	{"config owner_epoch and sync", []string{"sync_conflict_is_final_and_ends_the_session", "sync_server_error_is_sent_again", "sync_splits_a_batch_under_the_body_cap", "catch_up_conflict_skips_the_session_and_reports_it"}},
+	{"GET /models", []string{"models_lists_the_configured_providers"}},
+	{"POST /sessions/{id}/answer", []string{"claudecode_question_parks_then_answer_resumes"}},
+	{"DELETE /sessions/{id}", []string{"end_session_semantics"}},
 	{"GET /sessions", []string{"status_and_list_cold_after_restart"}},
 	{"POST /sessions", []string{"text_reply"}},
 	{"GET /sessions/{id}", []string{"session_settings_validation_and_persistence", "goal_update_while_busy"}},
@@ -141,9 +147,7 @@ var boxesFeatures = []struct {
 
 // knownGaps lists features that no contract row exercises yet, each with a
 // one-line reason.
-var knownGaps = []struct{ feature, reason string }{
-	{"config event_sink", "New refuses event_sink, and nothing replaces the engine journal sink; the spec lists it under Open questions"},
-}
+var knownGaps = []struct{ feature, reason string }{}
 
 func TestContractInventory(t *testing.T) {
 	skipShort(t)

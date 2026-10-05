@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -122,8 +124,9 @@ func runCmd(args []string) error {
 		return errors.Join(err, closeRuntime(rt))
 	}
 	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout),
-		streamed: map[string]bool{}, names: map[string]string{}}
+		streamed: map[string]bool{}, names: map[string]string{}, open: rt.Open, closing: make(chan struct{})}
 	runErr := drive(ctx, s, opts, out)
+	out.finishChildren()
 	if out.printedText {
 		fmt.Println()
 	}
@@ -259,6 +262,14 @@ type printer struct {
 	streamed    map[string]bool
 	names       map[string]string
 	printedText bool
+	// open opens a task child, which the runtime runs, to follow it. Only
+	// text output follows children.
+	open     func(context.Context, string) (*harness.Session, error)
+	mu       sync.Mutex
+	children sync.WaitGroup
+	// closing closes when the run has settled: a follower then prints up to
+	// the head that its child holds and returns.
+	closing chan struct{}
 	// streamedThis is set when text streamed since the last completed item.
 	streamedThis bool
 	command      *protocol.Event
@@ -275,6 +286,7 @@ func (p *printer) stream(ctx context.Context, s *harness.Session, after uint64, 
 			return err
 		}
 		p.handle(ev)
+		p.follow(ctx, ev)
 		if !ev.Ephemeral && p.finished(s, ev, command) {
 			return nil
 		}
@@ -340,6 +352,8 @@ type loggedPart struct {
 }
 
 func (p *printer) handle(ev protocol.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if ev.Kind == "command.recorded" {
 		p.command = &ev
 	}
@@ -442,4 +456,64 @@ func (p *printer) commandResult() error {
 		return nil
 	}
 	return errors.New(c.Text)
+}
+
+// follow prints the events of a task child that ev names, and of the
+// children of that child, as the engine printed them through its shared
+// callback.
+func (p *printer) follow(ctx context.Context, ev protocol.Event) {
+	if p.jsonOut || p.open == nil || ev.Kind != "child.spawned" {
+		return
+	}
+	var c struct {
+		ChildID string `json:"child_id"`
+	}
+	if json.Unmarshal(ev.Data, &c) != nil || c.ChildID == "" {
+		return
+	}
+	p.children.Go(func() { p.printChild(ctx, c.ChildID) })
+}
+
+func (p *printer) printChild(ctx context.Context, id string) {
+	cs, err := p.open(ctx, id)
+	if err != nil {
+		return
+	}
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var last, target atomic.Uint64
+	go func() {
+		select {
+		case <-p.closing:
+			target.Store(cs.View().HeadSeq)
+			if last.Load() >= target.Load() {
+				cancel()
+			}
+		case <-sctx.Done():
+		}
+	}()
+	for ev, err := range cs.Events(sctx, 0) {
+		if err != nil {
+			return
+		}
+		p.handle(ev)
+		p.follow(ctx, ev)
+		if ev.Ephemeral {
+			continue
+		}
+		last.Store(ev.Seq)
+		if t := target.Load(); t != 0 && ev.Seq >= t {
+			return
+		}
+		if v := viewAt(cs, ev.Seq); settled(v) && ev.Seq >= v.HeadSeq {
+			return
+		}
+	}
+}
+
+// finishChildren ends the followers: each prints up to the head that its
+// child holds now, then returns.
+func (p *printer) finishChildren() {
+	close(p.closing)
+	p.children.Wait()
 }

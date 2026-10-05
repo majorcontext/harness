@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/harnesstest"
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -124,6 +125,14 @@ func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *tes
 			})
 			d := newServeDriverIn(t, serveSyncConfig(t, fake, receiver.srv.URL), nil, t.TempDir())
 			id := runTurn(t, d, "go")
+			head := d.view(t, id).HeadSeq
+			synced := func() bool {
+				got, _ := receiver.store.Head(t.Context(), id)
+				return got == head
+			}
+			if !testpoll.UntilNoT(waitBound, synced) {
+				t.Fatalf("the receiver did not get the first %d records\n%s", head, d.Stderr())
+			}
 			refuse.Store(true)
 			d.Submit(t, id, "more")
 			awaitLog(t, d, "sync stopped for a session")

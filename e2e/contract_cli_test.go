@@ -272,6 +272,15 @@ func TestContractCLIRunRetryBeforeAnyTextPrintsNoRestartNotice(t *testing.T) {
 	}
 }
 
+func TestContractCLIRunPrintsTheOutputOfATaskChild(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
+	out, errOut, code := h.run("run", "-p", "delegate")
+	if code != 0 || !strings.Contains(out, "child says hello") || !strings.Contains(out, "waiting") {
+		t.Errorf("run with a task child = %d, want 0 and the text of the parent and of the child on stdout\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
 func TestContractCLISessionsOfAnEmptyDir(t *testing.T) {
 	skipShort(t)
 	h := newCLIHost(t, nil)
