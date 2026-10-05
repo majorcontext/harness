@@ -31,6 +31,10 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
+	specErrorText    = "the actor masks and bounds each error text that it writes to the log"
+	specGoalFailed   = "An error the user must fix yields `failed`."
+	specNoParkedGoal = "There is no deferred goal and no parked goal."
+
 	specOpenContinuation  = "Does the switch wrap the messages that the engine writes for the model"
 	specOpenListOrder     = "Does `GET /sessions` keep creation order?"
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
@@ -173,6 +177,7 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_tools_listed_and_run":                                 reGolden(specView),
 	"provider_429_then_ok":                                        reGolden(specView),
 	"provider_5xx_then_ok":                                        reGolden(specView),
+	"provider_error_text_is_masked_and_bounded":                   reGolden(specView, specErrorText, specGoalFailed, specNoParkedGoal),
 	"queue_delete_while_busy":                                     reGolden(specView),
 	"queue_survives_clean_restart_then_delete":                    reGolden(specView, specHandoffResume),
 	"queue_survives_clean_restart_then_drains_with_next_prompt":   reGolden(specQueue, specHandoffResume, specView),

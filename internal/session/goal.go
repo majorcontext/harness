@@ -10,6 +10,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/plugin"
 )
 
 const evaluatorPrompt = `You are a strict goal-completion evaluator for an autonomous agent.
@@ -297,7 +298,7 @@ func (a *Actor) goalStop(err error) []eventlog.Event {
 	if g.State != eventlog.GoalActive {
 		return nil
 	}
-	change := eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: err.Error()}
+	change := eventlog.GoalChanged{State: eventlog.GoalFailed, Reason: plugin.SanitizeSessionError(err.Error())}
 	if errors.Is(err, turn.ErrRetryable) || errors.Is(err, turn.ErrExhausted) {
 		change.State, change.RetryAt = eventlog.GoalPaused, time.Now().Add(min(goalRetry<<min(g.Pauses, 10), goalRetryMax))
 	}

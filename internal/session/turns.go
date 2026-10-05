@@ -9,6 +9,7 @@ import (
 
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/turn"
+	"github.com/majorcontext/harness/plugin"
 )
 
 const (
@@ -205,7 +206,7 @@ func (a *Actor) ended(r *running, runErr error) {
 	case errors.Is(runErr, turn.ErrExhausted):
 		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, string(eventlog.CauseProviderExhausted), cutOff, a.goalStop(runErr)...)
 	default:
-		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, runErr.Error(), cutOff, a.goalStop(runErr)...)
+		err = a.endTurn(a.cfg.Base, turnID, eventlog.StopFailed, plugin.SanitizeSessionError(runErr.Error()), cutOff, a.goalStop(runErr)...)
 		next = true
 	}
 	var after func() error
