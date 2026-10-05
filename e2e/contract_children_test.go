@@ -123,6 +123,79 @@ func TestContractChildrenBusyParent(t *testing.T) {
 	})
 }
 
+func TestContractChildReportText(t *testing.T) {
+	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
+		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},
+	}}}}
+	busyAck := harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+		{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+	}}}
+	childLooks := harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{
+		{ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."}},
+	}}}
+	after := harnesstest.Step{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true}
+	busyActions := []action{
+		create{as: "a"},
+		submit{as: "a", text: "delegate"},
+		awaitRequests{n: 3},
+		release{step: "child"},
+		awaitRequests{n: 4},
+		release{step: "ack"},
+		waitIdle{as: "a"},
+	}
+	runScenarios(t, []scenario{
+		{
+			name:       "child_usage_limit_reaches_a_busy_parent",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate, childLooks,
+				{Name: "child_wall", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}},
+				busyAck, after,
+			},
+			actions: busyActions,
+		},
+		{
+			name:       "child_long_result_reaches_a_busy_parent",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate, childLooks,
+				{Name: "child_done", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{Text: strings.Repeat("long result ", 400)}},
+				busyAck, after,
+			},
+			actions: busyActions,
+		},
+		{
+			// A parent that a restart reopens runs its queued input, and the reopened child ends crashed into that busy turn.
+			name:       "child_crash_reaches_a_busy_parent",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate,
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "partial", Block: true}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting", Block: true}},
+				{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "rest"}, Repeat: true},
+				{Name: "next", Match: harnesstest.LastUserText("next"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+				}}, Repeat: true},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 3},
+				enqueueNext{as: "a", text: "next"},
+				bindChild{as: "kid", parent: "a", record: true},
+				restart{kill: true},
+				getSession{as: "a"},
+				getSession{as: "kid"},
+				release{step: "next"},
+				waitIdle{as: "kid"},
+				waitIdle{as: "a"},
+				getSession{as: "kid"},
+				getSession{as: "a"},
+			},
+		},
+	})
+}
+
 func TestContractChildrenControl(t *testing.T) {
 	delegate := harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
 		ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "general-purpose", "prompt": "child work"},

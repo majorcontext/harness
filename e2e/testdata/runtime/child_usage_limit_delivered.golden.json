@@ -164,7 +164,7 @@
           "parts": [
             {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: [permanent] anthropic: You have reached your specified API usage limits. You will regain access on 2099-01-01 at 00:00 UTC. (rate_limit_error, HTTP 429)\n\nlooking"
+              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: provider capacity exhausted for this account: [permanent] anthropic: You have reached your specified API usage limits. You will regain access on 2099-01-01 at 00:00 UTC. (rate_limit_error, HTTP 429) — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child after 2099-01-01 at 00:00 UTC with task send on session_id \u003csession\u003e\n\nlooking"
             }
           ]
         }
@@ -319,7 +319,7 @@
         "parts": [
           {
             "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: [permanent] anthropic: You have reached your specified API usage limits. You will regain access on 2099-01-01 at 00:00 UTC. (rate_limit_error, HTTP 429)\n\nlooking"
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: provider capacity exhausted for this account: [permanent] anthropic: You have reached your specified API usage limits. You will regain access on 2099-01-01 at 00:00 UTC. (rate_limit_error, HTTP 429) — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child after 2099-01-01 at 00:00 UTC with task send on session_id \u003csession\u003e\n\nlooking"
           }
         ]
       },

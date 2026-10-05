@@ -60,6 +60,19 @@ const (
 	CauseProviderExhausted Cause = "provider_exhausted"
 )
 
+// ErrorClass types the error of a failed turn, so a reader never parses the
+// text of the error. A retryable failure holds the class name of the
+// provider, such as overloaded or server_error.
+type ErrorClass string
+
+// Error classes that do not name a retryable class of the provider.
+const (
+	ErrorPermanent   ErrorClass = "permanent"
+	ErrorTimedOut    ErrorClass = "timed_out"
+	ErrorRateLimited ErrorClass = "rate_limited"
+	ErrorUnrecovered ErrorClass = "unrecovered"
+)
+
 // Resolution says how a request closed.
 type Resolution string
 

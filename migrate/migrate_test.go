@@ -17,6 +17,7 @@ import (
 	"github.com/majorcontext/harness/engine"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/message"
 )
 
@@ -220,9 +221,22 @@ var journalCases = []struct {
 			t.Errorf("a child with no tools has tools %v", tools)
 		}
 	}},
-	{"child that a usage limit failed keeps the provider cause", "ses_0000000000000014", func(t *testing.T, s *eventlog.State, _ harness.Store) {
-		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Cause != eventlog.CauseProviderExhausted || e.Error != "usage limit reached" {
+	{"child that a usage limit failed reports its reason once", "ses_0000000000000014", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Cause != eventlog.CauseProviderExhausted || e.Error != "usage limit reached" || e.RecoverHint != "2026-09-03 09:00 UTC" {
 			t.Errorf("last ended %+v", e)
+		}
+		const want = "ses_0000000000000014 (agent=explore) failed: provider capacity exhausted for this account: usage limit reached (usage: 9 in / 7 out)" + wallGuidanceAfter + "ses_0000000000000014"
+		if _, report, ok := session.Settlement("ses_0000000000000014", s); !ok || report[1].Text != want {
+			t.Errorf("report %+v, want line %q", report, want)
+		}
+	}},
+	{"child that a rate limit wall failed reports its reason once", "ses_0000000000000015", func(t *testing.T, s *eventlog.State, _ harness.Store) {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Cause != eventlog.CauseProviderExhausted || e.ErrorClass != eventlog.ErrorRateLimited || e.Error != "too many requests" {
+			t.Errorf("last ended %+v", e)
+		}
+		const want = "ses_0000000000000015 (agent=explore) failed: provider rate limit outlasted the retry budget for this account: too many requests (usage: 9 in / 7 out)" + wallGuidance + "ses_0000000000000015"
+		if _, report, ok := session.Settlement("ses_0000000000000015", s); !ok || report[1].Text != want {
+			t.Errorf("report %+v, want line %q", report, want)
 		}
 	}},
 	{"child in a turn at the cutover fails as lost to restart", "ses_0000000000000012", func(t *testing.T, s *eventlog.State, _ harness.Store) {
@@ -244,6 +258,12 @@ var journalCases = []struct {
 	}},
 }
 
+// wallGuidance is the guidance that ends the line of a child that a wall of the provider account stopped, up to its session ID.
+const wallGuidance = " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child with task send on session_id "
+
+// wallGuidanceAfter is wallGuidance for a wall whose journal holds the time that it lifts.
+const wallGuidanceAfter = " — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child after 2026-09-03 09:00 UTC with task send on session_id "
+
 func TestDirConvertsEachJournal(t *testing.T) {
 	ctx := context.Background()
 	dir := copyDir(t, "testdata/journals")
@@ -253,7 +273,7 @@ func TestDirConvertsEachJournal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := Failed(results)
-	if len(results) != 11 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
+	if len(results) != 12 || len(failed) != 1 || failed[0].Session != "ses_0000000000000010" {
 		t.Fatalf("results %+v", results)
 	}
 	for _, c := range journalCases {

@@ -10,7 +10,10 @@ const (
 	specOneResult     = "Every tool call item gets exactly one result item, or an open request, before its turn ends."
 	specExternal      = "| Items | External items become `item.completed` | stream-json frames | `item/completed` |"
 	specTaskInputs    = "Task notifications become inputs"
-	specChildReport   = "The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child"
+	specChildReport   = "The report names the child, its agent, the outcome, and the reason, and holds the last assistant text of the child"
+	specChildReason   = "The reason is the classified text of the engine: a fixed prefix by `error_class`, then the `error` as the log holds it."
+	specChildCrash    = "A crashed child turn ends `crashed` and settles `failed`."
+	specChildLong     = "The report holds at most 4000 runes of the result, cut with `… [truncated]`"
 	specChildClaude   = "On Claude Code the engine checked out reports only when a turn started, so a busy parent gets no report in the middle of its turn"
 	specChildNoGoal   = "A child session has no `goal` tool"
 	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
@@ -47,7 +50,8 @@ const (
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
 	specOpenGauge         = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
 	specOpenRetry         = "Does a failed Claude Code turn run again?"
-	specOpenChildFailure  = "Does a failed child, an exhausted child, or a long result in a report to a busy parent keep the engine text?"
+	specOpenChildLong     = "Does a long result in a report keep the retention of the engine?"
+	specOpenChildCrash    = "What does a report give for a crashed child?"
 	specOpenChildParts    = "Does the log keep a `task_report` part and an `engine_context` part?"
 
 	specStopped       = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
@@ -119,10 +123,13 @@ var runtimeRows = map[string]runtimeRow{
 	"builtin_commands_run_and_record":                             pendingOn("phase 4"),
 	"busy_deferred_goal_with_max_turns":                           deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
-	"child_usage_limit_delivered":                                 reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
-	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"child_crash_reaches_a_busy_parent":                           reGolden(specView, specCrash, specChildReport, specChildCrash, specOpenChildCrash, specChildWording, specOpenChildParts),
+	"child_usage_limit_delivered":                                 reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
+	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording, specOpenChildParts),
-	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildWording, specOpenChildFailure, specOpenChildParts),
+	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
+	"child_usage_limit_reaches_a_busy_parent":                     reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
+	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specOpenChildLong, specChildWording, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_child_report_waits_for_the_next_turn":             reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_child_reports_share_the_next_turn":                reGolden(specTaskInputs, specChildReport, specChildClaude),
