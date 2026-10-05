@@ -227,3 +227,14 @@ func await[T any](a *Actor, ch <-chan T) {
 
 // Synced returns the receiver head of the last acknowledged SyncBatch.
 func (a *Actor) Synced() uint64 { return a.synced.Load() }
+
+// Rejected reports whether Sync rejected a batch for good, so that it lacks
+// records of the session.
+func (a *Actor) Rejected() bool {
+	select {
+	case <-a.rejected:
+		return true
+	default:
+		return false
+	}
+}

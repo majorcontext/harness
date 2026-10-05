@@ -24,6 +24,25 @@ func awaitStartWork(t *testing.T, d *runtimeDriver) {
 	}
 }
 
+// awaitLog waits until the stderr of serve holds each of wants. Serve writes
+// stderr through a pipe that a goroutine of the test copies, so a line has no
+// order against the HTTP reply that followed its write.
+func awaitLog(t *testing.T, d *runtimeDriver, wants ...string) {
+	t.Helper()
+	has := func() bool {
+		log := d.Stderr()
+		for _, want := range wants {
+			if !strings.Contains(log, want) {
+				return false
+			}
+		}
+		return true
+	}
+	if !testpoll.UntilNoT(waitBound, has) {
+		t.Fatalf("serve did not log %q\n%s", wants, d.Stderr())
+	}
+}
+
 func TestContractServeStartOpensOnlySessionsWithWork(t *testing.T) {
 	skipShort(t)
 	fake := harnesstest.New(t, replyText("ok"))
@@ -60,9 +79,7 @@ func TestContractServeStartSkipsALogThatDoesNotReplay(t *testing.T) {
 	if got := d.view(t, id).Status; got != "idle" {
 		t.Errorf("the readable session is %q, want idle", got)
 	}
-	if log := d.Stderr(); !strings.Contains(log, "ses_unreadable") || !strings.Contains(log, "does not replay") {
-		t.Errorf("serve did not log the skipped session\n%s", log)
-	}
+	awaitLog(t, d, "ses_unreadable", "does not replay")
 }
 
 func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
@@ -91,9 +108,7 @@ func TestContractListSkipsALogThatDoesNotReplay(t *testing.T) {
 	if len(page.Sessions) != 1 || page.Sessions[0].ID != id {
 		t.Errorf("GET /sessions lists %+v, want only %s: a log that does not replay is skipped", page.Sessions, id)
 	}
-	if log := d.Stderr(); !strings.Contains(log, "ses_torn") {
-		t.Errorf("serve did not log the skipped session\n%s", log)
-	}
+	awaitLog(t, d, "ses_torn")
 }
 
 func TestContractServeStartCatchesUpEveryStoredSession(t *testing.T) {
@@ -143,11 +158,5 @@ func TestContractServeLogsItsStartAndEachCreate(t *testing.T) {
 	fake := harnesstest.New(t, replyText("ok"))
 	d := newServeDriverIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(nil)), nil, t.TempDir())
 	id := d.Create(t)
-	awaitStartWork(t, d)
-	log := d.Stderr()
-	for _, want := range []string{`"msg":"serve start"`, `"msg":"config: `, `"msg":"session created"`, `"session":"` + id + `"`} {
-		if !strings.Contains(log, want) {
-			t.Errorf("serve log lacks %s\n%s", want, log)
-		}
-	}
+	awaitLog(t, d, `"msg":"serve start"`, `"msg":"config: `, `"msg":"session created"`, `"session":"`+id+`"`)
 }

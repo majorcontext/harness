@@ -101,6 +101,40 @@ func TestContractServeStopReportsCrashedWhenSyncDoesNotAcknowledge(t *testing.T)
 	}
 }
 
+func TestContractServeStopReportsUnsyncedAfterAFinalRejectionDuringTheRun(t *testing.T) {
+	skipShort(t)
+	rows := []struct {
+		name   string
+		status int
+		code   string
+	}{
+		{"sync_conflict", http.StatusConflict, "sync_conflict"},
+		{"unauthorized", http.StatusUnauthorized, "unauthorized"},
+		{"too_large", http.StatusRequestEntityTooLarge, "too_large"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			fake := harnesstest.New(t, replyText("ok"), replyText("again"))
+			var refuse atomic.Bool
+			receiver := newSyncReceiver(t, func(int, protocol.SyncBatch) (int, string) {
+				if refuse.Load() {
+					return row.status, row.code
+				}
+				return 0, ""
+			})
+			d := newServeDriverIn(t, serveSyncConfig(t, fake, receiver.srv.URL), nil, t.TempDir())
+			id := runTurn(t, d, "go")
+			refuse.Store(true)
+			d.Submit(t, id, "more")
+			awaitLog(t, d, "sync stopped for a session")
+			d.proc.terminate(t)
+			if got := readStopReport(t, d.store); got != (stopReport{Stop: "handoff", Sync: "unsynced"}) {
+				t.Errorf("stop report = %+v, want handoff and unsynced: Sync rejected a batch for good, so it lacks records", got)
+			}
+		})
+	}
+}
+
 func TestContractServeStartRemovesTheStopReportOfAnEarlierRun(t *testing.T) {
 	skipShort(t)
 	fake := harnesstest.New(t, replyText("ok"))

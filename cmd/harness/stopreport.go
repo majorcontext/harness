@@ -29,9 +29,9 @@ func removeStopReport(dir string) error {
 }
 
 // writeStopReport writes the one-line report for a close that returned
-// closeErr. replicated says that a Sync is set and the start caught up every
-// stored session, so a release that returned nil left the Sync with every
-// record.
+// closeErr. replicated says that a Sync is set, the start caught up every
+// stored session, and no Sync rejected a batch for good, so a release that
+// returned nil left the Sync with every record.
 func writeStopReport(dir string, closeErr error, replicated bool) error {
 	r := stopReport{Stop: "handoff", Sync: "synced"}
 	if closeErr != nil {

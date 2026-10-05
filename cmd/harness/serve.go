@@ -118,7 +118,7 @@ func serveCmd(args []string) error {
 		defer close(resumed)
 		startWork(ctx, rt, store, logger, &caughtUp)
 	}()
-	replicated := func() bool { return cfg.Sync != nil && caughtUp.Load() }
+	replicated := func() bool { return cfg.Sync != nil && caughtUp.Load() && !rt.SyncStopped() }
 	logger.Info("serve start", "addr", o.addr, "version", version)
 	select {
 	case err := <-errc:

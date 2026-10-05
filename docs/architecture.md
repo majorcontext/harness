@@ -142,6 +142,8 @@ func (r *Runtime) Close(ctx context.Context) error
 
 // CatchUp replicates every stored session through Sync, opening none. A box harness calls it at start.
 func (r *Runtime) CatchUp(ctx context.Context) error
+// SyncStopped reports whether a Sync rejected a batch for good since New. Sync may then lack records of a session that the runtime ran.
+func (r *Runtime) SyncStopped() bool
 // ProbePlugins reads the manifest of each configured plugin, as the first Create or Open does, and returns each plugin with its tools and hooks.
 func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error)
 
@@ -633,7 +635,7 @@ Go types in `protocol` are the source. `go generate ./protocol` writes `protocol
 - `run -p <prompt>` or `run -goal <condition>` creates a session, or opens the one that `-r <id>` or `-c` names, on a `DiskStore`, or on a `MemStore` with `-no-save`. `-model` replaces the model of an opened session, and `-system` appends a prompt segment. It submits the prompt as a typed input, so a slash command runs as `Submit` runs it, and prints each text delta of the session to stdout, each tool call and each failed tool to stderr, or each event as a JSON line with `-json`. It returns when the session has settled. It exits 1 when the turn failed or a typed command did not succeed, and 3 when `-goal` does not reach `achieved`. It prints `session: <id>` on stderr when it saved the session.
 - `sessions` lists the stored sessions in creation order with their message counts, or a JSON array with `--json`.
 - `plugin probe` calls `Runtime.ProbePlugins` and prints each plugin with its hooks. There is no manifest cache to refresh.
-- `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline. `sync` is `synced` when `Close` returned nil, a `sync` is configured, and the start caught up every stored session, else `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`; `boxinit` reads the file and posts both facts on the boot-progress route.
+- `serve` deletes `serve-stop.json` in the session directory at start. On `SIGINT` or `SIGTERM` it stops the turns, which hand off, waits for `Sync` to acknowledge every record, and closes the runtime and the HTTP server within 5 s. Then it writes the file as one line, `{"stop":"handoff"|"crashed","sync":"synced"|"unsynced"}`, and exits. `stop` is `handoff` when `Runtime.Close` returned nil and `crashed` when it failed or passed the deadline. `sync` is `synced` when `Close` returned nil, a `sync` is configured, the start caught up every stored session, and `Runtime.SyncStopped` is false, else `unsynced`. A `Close` that finds a session that Sync rejected for good does not fail for it; the stop is still `handoff`, and `sync` is `unsynced`. A missing file, such as after a kill, means `crashed` and `unsynced`; `boxinit` reads the file and posts both facts on the boot-progress route.
 
 ## turn and backend
 

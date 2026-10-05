@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -140,9 +141,11 @@ type Runtime struct {
 	closeStart context.CancelFunc
 	group      sync.WaitGroup
 
-	mu       sync.Mutex
-	closed   bool
-	sessions map[string]*entry
+	mu     sync.Mutex
+	closed bool
+	// syncStopped is set once a Sync rejects a batch for good.
+	syncStopped atomic.Bool
+	sessions    map[string]*entry
 	// catching holds the sessions that CatchUp replicates.
 	catching  map[string]*catchGrant
 	catchSlot chan struct{}
@@ -399,6 +402,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		plug = r.plugins.Session(id)
 	}
 	sp := r.newSessionPrompt(c.Agent, profile)
+	var a *session.Actor
 	cfg := session.Config{
 		ID:              id,
 		Store:           storeLog{r.store, id},
@@ -418,10 +422,14 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		KeepTurns:       r.keep,
 		Base:            r.base,
 		Go:              r.group.Go,
-		Done:            func() { r.forget(id, e) },
-		Check:           r.changeModel,
+		Done: func() {
+			if a != nil && a.Rejected() {
+				r.syncStopped.Store(true)
+			}
+			r.forget(id, e)
+		},
+		Check: r.changeModel,
 	}
-	var a *session.Actor
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
 	} else {
@@ -606,7 +614,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 				return
 			}
 			if e.s != nil {
-				if err := e.s.Release(ctx); !errors.Is(err, ErrSessionNotOwned) {
+				err := e.s.Release(ctx)
+				if !errors.Is(err, ErrSessionNotOwned) && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrSyncRejected) {
 					errs[i] = err
 				}
 			}
@@ -630,6 +639,11 @@ func (r *Runtime) Close(ctx context.Context) error {
 	r.closeTools(ctx)
 	return errors.Join(errs...)
 }
+
+// SyncStopped reports whether a Sync rejected a batch for good since New, so
+// that Sync may lack records of a session that this runtime ran. It stays
+// true for the life of the runtime.
+func (r *Runtime) SyncStopped() bool { return r.syncStopped.Load() }
 
 // hold adds one unit of the work that Close waits for, unless Close started.
 func (r *Runtime) hold() error {
