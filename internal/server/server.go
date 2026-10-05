@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"mime"
 	"net/http"
 	"strconv"
@@ -122,13 +123,51 @@ type handler[S Session] struct {
 
 type route struct{ method, path string }
 
-// handle registers f at pattern, "METHOD path", as the route of each op.
-func (h *handler[S]) handle(mux *http.ServeMux, pattern string, f http.HandlerFunc, ops ...command.Op) {
-	mux.HandleFunc(pattern, f)
-	method, path, _ := strings.Cut(pattern, " ")
-	for _, op := range ops {
-		h.routes[op] = route{method, path}
+// handlers maps the name of each route of Table to its handler. The two forms
+// of the events route share one handler.
+func (h *handler[S]) handlers() map[string]http.HandlerFunc {
+	events := h.serve(h.events)
+	m := map[string]http.HandlerFunc{
+		"createSession":    h.serve(h.create),
+		"listSessions":     h.serve(h.list),
+		"getSession":       h.serve(h.view),
+		"endSession":       h.serve(h.end),
+		"updateSession":    h.session(h.update),
+		"submitInput":      h.session(h.submit),
+		"listInputs":       h.serve(h.queued),
+		"withdrawInput":    h.session(h.withdraw),
+		"interruptSession": h.session(h.interrupt),
+		"compactSession":   h.session(h.compact),
+		"resolveRequest":   h.session(h.resolve),
+		"setGoal":          h.session(h.setGoal),
+		"clearGoal":        h.session(h.clearGoal),
+		"listEvents":       events,
+		"streamEvents":     events,
+		"listModels": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+			reply(w, http.StatusOK, h.rt.Models())
+			return nil
+		}),
+		"listCommands": h.serve(h.commands),
+		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+			reply(w, http.StatusOK, map[string]string{"status": "ok"})
+			return nil
+		}),
 	}
+	maps.Copy(m, h.boxHandlers())
+	return m
+}
+
+func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
+	c, err := h.rt.Commands()
+	if err != nil {
+		return err
+	}
+	for i, e := range c.Commands {
+		at := h.routes[command.Op(e.Op)]
+		c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
+	}
+	reply(w, http.StatusOK, c)
+	return nil
 }
 
 // New returns the HTTP API of rt.
@@ -138,41 +177,7 @@ func New[S Session](rt Runtime[S], opts Options) http.Handler {
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /sessions", h.serve(h.create))
-	mux.HandleFunc("GET /sessions", h.serve(h.list))
-	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
-	mux.HandleFunc("DELETE /sessions/{id}", h.serve(h.end))
-	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
-	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
-	h.handle(mux, "GET /sessions/{id}/inputs", h.serve(h.queued), command.OpQueueList)
-	mux.HandleFunc("DELETE /sessions/{id}/inputs/{input}", h.session(h.withdraw))
-	h.handle(mux, "POST /sessions/{id}/interrupt", h.session(h.interrupt), command.OpAbort)
-	h.handle(mux, "POST /sessions/{id}/compact", h.session(h.compact), command.OpCompact)
-	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
-	h.handle(mux, "PUT /sessions/{id}/goal", h.session(h.setGoal), command.OpSetGoal)
-	h.handle(mux, "DELETE /sessions/{id}/goal", h.session(h.clearGoal), command.OpClearGoal)
-	mux.HandleFunc("GET /sessions/{id}/events", h.serve(h.events))
-	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		reply(w, http.StatusOK, rt.Models())
-		return nil
-	}))
-	h.box(mux)
-	mux.HandleFunc("GET /commands", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		c, err := rt.Commands()
-		if err != nil {
-			return err
-		}
-		for i, e := range c.Commands {
-			at := h.routes[command.Op(e.Op)]
-			c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
-		}
-		reply(w, http.StatusOK, c)
-		return nil
-	}))
-	mux.HandleFunc("GET /health", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		reply(w, http.StatusOK, map[string]string{"status": "ok"})
-		return nil
-	}))
+	h.bind(mux, h.handlers())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pattern := mux.Handler(r); pattern != "" {
 			mux.ServeHTTP(w, r)
