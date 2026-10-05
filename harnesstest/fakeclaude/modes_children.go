@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -14,8 +15,9 @@ const (
 	reportMarker = "[tasks:"
 	reportText   = "A background task you started has finished"
 	slowSuffix   = "slow"
-	slowChild    = 1500 * time.Millisecond
-	settleWait   = 5 * time.Second
+	gateFile     = "child.gate"
+	gateWait     = 20 * time.Second
+	settleWait   = 30 * time.Second
 )
 
 // childModes run one scenario across several invocations, told apart by the
@@ -32,8 +34,9 @@ var childModes = map[string]mode{
 // line. A line in that window shows that harness delivered a report in the
 // middle of the turn.
 // A child answers with its prompt, so a report names it. A child that ends
-// with the slow suffix takes a moment, so a prompt that a test sends after the
-// parent starts is queued before the child ends. A turn that carries a report
+// with the slow suffix waits for the gate file in its work dir, so a test
+// that writes the file after it queued a prompt gets the prompt queued before
+// the child ends. A turn that carries a report
 // in its first line only acknowledges it, and so does any other prompt.
 func childParent(prompts ...string) mode {
 	return func(f *fake) {
@@ -41,7 +44,7 @@ func childParent(prompts ...string) mode {
 		switch {
 		case strings.Contains(text, childPrompt):
 			if strings.HasSuffix(text, slowSuffix) {
-				time.Sleep(slowChild)
+				awaitGate()
 			}
 			answer := strings.TrimSpace("child done " + strings.TrimSpace(strings.TrimPrefix(text, childPrompt)))
 			f.emit(say(answer), success(answer, 1, 1))
@@ -51,6 +54,14 @@ func childParent(prompts ...string) mode {
 			spawnChildren(f, prompts)
 		default:
 			f.emit(say("ok"), success("ok", 1, 1))
+		}
+	}
+}
+
+func awaitGate() {
+	for deadline := time.Now().Add(gateWait); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(gateFile); err == nil {
+			return
 		}
 	}
 }

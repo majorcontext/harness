@@ -239,16 +239,28 @@ func (a *Actor) startInputs(q []eventlog.InputAdmitted) []string {
 		return ids
 	}
 	for _, in := range q[1:] {
-		if in.Source == sourceChild {
+		if isReport(in.Parts) {
 			ids = append(ids, in.InputID)
 		}
 	}
 	return ids
 }
 
-// ownsLoop reports whether the backend of the current model runs the loop of
-// a turn itself.
+// isReport reports whether parts hold the report of a child. A caller cannot
+// write a task report part, so this tells a report from a prompt that names
+// source child.
+func isReport(parts []eventlog.Part) bool {
+	return slices.ContainsFunc(parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })
+}
+
+// ownsLoop reports whether the backend that runs the current turn runs its
+// loop itself. With no turn, or a run that is not a turn, it reads the backend
+// of the current model, which the next turn uses. A model change does not move
+// a turn that runs.
 func (a *Actor) ownsLoop() bool {
+	if a.run != nil && a.run.kind == kindTurn {
+		return a.run.ownsLoop
+	}
 	return a.cfg.Backend.Capabilities(a.state.Model()).OwnsLoop
 }
 

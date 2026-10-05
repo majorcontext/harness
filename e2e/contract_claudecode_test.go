@@ -105,6 +105,7 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 				submit{as: "a", text: "delegate"},
 				claudeAwaitText{as: "a", text: "Delegating."},
 				enqueueNext{as: "a", text: "next step"},
+				writeFile{path: "child.gate", body: "open\n"},
 				claudeAwaitText{as: "a", text: "noted"},
 			}, settled...),
 		},
