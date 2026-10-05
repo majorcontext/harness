@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,10 +14,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/engine"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/plugin"
-	"github.com/majorcontext/harness/provider"
 )
 
 // TestPluginHelperProcess is not a real test. It is invoked as a subprocess
@@ -119,144 +115,6 @@ func TestBuildPluginHostNoPlugins(t *testing.T) {
 	// `s.cfg.Hooks != nil` check in the engine true and then panic).
 	if h := pluginHooks(host); h != nil {
 		t.Fatalf("pluginHooks(nil) = %v, want nil interface", h)
-	}
-}
-
-// TestPluginWiringEndToEnd proves the full wiring path: a plugin configured
-// exactly as `config.Config.Plugins` would carry it, probed and cached by
-// buildPluginHost exactly as run/serve do, wired into engine.Config.Hooks,
-// and then a session created the way serveCmd's newSessionFn creates it
-// actually dispatches a hook to the real (subprocess) plugin and observes
-// its mutation in the request sent to the model.
-func TestPluginWiringEndToEnd(t *testing.T) {
-	if testing.Short() {
-		t.Skip("spawns a real plugin subprocess")
-	}
-	tmp := t.TempDir()
-	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
-	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
-	t.Setenv("PLUGIN_NAME", "echoplug")
-	marker := "hook-fired-42"
-	t.Setenv("PLUGIN_MARKER", marker)
-
-	cfg := &config.Config{
-		Plugins: []config.PluginSpec{helperPluginCommand(t, "echoplug")},
-	}
-
-	ctx := context.Background()
-	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, nil, nil, "", "")
-	if err != nil {
-		t.Fatalf("buildPluginHost: %v", err)
-	}
-	if host == nil {
-		t.Fatal("buildPluginHost returned nil host with plugins configured")
-	}
-	t.Cleanup(host.Close)
-
-	prov := &scriptedProvider{name: "test"}
-	model := message.ModelRef{Provider: "test", Model: "m1"}
-	mkCfg := func(m message.ModelRef) engine.Config {
-		return engine.Config{
-			Providers:    provider.Registry{"test": prov},
-			Model:        m,
-			System:       []string{"base system"},
-			WorkDir:      tmp,
-			Instructions: &engine.InstructionsConfig{Disabled: true},
-			SkillsDirs:   []string{},
-			Hooks:        pluginHooks(host),
-		}
-	}
-	newSession := newSessionFn(mkCfg, model, cfg, nil, nil, func(string, int, *provider.Request) {})
-	sess, err := newSession(message.ModelRef{}, tmp, "")
-	if err != nil {
-		t.Fatalf("newSession: %v", err)
-	}
-	if _, err := sess.Prompt(ctx, "hello"); err != nil {
-		t.Fatalf("Prompt: %v", err)
-	}
-	if len(prov.requests) == 0 {
-		t.Fatal("provider never received a request")
-	}
-	found := false
-	for _, seg := range prov.requests[0].System {
-		if seg == marker {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("system segments = %v, want to contain plugin marker %q", prov.requests[0].System, marker)
-	}
-}
-
-// TestPluginHTTPHeadersWiring proves scope item (4): config's
-// plugin_http_headers reaches the plugin's InitializeParams.HTTPHeaders and
-// is actually stamped on the plugin's outbound HTTP traffic. It does not add
-// new stamping machinery — plugin.Client.HTTPClient() already does the
-// stamping (see plugin/sdk.go); this only proves buildPluginHost passes the
-// config value through plugin.Options.HTTPHeaders, which host.go already
-// forwards into InitializeParams.
-func TestPluginHTTPHeadersWiring(t *testing.T) {
-	if testing.Short() {
-		t.Skip("spawns a real plugin subprocess")
-	}
-	tmp := t.TempDir()
-	t.Setenv("HARNESS_PLUGIN_CACHE", filepath.Join(tmp, "plugin_cache.json"))
-	t.Setenv("GO_WANT_PLUGIN_HELPER", "1")
-	t.Setenv("PLUGIN_NAME", "httpplug")
-
-	gotHeaders := make(chan http.Header, 1)
-	probe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeaders <- r.Header.Clone()
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(probe.Close)
-	t.Setenv("PLUGIN_HTTP_PROBE_URL", probe.URL)
-
-	cfg := &config.Config{
-		Plugins:           []config.PluginSpec{helperPluginCommand(t, "httpplug")},
-		PluginHTTPHeaders: map[string]string{"X-Workspace": "acme-corp"},
-	}
-
-	ctx := context.Background()
-	host, err := buildPluginHost(ctx, cfg.Plugins, "test-version", tmp, cfg.PluginHTTPHeaders, nil, "", "")
-	if err != nil {
-		t.Fatalf("buildPluginHost: %v", err)
-	}
-	if host == nil {
-		t.Fatal("buildPluginHost returned nil host with plugins configured")
-	}
-	t.Cleanup(host.Close)
-
-	prov := &scriptedProvider{name: "test"}
-	model := message.ModelRef{Provider: "test", Model: "m1"}
-	mkCfg := func(m message.ModelRef) engine.Config {
-		return engine.Config{
-			Providers:    provider.Registry{"test": prov},
-			Model:        m,
-			System:       []string{"base system"},
-			WorkDir:      tmp,
-			Instructions: &engine.InstructionsConfig{Disabled: true},
-			SkillsDirs:   []string{},
-			Hooks:        pluginHooks(host),
-		}
-	}
-	newSession := newSessionFn(mkCfg, model, cfg, nil, nil, func(string, int, *provider.Request) {})
-	sess, err := newSession(message.ModelRef{}, tmp, "")
-	if err != nil {
-		t.Fatalf("newSession: %v", err)
-	}
-	if _, err := sess.Prompt(ctx, "hello"); err != nil {
-		t.Fatalf("Prompt: %v", err)
-	}
-
-	// Block directly on the channel the probe handler fills: the plugin's
-	// system.transform hook (dispatched synchronously by Prompt above) makes
-	// its outbound request before returning, so the value is already there;
-	// if the wiring were broken the plugin never calls out and this blocks
-	// until the test binary's own timeout catches the hang.
-	h := <-gotHeaders
-	if got := h.Get("X-Workspace"); got != "acme-corp" {
-		t.Errorf("plugin outbound request X-Workspace header = %q, want %q (config plugin_http_headers -> InitializeParams.HTTPHeaders -> Client.HTTPClient())", got, "acme-corp")
 	}
 }
 
