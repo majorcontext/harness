@@ -98,6 +98,15 @@ func TestContractClaudeCodeChildReport(t *testing.T) {
 			}, settled...),
 		},
 		{
+			name:   "claudecode_long_child_result_has_no_readable_handle",
+			driver: claudeLaneDriver("child_report_long"),
+			actions: append([]action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				claudeAwaitText{as: "a", text: "noted"},
+			}, settled...),
+		},
+		{
 			name:   "claudecode_queued_prompt_and_child_report_share_a_turn",
 			driver: claudeLaneDriver("child_report_after_prompt"),
 			actions: append([]action{

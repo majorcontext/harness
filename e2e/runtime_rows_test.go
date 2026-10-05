@@ -17,6 +17,9 @@ const (
 	specChildLost     = "except that a crashed turn reads `lost to restart: turn was in flight when the process last stopped`"
 	specChildBound    = "the engine masked the cause with its secret patterns and cut it at 500 runes with `… [truncated]`, and the runtime does the same"
 	specChildStatus   = "The `status` and `log` actions of the `task` tool show this reason, as the engine showed its classified reason."
+	specChildHint     = "The recover hint is masked the same way and cut at 120 runes."
+	specChildHandle   = "the parent retains the masked result as `tool_result.retained` in the append of `child.settled`"
+	specChildNoRead   = "the preview ends `… [truncated; full result unavailable]`"
 	specChildClaude   = "On Claude Code the engine checked out reports only when a turn started, so a busy parent gets no report in the middle of its turn"
 	specChildNoGoal   = "A child session has no `goal` tool"
 	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
@@ -132,6 +135,9 @@ var runtimeRows = map[string]runtimeRow{
 	"child_usage_limit_reaches_a_busy_parent":                     reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_rate_limit_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_result_within_the_byte_limit_reaches_a_busy_parent":    reGolden(specChildReport, specChildLong, specChildWording, specOpenChildParts),
+	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":    reGolden(specChildReport, specChildReason, specChildHint, specChildWording, specOpenChildParts),
+	"child_long_result_handle_reads_back":                         reGolden(specChildReport, specChildLong, specChildHandle, specChildWording, specOpenChildParts),
+	"claudecode_long_child_result_has_no_readable_handle":         reGolden(specTaskInputs, specChildReport, specChildNoRead, specChildClaude),
 	"child_long_error_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildBound, specChildWording, specOpenChildParts),
 	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specChildWording, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),

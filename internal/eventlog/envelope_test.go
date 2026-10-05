@@ -84,7 +84,7 @@ func everyKind() []Event {
 		ToolResultRetained{Handle: "trh_1", Tool: "bash", BlobKey: "trh_1-2", Bytes: 20000, Lines: 3, Head: "x"},
 		suspend("t1", CauseHandoff), resume("t1", 1),
 		CompactionApplied{FromSeq: 1, ToSeq: 12, Summary: "so far", ByBackend: true},
-		end("t1", StopCompleted, ""),
+		TurnEnded{TurnID: "t1", StopReason: StopCompleted, Error: "short", ErrorDetail: "short and longer"},
 		GoalEvaluated{TurnID: "t1", Verdict: VerdictMet},
 		goal(GoalAchieved),
 		ChildSettled{ChildID: "k", Outcome: OutcomeDone, ResultRef: "blob/k"},

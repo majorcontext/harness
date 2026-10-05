@@ -1,0 +1,79 @@
+{
+  "requests": null,
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "delegate"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Delegating."
+          }
+        ]
+      },
+      {
+        "id": "msg#3",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "no second message received"
+          }
+        ]
+      },
+      {
+        "id": "msg#4",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nlong result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long… [truncated; full result unavailable]"
+          }
+        ]
+      },
+      {
+        "id": "msg#5",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "noted"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "claude_inputs.a": {
+      "status": 200,
+      "body": [
+        {
+          "content": "delegate",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "child work long",
+          "role": "user",
+          "type": "user"
+        },
+        {
+          "content": "A background task you started has finished. See the engine context below for its result, and continue accordingly.\n\n[tasks:\n- \u003csession\u003e (agent=general-purpose) done: long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long result long… [truncated; full result unavailable] (usage: 1 in / 1 out)\n]",
+          "role": "user",
+          "type": "user"
+        }
+      ]
+    }
+  }
+}
