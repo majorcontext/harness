@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -147,17 +148,73 @@ func TestContractCLIRunGoalExitCodes(t *testing.T) {
 	}
 }
 
-func TestContractCLIRunTypedCommandPrintsItsResult(t *testing.T) {
+func TestContractCLIRunTypedCommandPrintsNothingOnSuccess(t *testing.T) {
 	skipShort(t)
 	h := newCLIHost(t, nil, replyText("hello"))
 	_, errOut, _ := h.run("run", "-p", "hi")
 	id := sessionID(t, errOut)
 	out, errOut, code := h.run("run", "-r", id, "-p", "/thinking high")
-	if code != 0 || !strings.Contains(out, "/thinking succeeded") {
-		t.Fatalf("/thinking = %d %q, want its result\n%s", code, out, errOut)
+	if code != 0 || out != "" {
+		t.Fatalf("/thinking = %d %q, want 0 and no output\n%s", code, out, errOut)
 	}
 	if _, errOut, code := h.run("run", "-r", id, "-p", "/compact abc"); code != 1 || !strings.Contains(errOut, "keep_turns must be a number") {
 		t.Errorf("a command with a bad argument = %d, want 1 and its text\n%s", code, errOut)
+	}
+}
+
+func TestContractCLIRunJSONExitsOneWhenACommandFails(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	_, errOut, _ := h.run("run", "-p", "hi")
+	id := sessionID(t, errOut)
+	out, errOut, code := h.run("run", "-json", "-r", id, "-p", "/compact")
+	if code != 1 || !strings.Contains(errOut, "/compact did nothing") || !strings.Contains(out, `"status":"failed"`) {
+		t.Errorf("run -json with a failed command = %d, want 1, the text, and the failed record\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+func TestContractCLIRunRefusesALineBeforeItCreatesASession(t *testing.T) {
+	skipShort(t)
+	rows := []struct {
+		name  string
+		extra map[string]any
+		args  []string
+		want  string
+	}{
+		{"control_command_without_a_session", nil, []string{"-p", "/compact"}, "needs an existing session"},
+		{"command_that_run_does_not_perform", nil, []string{"-p", "/status"}, "not available in this mode"},
+		{"unknown_command_on_a_model_api", nil, []string{"-p", "/nope"}, `unknown command "nope"`},
+		{"goal_without_an_evaluator_model", map[string]any{"goal_evaluator_model": ""}, []string{"-goal", "say done"}, "goal_evaluator_model must be set"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			h := newCLIHost(t, row.extra, replyText("hello"))
+			_, errOut, code := h.run(append([]string{"run"}, row.args...)...)
+			if code != 1 || !strings.Contains(errOut, row.want) || strings.Contains("\n"+errOut, "\nsession: ") {
+				t.Errorf("run %v = %d, want 1 and %q with no session\n%s", row.args, code, row.want, errOut)
+			}
+			if entries, _ := os.ReadDir(h.dir); len(entries) != 0 {
+				t.Errorf("session dir holds %d entries, want none", len(entries))
+			}
+		})
+	}
+}
+
+func TestContractCLIRunAndSessionsDoNotReplicate(t *testing.T) {
+	skipShort(t)
+	receiver := newSyncReceiver(t, nil)
+	tokenFile := filepath.Join(t.TempDir(), "sync-token")
+	if err := os.WriteFile(tokenFile, []byte(syncToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newCLIHost(t, map[string]any{"owner_epoch": 7, "sync": map[string]any{"url": receiver.srv.URL + syncPath, "token_file": tokenFile}}, replyText("hello"))
+	if _, errOut, code := h.run("run", "-p", "hi"); code != 0 {
+		t.Fatalf("run = %d\n%s", code, errOut)
+	}
+	h.run("sessions")
+	h.run("plugin", "probe")
+	if got := receiver.snapshot(); len(got) != 0 {
+		t.Errorf("the receiver got %d batches from run, sessions, and plugin probe, want none: only serve replicates", len(got))
 	}
 }
 

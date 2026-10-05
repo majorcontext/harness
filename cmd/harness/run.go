@@ -113,7 +113,14 @@ func runCmd(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	line, err := checkLine(cfg, rt, opts, modelSet)
+	if err != nil {
+		return errors.Join(err, closeRuntime(rt))
+	}
 	s, err := runSession(ctx, rt, cfg, opts, modelSet)
+	if err == nil && line != nil {
+		err = line.refuseOn(s.View().Model)
+	}
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
@@ -324,6 +331,9 @@ type loggedPart struct {
 }
 
 func (p *printer) handle(ev protocol.Event) {
+	if ev.Kind == "command.recorded" {
+		p.command = &ev
+	}
 	if p.jsonOut {
 		_ = p.enc.Encode(ev)
 		return
@@ -345,8 +355,6 @@ func (p *printer) handle(ev protocol.Event) {
 		}
 	case "item.completed":
 		p.item(ev)
-	case "command.recorded":
-		p.command = &ev
 	}
 }
 
@@ -406,24 +414,20 @@ func (p *printer) verdict(s *harness.Session, opts runOptions, admitted protocol
 	return nil
 }
 
-// commandResult prints the result of a typed command and returns its failure.
+// commandResult returns the failure of a typed command. A command that
+// succeeded prints nothing.
 func (p *printer) commandResult() error {
-	if p.command == nil || p.jsonOut {
+	if p.command == nil {
 		return nil
 	}
 	var c struct {
-		Status string          `json:"status"`
-		Text   string          `json:"text"`
-		Result json.RawMessage `json:"result"`
+		Status string `json:"status"`
+		Text   string `json:"text"`
 	}
 	if err := json.Unmarshal(p.command.Data, &c); err != nil {
 		return err
 	}
 	if c.Status == protocol.CommandSucceeded {
-		fmt.Fprintln(p.out, c.Text)
-		if len(c.Result) > 0 {
-			fmt.Fprintln(p.out, string(c.Result))
-		}
 		return nil
 	}
 	return errors.New(c.Text)
