@@ -66,6 +66,7 @@ go get github.com/majorcontext/harness@latest
 Then create a runtime and a session, send the session a prompt, and read its events:
 
 ```go
+ctx := context.Background()
 rt, err := harness.New(harness.Options{
 	Store:   harness.NewMemStore(),
 	WorkDir: ".",

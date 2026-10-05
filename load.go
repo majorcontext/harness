@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -49,8 +50,11 @@ func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, erro
 			return nil, ctx.Err()
 		}
 		if l.created != nil {
-			if e.err != nil {
+			if errors.Is(e.err, ErrSessionNotFound) {
 				continue
+			}
+			if e.err != nil {
+				return nil, e.err
 			}
 			return nil, fmt.Errorf("%w: %s", ErrSessionExists, id)
 		}
