@@ -26,7 +26,7 @@ func ignoredKey(c config.Config) string {
 }
 
 // checkEmbedder refuses a second source for what the config sets: an Owner
-// beside owner_epoch, a Sync beside the sync block, and a token with no URL.
+// beside owner_epoch, a Sync beside the sync block, a token with no URL.
 func checkEmbedder(opts Options) error {
 	switch {
 	case opts.Owner != nil && opts.Config.OwnerEpoch != 0:

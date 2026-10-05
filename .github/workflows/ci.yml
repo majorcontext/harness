@@ -37,6 +37,11 @@ jobs:
 
       - run: go build ./...
 
+      - name: Protocol drift
+        run: |
+          go generate ./protocol
+          git diff --exit-code -- protocol/
+
       - run: go test -race -skip '^TestRepository$' ./...
 
       - run: go vet ./...
@@ -58,9 +63,8 @@ jobs:
         run: HARNESS_E2E_COVER=1 go test -race -count=1 ./e2e/ -run TestContract
 
       - name: Runtime contract
-        # Runs the contract rows on harness.Runtime by their dispositions in
-        # e2e/runtime_rows_test.go. It does not gate until the phase 4 switch.
-        continue-on-error: true
+        # Runs the contract rows on harness.Runtime in process by their
+        # dispositions in e2e/runtime_rows_test.go.
         run: HARNESS_E2E_RUNTIME=1 go test -race -count=1 ./e2e/ -run '^TestContract[A-Za-z]*$/^runtime$'
 
       - name: Startup budget

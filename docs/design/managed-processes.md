@@ -325,7 +325,7 @@ unknown name is 404 (also true when `Processes` is not configured at
 all — from a caller's perspective "no such process" and "nothing is
 configured" are the same observable fact).
 
-See `server/openapi.yaml` for the full schema (`ProcessStatus`,
+See the former `server/openapi.yaml` for the full schema (`ProcessStatus`,
 `ProcessInfo`).
 
 ## 6. End-to-end verification

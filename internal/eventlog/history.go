@@ -8,6 +8,8 @@ import (
 
 type entry struct {
 	seq uint64
+	// id is the ID that a reader sees for the message.
+	id  string
 	msg Message
 	// by is the provider that ran the turn of the message, and turn counts
 	// the turns that started before it.
@@ -133,7 +135,7 @@ func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
 	case TurnStarted:
 		for _, id := range e.InputIDs {
-			s.say(env.Seq, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
+			s.say(env.Seq, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
 		}
 		s.settle(env.Seq)
 	case InputPromoted:
@@ -150,22 +152,42 @@ func (s *State) remember(env Envelope) {
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
+		s.history = append(s.history, entry{seq: env.Seq, id: "msg_" + e.InputID, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
 	case ItemCompleted:
-		s.say(env.Seq, e.Message)
+		s.say(env.Seq, "msg_"+e.ItemID, e.Message)
 	case CompactionApplied:
 		i := slices.IndexFunc(s.history, func(h entry) bool { return h.seq > e.ToSeq })
 		if i < 0 {
 			i = len(s.history)
 		}
 		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
-		s.history = slices.Clone(s.history[i:])
-		s.turnAt = max(0, s.turnAt-i)
+		s.history, s.turnAt = movePins(s.history[i:], max(0, s.turnAt-i), env.Seq)
 		s.stranded = slices.Concat(s.stranded, folded)
 		if s.turn.ID != "" {
 			s.settle(env.Seq)
 		}
 	}
+}
+
+// movePins returns h with each pinned segment after the other messages, in
+// their order, and the start of the running turn less the pins that moved
+// from before it. A pin that a compaction keeps follows the last message of
+// the kept history, as the engine clamped its slot to the end.
+func movePins(h []entry, turnAt int, seq uint64) ([]entry, int) {
+	out := make([]entry, 0, len(h))
+	var pins []entry
+	for i, e := range h {
+		if !e.pinned {
+			out = append(out, e)
+			continue
+		}
+		e.seq = seq
+		pins = append(pins, e)
+		if i < turnAt {
+			turnAt--
+		}
+	}
+	return append(out, pins...), turnAt
 }
 
 // settle puts the stranded pinned segments at the end of the history. A
@@ -179,8 +201,8 @@ func (s *State) settle(seq uint64) {
 	s.stranded = nil
 }
 
-func (s *State) say(seq uint64, m Message) {
-	s.history = append(s.history, entry{seq: seq, msg: m, by: s.turnBy, turn: s.turnN})
+func (s *State) say(seq uint64, id string, m Message) {
+	s.history = append(s.history, entry{seq: seq, id: id, msg: m, by: s.turnBy, turn: s.turnN})
 }
 
 // ProviderOf returns the provider of a model reference.

@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/majorcontext/harness/config"
@@ -93,6 +95,9 @@ type Options struct {
 	Version string
 	// ServeURL and RunToken go to each plugin. A token needs a URL.
 	ServeURL, RunToken string
+	// MaxTokens caps the response of each model call of a turn, as the engine
+	// flag -max-tokens did. Zero or less: the backend default.
+	MaxTokens int
 }
 
 // Runtime hosts many sessions. Each runs only while its Ownership holds.
@@ -102,8 +107,9 @@ type Runtime struct {
 	sync  Sync
 	tools []turn.Tool
 	// models routes each turn to the backend of its model.
-	models *backend.Router
-	limits turn.Limits
+	models    *backend.Router
+	limits    turn.Limits
+	maxTokens int
 	// prompt reads the system prompt of a session with the files that it holds.
 	prompt    func() prompt.Info
 	evaluator string
@@ -118,6 +124,7 @@ type Runtime struct {
 	// plugins is nil without plugins.
 	plugins *pluginsrc.Plugins
 	workDir string
+	health  protocol.Health
 	// banner is the engine status that a model call sends; empty: none.
 	banner string
 	// questions lets a backend ask the user a question.
@@ -138,18 +145,14 @@ type Runtime struct {
 	closeStart context.CancelFunc
 	group      sync.WaitGroup
 
-	mu       sync.Mutex
-	closed   bool
-	sessions map[string]*entry
+	mu     sync.Mutex
+	closed bool
+	// syncStopped is set once a Sync rejects a batch for good.
+	syncStopped atomic.Bool
+	sessions    map[string]*entry
 	// catching holds the sessions that CatchUp replicates.
 	catching  map[string]*catchGrant
 	catchSlot chan struct{}
-}
-
-type entry struct {
-	ready chan struct{}
-	s     *Session
-	err   error
 }
 
 // New returns a Runtime. It does no I/O; sessions load on Create or Open.
@@ -167,9 +170,10 @@ func New(opts Options) (*Runtime, error) {
 		return nil, err
 	}
 	d := config.Defaults()
-	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync,
+	r := &Runtime{store: opts.Store, owner: opts.Owner, sync: opts.Sync, health: healthOf(opts.Version, opts.Config, time.Now()),
 		sessions: map[string]*entry{}, catching: map[string]*catchGrant{}, catchSlot: make(chan struct{}, 1),
 		threshold: positive(opts.Config.CompactionThreshold, d.CompactionThreshold), keep: positive(opts.Config.CompactionKeepTurns, d.CompactionKeepTurns)}
+	r.maxTokens = max(opts.MaxTokens, 0)
 	r.limits = turn.Limits{Retries: opts.Config.PromptRetriesValue(), Continuations: opts.Config.MaxTokensContinuationsValue(),
 		Idle: time.Duration(cmp.Or(opts.Config.StreamIdleTimeoutS, d.StreamIdleTimeoutS)) * time.Second}
 	if opts.Config.GoalEvaluatorModel != "" {
@@ -289,76 +293,6 @@ type launch struct {
 	profile *prompt.Profile
 }
 
-func (r *Runtime) load(ctx context.Context, id string, l launch) (*Session, error) {
-	for {
-		r.mu.Lock()
-		if r.closed {
-			r.mu.Unlock()
-			return nil, ErrDraining
-		}
-		e := r.sessions[id]
-		if e == nil {
-			e = &entry{ready: make(chan struct{})}
-			r.sessions[id] = e
-			r.group.Add(1)
-			r.mu.Unlock()
-			e.s, e.err = r.start(ctx, id, e, l)
-			if e.err != nil {
-				r.forget(id, e)
-			}
-			close(e.ready)
-			if e.err == nil {
-				r.run(e.s, l.created != nil)
-			}
-			r.group.Done()
-			return e.s, e.err
-		}
-		r.mu.Unlock()
-		if l.created != nil {
-			return nil, fmt.Errorf("%w: %s", ErrSessionExists, id)
-		}
-		select {
-		case <-e.ready:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		if e.err != nil {
-			return nil, e.err
-		}
-		if !e.s.a.View().Stopped {
-			return e.s, nil
-		}
-		select {
-		case <-e.s.a.Done():
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		r.forget(id, e)
-	}
-}
-
-// run runs session s after load publishes it, so a tool of its first run
-// finds it. An opened session then settles or opens its unsettled children.
-func (r *Runtime) run(s *Session, create bool) {
-	s.a.Run()
-	if create {
-		close(s.recovered)
-		return
-	}
-	r.group.Go(func() {
-		r.tree.Recover(s.a)
-		close(s.recovered)
-	})
-}
-
-func (r *Runtime) forget(id string, e *entry) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sessions[id] == e {
-		delete(r.sessions, id)
-	}
-}
-
 func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Session, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -397,6 +331,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		plug = r.plugins.Session(id)
 	}
 	sp := r.newSessionPrompt(c.Agent, profile)
+	var a *session.Actor
 	cfg := session.Config{
 		ID:              id,
 		Store:           storeLog{r.store, id},
@@ -412,14 +347,19 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Appended:        r.appended(id, plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
+		MaxTokens:       r.maxTokens,
 		Threshold:       r.threshold,
 		KeepTurns:       r.keep,
 		Base:            r.base,
 		Go:              r.group.Go,
-		Done:            func() { r.forget(id, e) },
-		Check:           r.changeModel,
+		Done: func() {
+			if a != nil && a.Rejected() {
+				r.syncStopped.Store(true)
+			}
+			r.forget(id, e)
+		},
+		Check: r.changeModel,
 	}
-	var a *session.Actor
 	if l.created != nil {
 		a, err = session.Create(ctx, cfg, c, l.first)
 	} else {
@@ -532,6 +472,10 @@ func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.S
 	page := protocol.SessionPage{Sessions: []protocol.Session{}}
 	for _, id := range ids {
 		v, err := r.describe(ctx, id)
+		if errors.Is(err, session.ErrUnreplayable) {
+			slog.Warn("harness: session skipped in the list", "session", id, "err", err)
+			continue
+		}
 		if err != nil {
 			return protocol.SessionPage{}, err
 		}
@@ -600,7 +544,8 @@ func (r *Runtime) Close(ctx context.Context) error {
 				return
 			}
 			if e.s != nil {
-				if err := e.s.Release(ctx); !errors.Is(err, ErrSessionNotOwned) {
+				err := e.s.Release(ctx)
+				if !errors.Is(err, ErrSessionNotOwned) && !errors.Is(err, ErrConflict) && !errors.Is(err, ErrSyncRejected) {
 					errs[i] = err
 				}
 			}
@@ -624,6 +569,11 @@ func (r *Runtime) Close(ctx context.Context) error {
 	r.closeTools(ctx)
 	return errors.Join(errs...)
 }
+
+// SyncStopped reports whether a Sync rejected a batch for good since New, so
+// that Sync may lack records of a session that this runtime ran. It stays
+// true for the life of the runtime.
+func (r *Runtime) SyncStopped() bool { return r.syncStopped.Load() }
 
 // hold adds one unit of the work that Close waits for, unless Close started.
 func (r *Runtime) hold() error {
@@ -651,6 +601,16 @@ func (r *Runtime) startPlugins(ctx context.Context) error {
 	defer cancel()
 	defer context.AfterFunc(r.base, cancel)()
 	return r.plugins.Start(ctx, func(name string) bool { return r.known("", name) })
+}
+
+// ProbePlugins reads the manifest of each configured plugin, as the first
+// Create or Open does, and returns each plugin with its tools and hooks. It
+// fails as that Create or Open fails. It returns nil with no plugin.
+func (r *Runtime) ProbePlugins(ctx context.Context) ([]protocol.Plugin, error) {
+	if err := r.startPlugins(ctx); err != nil {
+		return nil, err
+	}
+	return r.pluginInfo(), nil
 }
 
 // created returns the session.created record of session id, which is its

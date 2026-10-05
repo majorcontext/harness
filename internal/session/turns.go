@@ -95,7 +95,7 @@ func sameJSON(x, y any) bool {
 // the conversation as the model reads it, with each pinned segment.
 func (a *Actor) modelRequest() turn.Request {
 	return turn.Request{SessionID: a.cfg.ID, Model: a.state.Model(), Settings: a.state.Settings(), Instructions: a.cfg.Prompt(),
-		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), Blob: a.blob}
+		History: a.state.ModelHistory(), AllowedTools: a.state.AllowedTools(), MaxTokens: a.cfg.MaxTokens, Blob: a.blob}
 }
 
 func (a *Actor) start(id string, inputIDs []string) {

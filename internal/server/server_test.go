@@ -230,6 +230,10 @@ type reader struct{ stub }
 
 func (r reader) Session() protocol.Session { return r.View() }
 
+func (reader) Messages(context.Context, uint64, int) (protocol.MessagePage, error) {
+	return protocol.MessagePage{}, nil
+}
+
 func TestInternalErrorHidesItsCause(t *testing.T) {
 	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, server.Options{}))
 	t.Cleanup(srv.Close)

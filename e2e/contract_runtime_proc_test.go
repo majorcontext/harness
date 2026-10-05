@@ -28,18 +28,20 @@ func devProcesses() map[string]any {
 
 func TestContractRuntimeProcesses(t *testing.T) {
 	skipShort(t)
-	rows := []struct {
-		name string
-		run  func(t *testing.T)
-	}{
-		{"process_tool_from_the_model", func(t *testing.T) { processToolFromModel(t, serveHost, "process: process: ") }},
-	}
-	for _, row := range rows {
-		t.Run(row.name, func(t *testing.T) {
-			t.Parallel()
-			row.run(t)
-		})
-	}
+	onHosts(t, func(t *testing.T, h host) {
+		for _, row := range []struct {
+			name string
+			run  func(t *testing.T, h host)
+		}{
+			{"process_tool_from_the_model", processToolFromModel},
+			{"process_status_line_follows_a_start_by_one_turn", processStatusLine},
+		} {
+			t.Run(row.name, func(t *testing.T) {
+				t.Parallel()
+				row.run(t, h)
+			})
+		}
+	})
 	if os.Getenv(runtimeEnv) == "" {
 		return
 	}
@@ -48,8 +50,6 @@ func TestContractRuntimeProcesses(t *testing.T) {
 			name string
 			run  func(t *testing.T)
 		}{
-			{"process_tool_from_the_model", func(t *testing.T) { processToolFromModel(t, runtimeHost, "process: ") }},
-			{"process_status_line_follows_a_start_by_one_turn", processStatusLine},
 			{"process_tool_needs_a_workdir", processNeedsWorkdir},
 			{"process_close_stops_processes_when_its_ctx_ends", processCloseStops},
 		} {
@@ -105,9 +105,9 @@ func normProcessResult(t *testing.T, workdir, content string) string {
 	return strings.TrimSpace(out.String())
 }
 
-// processToolFromModel runs every action of the process tool. prefix starts
-// each error that the process manager returns.
-func processToolFromModel(t *testing.T, h host, prefix string) {
+// processToolFromModel runs every action of the process tool.
+func processToolFromModel(t *testing.T, h host) {
+	const prefix = "process: "
 	proc := func(kv ...any) harnesstest.ToolCall { return ftTool("process", ftArgs(kv...)) }
 	rtCommand := []string{"sh", "-c", "echo rt-up; sleep 100"}
 	d, fake := processHost(t, h, toolChain(
@@ -179,8 +179,8 @@ func processStart(name string) harnesstest.ToolCall {
 
 var statusLineRE = regexp.MustCompile(`\n\n<harness-engine-context>\n\[processes: dev ready :3000 since \S+Z log=\.harness/proc/dev\.log\]\n</harness-engine-context>$`)
 
-func processStatusLine(t *testing.T) {
-	d, fake := processHost(t, runtimeHost,
+func processStatusLine(t *testing.T, h host) {
+	d, fake := processHost(t, h,
 		harnesstest.Step{Name: "start", Match: harnesstest.LastUserText("run"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{processStart("dev")}}},
 		harnesstest.Step{Name: "started", Match: harnesstest.LastToolResult("process"), Reply: harnesstest.Reply{Text: "started"}},
 		harnesstest.Step{Name: "again", Match: harnesstest.LastUserText("again"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{processStart("nope")}}},

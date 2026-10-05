@@ -207,6 +207,11 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				waitIdle{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractSessionOpsCommands(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name:  "builtin_commands_run_and_record",
 			model: []harnesstest.Step{agentStep("rest", "ok", true)},
@@ -214,11 +219,13 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				commands{},
 				create{as: "a"},
 				command{as: "a", text: "/thinking high"},
+				awaitCommands{as: "a"},
 				command{as: "a", text: "/compact abc"},
 				command{as: "a", text: "/cost"},
+				awaitCommands{as: "a"},
 				waitIdle{as: "a"},
 				getSession{as: "a"},
-				bootstrap{as: "a"},
+				commandRecords{as: "a"},
 			},
 		},
 	})

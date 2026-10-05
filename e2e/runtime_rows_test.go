@@ -4,6 +4,9 @@ package e2e
 const (
 	specView          = "A `View` is immutable: the `protocol.Session` (status, turn, goal, queue, settings, usage, context gauge, last turn, compaction count, subscription usage, head seq)"
 	specUpdate        = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
+	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that the model reads, oldest first, as the engine answered its message page"
+	specBootstrapGone = "The engine bootstrap form (`stream_from`, `live_from`, `seqs`) has no counterpart: one page route and one event cursor replace it."
+	specRestartOpens  = "A restart opens no session by itself: the embedder opens each session that has work to resume"
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt       = "| New id | `201 {input_id, seq}` |"
 	specItems         = "| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |"
@@ -30,7 +33,9 @@ const (
 	specPinInTurn     = "A compaction that a running turn makes settles the segment there at once"
 	specPinRestart    = "A pin is fixed to the messages around it and replay rebuilds it from the log, so a pin survives a restart."
 	specPinCompact    = "A compaction moves each pinned segment that it folds to the end of the history"
-	specOpenPinSlot   = "Where does a pinned segment sit after a compaction, and does it survive a restart?"
+	specPinCut        = "A compaction moves a pinned segment after the cut to the end of the kept history, so the next input follows it"
+	specPinPaired     = "the runtime keeps the call and its result paired"
+	specPinKept       = "so a restart lost the report; the runtime keeps it"
 	specAnswerNoSteer = "A run that answers a question takes no steer input"
 	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
@@ -105,6 +110,7 @@ const (
 	specCmdFailed      = "`failed` (the error text of a sentinel error"
 	specCmdResult      = "Its result is the `protocol.Compacted` of `Compact`."
 	specCmdInterrupt   = "`Open` records `interrupted` for each command that an earlier owner accepted and never finished"
+	specCmdSwitch      = "Switch oracle: `builtin_commands_run_and_record`, with the receipt, the record, and the routes in the new shape."
 	specCmdUnsupport   = "A frontend command, or a control command with no operation here (`queue-clear`): `unsupported`"
 	specCmdMenuRoutes  = "A control command names its operation and `available_during_task`; the handler adds the route of the same operation, where one exists."
 	specGoalOwnTurn    = "So the turn that calls `set` is not judged; the condition runs as a turn of its own after it"
@@ -212,9 +218,9 @@ var runtimeRows = map[string]runtimeRow{
 	"bifrost_tool_error_marker":                                           reGolden(specItems),
 	"bifrost_tool_round_trip":                                             reGolden(specItems),
 	"bifrost_two_tool_calls_one_turn":                                     reGolden(specItems, specOneResult),
-	"bootstrap_cold_then_resident_windows":                                pendingOn("phase 4"),
-	"bootstrap_cold_window_after_kill":                                    pendingOn("phase 4"),
-	"builtin_commands_run_and_record":                                     pendingOn("phase 4"),
+	"bootstrap_cold_then_resident_windows":                                reGolden(specMessages, specBootstrapGone, specErrors),
+	"bootstrap_cold_window_after_kill":                                    reGolden(specMessages, specBootstrapGone, specErrors),
+	"builtin_commands_run_and_record":                                     reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
 	"busy_deferred_goal_with_max_turns":                                   deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                               reGolden(specView, specCrash, specChildReport),
 	"child_crash_reaches_a_busy_parent":                                   reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording),
@@ -227,10 +233,10 @@ var runtimeRows = map[string]runtimeRow{
 	"child_report_to_a_busy_parent_stays_through_a_compaction":            reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult),
 	"prompt_and_child_report_in_one_drain_are_two_messages":               reGolden(specChildReport, specChildWording, specChildPinned, specPinDrain),
 	"task_log_of_a_child_shows_no_pinned_report":                          reGolden(specTaskInputs, specChildReport, specChildWording, specChildPinned, specPinReaders, specItems, specOneResult),
-	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":         reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specOpenPinSlot),
-	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":          reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specOpenPinSlot),
+	"child_report_to_a_busy_parent_after_the_cut_of_a_compaction":         reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinCut),
+	"child_report_to_a_busy_parent_folded_with_a_long_kept_tail":          reGolden(specChildReport, specChildWording, specChildPinned, specPinCompact, specCompactResult, specPinPaired),
 	"child_report_to_a_busy_parent_stays_through_an_in_turn_compaction":   reGolden(specChildReport, specChildWording, specChildPinned, specPinInTurn, specOverflowFolds),
-	"child_report_to_a_busy_parent_survives_a_restart":                    reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specOpenPinSlot),
+	"child_report_to_a_busy_parent_survives_a_restart":                    reGolden(specChildReport, specChildWording, specChildPinned, specPinRestart, specPinKept),
 	"child_rate_limit_reaches_a_busy_parent":                              reGolden(specChildReport, specChildReason, specChildWording),
 	"child_result_within_the_byte_limit_reaches_a_busy_parent":            reGolden(specChildReport, specChildLong, specChildWording),
 	"child_usage_limit_with_a_long_hint_reaches_a_busy_parent":            reGolden(specChildReport, specChildReason, specChildHint, specChildWording),
@@ -238,7 +244,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_long_child_result_has_no_readable_handle":                 reGolden(specTaskInputs, specChildReport, specChildNoRead, specChildClaude),
 	"child_long_error_reaches_a_busy_parent":                              reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
 	"child_long_result_reaches_a_busy_parent":                             reGolden(specChildReport, specChildLong, specChildWording),
-	"claudecode_compact_delegated":                                        reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge),
+	"claudecode_compact_delegated":                                        reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specRestartOpens),
 	"claudecode_child_report_waits_for_the_next_turn":                     reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_child_reports_share_the_next_turn":                        reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":              reGolden(specQueue, specChildReport, specChildClaude),
@@ -281,17 +287,17 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_uncoded_chain_miss_resends_full_history":                    reGolden(specItems, specWarm),
 	"codex_ws_usage_frame_reaches_session":                                reGolden(specView, specItems),
 	"codex_http_usage_headers_reach_session":                              reGolden(specView, specItems),
-	"compact_manual":                                                      pendingOn("phase 4"),
-	"compact_survives_restart":                                            pendingOn("phase 4"),
+	"compact_manual":                                                      reGolden(specMessages, specBootstrapGone, specErrors),
+	"compact_survives_restart":                                            reGolden(specMessages, specBootstrapGone, specErrors, specRestartOpens),
 	"context_overflow":                                                    reGolden(specView, specOverflowFails),
 	"deferred_goal_judges_finished_turn":                                  deletedBy(specGoalDeferred),
 	"deferred_goal_with_max_turns":                                        deletedBy(specGoalDeferred),
 	"driver_child_send_and_cancel":                                        reGolden(specTaskInputs, specChildNoGoal, specReceipt, specView),
-	"driver_clean_restart":                                                reGolden(specView),
+	"driver_clean_restart":                                                reGolden(specView, specRestartOpens),
 	"driver_compact":                                                      reGolden(specView, specCompactResult),
 	"driver_queue_goal_and_end":                                           reGolden(specView, specReceipt, specClearGoal),
 	"driver_resume_streams":                                               reGolden(specCursor, specBoxGlobal),
-	"driver_settings_and_reads":                                           pendingOn("phase 4"),
+	"driver_settings_and_reads":                                           reGolden(specMessages, specBootstrapGone, specErrors),
 	"end_then_send_runs_no_report_of_the_stopped_child":                   reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_then_open_before_the_child_turn_ends_runs_no_report":             reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_idle_parent_cancels_running_child":                               reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
@@ -340,8 +346,8 @@ var runtimeRows = map[string]runtimeRow{
 	"mcp_two_servers_share_a_tool_name":                                   sameAsServe(),
 	"mcp_unavailable_at_start_then_connect":                               reGolden(specMCPNoStatus),
 	"mcp_unavailable_connect_fails_with_classified_reason":                reGolden(specMCPNoStatus, specMCPText),
-	"messages_page_after_compaction":                                      pendingOn("phase 4"),
-	"messages_page_windows":                                               pendingOn("phase 4"),
+	"messages_page_after_compaction":                                      reGolden(specMessages, specBootstrapGone, specErrors),
+	"messages_page_windows":                                               reGolden(specMessages, specBootstrapGone, specErrors),
 	"model_tool_false_removes_the_model_tool":                             sameAsServe(),
 	"model_tool_lists_the_registry_and_sets_native":                       sameAsServe(),
 	"model_tool_reports_lists_and_switches_the_model":                     sameAsServe(),
@@ -367,17 +373,17 @@ var runtimeRows = map[string]runtimeRow{
 	"queued_input_runs_after_kill":                                        reGolden(specCrash, specCrashQueue),
 	"queued_input_survives_kill":                                          deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":                         deletedBy(specGoalDeferred),
-	"replay_after_kill_full_transcript":                                   pendingOn("phase 4"),
+	"replay_after_kill_full_transcript":                                   reGolden(specMessages, specBootstrapGone, specErrors),
 	"send_to_child_and_cancel_tree":                                       reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn":         reGolden(specUpdate),
 	"session_info_reports_the_session":                                    reGolden(specPromptSwitch),
 	"session_info_reports_what_the_session_loaded":                        reGolden(specPromptSwitch),
 	"session_info_reports_the_plugin_and_its_system_segment":              reGolden(specPromptSwitch),
-	"session_settings_validation_and_persistence":                         reGolden(specModelCheck, specErrors, specUpdate, specView),
-	"sse_resume_after_kill":                                               reGolden(specCursor, specBoxGlobal),
+	"session_settings_validation_and_persistence":                         reGolden(specModelCheck, specErrors, specUpdate, specView, specRestartOpens),
+	"sse_resume_after_kill":                                               reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                   reGolden(specCursor, specBoxGlobal),
-	"list_sessions_in_creation_order":                                     reGolden(specView, specListOrder),
-	"status_and_list_cold_after_restart":                                  reGolden(specView, specListOrder, specStatusRoute),
+	"list_sessions_in_creation_order":                                     reGolden(specView, specListOrder, specRestartOpens),
+	"status_and_list_cold_after_restart":                                  reGolden(specView, specListOrder, specStatusRoute, specRestartOpens),
 	"steer_joins_the_turn_at_the_tool_boundary":                           sameAsServe(),
 	"stream_stall":                                      reGolden(specView),
 	"task_child_result_reaches_parent":                  reGolden(specTaskInputs, specChildReport, specChildNoGoal),
@@ -456,7 +462,7 @@ var runtimeRows = map[string]runtimeRow{
 	"context_overflow_after_the_compaction_fails_the_turn":                   reGolden(specView, specOverflowFolds, specOverflowTwice),
 	"a_stalled_summary_fails_the_overflowed_turn":                            reGolden(specView, specOverflowFails),
 	"compact_during_a_turn_is_session_busy":                                  reGolden(specView, specErrors, specCompactBusy),
-	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue),
+	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue, specRestartOpens),
 	"a_failed_turn_runs_the_next_queued_input":                               reGolden(specView, specFailedRuns),
 	"session_usage_counts_every_model_call_but_the_evaluation":               reGolden(specView, specCompactResult),
 	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),

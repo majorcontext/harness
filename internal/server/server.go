@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"mime"
 	"net/http"
 	"strconv"
@@ -38,6 +39,8 @@ type Session interface {
 // Reader is a session for reads: its state and its events, with no owner.
 type Reader interface {
 	Session() protocol.Session
+	// Messages returns the page of the conversation before seq before.
+	Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 	// Events yields the events after seq, and ends at the head when the
 	// session is not running.
 	Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error]
@@ -58,11 +61,11 @@ type Runtime[S Session] interface {
 
 // Processes runs the processes of the box.
 type Processes interface {
-	List() []process.Info
-	Start(ctx context.Context, name string) (process.Status, error)
-	Stop(ctx context.Context, name string) (process.Status, error)
-	Restart(ctx context.Context, name string) (process.Status, error)
-	Logs(name string, tail int) (string, process.Status, error)
+	List() []protocol.ProcessInfo
+	Start(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Stop(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Restart(ctx context.Context, name string) (protocol.ProcessStatus, error)
+	Logs(name string, tail int) (protocol.ProcessLogs, error)
 }
 
 // Options configures the handler.
@@ -74,6 +77,8 @@ type Options struct {
 	WorkDir string
 	// Processes serves the /processes routes. nil: no process runs.
 	Processes Processes
+	// Health is the body of GET /health.
+	Health protocol.Health
 }
 
 // Code is the wire code of a sentinel error.
@@ -116,63 +121,71 @@ type handler[S Session] struct {
 	codes   []Code
 	workDir string
 	procs   Processes
+	health  protocol.Health
 	// routes names the route that runs each control command.
 	routes map[command.Op]route
 }
 
 type route struct{ method, path string }
 
-// handle registers f at pattern, "METHOD path", as the route of each op.
-func (h *handler[S]) handle(mux *http.ServeMux, pattern string, f http.HandlerFunc, ops ...command.Op) {
-	mux.HandleFunc(pattern, f)
-	method, path, _ := strings.Cut(pattern, " ")
-	for _, op := range ops {
-		h.routes[op] = route{method, path}
+// handlers maps the name of each route of Table to its handler. The two forms
+// of the events route share one handler.
+func (h *handler[S]) handlers() map[string]http.HandlerFunc {
+	events := h.serve(h.events)
+	m := map[string]http.HandlerFunc{
+		"createSession":    h.serve(h.create),
+		"listSessions":     h.serve(h.list),
+		"getSession":       h.serve(h.view),
+		"endSession":       h.serve(h.end),
+		"updateSession":    h.session(h.update),
+		"submitInput":      h.session(h.submit),
+		"repeatInput":      h.session(h.submit),
+		"listInputs":       h.serve(h.queued),
+		"withdrawInput":    h.session(h.withdraw),
+		"interruptSession": h.session(h.interrupt),
+		"compactSession":   h.session(h.compact),
+		"resolveRequest":   h.session(h.resolve),
+		"answerRequest":    h.session(h.resolve),
+		"setGoal":          h.session(h.setGoal),
+		"clearGoal":        h.session(h.clearGoal),
+		"listEvents":       events,
+		"streamEvents":     events,
+		"listModels": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+			reply(w, http.StatusOK, h.rt.Models())
+			return nil
+		}),
+		"listMessages": h.serve(h.messages),
+		"listCommands": h.serve(h.commands),
+		"health": h.serve(func(w http.ResponseWriter, _ *http.Request) error {
+			reply(w, http.StatusOK, h.health)
+			return nil
+		}),
 	}
+	maps.Copy(m, h.boxHandlers())
+	return m
+}
+
+func (h *handler[S]) commands(w http.ResponseWriter, _ *http.Request) error {
+	c, err := h.rt.Commands()
+	if err != nil {
+		return err
+	}
+	for i, e := range c.Commands {
+		at := h.routes[command.Op(e.Op)]
+		c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
+	}
+	reply(w, http.StatusOK, c)
+	return nil
 }
 
 // New returns the HTTP API of rt.
 func New[S Session](rt Runtime[S], opts Options) http.Handler {
-	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
+	h := &handler[S]{rt: rt, workDir: opts.WorkDir, procs: opts.Processes, health: opts.Health, routes: map[command.Op]route{}, codes: append([]Code{{errInvalid, protocol.CodeInvalidRequest},
 		{process.ErrUnknownProcess, protocol.CodeProcessNotFound}, {workspace.ErrInvalid, protocol.CodeInvalidRequest},
 		{workspace.ErrNotRepo, protocol.CodeNotAGitRepo}, {workspace.ErrNoBase, protocol.CodeNoBase},
 		{workspace.ErrTooManyChanges, protocol.CodeTooManyChanges}}, opts.Codes...)}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /sessions", h.serve(h.create))
-	mux.HandleFunc("GET /sessions", h.serve(h.list))
-	h.handle(mux, "GET /sessions/{id}", h.serve(h.view), command.OpStatus)
-	mux.HandleFunc("DELETE /sessions/{id}", h.serve(h.end))
-	h.handle(mux, "PATCH /sessions/{id}", h.session(h.update), command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier)
-	mux.HandleFunc("POST /sessions/{id}/inputs", h.session(h.submit))
-	h.handle(mux, "GET /sessions/{id}/inputs", h.serve(h.queued), command.OpQueueList)
-	mux.HandleFunc("DELETE /sessions/{id}/inputs/{input}", h.session(h.withdraw))
-	h.handle(mux, "POST /sessions/{id}/interrupt", h.session(h.interrupt), command.OpAbort)
-	h.handle(mux, "POST /sessions/{id}/compact", h.session(h.compact), command.OpCompact)
-	mux.HandleFunc("POST /sessions/{id}/requests/{request}", h.session(h.resolve))
-	h.handle(mux, "PUT /sessions/{id}/goal", h.session(h.setGoal), command.OpSetGoal)
-	h.handle(mux, "DELETE /sessions/{id}/goal", h.session(h.clearGoal), command.OpClearGoal)
-	mux.HandleFunc("GET /sessions/{id}/events", h.serve(h.events))
-	mux.HandleFunc("GET /models", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		reply(w, http.StatusOK, rt.Models())
-		return nil
-	}))
-	h.box(mux)
-	mux.HandleFunc("GET /commands", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		c, err := rt.Commands()
-		if err != nil {
-			return err
-		}
-		for i, e := range c.Commands {
-			at := h.routes[command.Op(e.Op)]
-			c.Commands[i].Method, c.Commands[i].Path = at.method, at.path
-		}
-		reply(w, http.StatusOK, c)
-		return nil
-	}))
-	mux.HandleFunc("GET /health", h.serve(func(w http.ResponseWriter, _ *http.Request) error {
-		reply(w, http.StatusOK, map[string]string{"status": "ok"})
-		return nil
-	}))
+	h.bind(mux, h.handlers())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pattern := mux.Handler(r); pattern != "" {
 			mux.ServeHTTP(w, r)
@@ -290,6 +303,31 @@ func number(r *http.Request, key string) (uint64, error) {
 	return n, nil
 }
 
+// count parses the query parameter key as a non-negative int, or returns 0
+// when the request does not name it. A name with an empty value is an error.
+func count(r *http.Request, key string) (int, error) {
+	vs, ok := r.URL.Query()[key]
+	if !ok {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(vs[0])
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("%w: %s must be a non-negative integer", errInvalid, key)
+	}
+	return n, nil
+}
+
+// once rejects a query parameter that the request gives more than once.
+func once(r *http.Request, keys ...string) error {
+	q := r.URL.Query()
+	for _, key := range keys {
+		if len(q[key]) > 1 {
+			return fmt.Errorf("%w: %s must be given at most once", errInvalid, key)
+		}
+	}
+	return nil
+}
+
 func limit(r *http.Request) (int, error) {
 	n, err := number(r, "limit")
 	if n == 0 {
@@ -330,6 +368,34 @@ func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	reply(w, http.StatusOK, rd.Session())
+	return nil
+}
+
+// messages answers a page of the conversation. It only reads the session.
+func (h *handler[S]) messages(w http.ResponseWriter, r *http.Request) error {
+	if err := once(r, "before", "limit"); err != nil {
+		return err
+	}
+	before, err := count(r, "before")
+	if err != nil {
+		return err
+	}
+	n, err := count(r, "limit")
+	if err != nil {
+		return err
+	}
+	if n > protocol.MaxMessageLimit {
+		return fmt.Errorf("%w: limit must be at most %d", errInvalid, protocol.MaxMessageLimit)
+	}
+	rd, err := h.rt.Read(r.Context(), r.PathValue("id"))
+	if err != nil {
+		return err
+	}
+	page, err := rd.Messages(r.Context(), uint64(before), n)
+	if err != nil {
+		return err
+	}
+	replyRaw(w, page)
 	return nil
 }
 

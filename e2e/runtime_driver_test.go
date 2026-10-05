@@ -13,8 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 
@@ -23,17 +21,26 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// runtimeDriver drives harness.Runtime in process over Runtime.Handler, on
-// a DiskStore, with the config that serve would read.
+// runtimeDriver drives harness.Runtime over its HTTP routes, on a DiskStore:
+// in process, over Runtime.Handler with the config that serve would read, or
+// through the serve binary.
 type runtimeDriver struct {
 	store, workDir string
 	ask            bool
 	cfg            config.Config
 	rt             *harness.Runtime
 	srv            *httptest.Server
-	inputs         int
-	lastInput      map[string]string
-	lastTyped      map[string]string
+	// serve is true when the driver runs the serve binary, as proc, which it
+	// restarts on the same store.
+	serve      bool
+	proc       *serveProc
+	configPath string
+	env        map[string]string
+	args       []string
+	client     *http.Client
+	inputs     int
+	lastInput  map[string]string
+	lastTyped  map[string]string
 }
 
 // runtimeVersion is the build version that serve reports in its engine banner.
@@ -42,11 +49,6 @@ const runtimeVersion = "0.1.0-dev"
 // runtimeKey gives the in-process runtime the model key that startServeIn
 // gives serve.
 var runtimeKey = sync.OnceFunc(func() { _ = os.Setenv("ANTHROPIC_API_KEY", codexAPIKey) })
-
-func newRuntimeDriver(t *testing.T, configPath string, ask bool) *runtimeDriver {
-	t.Helper()
-	return newRuntimeDriverIn(t, configPath, ask, resolved(t.TempDir()))
-}
 
 // newRuntimeDriverIn runs the runtime in workDir. An empty workDir gives it no WorkDir.
 // A .harness.json in workDir joins the config as the project layer, as an
@@ -69,8 +71,29 @@ func newRuntimeDriverIn(t *testing.T, configPath string, ask bool, workDir strin
 	return d
 }
 
+// newServeDriverIn runs the serve binary in workDir, on the config at
+// configPath, with env added to its environment and args after its flags.
+func newServeDriverIn(t *testing.T, configPath string, env map[string]string, workDir string, args ...string) *runtimeDriver {
+	t.Helper()
+	d := &runtimeDriver{store: t.TempDir(), workDir: workDir, serve: true, configPath: configPath, env: env, args: args, client: &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
+		lastInput: map[string]string{}, lastTyped: map[string]string{}}
+	d.start(t)
+	return d
+}
+
+func (d *runtimeDriver) startProc(t *testing.T) {
+	t.Helper()
+	env := map[string]string{"HARNESS_SESSION_DIR": d.store, "HARNESS_CONFIG": d.configPath, "ANTHROPIC_API_KEY": "e2e-dummy-key"}
+	maps.Copy(env, d.env)
+	d.proc = startServeProc(t, freeAddr, d.workDir, env, d.args...)
+}
+
 func (d *runtimeDriver) start(t *testing.T) {
 	t.Helper()
+	if d.serve {
+		d.startProc(t)
+		return
+	}
 	rt, err := harness.New(harness.Options{Store: harness.NewDiskStore(d.store), Config: d.cfg, WorkDir: d.workDir, Version: runtimeVersion, AskUserQuestion: d.ask})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
@@ -82,33 +105,12 @@ func (d *runtimeDriver) start(t *testing.T) {
 	d.openAll(t)
 }
 
-// openAll opens each session of the store, as an embedder does when it
-// starts: a route that only reads a session never opens it, so a turn or a
-// queued input that a restart left resumes here.
-func (d *runtimeDriver) openAll(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
-	defer cancel()
-	for after := ""; ; {
-		page, err := d.rt.List(ctx, protocol.ListSessions{After: after})
-		if err != nil {
-			t.Fatalf("list sessions: %v", err)
-		}
-		for _, s := range page.Sessions {
-			if _, err := d.rt.Open(ctx, s.ID); err != nil {
-				t.Fatalf("open %s: %v", s.ID, err)
-			}
-		}
-		if page.Next == "" {
-			return
-		}
-		after = page.Next
-	}
-}
-
 // stop closes the runtime first, which ends its event streams, then the server.
 func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 	t.Helper()
+	if d.serve {
+		return
+	}
 	if d.rt == nil {
 		return
 	}
@@ -129,6 +131,15 @@ func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 // with SIGKILL of serve.
 func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 	t.Helper()
+	if d.serve {
+		if kill {
+			d.proc.kill()
+		} else {
+			d.proc.terminate(t)
+		}
+		d.startProc(t)
+		return
+	}
 	if !kill {
 		d.stop(t, context.Background())
 		d.start(t)
@@ -145,9 +156,29 @@ func (d *runtimeDriver) Restart(t *testing.T, kill bool) {
 	d.start(t)
 }
 
-func (d *runtimeDriver) Stderr() string { return "(the runtime runs in the test process)" }
+func (d *runtimeDriver) Stderr() string {
+	if d.serve {
+		return d.proc.stderr.String()
+	}
+	return "(the runtime runs in the test process)"
+}
 
 func (d *runtimeDriver) Workdir() string { return d.workDir }
+
+// endpoint is the base URL and client of the host.
+func (d *runtimeDriver) endpoint() (string, *http.Client) {
+	if d.serve {
+		return "http://" + d.proc.addr, d.client
+	}
+	return d.srv.URL, d.srv.Client()
+}
+
+// authorize adds the run token that serve requires.
+func (d *runtimeDriver) authorize(req *http.Request) {
+	if d.serve {
+		req.Header.Set("Authorization", "Bearer "+d.proc.token)
+	}
+}
 
 func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path string, body any, header http.Header) *http.Response {
 	t.Helper()
@@ -159,14 +190,16 @@ func (d *runtimeDriver) send(t *testing.T, ctx context.Context, method, path str
 		}
 		rdr = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, d.srv.URL+path, rdr)
+	base, client := d.endpoint()
+	req, err := http.NewRequestWithContext(ctx, method, base+path, rdr)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
+	d.authorize(req)
 	maps.Copy(req.Header, header)
-	resp, err := d.srv.Client().Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("%s %s: %v\nstderr:\n%s", method, path, err, d.Stderr())
 	}
 	return resp
 }
@@ -394,12 +427,14 @@ func (d *runtimeDriver) Models(t *testing.T) callResult {
 func (d *runtimeDriver) AwaitTurnEnd(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), waitBound)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.srv.URL+"/sessions/"+id+"/events?after=0", nil)
+	base, client := d.endpoint()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/sessions/"+id+"/events?after=0", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	resp, err := d.srv.Client().Do(req)
+	d.authorize(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -522,16 +557,6 @@ func (d *runtimeDriver) SessionStatus(t *testing.T) callResult {
 	return deleted("GET /session/status")
 }
 
-func (d *runtimeDriver) MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult {
-	t.Helper()
-	return notServed(t, "GET /sessions/{id}/messages", "phase 4")
-}
-
-func (d *runtimeDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
-	t.Helper()
-	return notServed(t, "GET /sessions/{id}/messages", "phase 4")
-}
-
 // JournalPage reads the page after the cursor from, as serve read the page
 // at its next_cursor.
 func (d *runtimeDriver) JournalPage(t *testing.T, id string, from, limit int) callResult {
@@ -557,11 +582,6 @@ func (d *runtimeDriver) events(t *testing.T, id string) []protocol.Event {
 		}
 		after = page.Next
 	}
-}
-
-func (d *runtimeDriver) Messages(t *testing.T, id string) []transcriptMessage {
-	t.Helper()
-	return transcriptOfLog(t, d.events(t, id))
 }
 
 func (d *runtimeDriver) sessionIDs(t *testing.T) []string {
@@ -629,155 +649,6 @@ func decodeEvent[T any](t *testing.T, ev protocol.Event) T {
 		t.Fatalf("decode %s event %d: %v (%s)", ev.Kind, ev.Seq, err, ev.Data)
 	}
 	return v
-}
-
-// stream reads the SSE events of session id after seq after, and passes
-// each to visit until it returns true. The read fails at waitBound.
-func (d *runtimeDriver) stream(t *testing.T, id string, after uint64, header bool, visit func(sseID string, ev protocol.Event) bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
-	defer cancel()
-	h := http.Header{"Accept": {"text/event-stream"}}
-	path := "/sessions/" + id + "/events"
-	if header {
-		h.Set("Last-Event-ID", strconv.FormatUint(after, 10))
-	} else {
-		path += "?after=" + strconv.FormatUint(after, 10)
-	}
-	resp := d.send(t, ctx, http.MethodGet, path, nil, h)
-	defer func() { _ = resp.Body.Close() }()
-	sc := newSSEScanner(resp.Body)
-	for {
-		raw, err := sc.next()
-		if err != nil {
-			t.Fatalf("event stream of %s ended: %v", id, err)
-		}
-		var ev protocol.Event
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			t.Fatalf("decode frame %s: %v", raw, err)
-		}
-		if visit(sc.id, ev) {
-			return
-		}
-	}
-}
-
-// settled reports whether a session runs nothing and has nothing to run. A
-// session that waits for an answer runs nothing, and neither does one whose
-// queue waits after a turn that ended provider_exhausted.
-func settled(v protocol.Session) bool {
-	held := v.LastTurn != nil && v.LastTurn.Cause == "provider_exhausted"
-	return (v.Status == protocol.StatusIdle || v.Status == protocol.StatusWaiting) && (len(v.Queued) == 0 || held) && (v.Goal == nil || v.Goal.State != "active")
-}
-
-// WaitIdle reads the view again on each frame of the session, from the head
-// that the first view saw, until the session has settled. A child has
-// settled when its parent has recorded that and has settled too, as the
-// report of the child can start a turn of the parent.
-func (d *runtimeDriver) WaitIdle(t *testing.T, id string) {
-	t.Helper()
-	v := d.view(t, id)
-	if !settled(v) {
-		d.stream(t, id, v.HeadSeq, false, func(string, protocol.Event) bool {
-			v = d.view(t, id)
-			return settled(v)
-		})
-	}
-	if v.ParentID != "" {
-		d.awaitChildSettled(t, v.ParentID, id)
-		d.WaitIdle(t, v.ParentID)
-	}
-}
-
-// awaitChildSettled waits until the newest child.spawned of child in the
-// log of parent has a child.settled after it.
-func (d *runtimeDriver) awaitChildSettled(t *testing.T, parent, child string) {
-	t.Helper()
-	settledLast := func(ev protocol.Event) (mine, done bool) {
-		if ev.Kind != "child.spawned" && ev.Kind != "child.settled" {
-			return false, false
-		}
-		c := decodeEvent[struct {
-			ChildID string `json:"child_id"`
-		}](t, ev)
-		return c.ChildID == child, ev.Kind == "child.settled"
-	}
-	events := d.events(t, parent)
-	for i := len(events) - 1; i >= 0; i-- {
-		if mine, done := settledLast(events[i]); mine {
-			if done {
-				return
-			}
-			break
-		}
-	}
-	var head uint64
-	if len(events) > 0 {
-		head = events[len(events)-1].Seq
-	}
-	d.stream(t, parent, head, false, func(_ string, ev protocol.Event) bool {
-		mine, done := settledLast(ev)
-		return mine && done
-	})
-}
-
-func (d *runtimeDriver) AwaitGoalExhausted(t *testing.T) {
-	t.Helper()
-	for _, id := range d.sessionIDs(t) {
-		if g := d.view(t, id).Goal; g == nil {
-			continue
-		}
-		d.stream(t, id, 0, false, func(_ string, ev protocol.Event) bool {
-			return ev.Kind == "goal.changed" && decodeEvent[struct{ State string }](t, ev).State == "exhausted"
-		})
-		return
-	}
-	t.Fatal("no session has a goal")
-}
-
-// Child waits on the events of the parent until it has spawned more than
-// nth children, and returns the nth in spawn order.
-func (d *runtimeDriver) Child(t *testing.T, parentID string, nth int) string {
-	t.Helper()
-	var ids []string
-	d.stream(t, parentID, 0, false, func(_ string, ev protocol.Event) bool {
-		if ev.Kind == "child.spawned" && !ev.Ephemeral {
-			ids = append(ids, decodeEvent[struct {
-				ChildID string `json:"child_id"`
-			}](t, ev).ChildID)
-		}
-		return len(ids) > nth
-	})
-	return ids[nth]
-}
-
-// SSEResume reads the durable frames of one session after afterSeq, up to
-// its head on entry. A read of every session is the deleted box-global stream.
-func (d *runtimeDriver) SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult {
-	t.Helper()
-	if id == "" {
-		return deleted("GET /event")
-	}
-	head := d.view(t, id).HeadSeq
-	body := []any{}
-	if uint64(afterSeq) < head {
-		d.stream(t, id, uint64(afterSeq), header, func(sseID string, ev protocol.Event) bool {
-			if ev.Ephemeral {
-				return false
-			}
-			body = append(body, map[string]any{"id": sseID, "type": ev.Kind, "seq": ev.Seq})
-			return ev.Seq >= head
-		})
-	}
-	return callResult{Status: http.StatusOK, Body: map[string]any{"frames": body}}
-}
-
-func partsText(parts []logPart) string {
-	var texts []string
-	for _, p := range parts {
-		texts = append(texts, p.Text)
-	}
-	return strings.Join(texts, "\n")
 }
 
 var _ driver = (*runtimeDriver)(nil)

@@ -19,7 +19,9 @@ var rowNamePattern = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)+$`)
 func contractRowNames(t *testing.T) map[string]string {
 	t.Helper()
 	files, err := filepath.Glob("contract_*_test.go")
-	if err != nil || len(files) == 0 {
+	syncFiles, serr := filepath.Glob("runtime_sync*_test.go")
+	files = append(files, syncFiles...)
+	if err != nil || serr != nil || len(files) == 0 {
 		t.Fatalf("no contract test files: %v", err)
 	}
 	names := map[string]string{}
@@ -95,49 +97,53 @@ var boxesFeatures = []struct {
 	{"config providers.claude-code", []string{"claudecode_turn_text_and_tool", "claudecode_resume_across_turns"}},
 	{"config goal_evaluator_model", []string{"bifrost_goal_met_first_turn", "bifrost_goal_not_met_then_met"}},
 	{"config session_sync=fsync", []string{"session_sync_fsync_reports_fsync", "session_sync_default_reports_fsync"}},
-	{"config context_window_required", []string{"context_window_required_refuses_an_unknown_model_at_create", "context_window_required_false_admits_an_unknown_model_without_a_window"}},
+	{"config context_window_required", []string{"create_checks_the_model", "create_takes_an_unknown_model_when_no_window_is_required"}},
 	{"config mcp_tool_loading", []string{"mcp_lazy_search_select_then_call", "mcp_auto_defers_over_threshold", "mcp_per_server_tool_loading_overrides_global"}},
 	{"config mcp_servers", []string{"mcp_eager_lists_namespaced_tools", "mcp_tool_call_result", "mcp_http_sse_reply", "mcp_stdio_server_call", "claudecode_configured_mcp_servers_reach_the_cli"}},
-	{"config event_sink", []string{"event_sink_ships_every_durable_record", "event_sink_retries_a_retryable_failure"}},
 	{"config append_system_prompt", []string{"system_segments_order_append_layers_then_instructions_then_skills"}},
 	{"config plugins", []string{"plugin_tools_listed_and_run", "plugin_boxes_style_command_and_dir", "plugin_before_hook_rewrites_and_blocks"}},
 
-	{"GET /session", []string{"status_and_list_cold_after_restart"}},
-	{"POST /session", []string{"text_reply"}},
-	{"GET /session/{id}", []string{"session_settings_validation_and_persistence", "goal_update_while_busy"}},
-	{"GET /session/{id}/message pages", []string{"messages_page_windows", "messages_page_after_compaction"}},
-	{"GET /session/{id}/message stream_from", []string{"bootstrap_cold_then_resident_windows"}},
-	{"GET /session/{id}/journal", []string{"journal_pages_follow_cursor"}},
-	{"GET /session/{id}/queue", []string{"queue_survives_clean_restart_then_delete"}},
-	{"DELETE /session/{id}/queue", []string{"queue_delete_while_busy"}},
-	{"POST /session/{id}/enqueue", []string{"enqueue_while_busy_runs_after"}},
-	{"POST /session/{id}/prompt_async", []string{"text_reply", "two_turns_keep_history"}},
-	{"POST /session/{id}/abort", []string{"interrupt_idle_is_noop", "interrupt_drops_unfinished_text_then_queue_continues"}},
-	{"POST /session/{id}/send", []string{"send_to_child_and_cancel_tree", "goal_busy_send_is_queued"}},
-	{"POST /session/{id}/model", []string{"session_settings_validation_and_persistence"}},
-	{"POST /session/{id}/thinking", []string{"session_settings_validation_and_persistence"}},
-	{"POST /session/{id}/service-tier", []string{"session_settings_validation_and_persistence"}},
-	{"POST /session/{id}/goal", []string{
+	{"config owner_epoch and sync", []string{"sync_conflict_is_final_and_ends_the_session", "sync_server_error_is_sent_again", "sync_splits_a_batch_under_the_body_cap", "catch_up_conflict_skips_the_session_and_reports_it"}},
+	{"GET /health capabilities", []string{"health_reports_the_delta_row_identity_capability"}},
+	{"GET /models", []string{"models_lists_the_configured_providers"}},
+	{"POST /sessions/{id}/answer", []string{"claudecode_question_parks_then_answer_resumes"}},
+	{"DELETE /sessions/{id}", []string{"end_session_semantics"}},
+	{"GET /sessions", []string{"status_and_list_cold_after_restart"}},
+	{"POST /sessions", []string{"text_reply"}},
+	{"GET /sessions/{id}", []string{"session_settings_validation_and_persistence", "goal_update_while_busy"}},
+	{"GET /sessions/{id}/messages pages", []string{"messages_page_windows", "messages_page_after_compaction"}},
+	{"GET /sessions/{id}/messages bootstrap window", []string{"bootstrap_cold_then_resident_windows"}},
+	{"GET /sessions/{id}/events page", []string{"journal_pages_follow_cursor"}},
+	{"GET /sessions/{id}/inputs", []string{"queue_survives_clean_restart_then_delete"}},
+	{"DELETE /sessions/{id}/inputs/{input}", []string{"queue_delete_while_busy"}},
+	{"POST /sessions/{id}/inputs enqueue", []string{"enqueue_while_busy_runs_after"}},
+	{"POST /sessions/{id}/inputs prompt", []string{"text_reply", "two_turns_keep_history"}},
+	{"POST /sessions/{id}/interrupt", []string{"interrupt_idle_is_noop", "interrupt_drops_unfinished_text_then_queue_continues"}},
+	{"POST /sessions/{id}/inputs send", []string{"send_to_child_and_cancel_tree", "goal_busy_send_is_queued"}},
+	{"PATCH /sessions/{id} model", []string{"session_settings_validation_and_persistence"}},
+	{"PATCH /sessions/{id} effort", []string{"session_settings_validation_and_persistence"}},
+	{"PATCH /sessions/{id} service_tier", []string{"session_settings_validation_and_persistence"}},
+	{"PUT /sessions/{id}/goal", []string{
 		"goal_met_first_turn",
 		"goal_update_while_busy",
 		"deferred_goal_judges_finished_turn",
 		"goal_update_deferred_goal_waits_for_first_turn",
 	}},
-	{"POST /session/{id}/goal defer and max_turns", []string{
+	{"PUT /sessions/{id}/goal deferred", []string{
 		"deferred_goal_with_max_turns",
 		"busy_deferred_goal_with_max_turns",
 		"persisted_queue_dispatches_after_deferred_arm",
 		"queued_prompt_runs_before_deferred_auto_arm",
 	}},
-	{"DELETE /session/{id}/goal", []string{"goal_cleared_before_first_turn"}},
-	{"POST /session/{id}/compact", []string{"compact_manual", "compact_survives_restart"}},
+	{"DELETE /sessions/{id}/goal", []string{"goal_cleared_before_first_turn"}},
+	{"POST /sessions/{id}/compact", []string{"compact_manual", "compact_survives_restart"}},
 	{"GET /commands", []string{"builtin_commands_run_and_record"}},
-	{"GET /session/{id}/git/changes", []string{
+	{"GET /workspace/changes", []string{
 		"git_changes_uncommitted_scope_reports_modified_deleted_and_untracked_files",
 		"git_changes_branch_scope_diffs_the_work_tree_against_the_default_branch",
 	}},
-	{"/process", []string{"process_http_lifecycle", "process_tool_from_the_model"}},
-	{"GET /event resume", []string{"sse_resume_cursor", "sse_resume_after_kill"}},
+	{"GET /processes, POST /processes/{name}/{action}", []string{"process_http_lifecycle", "process_tool_from_the_model"}},
+	{"GET /sessions/{id}/events stream", []string{"sse_resume_cursor", "sse_resume_after_kill"}},
 }
 
 // knownGaps lists features that no contract row exercises yet, each with a

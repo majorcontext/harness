@@ -39,6 +39,7 @@ Add none of these without a new design decision:
 - An exported identifier gets a one-line doc comment.
 - Use ASD-STE100 Simplified Technical English for prose. Never print a secret value.
 - Write tooling in Go (a test helper or `go run ./internal/...`), not shell scripts.
+- After a change to a `protocol` type or to `internal/server` `Table`, run `go generate ./protocol` and commit `protocol/openapi.json` and `protocol/protocol.ts`. CI fails on a diff.
 
 ## Tests
 - TDD means: write the failing contract test first, see it fail for the named reason, then implement. A contract test is a scenario row in `e2e/`; a row runs on both drivers with `HARNESS_E2E_RUNTIME=1`, except a row marked `rowDeleted` (the spec deletes what it pins). A behavior change adds a row; a bug fix adds one row to the nearest table.

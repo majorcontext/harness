@@ -45,7 +45,7 @@ func (s *State) applyCompaction(e CompactionApplied, seq uint64) error {
 	if e.FromSeq == 0 || e.FromSeq > e.ToSeq || e.ToSeq >= seq {
 		return illegal("compaction from_seq %d to_seq %d at seq %d", e.FromSeq, e.ToSeq, seq)
 	}
-	s.compaction = e
+	s.compaction, s.compactedAt = e, seq
 	s.compacted++
 	s.usage = s.usage.Add(e.Usage)
 	return nil

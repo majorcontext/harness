@@ -9,76 +9,61 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
+	"github.com/majorcontext/harness"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/engine"
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/provider"
-	"github.com/majorcontext/harness/provider/anthropic"
-	"github.com/majorcontext/harness/provider/openai"
-	"github.com/majorcontext/harness/provider/openaicompat"
+	"github.com/majorcontext/harness/protocol"
 )
 
 func main() {
 	first := flag.String("first", config.DefaultModel, "model for the first prompt")
 	then := flag.String("then", "anthropic/claude-haiku-4-5-20251001", "model for the second prompt")
 	flag.Parse()
-
-	firstRef, err := message.ParseModelRef(*first)
-	if err != nil {
-		log.Fatal(err)
-	}
-	thenRef, err := message.ParseModelRef(*then)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	s := engine.NewSession(engine.Config{
-		Providers: registry(),
-		Model:     firstRef,
-		OnEvent: func(e engine.Event) {
-			if e.Type == engine.EventTextDelta {
-				fmt.Print(e.Text)
-			}
-		},
-	})
 	ctx := context.Background()
 
-	fmt.Printf("[%s]\n", s.Model())
-	if _, err := s.Prompt(ctx, "Pick a random animal. Reply with only its name."); err != nil {
+	rt, err := harness.New(harness.Options{Store: harness.NewMemStore()})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = rt.Close(ctx) }()
+	s, err := rt.Create(ctx, protocol.CreateSession{Model: *first})
+	if err != nil {
 		log.Fatal(err)
 	}
 
-	s.SetModel(thenRef)
-	fmt.Printf("\n\n[%s]\n", s.Model())
-	if _, err := s.Prompt(ctx, "Which animal did you pick? Give one fact about it."); err != nil {
+	fmt.Printf("[%s]\n", s.View().Model)
+	say(ctx, s, "first", "Pick a random animal. Reply with only its name.")
+
+	if _, err := s.Update(ctx, protocol.SettingsPatch{Model: then}); err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("\n\n[%s]\n", s.View().Model)
+	say(ctx, s, "second", "Which animal did you pick? Give one fact about it.")
 	fmt.Println()
 }
 
-// registry adds a provider for each API key in the environment.
-func registry() provider.Registry {
-	reg := provider.Registry{}
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		reg[anthropic.Family] = &anthropic.Client{APIKey: key}
+// say sends text and streams the reply until the turn ends.
+func say(ctx context.Context, s *harness.Session, id, text string) {
+	head := s.View().HeadSeq
+	if _, err := s.Submit(ctx, protocol.Input{ID: id, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+		log.Fatal(err)
 	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		reg[openai.Family] = &openai.Client{APIKey: key}
-	}
-	if key := os.Getenv("OPENROUTER_API_KEY"); key != "" {
-		reg["openrouter"] = &openaicompat.Client{
-			Family:  "openrouter",
-			APIKey:  key,
-			BaseURL: "https://openrouter.ai/api/v1",
+	for e, err := range s.Events(ctx, head) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		switch e.Kind {
+		case protocol.KindItemDelta:
+			var f protocol.ItemFrame
+			if json.Unmarshal(e.Data, &f) == nil && f.Type == "text" {
+				fmt.Print(f.Text)
+			}
+		case "turn.ended":
+			return
 		}
 	}
-	if len(reg) == 0 {
-		log.Fatal("set ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY")
-	}
-	return reg
 }

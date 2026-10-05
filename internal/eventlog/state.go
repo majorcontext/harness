@@ -204,12 +204,14 @@ type State struct {
 	subscribed *SubscriptionUsage
 	cost       *float64
 	compaction CompactionApplied
-	compacted  int
-	children   map[string]Outcome
-	backends   map[string]string
-	retained   []ToolResultRetained
-	commands   map[string]command
-	history    []entry
+	// compactedAt is the seq of the record of the newest compaction.
+	compactedAt uint64
+	compacted   int
+	children    map[string]Outcome
+	backends    map[string]string
+	retained    []ToolResultRetained
+	commands    map[string]command
+	history     []entry
 	// stranded holds the pinned segments that a compaction outside a turn
 	// folded. The model reads them at the end of the history, and the next
 	// turn start settles them there, after its inputs.
@@ -333,6 +335,16 @@ func (s *State) Unsettled() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// Resumable reports whether opening the session has work to do: a turn that
+// runs or is suspended, an input that waits (not after a provider_exhausted
+// turn, which holds the queue), a goal that is active or paused, a command
+// that no owner finished, or a child that has not settled.
+func (s *State) Resumable() bool {
+	held := s.lastEnded.Cause == CauseProviderExhausted
+	return s.turn.ID != "" || (len(s.queue) > 0 && !held) || s.goal.State == GoalActive || s.goal.State == GoalPaused ||
+		len(s.Unfinished()) > 0 || len(s.Unsettled()) > 0
 }
 
 // Children returns every spawned child, settled or not, sorted.

@@ -382,7 +382,7 @@ nothing dispatches `DELETE /session/{id}/queue` through serve mode yet.
 No `serve_support` key at all means an older server that resolves
 nothing.
 
-Add the entry to `server/openapi.yaml`, which stays authoritative.
+Add the route to the route table of `internal/server`, and run `go generate ./protocol`.
 
 ### The menu lives in the input area
 
@@ -596,7 +596,7 @@ box. Wrapping is not owning, and it is out of scope here.
 1. `command` package: `Spec`, `Registry`, `Resolve`, `Op`, the builtin
    control table. No I/O, no routes.
 2. `server` dispatcher: the `Op`-to-route map, `GET /commands` (including
-   `serve_support`), and the `server/openapi.yaml` entry.
+   `serve_support`), and the route table entry.
    `resolvePromptCommand` resolves a typed line on every prompt-landing
    route and journals its `CommandRecord` (see "Serve-mode resolution").
 3. `cmd/harness` dispatcher: `Op` to a method call on the held session,

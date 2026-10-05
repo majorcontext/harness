@@ -1,9 +1,6 @@
 package e2e
 
 import (
-	"encoding/json"
-	"maps"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,63 +28,38 @@ func runtimeWorkdir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// startRuntime starts one serve process in workdir over a scripted model.
-// extra replaces or adds top-level config keys.
-func startRuntime(t *testing.T, workdir string, extra map[string]any, steps ...harnesstest.Step) (*httpDriver, *harnesstest.Server) {
+// onHosts runs fn as a subtest on each host: the serve binary always, and
+// the runtime in process with runtimeEnv. It runs a row that sets no
+// environment, so the rows of a host share the process.
+func onHosts(t *testing.T, fn func(t *testing.T, h host)) {
 	t.Helper()
-	fake := harnesstest.New(t, steps...)
-	cfg := map[string]any{"context_window_tokens": 1_000_000}
-	maps.Copy(cfg, extra)
-	d := &httpDriver{
-		sessDir:  t.TempDir(),
-		workDir:  workdir,
-		config:   writeGoalConfigWith(t, fake.URL(), cfg),
-		enqSeq:   map[string]int64{},
-		typedSeq: map[string]int64{},
+	for _, h := range []host{serveHost, runtimeHost} {
+		if h.runtime && os.Getenv(runtimeEnv) == "" {
+			continue
+		}
+		t.Run(h.name(), func(t *testing.T) { fn(t, h) })
 	}
-	d.p = startServeIn(t, d.sessDir, d.config, d.workDir)
-	return d, fake
 }
 
-// patchConfig rewrites the JSON config file at path, so the next serve start reads the change.
-func patchConfig(t *testing.T, path string, edit func(cfg map[string]any)) {
+// startOn opens h in workdir over a scripted model. extra replaces or adds
+// top-level config keys.
+func startOn(t *testing.T, h host, workdir string, extra map[string]any, steps ...harnesstest.Step) (*runtimeDriver, *harnesstest.Server) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	edit(cfg)
-	raw, err = json.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	fake := harnesstest.New(t, steps...)
+	return h.openIn(t, writeGoalConfigWith(t, fake.URL(), scenarioConfig(extra)), workdir, nil).(*runtimeDriver), fake
+}
+
+func replyText(text string) harnesstest.Step {
+	return harnesstest.Step{Name: "reply", Reply: harnesstest.Reply{Text: text}, Repeat: true}
 }
 
 // runTurn creates a session, runs one prompt to idle, and returns its id.
-func runTurn(t *testing.T, d *httpDriver, text string) string {
+func runTurn(t *testing.T, d *runtimeDriver, text string) string {
 	t.Helper()
 	id := d.Create(t)
 	d.Submit(t, id, text)
 	d.WaitIdle(t, id)
 	return id
-}
-
-// eventTip is the seq of the newest durable event of the serve process.
-func eventTip(t *testing.T, d *httpDriver) int64 {
-	t.Helper()
-	res := d.call(t, http.MethodGet, "/event/tip", nil)
-	n, err := res.Body.(map[string]any)["seq"].(json.Number).Int64()
-	if err != nil {
-		t.Fatalf("decode tip: %v", err)
-	}
-	return n
 }
 
 // bodyOf is the decoded JSON object of a recorded call.

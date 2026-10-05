@@ -193,6 +193,7 @@ type View struct {
 	st    Store
 	id    string
 	state protocol.Session
+	log   *eventlog.State
 }
 
 // OpenView reads a session from st without owning it: no Acquire, no appends.
@@ -205,7 +206,26 @@ func OpenView(ctx context.Context, st Store, id string) (*View, error) {
 	if ref, err := message.ParseModelRef(s.Model()); err == nil {
 		window, _ = modelmeta.ContextWindow(ref)
 	}
-	return &View{st: st, id: id, state: session.Describe(id, s, window)}, nil
+	return &View{st: st, id: id, state: session.Describe(id, s, window), log: s}, nil
+}
+
+// Resumable reports whether Open of the session has work to resume.
+func (v *View) Resumable() bool { return v.log.Resumable() }
+
+// Messages returns the page of the conversation before seq before; 0 is the
+// newest page. A limit above protocol.MaxMessageLimit fails with ErrInvalidRequest.
+func (v *View) Messages(_ context.Context, before uint64, limit int) (protocol.MessagePage, error) {
+	if err := checkMessageLimit(limit); err != nil {
+		return protocol.MessagePage{}, err
+	}
+	return v.log.MessagePage(before, limit), nil
+}
+
+func checkMessageLimit(limit int) error {
+	if limit < 0 || limit > protocol.MaxMessageLimit {
+		return fmt.Errorf("%w: limit must be between 0 and %d", ErrInvalidRequest, protocol.MaxMessageLimit)
+	}
+	return nil
 }
 
 // Session returns the session as of OpenView.

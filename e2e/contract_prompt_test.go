@@ -107,12 +107,7 @@ func inTreeWith(files map[string]string, sub string, config map[string]any) func
 		}
 		cfg := writeGoalConfigWith(t, modelURL, scenarioConfig(config))
 		workDir := filepath.Join(base, sub)
-		if h.runtime {
-			return newRuntimeDriverIn(t, cfg, false, workDir)
-		}
-		d := &httpDriver{sessDir: t.TempDir(), workDir: workDir, config: cfg, enqSeq: map[string]int64{}, typedSeq: map[string]int64{}}
-		d.p = d.serve(t)
-		return d
+		return h.openIn(t, cfg, workDir, nil)
 	}
 }
 

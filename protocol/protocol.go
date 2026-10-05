@@ -32,7 +32,7 @@ type CreateSession struct {
 	// ID is minted by the client, or by the runtime when it is empty.
 	ID string `json:"id,omitempty"`
 	// Model is a provider/model ref. Empty selects the configured default.
-	Model       string `json:"model"`
+	Model       string `json:"model" optional:"true"`
 	Effort      string `json:"effort,omitempty"`
 	ServiceTier string `json:"service_tier,omitempty"`
 	Origin      string `json:"origin,omitempty"`
@@ -347,6 +347,7 @@ const (
 	CodeNoBase            = "no_base"
 	CodeTooManyChanges    = "too_many_changes"
 	CodeProcessNotFound   = "process_not_found"
+	CodeUnauthorized      = "unauthorized"
 )
 
 // ErrorBody is the body of every HTTP error response.

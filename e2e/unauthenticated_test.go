@@ -59,7 +59,8 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 	cmd.Dir = t.TempDir()
 	cmd.Env = cleanEnv(map[string]string{
 		"HARNESS_SESSION_DIR": t.TempDir(),
-		"HARNESS_CONFIG":      t.TempDir() + "/config.json",
+		"HARNESS_CONFIG":      writeGoalConfig(t, "http://127.0.0.1:1"),
+		"ANTHROPIC_API_KEY":   "e2e-dummy-key",
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
@@ -75,14 +76,14 @@ func TestServeNonLoopbackUnauthenticatedFlagStartsUnauthenticated(t *testing.T) 
 	// A real API call with NO Authorization header must succeed — proof
 	// this is actually running unauthenticated, not merely that /health
 	// (already unauthenticated on every box) answered.
-	resp, err := http.Post("http://"+dialAddr+"/session", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
 	if err != nil {
-		t.Fatalf("POST /session: %v", err)
+		t.Fatalf("POST /sessions: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /session with no Authorization header = %d, want 201 (unauthenticated); body: %s", resp.StatusCode, body)
+		t.Fatalf("POST /sessions with no Authorization header = %d, want 201 (unauthenticated); body: %s", resp.StatusCode, body)
 	}
 
 	if !strings.Contains(stderr.String(), "serving unauthenticated on a non-loopback bind") {
@@ -100,8 +101,9 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	cmd.Dir = t.TempDir()
 	cmd.Env = cleanEnv(map[string]string{
 		"HARNESS_SESSION_DIR":     t.TempDir(),
-		"HARNESS_CONFIG":          t.TempDir() + "/config.json",
+		"HARNESS_CONFIG":          writeGoalConfig(t, "http://127.0.0.1:1"),
 		"HARNESS_UNAUTHENTICATED": "1",
+		"ANTHROPIC_API_KEY":       "e2e-dummy-key",
 	})
 	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
@@ -114,13 +116,13 @@ func TestServeHarnessUnauthenticatedEnvStartsUnauthenticated(t *testing.T) {
 	dialAddr := "127.0.0.1:" + port
 	waitHealthyAt(t, dialAddr, stderr)
 
-	resp, err := http.Post("http://"+dialAddr+"/session", "application/json", strings.NewReader("{}"))
+	resp, err := http.Post("http://"+dialAddr+"/sessions", "application/json", strings.NewReader("{}"))
 	if err != nil {
-		t.Fatalf("POST /session: %v", err)
+		t.Fatalf("POST /sessions: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /session with no Authorization header = %d, want 201 (unauthenticated)", resp.StatusCode)
+		t.Fatalf("POST /sessions with no Authorization header = %d, want 201 (unauthenticated)", resp.StatusCode)
 	}
 }
 

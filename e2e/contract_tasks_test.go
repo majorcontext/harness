@@ -37,7 +37,7 @@ func TestContractTaskProfileFiles(t *testing.T) {
 	attempt := func(files map[string]string, wait ...action) []action {
 		return slices.Concat(inDir(files), []action{create{as: "a"}, submit{as: "a", text: "refuse it"}}, wait, []action{waitIdle{as: "a"}})
 	}
-	childSettled := awaitRequestsOn{serve: 2, runtime: 4}
+	childSettled := awaitRequests{n: 4}
 	model := func(agents ...string) []harnesstest.Step {
 		var calls []map[string]any
 		for _, name := range agents {

@@ -15,7 +15,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -129,17 +131,6 @@ func claudeDriverOf(t *testing.T, r *run) *claudeDriver {
 	d, ok := r.drv.(*claudeDriver)
 	if !ok {
 		t.Fatalf("scenario action needs a claude lane driver, got %T", r.drv)
-	}
-	return d
-}
-
-// serveLaneOf is the serve process of a claude lane, for an action that
-// reads a route that only serve has.
-func serveLaneOf(t *testing.T, r *run) *httpDriver {
-	t.Helper()
-	d, ok := claudeDriverOf(t, r).laneHost.(*httpDriver)
-	if !ok {
-		t.Fatalf("scenario action reads a serve route, the host is %T", claudeDriverOf(t, r).laneHost)
 	}
 	return d
 }
@@ -304,34 +295,6 @@ func (a claudeAwaitText) run(t *testing.T, r *run) {
 	claudeDriverOf(t, r).awaitAssistantText(t, r.id(t, a.as), a.text)
 }
 
-func (d *httpDriver) awaitAssistantText(t *testing.T, id, text string) {
-	t.Helper()
-	err := d.scan(t, func(raw []byte) bool {
-		var ev struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id"`
-			Message   *struct {
-				Role  string `json:"role"`
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(raw, &ev) != nil || ev.Type != "message" || ev.SessionID != id || ev.Message == nil || ev.Message.Role != "assistant" {
-			return false
-		}
-		for _, p := range ev.Message.Parts {
-			if strings.Contains(p.Text, text) {
-				return true
-			}
-		}
-		return false
-	})
-	if err != nil {
-		t.Fatalf("no assistant message containing %q: %v\nstderr:\n%s", text, err, d.Stderr())
-	}
-}
-
 // resolution is the body of a call that resolves an open question: the JSON
 // text of an answer, with an empty text for none, or a dismissal.
 type resolution struct {
@@ -373,29 +336,12 @@ func (a claudeDismiss) run(t *testing.T, r *run) {
 	r.record(t, "dismiss_question", a.as, claudeDriverOf(t, r).resolveQuestion(t, r.id(t, a.as), a.callID, resolution{dismiss: true}))
 }
 
-func (d *httpDriver) resolveQuestion(t *testing.T, id, callID string, res resolution) callResult {
-	t.Helper()
-	if res.dismiss {
-		return notInEngine("a dismissal of a question")
-	}
-	body := rawBody("{}")
-	if res.answer != "" {
-		body = rawBody(`{"answers":` + res.answer + `}`)
-	}
-	return d.call(t, http.MethodPost, "/session/"+id+"/question/"+callID+"/answer", body)
-}
-
 // claudeHistoryTool calls get_conversation_history on the session's hosted MCP
 // endpoint, the tool a resumed delegated turn reads prior history through.
 type claudeHistoryTool struct{ as string }
 
 func (a claudeHistoryTool) run(t *testing.T, r *run) {
-	d := claudeDriverOf(t, r)
-	if serve, ok := d.laneHost.(*httpDriver); ok {
-		r.record(t, "history_tool", a.as, serve.historyTool(t, r.id(t, a.as)))
-		return
-	}
-	r.record(t, "history_tool", a.as, d.lastToolCall(t))
+	r.record(t, "history_tool", a.as, claudeDriverOf(t, r).lastToolCall(t))
 }
 
 // lastToolCall is the response that the CLI of the newest run got from the
@@ -409,15 +355,6 @@ func (d *claudeDriver) lastToolCall(t *testing.T) callResult {
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	return callResult{Status: http.StatusOK, Body: decodeBody(t, "tool call", []byte(lines[len(lines)-1]))}
-}
-
-func (d *httpDriver) historyTool(t *testing.T, id string) callResult {
-	t.Helper()
-	rpc := map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-		"params": map[string]any{"name": "get_conversation_history", "arguments": map[string]any{}},
-	}
-	return d.call(t, http.MethodPost, "/session/"+id+"/mcp", rpc)
 }
 
 // claudeOfferedTools records the sorted names of the tools that the hosted
@@ -493,23 +430,6 @@ func (a claudeMessageParents) run(t *testing.T, r *run) {
 	r.record(t, "message_parents", a.as, claudeDriverOf(t, r).messageParents(t, r.id(t, a.as)))
 }
 
-func (d *httpDriver) messageParents(t *testing.T, id string) callResult {
-	t.Helper()
-	resp, data := d.p.do(http.MethodGet, "/session/"+id+"/message", nil)
-	var msgs []struct {
-		Role   string `json:"role"`
-		Parent string `json:"parent_tool_use_id"`
-	}
-	if err := json.Unmarshal(data, &msgs); err != nil {
-		t.Fatalf("decode messages: %v (%s)", err, data)
-	}
-	var out []any
-	for _, m := range msgs {
-		out = append(out, map[string]any{"role": m.Role, "parent_tool_use_id": m.Parent})
-	}
-	return callResult{Status: resp.StatusCode, Body: out}
-}
-
 // claudeJournalEvents records the type and compaction fields of the session's
 // journal events whose type starts with prefix, in journal order.
 type claudeJournalEvents struct{ as, prefix string }
@@ -519,47 +439,12 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 	r.record(t, "journal_events", a.as, callResult{Status: http.StatusOK, Body: events})
 }
 
-func (d *httpDriver) journalEvents(t *testing.T, id, prefix string) []any {
-	t.Helper()
-	var tip struct {
-		Seq int64 `json:"seq"`
-	}
-	if err := json.Unmarshal(d.expect(t, http.StatusOK, http.MethodGet, "/event/tip", nil), &tip); err != nil {
-		t.Fatalf("decode tip: %v", err)
-	}
-	events := []any{}
-	err := d.scan(t, func(raw []byte) bool {
-		var ev struct {
-			Type       string `json:"type"`
-			SessionID  string `json:"session_id"`
-			Seq        int64  `json:"seq"`
-			Trigger    string `json:"trigger"`
-			PreTokens  int    `json:"pre_tokens"`
-			PostTokens int    `json:"post_tokens"`
-		}
-		if json.Unmarshal(raw, &ev) != nil || ev.Seq == 0 {
-			return false
-		}
-		if ev.SessionID == id && strings.HasPrefix(ev.Type, prefix) {
-			events = append(events, map[string]any{
-				"type": ev.Type, "trigger": ev.Trigger, "pre_tokens": ev.PreTokens, "post_tokens": ev.PostTokens,
-			})
-		}
-		return ev.Seq >= tip.Seq
-	})
-	if err != nil {
-		t.Fatalf("journal scan: %v\nstderr:\n%s", err, d.Stderr())
-	}
-	return events
-}
-
-var (
-	_ laneHost = (*httpDriver)(nil)
-	_ laneHost = (*runtimeDriver)(nil)
-)
+var _ laneHost = (*runtimeDriver)(nil)
 
 // awaitAssistantText also takes the streamed text: the CLI can wait for
-// input before its message completes.
+// input before its message completes. A message that completes right after its
+// text is recorded by then, so a kill that follows loses nothing: the wait for
+// the record is bounded, because a message that waits for input never completes.
 func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 	t.Helper()
 	var streamed strings.Builder
@@ -574,7 +459,20 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 		}
 		return false
 	})
+	testpoll.UntilNoT(recordGrace, func() bool {
+		for _, ev := range d.events(t, id) {
+			if ev.Kind == "item.completed" {
+				if it := decodeEvent[logItem](t, ev); it.Message.Role == "assistant" && strings.Contains(partsText(it.Message.Parts), text) {
+					return true
+				}
+			}
+		}
+		return false
+	}, 20*time.Millisecond)
 }
+
+// recordGrace bounds the wait of awaitAssistantText for the record of a message.
+const recordGrace = 2 * time.Second
 
 func (d *runtimeDriver) resolveQuestion(t *testing.T, id, callID string, res resolution) callResult {
 	t.Helper()
@@ -737,10 +635,6 @@ func (a claudeBackendStates) run(t *testing.T, r *run) {
 	r.record(t, "backend_states", a.as, claudeDriverOf(t, r).backendStateKeys(t, r.id(t, a.as)))
 }
 
-func (d *httpDriver) backendStateKeys(*testing.T, string) callResult {
-	return notInEngine("a backend state blob")
-}
-
 func (d *runtimeDriver) backendStateKeys(t *testing.T, id string) callResult {
 	t.Helper()
 	keys := map[string]bool{}
@@ -762,11 +656,6 @@ type claudeCompactKeeping struct {
 
 func (a claudeCompactKeeping) run(t *testing.T, r *run) {
 	r.record(t, "compact_keeping", a.as, claudeDriverOf(t, r).compactKeeping(t, r.id(t, a.as), a.keep))
-}
-
-func (d *httpDriver) compactKeeping(t *testing.T, id string, keep int) callResult {
-	t.Helper()
-	return d.call(t, http.MethodPost, "/session/"+id+"/compact", map[string]any{"keep_turns": keep})
 }
 
 func (d *runtimeDriver) compactKeeping(t *testing.T, id string, keep int) callResult {

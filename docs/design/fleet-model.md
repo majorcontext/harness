@@ -6,7 +6,7 @@ Harness is deployed as a fleet: many short-lived compute instances (a
 sandbox, a VM, a container — this doc calls each one a **box**), each
 running one `harness serve` process, coordinated by one external
 orchestrator that a box never needs to know the implementation
-of. `server/openapi.yaml` already assumes exactly this shape ("a single
+of. The former `server/openapi.yaml` already assumes exactly this shape ("a single
 external orchestrator drives many harness instances through this API"; "the
 orchestrator holds exactly one [event stream] per box") without ever writing
 down the model that makes those sentences true. This is that write-up: what
@@ -152,7 +152,7 @@ running multiple concurrently-important sessions on one. Two reasons this
 is a doctrine rather than a mechanism:
 
 - **Workdir exclusivity is per-box.** `share_workdir`/`workdir_isolation`
-  (see `server/openapi.yaml`'s `createSession`) already prevent two
+  (see the former `server/openapi.yaml`'s `createSession`) already prevent two
   sessions on the same box from silently corrupting a shared working
   directory, but they do nothing to prevent two *unrelated* tasks from
   contending for the same box's compute and attention. One active task per
@@ -229,7 +229,7 @@ Both share one wire shape (`paused: bool`, `pause_reason: "restart" |
 "provider-backoff"`) on the goal summary (`GET /session`, `GET
 /session/{id}`, `GET /session/{id}/wait`) and, where applicable, on the
 `goal.*` event vocabulary (`goal.paused`, and `goal.stalled` while
-retryable && waiting) — see §9 and `server/openapi.yaml`.
+retryable && waiting) — see §9 and the former `server/openapi.yaml`.
 
 ## 8. The box spawn contract: `HARNESS_HUB_BOX_NAME`
 

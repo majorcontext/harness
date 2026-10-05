@@ -172,14 +172,10 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 func runCodexScenarios(t *testing.T, table []codexScenario) {
 	t.Helper()
 	skipShort(t)
-	for _, sc := range table {
-		t.Run(sc.name, func(t *testing.T) {
-			parallelUnlessUpdating(t)
-			compareGolden(t, sc.name, runCodexScenario(t, sc, serveHost))
-		})
+	for _, h := range []host{serveHost, runtimeHost} {
+		onHost(t, h, table, func(sc codexScenario) (string, bool) { return sc.name, false },
+			func(t *testing.T, sc codexScenario) observation { return runCodexScenario(t, sc, h) })
 	}
-	onRuntime(t, table, func(sc codexScenario) (string, bool) { return sc.name, false },
-		func(t *testing.T, sc codexScenario) observation { return runCodexScenario(t, sc, runtimeHost) })
 }
 
 func codexText(s string) harnesstest.Reply { return harnesstest.Reply{Text: s} }

@@ -1,0 +1,383 @@
+{
+  "requests": [
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "thinking_type": "enabled",
+      "thinking_budget_tokens": 16384,
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "goal",
+        "grep",
+        "ls",
+        "model",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "session_info",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "/cost"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "sessions": {
+    "a": [
+      {
+        "id": "msg#1",
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "/cost"
+          }
+        ]
+      },
+      {
+        "id": "msg#2",
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "text",
+            "text": "ok"
+          }
+        ]
+      }
+    ]
+  },
+  "calls": {
+    "command.a": {
+      "status": 201,
+      "body": {
+        "command": "accepted",
+        "input_id": "in1",
+        "seq": 3
+      }
+    },
+    "command.a#2": {
+      "status": 201,
+      "body": {
+        "command": "failed",
+        "input_id": "in2",
+        "seq": 6
+      }
+    },
+    "command.a#3": {
+      "status": 201,
+      "body": {
+        "input_id": "in3",
+        "seq": 7
+      }
+    },
+    "command_records.a": {
+      "status": 200,
+      "body": [
+        {
+          "line": "/thinking high",
+          "name": "thinking",
+          "result": {
+            "context": {
+              "tokens": 0,
+              "window": 1000000
+            },
+            "created_at": "\u003ctime\u003e",
+            "effort": "high",
+            "head_seq": 4,
+            "id": "ses:a",
+            "model": "anthropic/claude-fable-5",
+            "origin": "",
+            "status": "idle",
+            "subscription_usage": null,
+            "synced_seq": 0,
+            "updated_at": "\u003ctime\u003e",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          },
+          "status": "succeeded",
+          "text": "/thinking succeeded"
+        },
+        {
+          "line": "/compact abc",
+          "name": "compact",
+          "status": "failed",
+          "text": "command: /compact keep_turns must be a number, got \"abc\""
+        }
+      ]
+    },
+    "commands": {
+      "status": 200,
+      "body": {
+        "commands": [
+          {
+            "available_during_task": true,
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "method": "POST",
+            "name": "abort",
+            "op": "abort",
+            "path": "/sessions/{id}/interrupt",
+            "summary": "Stop the running turn"
+          },
+          {
+            "arg_hint": "[keep_turns]",
+            "args": [
+              {
+                "name": "keep_turns",
+                "optional": true,
+                "type": "int"
+              }
+            ],
+            "available_during_task": false,
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "method": "POST",
+            "name": "compact",
+            "op": "compact",
+            "path": "/sessions/{id}/compact",
+            "summary": "Summarize history and keep the last turns"
+          },
+          {
+            "arg_hint": "\u003ccondition\u003e",
+            "args": [
+              {
+                "name": "condition",
+                "type": "rest"
+              }
+            ],
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "PUT",
+            "name": "goal",
+            "op": "set_goal",
+            "path": "/sessions/{id}/goal",
+            "summary": "Pursue a goal until its condition holds"
+          },
+          {
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "DELETE",
+            "name": "goal-clear",
+            "op": "clear_goal",
+            "path": "/sessions/{id}/goal",
+            "summary": "Stop pursuing the current goal"
+          },
+          {
+            "arg_hint": "\u003cprovider/model\u003e",
+            "args": [
+              {
+                "name": "model",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "model",
+            "op": "set_model",
+            "path": "/sessions/{id}",
+            "summary": "Change the session model"
+          },
+          {
+            "aliases": [
+              "clear"
+            ],
+            "category": "frontend",
+            "destructive": true,
+            "kind": "frontend",
+            "name": "new",
+            "summary": "Start a new session"
+          },
+          {
+            "available_during_task": true,
+            "category": "info",
+            "kind": "control",
+            "method": "GET",
+            "name": "processes",
+            "op": "process_list",
+            "path": "/processes",
+            "summary": "List managed processes"
+          },
+          {
+            "available_during_task": true,
+            "category": "session",
+            "kind": "control",
+            "method": "GET",
+            "name": "queue",
+            "op": "queue_list",
+            "path": "/sessions/{id}/inputs",
+            "summary": "Show queued prompts"
+          },
+          {
+            "category": "session",
+            "destructive": true,
+            "kind": "control",
+            "name": "queue-clear",
+            "op": "queue_clear",
+            "summary": "Drop every queued prompt"
+          },
+          {
+            "category": "frontend",
+            "kind": "frontend",
+            "name": "quit",
+            "summary": "Leave the session"
+          },
+          {
+            "arg_hint": "\u003csession-id\u003e",
+            "args": [
+              {
+                "name": "session_id",
+                "type": "string"
+              }
+            ],
+            "category": "frontend",
+            "kind": "frontend",
+            "name": "resume",
+            "summary": "Talk to an existing session"
+          },
+          {
+            "available_during_task": true,
+            "category": "info",
+            "kind": "control",
+            "method": "GET",
+            "name": "status",
+            "op": "status",
+            "path": "/sessions/{id}",
+            "summary": "Show the session state"
+          },
+          {
+            "arg_hint": "\u003ceffort\u003e",
+            "args": [
+              {
+                "name": "effort",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "thinking",
+            "op": "set_thinking",
+            "path": "/sessions/{id}",
+            "summary": "Set the reasoning effort"
+          },
+          {
+            "arg_hint": "\u003ctier\u003e",
+            "args": [
+              {
+                "name": "service_tier",
+                "type": "string"
+              }
+            ],
+            "available_during_task": true,
+            "category": "model",
+            "kind": "control",
+            "method": "PATCH",
+            "name": "tier",
+            "op": "set_service_tier",
+            "path": "/sessions/{id}",
+            "summary": "Set the provider service tier"
+          }
+        ],
+        "serve_support": {
+          "abort": {
+            "supported": true
+          },
+          "compact": {
+            "supported": true
+          },
+          "goal": {
+            "supported": true
+          },
+          "goal-clear": {
+            "supported": true
+          },
+          "model": {
+            "supported": true
+          },
+          "new": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "processes": {
+            "supported": true
+          },
+          "queue": {
+            "supported": true
+          },
+          "queue-clear": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "quit": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "resume": {
+            "reason": "Not available in this client.",
+            "supported": false
+          },
+          "status": {
+            "supported": true
+          },
+          "thinking": {
+            "supported": true
+          },
+          "tier": {
+            "supported": true
+          }
+        }
+      }
+    },
+    "get_session.a": {
+      "status": 200,
+      "body": {
+        "context": {
+          "tokens": 5,
+          "window": 1000000
+        },
+        "created_at": "\u003ctime\u003e",
+        "effort": "high",
+        "head_seq": 11,
+        "id": "ses:a",
+        "last_turn": {
+          "stop_reason": "completed",
+          "turn_id": "turn#1"
+        },
+        "model": "anthropic/claude-fable-5",
+        "origin": "",
+        "status": "idle",
+        "subscription_usage": null,
+        "synced_seq": 0,
+        "updated_at": "\u003ctime\u003e",
+        "usage": {
+          "input_tokens": 5,
+          "output_tokens": 3
+        }
+      }
+    }
+  }
+}

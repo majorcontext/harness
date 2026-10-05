@@ -81,11 +81,10 @@ func TestContractClaudeCodeMirror(t *testing.T) {
 }
 
 func TestContractClaudeCodeInterrupt(t *testing.T) {
-	row := func(name, mode string, openCalls bool, facts ...action) scenario {
+	row := func(name, mode string, facts ...action) scenario {
 		return scenario{
-			name:      name,
-			openCalls: openCalls,
-			driver:    claudeLane{mode: mode, signals: true}.newDriver,
+			name:   name,
+			driver: claudeLane{mode: mode, signals: true}.newDriver,
 			actions: withActions([]action{
 				create{as: "a"}, submit{as: "a", text: "hi"}, claudeAwaitText{as: "a", text: "Working on it."},
 				interrupt{as: "a"}, waitIdle{as: "a"}, claudeSignals{as: "a"},
@@ -94,12 +93,12 @@ func TestContractClaudeCodeInterrupt(t *testing.T) {
 	}
 	session := claudeSession{as: "a"}
 	runScenarios(t, []scenario{
-		row("claudecode_interrupt_keeps_the_usage_of_the_result_after_the_signal", "hang_after_text", false, session),
-		row("claudecode_interrupt_closes_a_tool_call_that_the_cli_left_open", "hang_in_tool", true, session),
-		row("claudecode_interrupt_closes_a_tool_call_that_the_cli_printed_on_the_signal", "tool_on_interrupt", true, session),
-		row("claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal", "tool_result_on_interrupt", false, session),
-		row("claudecode_interrupt_ends_completed_when_the_cli_finishes_on_the_signal", "success_on_interrupt", false, session),
-		row("claudecode_interrupt_ignores_a_placeholder_result", "placeholder_on_interrupt", false, claudeUsage{as: "a"}),
-		row("claudecode_interrupt_of_a_cli_that_exits_with_no_frame", "exit_on_interrupt", false, session),
+		row("claudecode_interrupt_keeps_the_usage_of_the_result_after_the_signal", "hang_after_text", session),
+		row("claudecode_interrupt_closes_a_tool_call_that_the_cli_left_open", "hang_in_tool", session),
+		row("claudecode_interrupt_closes_a_tool_call_that_the_cli_printed_on_the_signal", "tool_on_interrupt", session),
+		row("claudecode_interrupt_keeps_a_tool_result_that_the_cli_printed_on_the_signal", "tool_result_on_interrupt", session),
+		row("claudecode_interrupt_ends_completed_when_the_cli_finishes_on_the_signal", "success_on_interrupt", session),
+		row("claudecode_interrupt_ignores_a_placeholder_result", "placeholder_on_interrupt", claudeUsage{as: "a"}),
+		row("claudecode_interrupt_of_a_cli_that_exits_with_no_frame", "exit_on_interrupt", session),
 	})
 }
