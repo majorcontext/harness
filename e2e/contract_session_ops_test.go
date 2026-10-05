@@ -9,6 +9,7 @@ import (
 func TestContractSessionOps(t *testing.T) {
 	slow := harnesstest.Step{Name: "slow", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "partial", Block: true}}
 	rest := agentStep("rest", "ok", true)
+	resumed := harnesstest.Step{Name: "resumed", Match: harnesstest.LastUserText("first"), Reply: harnesstest.Reply{Text: "ok", Block: true}}
 	runScenarios(t, []scenario{
 		{
 			name:  "queue_delete_while_busy",
@@ -31,7 +32,7 @@ func TestContractSessionOps(t *testing.T) {
 		},
 		{
 			name:  "queue_survives_clean_restart_then_delete",
-			model: []harnesstest.Step{slow, rest},
+			model: []harnesstest.Step{slow, resumed, rest},
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "first"},
@@ -45,6 +46,8 @@ func TestContractSessionOps(t *testing.T) {
 				deleteQueued{as: "a"},
 				expectQueued{as: "a"},
 				getSession{as: "a"},
+				release{step: "resumed"},
+				waitIdle{as: "a"},
 				submit{as: "a", text: "again"},
 				waitIdle{as: "a"},
 			},

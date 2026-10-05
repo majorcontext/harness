@@ -326,9 +326,17 @@ func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
 	return notServed(t, "DELETE /sessions/{id}", "phase 4")
 }
 
+// DeleteQueued withdraws each queued input, as serve cleared the queue in one
+// call, and records the status of the last call.
 func (d *runtimeDriver) DeleteQueued(t *testing.T, id string) callResult {
 	t.Helper()
-	return notServed(t, "DELETE /sessions/{id}/inputs/{input}", "phase 4")
+	var queued []string
+	d.expect(t, http.StatusOK, http.MethodGet, "/sessions/"+id+"/inputs", nil, &queued)
+	res := callResult{Status: http.StatusNoContent}
+	for _, in := range queued {
+		res = d.call(t, http.MethodDelete, "/sessions/"+id+"/inputs/"+in, nil)
+	}
+	return res
 }
 
 func (d *runtimeDriver) GetSession(t *testing.T, id string) callResult {
