@@ -174,7 +174,7 @@ func TestContractClaudeCodeHistory(t *testing.T) {
 
 func TestContractClaudeCodeSettings(t *testing.T) {
 	runScenarios(t, []scenario{{
-		name:   "settings_change_to_claude_code_mid_turn_waits_for_the_next_turn",
+		name:   "settings_change_to_claude_code_mid_turn_fails_the_turn",
 		driver: claudeLaneDriver("normal"),
 		model: []harnesstest.Step{
 			{Name: "call", Match: harnesstest.LastUserText("native"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
@@ -189,6 +189,7 @@ func TestContractClaudeCodeSettings(t *testing.T) {
 			setModel{as: "a", model: "claude-code/sonnet"},
 			release{step: "call"},
 			waitIdle{as: "a"},
+			getSession{as: "a"},
 			submit{as: "a", text: "again"},
 			waitIdle{as: "a"},
 			claudeSession{as: "a"},

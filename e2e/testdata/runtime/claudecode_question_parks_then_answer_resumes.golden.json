@@ -67,7 +67,11 @@
   },
   "calls": {
     "answer_question.a": {
-      "status": 204
+      "status": 202,
+      "body": {
+        "seq": 10,
+        "status": "started"
+      }
     },
     "claude_inputs.a": {
       "status": 200,

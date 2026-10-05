@@ -150,6 +150,40 @@
       "status": 200,
       "body": {
         "context": {
+          "used_tokens": 5,
+          "window_tokens": 0
+        },
+        "created_at": "\u003ctime\u003e",
+        "id": "ses:a",
+        "last_activity_at": "\u003ctime\u003e",
+        "last_turn": {
+          "error": "provider/claudecode: Stream called directly for model claude-code/sonnet — a claude-code session's turns must be dispatched through the delegated CLI backend (engine/claude_code_backend.go), not the native provider-call path; this indicates a caller bypass...[truncated]",
+          "outcome": "error"
+        },
+        "lineage": {
+          "children": [],
+          "status": "idle"
+        },
+        "messages": 3,
+        "model": "claude-code/sonnet",
+        "plugins": [],
+        "queued": 0,
+        "state": "idle",
+        "status": "idle",
+        "subscription_usage": null,
+        "usage": {
+          "input_tokens": 5,
+          "last_input_tokens": 5,
+          "messages": 3,
+          "output_tokens": 3
+        },
+        "workdir": "\u003cworkdir\u003e"
+      }
+    },
+    "get_session.a#2": {
+      "status": 200,
+      "body": {
+        "context": {
           "used_tokens": 113,
           "window_tokens": 0
         },

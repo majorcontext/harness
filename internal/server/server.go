@@ -25,7 +25,7 @@ type Session interface {
 	Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error)
 	Interrupt(ctx context.Context, req protocol.Interrupt) error
 	Compact(ctx context.Context, req protocol.Compact) (protocol.Compacted, error)
-	Resolve(ctx context.Context, requestID string, res protocol.Resolution) error
+	Resolve(ctx context.Context, requestID string, res protocol.Resolution) (protocol.Resolved, error)
 	SetGoal(ctx context.Context, g protocol.Goal) error
 	ClearGoal(ctx context.Context) error
 	Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)
@@ -413,8 +413,13 @@ func (h *handler[S]) resolve(s S, w http.ResponseWriter, r *http.Request) error 
 	if err := decode(w, r, &res, maxBody); err != nil {
 		return err
 	}
-	if err := s.Resolve(r.Context(), r.PathValue("request"), res); err != nil {
+	got, err := s.Resolve(r.Context(), r.PathValue("request"), res)
+	if err != nil {
 		return err
+	}
+	if got.Status == protocol.ResolvedStarted {
+		reply(w, http.StatusAccepted, got)
+		return nil
 	}
 	w.WriteHeader(http.StatusNoContent)
 	return nil

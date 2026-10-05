@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/protocol"
 )
 
 // ErrRequestNotPending reports a request that is not open.
@@ -36,19 +37,20 @@ func (a *Actor) questions() bool {
 	return a.cfg.AskUserQuestion && a.state.Summary().ParentID == "" && g.State != eventlog.GoalActive
 }
 
-// Resolve closes request id. An answer starts a turn that has no input, so
-// the backend that asked reads the answer; a dismissal starts none, and the
-// next turn tells the backend.
-func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, dismiss bool) error {
-	_, err := call(ctx, a, func(reply func(struct{}, error)) {
+// Resolve closes request id and returns the seq of its request.resolved
+// record. An answer starts a turn that has no input, so the backend that
+// asked reads the answer; a dismissal starts none, and the next turn tells
+// the backend.
+func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, dismiss bool) (protocol.Resolved, error) {
+	return call(ctx, a, func(reply func(protocol.Resolved, error)) {
 		i := slices.IndexFunc(a.state.Requests(), func(r eventlog.RequestOpened) bool { return r.RequestID == id })
 		if i < 0 {
-			reply(struct{}{}, ErrRequestNotPending)
+			reply(protocol.Resolved{}, ErrRequestNotPending)
 			return
 		}
 		if !dismiss {
 			if err := checkAnswer(a.state.Requests()[i].RequestKind, answer); err != nil {
-				reply(struct{}{}, err)
+				reply(protocol.Resolved{}, err)
 				return
 			}
 		}
@@ -56,21 +58,22 @@ func (a *Actor) Resolve(ctx context.Context, id string, answer json.RawMessage, 
 		if !dismiss {
 			ev.Resolution, ev.Answer = eventlog.ResolutionAnswered, answer
 		}
+		got := protocol.Resolved{Seq: a.state.Head() + 1, Status: protocol.ResolvedDismissed}
 		if dismiss {
-			reply(struct{}{}, a.append(ev))
+			reply(got, a.append(ev))
 			return
 		}
 		if a.run != nil {
-			reply(struct{}{}, ErrBusy)
+			reply(protocol.Resolved{}, ErrBusy)
 			return
 		}
 		turnID := newID("turn")
 		if err := a.append(ev, eventlog.TurnStarted{TurnID: turnID, InputIDs: []string{}}); err != nil {
-			reply(struct{}{}, err)
+			reply(protocol.Resolved{}, err)
 			return
 		}
 		a.start(turnID, nil)
-		reply(struct{}{}, nil)
+		got.Status = protocol.ResolvedStarted
+		reply(got, nil)
 	})
-	return err
 }

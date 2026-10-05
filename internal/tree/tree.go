@@ -66,7 +66,7 @@ type Config struct {
 	Go   func(func())
 	// Profiles reads the agent profiles. Resolve maps a model alias to its ref.
 	// CheckModel reports why no child can run the model ref.
-	Profiles   func() map[string]prompt.Profile
+	Profiles   func() (map[string]prompt.Profile, error)
 	Resolve    func(string) string
 	CheckModel func(model string) error
 	// Suffix returns a fresh random suffix for an ID.
@@ -98,7 +98,10 @@ type Choice struct{ Model, Effort string }
 // spawn appends child.spawned to parent, then creates the child with task
 // as its first input. A child that fails to start settles failed at once.
 func (t *Tree) spawn(ctx context.Context, parent, agent, task string, ch Choice) (string, error) {
-	profiles := t.cfg.Profiles()
+	profiles, err := t.cfg.Profiles()
+	if err != nil {
+		return "", fmt.Errorf("loading agent definitions: %w", err)
+	}
 	p, ok := profiles[agent]
 	if !ok {
 		return "", fmt.Errorf("unknown agent %q; the agents are %s", agent, strings.Join(slices.Sorted(maps.Keys(profiles)), ", "))

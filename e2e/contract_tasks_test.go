@@ -32,6 +32,47 @@ func TestContractTaskProfiles(t *testing.T) {
 	})
 }
 
+func TestContractTaskRepeatedProfileNames(t *testing.T) {
+	other := "---\nname: reader\ndescription: Reads again.\n---\n\nRead more.\n"
+	attempt := []action{create{as: "a"}, submit{as: "a", text: "refuse it"}, waitIdle{as: "a"}}
+	model := []harnesstest.Step{
+		taskStep("refuse", userStarts("refuse"), fixed(spawn("reader", "x"))),
+		{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+	}
+	runScenarios(t, []scenario{
+		{
+			name:  "task_spawn_fails_on_an_agent_name_repeated_in_one_dir",
+			model: model,
+			actions: slices.Concat([]action{
+				writeFile{path: ".agents/reader.md", body: readerProfile},
+				writeFile{path: ".agents/reader_again.md", body: other},
+			}, attempt),
+		},
+		{
+			name:   "task_spawn_fails_on_an_agent_name_repeated_across_dirs",
+			config: map[string]any{"agent_defs_dirs": []string{"team", ".agents"}},
+			model:  model,
+			actions: slices.Concat([]action{
+				writeFile{path: ".agents/reader.md", body: readerProfile},
+				writeFile{path: "team/reader.md", body: other},
+			}, attempt),
+		},
+		{
+			name:       "session_of_a_child_opens_after_an_agent_name_is_repeated",
+			concurrent: true,
+			model:      delegation("general-purpose", childDone),
+			actions: slices.Concat(spawned, []action{
+				writeFile{path: ".agents/reader.md", body: readerProfile},
+				writeFile{path: ".agents/reader_again.md", body: other},
+				restart{},
+				sendToSession{as: "kid", text: "more work"},
+				waitIdle{as: "kid"},
+				getSession{as: "kid"},
+			}),
+		},
+	})
+}
+
 func TestContractTaskReadOnlyProfiles(t *testing.T) {
 	runScenarios(t, []scenario{{
 		name:       "task_explore_and_plan_children_get_read_only_tools",

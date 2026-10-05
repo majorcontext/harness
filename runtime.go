@@ -128,6 +128,7 @@ type Runtime struct {
 	threshold float64
 	keep      int
 	name      func() string
+	births    births
 	base      context.Context
 	cancel    context.CancelFunc
 	group     sync.WaitGroup
@@ -170,7 +171,7 @@ func New(opts Options) (*Runtime, error) {
 	r.base, r.cancel = context.WithCancel(context.Background())
 	r.tree = tree.New(host{r}, tree.Config{MaxDepth: positive(opts.Config.MaxTaskDepth, d.MaxTaskDepth),
 		MaxRunning: positive(opts.Config.MaxConcurrentTasks, d.MaxConcurrentTasks), MaxTokens: opts.Config.MaxTreeTokens,
-		Base: r.base, Go: r.group.Go, Profiles: func() map[string]prompt.Profile { return prompt.Profiles(r.agentDirs) },
+		Base: r.base, Go: r.group.Go, Profiles: func() (map[string]prompt.Profile, error) { return prompt.Profiles(r.agentDirs) },
 		Resolve: opts.Config.ResolveModel, CheckModel: r.checkChildModel, Suffix: newSuffix})
 	tools := opts.Tools
 	if opts.WorkDir != "" && slices.ContainsFunc(tools, func(t Tool) bool { return t.Spec().Name == modelToolName }) {
@@ -413,7 +414,8 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 }
 
 // profile returns the agent profile of a session: read, or read from the
-// WorkDir now. The zero profile is no profile.
+// WorkDir now. The zero profile is no profile. A repeated agent name fails a
+// spawn, not the open of a session that exists.
 func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	switch {
 	case read != nil:
@@ -421,7 +423,8 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 	case agent == "":
 		return prompt.Profile{}
 	}
-	return prompt.Profiles(r.agentDirs)[agent]
+	profiles, _ := prompt.Profiles(r.agentDirs)
+	return profiles[agent]
 }
 
 // appended gives the events of session id to its plugins, and reports the
@@ -497,13 +500,14 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 	})
 }
 
-// List returns a page of sessions in ID order.
+// List returns a page of sessions in creation order. The After of a page is
+// the ID of the last session of the page before it.
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-	ids, err := r.store.Sessions(ctx, q.After, limit)
+	ids, err := r.sessionsByCreation(ctx, q.After, limit)
 	if err != nil {
 		return protocol.SessionPage{}, err
 	}
