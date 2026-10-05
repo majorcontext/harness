@@ -53,9 +53,10 @@ type run struct {
 	pending   *eventlog.Message
 	pendingID string
 	deferred  []eventlog.Message
-	// open counts the tool calls with no result. While one runs, the CLI
-	// takes a queued message before its next API call.
-	open       int
+	// steer reports a steer input that waits for Sink.Steer. A resolution
+	// run takes none and leaves the notification for the run after it: the
+	// CLI would queue the input behind its own continuation and answer it in a
+	// second result.
 	steer      bool
 	mainModel  string
 	lastCall   *usage
@@ -88,6 +89,10 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 		}
 		r.sendErr = r.proc.Send(line)
 	}
+	steered := req.Steered
+	if r.resolution != nil {
+		steered = nil
+	}
 	for {
 		select {
 		case line, ok := <-r.proc.Lines():
@@ -97,12 +102,12 @@ func (r *run) drive(ctx context.Context, req turn.Request) error {
 			if err := r.frame(line); err != nil || r.result != nil {
 				return err
 			}
-		case <-req.Steered:
+		case <-steered:
 			r.steer = true
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		}
-		if r.steer && r.open > 0 {
+		if r.steer {
 			if err := r.steered(); err != nil {
 				return err
 			}
@@ -346,9 +351,6 @@ func (r *run) assistant(env envelope) error {
 				parts[i].Name = name
 			}
 			r.names[p.CallID] = parts[i].Name
-			if env.ParentToolUseID == "" {
-				r.open++
-			}
 			if p.Name == askTool && env.ParentToolUseID == "" {
 				r.question = &question{callID: p.CallID, input: p.Arguments}
 			}
@@ -372,9 +374,6 @@ func (r *run) toolResults(env envelope) error {
 			return err
 		}
 	}
-	if env.ParentToolUseID == "" {
-		r.open = max(0, r.open-len(parts))
-	}
 	if r.pending != nil {
 		r.deferred = append(r.deferred, msg)
 		return nil
@@ -397,7 +396,7 @@ func (r *run) flush() error {
 	return nil
 }
 
-// steered writes the queued steer inputs to stdin while a tool runs.
+// steered writes the queued steer inputs to stdin.
 func (r *run) steered() error {
 	r.steer = false
 	if err := r.flush(); err != nil {

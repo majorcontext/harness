@@ -96,37 +96,6 @@
         "bash",
         "edit_file",
         "glob",
-        "grep",
-        "ls",
-        "process",
-        "read_file",
-        "read_tool_result",
-        "task",
-        "write_file"
-      ],
-      "messages": [
-        {
-          "role": "user",
-          "parts": [
-            {
-              "kind": "text",
-              "text": "child work"
-            },
-            {
-              "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "system_has_goal_evaluator": false,
-      "model": "claude-fable-5",
-      "tools": [
-        "bash",
-        "edit_file",
-        "glob",
         "goal",
         "grep",
         "ls",
@@ -143,6 +112,10 @@
             {
               "kind": "text",
               "text": "delegate"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
             }
           ]
         },
@@ -175,8 +148,12 @@
           "role": "assistant",
           "parts": [
             {
-              "kind": "text",
-              "text": "waiting"
+              "kind": "tool_use",
+              "tool_name": "bash",
+              "tool_input": {
+                "command": "sleep 0.3"
+              },
+              "tool_use_id": "toolu#2"
             }
           ]
         },
@@ -184,12 +161,104 @@
           "role": "user",
           "parts": [
             {
+              "kind": "tool_result",
+              "text": "(no output)",
+              "tool_name": "bash",
+              "tool_use_id": "toolu#2"
+            },
+            {
               "kind": "text",
-              "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: crashed\n\n[harness: this turn was interrupted by a process restart and could not complete]"
+              "text": "OPERATOR MESSAGES (address these, then continue the task):\n1. A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work"
             },
             {
               "kind": "text",
               "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "system_has_goal_evaluator": false,
+      "model": "claude-fable-5",
+      "tools": [
+        "bash",
+        "edit_file",
+        "glob",
+        "grep",
+        "ls",
+        "process",
+        "read_file",
+        "read_tool_result",
+        "task",
+        "write_file"
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "child work"
+            },
+            {
+              "kind": "text",
+              "text": "\u003charness-engine-context\u003e\n[engine: harness \u003cversion\u003e · session_sync=fsync · engine started \u003ctime\u003e]\n\u003c/harness-engine-context\u003e"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "looking"
+            },
+            {
+              "kind": "tool_use",
+              "tool_name": "ls",
+              "tool_input": {
+                "path": "."
+              },
+              "tool_use_id": "toolu#3"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "tool_result",
+              "text": "(empty directory)",
+              "tool_name": "ls",
+              "tool_use_id": "toolu#3"
             }
           ]
         }
@@ -239,133 +308,46 @@
         "role": "assistant",
         "parts": [
           {
-            "type": "text",
-            "text": "waiting"
+            "type": "tool_call",
+            "call_id": "toolu#2",
+            "name": "bash",
+            "arguments": {
+              "command": "sleep 0.3"
+            }
           }
         ]
       },
       {
         "id": "msg#5",
-        "role": "user",
+        "role": "tool",
         "parts": [
           {
-            "type": "text",
-            "text": "A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: failed: crashed\n\n[harness: this turn was interrupted by a process restart and could not complete]"
+            "type": "tool_result",
+            "call_id": "toolu#2",
+            "content": "(no output)"
           }
         ]
       },
       {
         "id": "msg#6",
-        "role": "assistant",
-        "parts": [
-          {
-            "type": "text",
-            "text": "rest"
-          }
-        ]
-      }
-    ],
-    "kid": [
-      {
-        "id": "msg#7",
         "role": "user",
         "parts": [
           {
             "type": "text",
-            "text": "child work"
+            "text": "OPERATOR MESSAGES (address these, then continue the task):\n1. A background task you started has finished.\n\ntask: \u003csession\u003e (agent general-purpose)\noutcome: done\n\nchild done\n"
           }
         ]
       },
       {
-        "id": "msg#8",
+        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
             "type": "text",
-            "text": "[harness: this turn was interrupted by a process restart and could not complete]"
+            "text": "parent done"
           }
         ]
       }
     ]
-  },
-  "calls": {
-    "get_session.a": {
-      "status": 200,
-      "body": {
-        "context": {
-          "tokens": 5,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 18,
-        "id": "ses:a",
-        "last_turn": {
-          "stop_reason": "completed",
-          "turn_id": "turn#2"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 15,
-          "output_tokens": 9
-        }
-      }
-    },
-    "get_session.kid": {
-      "status": 200,
-      "body": {
-        "context": {
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 4,
-        "id": "ses:kid",
-        "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
-        "status": "running",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "turn_id": "turn#1",
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        }
-      }
-    },
-    "get_session.kid#2": {
-      "status": 200,
-      "body": {
-        "context": {
-          "tokens": 0,
-          "window": 1000000
-        },
-        "created_at": "\u003ctime\u003e",
-        "head_seq": 7,
-        "id": "ses:kid",
-        "last_turn": {
-          "error": "crashed",
-          "stop_reason": "interrupted",
-          "turn_id": "turn#1"
-        },
-        "model": "anthropic/claude-fable-5",
-        "origin": "task",
-        "parent_id": "ses:a",
-        "status": "idle",
-        "subscription_usage": null,
-        "synced_seq": 0,
-        "updated_at": "\u003ctime\u003e",
-        "usage": {
-          "input_tokens": 0,
-          "output_tokens": 0
-        }
-      }
-    }
   }
 }

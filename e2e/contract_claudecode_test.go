@@ -155,6 +155,18 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 			),
 		},
 		{
+			name:   "claudecode_question_answer_run_takes_no_steer_input",
+			driver: claudeLane{mode: "question_continues", ask: true}.newDriver,
+			actions: withActions(parked,
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			),
+		},
+		{
 			name:   "claudecode_question_unknown_call_id_conflicts",
 			driver: lane,
 			actions: withActions(parked,

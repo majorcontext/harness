@@ -15,7 +15,7 @@ const (
 	StatusRetrying = "retrying"
 )
 
-// Input deliveries.
+// Input deliveries. An input with no delivery is steer.
 const (
 	DeliveryQueue = "queue"
 	DeliverySteer = "steer"

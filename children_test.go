@@ -56,13 +56,13 @@ func (f *family) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn
 }
 
 // last returns the last part of the newest request that session sent with
-// a last part that starts with prefix, or "".
+// a last part that starts with prefix, or "". A steer heading does not count.
 func (f *family) last(session, prefix string) (turn.Request, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, req := range slices.Backward(f.reqs) {
 		m := req.History[len(req.History)-1]
-		if p := m.Parts[len(m.Parts)-1].Text; (session == "" || req.SessionID == session) && strings.HasPrefix(p, prefix) {
+		if p := strings.TrimPrefix(m.Parts[len(m.Parts)-1].Text, "OPERATOR MESSAGES (address these, then continue the task):\n1. "); (session == "" || req.SessionID == session) && strings.HasPrefix(p, prefix) {
 			return req, p
 		}
 	}
