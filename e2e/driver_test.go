@@ -65,6 +65,7 @@ type driver interface {
 	GetSession(t *testing.T, id string) callResult
 	SessionStatus(t *testing.T) callResult
 	MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult
+	MessagesQuery(t *testing.T, id, rawQuery string) callResult
 	Bootstrap(t *testing.T, id string, limit int) callResult
 	JournalPage(t *testing.T, id string, from, limit int) callResult
 	SSEResume(t *testing.T, id string, afterSeq int64, header, scoped bool) callResult

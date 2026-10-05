@@ -411,6 +411,26 @@
           ]
         }
       ]
+    },
+    "messages_page.a#8": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: limit must be given at most once"
+        }
+      }
+    },
+    "messages_page.a#9": {
+      "status": 400,
+      "body": {
+        "error": {
+          "code": "invalid_request",
+          "details": {},
+          "message": "invalid request: before must be given at most once"
+        }
+      }
     }
   }
 }

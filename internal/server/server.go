@@ -303,6 +303,17 @@ func number(r *http.Request, key string) (uint64, error) {
 	return n, nil
 }
 
+// once rejects a query parameter that the request gives more than once.
+func once(r *http.Request, keys ...string) error {
+	q := r.URL.Query()
+	for _, key := range keys {
+		if len(q[key]) > 1 {
+			return fmt.Errorf("%w: %s must be given at most once", errInvalid, key)
+		}
+	}
+	return nil
+}
+
 func limit(r *http.Request) (int, error) {
 	n, err := number(r, "limit")
 	if n == 0 {
@@ -348,6 +359,9 @@ func (h *handler[S]) view(w http.ResponseWriter, r *http.Request) error {
 
 // messages answers a page of the conversation. It only reads the session.
 func (h *handler[S]) messages(w http.ResponseWriter, r *http.Request) error {
+	if err := once(r, "before", "limit"); err != nil {
+		return err
+	}
 	before, err := number(r, "before")
 	if err != nil {
 		return err

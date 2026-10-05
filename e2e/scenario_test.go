@@ -251,6 +251,7 @@ type commands struct{}
 type messagesPage struct {
 	as               string
 	beforeSeq, limit int
+	rawQuery         string // sent as given, in place of beforeSeq and limit
 }
 type bootstrap struct {
 	as    string
@@ -391,6 +392,10 @@ func (sessionStatus) run(t *testing.T, r *run) {
 	r.record(t, "session_status", "", r.drv.SessionStatus(t))
 }
 func (a messagesPage) run(t *testing.T, r *run) {
+	if a.rawQuery != "" {
+		r.record(t, "messages_page", a.as, r.drv.MessagesQuery(t, r.id(t, a.as), a.rawQuery))
+		return
+	}
 	r.record(t, "messages_page", a.as, r.drv.MessagesPage(t, r.id(t, a.as), a.beforeSeq, a.limit))
 }
 func (a bootstrap) run(t *testing.T, r *run) {

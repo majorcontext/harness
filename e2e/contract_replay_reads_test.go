@@ -88,6 +88,8 @@ func TestContractReplayReadsB(t *testing.T) {
 				messagesPage{as: "a", limit: 2, beforeSeq: 100},
 				messagesPage{as: "a", limit: 1001},
 				messagesPage{as: "a", beforeSeq: 4},
+				messagesPage{as: "a", rawQuery: "limit=2&limit=3"},
+				messagesPage{as: "a", rawQuery: "before=3&before=4"},
 			),
 		},
 		{
