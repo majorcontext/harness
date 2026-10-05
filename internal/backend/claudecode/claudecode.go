@@ -33,6 +33,11 @@ const continuation = "The previous turn was interrupted. " +
 	"Continue the unfinished work from the saved conversation. " +
 	"Check the current state before repeating actions that may already have completed."
 
+// reportTrigger is the text of a turn that only reports of children start,
+// before the segment that holds their task lines.
+const reportTrigger = "A background task you started has finished. " +
+	"See the engine context below for its result, and continue accordingly."
+
 // historyDirective tells a CLI session that lacks part of the conversation to
 // read it through the history tool before it answers.
 const historyDirective = "You are continuing a conversation that happened on another model. " +
@@ -347,31 +352,30 @@ func (r *run) prompt(req turn.Request) (input, error) {
 	return userLine(m, r.read)
 }
 
-// startParts returns the parts of the line that starts a turn. When only
-// reports of children start it, the line is their text. When the turn also
-// has another input, the task lines of the reports follow the text of that
-// input in one segment, as the engine appended the reports that waited for
-// the turn; the text of a report is left out, because its task line holds the
-// result.
+// startParts returns the parts of the line that starts a turn. The task lines
+// of the reports of children follow in one segment, after the text of the
+// other inputs, as the engine appended the reports that waited for the turn;
+// the text of a report is left out, because its task line holds the result.
+// When only reports start the turn, the segment follows the trigger sentence
+// of the engine.
 func startParts(inputs []eventlog.Message) []eventlog.Part {
 	report := func(m eventlog.Message) bool {
 		return slices.ContainsFunc(m.Parts, func(p eventlog.Part) bool { return p.Type == eventlog.PartTaskReport })
 	}
-	only := !slices.ContainsFunc(inputs, func(m eventlog.Message) bool { return !report(m) })
 	var parts []eventlog.Part
 	var tasks []string
 	for _, in := range inputs {
 		for _, p := range in.Parts {
 			switch {
 			case p.Type == eventlog.PartTaskReport:
-				if !only {
-					tasks = append(tasks, p.Text)
-				}
-			case report(in) && !only:
-			default:
+				tasks = append(tasks, p.Text)
+			case !report(in):
 				parts = append(parts, p)
 			}
 		}
+	}
+	if len(parts) == 0 && len(tasks) > 0 {
+		parts = append(parts, eventlog.Part{Type: eventlog.PartText, Text: reportTrigger})
 	}
 	if len(tasks) > 0 {
 		parts = append(parts, eventlog.Part{Type: eventlog.PartEngineContext, Text: eventlog.TaskSegment(tasks)})
