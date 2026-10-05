@@ -72,6 +72,8 @@ func TestContractChildReportPinned(t *testing.T) {
 				enqueue{as: "a", text: "also this"},
 				release{step: "ack"},
 				waitIdle{as: "a"},
+				submit{as: "a", text: "next"},
+				waitIdle{as: "a"},
 			},
 		},
 		{
@@ -105,6 +107,73 @@ func TestContractChildReportPinned(t *testing.T) {
 				submit{as: "a", text: "log"},
 				waitIdle{as: "a"},
 			},
+		},
+	})
+}
+
+func TestContractChildReportPinnedAcrossTurns(t *testing.T) {
+	summary := harnesstest.Step{Name: "summary", Match: summaryRequest, Reply: harnesstest.Reply{Text: "gist"}}
+	unused := summary
+	unused.Repeat = true
+	hello := harnesstest.Step{Name: "hello", Match: harnesstest.LastUserText("hello"), Reply: harnesstest.Reply{Text: "hi"}}
+	call := func(id, tool string, input map[string]any) harnesstest.Reply {
+		return harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: id, Name: tool, Input: input}}}
+	}
+	keepOne := map[string]any{"compaction_keep_turns": 1}
+	runScenarios(t, []scenario{
+		{
+			name:       "child_report_to_a_busy_parent_after_the_cut_of_a_compaction",
+			concurrent: true,
+			config:     keepOne,
+			model:      busyParentSteps(hello, summary),
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "hello"}, waitIdle{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 4},
+				release{step: "child"},
+				awaitRequests{n: 5},
+				release{step: "ack"},
+				waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "next"}, waitIdle{as: "a"},
+			},
+		},
+		{
+			name:       "child_report_to_a_busy_parent_folded_with_a_long_kept_tail",
+			concurrent: true,
+			config:     keepOne,
+			model: busyParentSteps(summary,
+				harnesstest.Step{Name: "long1", Match: harnesstest.LastUserText("long"), Reply: call("toolu_g", "glob", map[string]any{"pattern": "*.none"})},
+				harnesstest.Step{Name: "long2", Match: harnesstest.LastToolResult("glob"), Reply: call("toolu_r", "grep", map[string]any{"pattern": "zzzz"})},
+				harnesstest.Step{Name: "long3", Match: harnesstest.LastToolResult("grep"), Reply: harnesstest.Reply{Text: "long done"}},
+			),
+			actions: slices.Concat(busyParent, []action{
+				submit{as: "a", text: "long"}, waitIdle{as: "a"},
+				compact{as: "a"},
+				submit{as: "a", text: "next"}, waitIdle{as: "a"},
+			}),
+		},
+		{
+			name:       "child_report_to_a_busy_parent_stays_through_an_in_turn_compaction",
+			concurrent: true,
+			config:     keepOne,
+			model: busyParentSteps(unused,
+				harnesstest.Step{Name: "big1", Match: harnesstest.LastUserText("big"), Reply: call("toolu_g", "glob", map[string]any{"pattern": "*.none"})},
+				harnesstest.Step{Name: "overflow", Match: harnesstest.LastToolResult("glob"), Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: harnesstest.ContextOverflowMessage}},
+				harnesstest.Step{Name: "big2", Match: harnesstest.LastToolResult("glob"), Reply: call("toolu_r", "grep", map[string]any{"pattern": "zzzz"})},
+				harnesstest.Step{Name: "big3", Match: harnesstest.LastToolResult("grep"), Reply: harnesstest.Reply{Text: "big done"}},
+			),
+			actions: slices.Concat(busyParent, []action{
+				submit{as: "a", text: "big"}, waitIdle{as: "a"},
+				submit{as: "a", text: "next"}, waitIdle{as: "a"},
+			}),
+		},
+		{
+			name:       "child_report_to_a_busy_parent_survives_a_restart",
+			concurrent: true,
+			model:      busyParentSteps(),
+			actions:    slices.Concat(busyParent, []action{restart{}, submit{as: "a", text: "next"}, waitIdle{as: "a"}}),
 		},
 	})
 }

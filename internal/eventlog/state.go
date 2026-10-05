@@ -210,9 +210,9 @@ type State struct {
 	retained   []ToolResultRetained
 	commands   map[string]command
 	history    []entry
-	// stranded holds the pinned segments that a compaction folded. The model
-	// reads them at the end of the history, and the next turn start settles
-	// them there, after its inputs.
+	// stranded holds the pinned segments that a compaction outside a turn
+	// folded. The model reads them at the end of the history, and the next
+	// turn start settles them there, after its inputs.
 	stranded []entry
 	// turnAt is the length of history when the current turn started.
 	turnAt int

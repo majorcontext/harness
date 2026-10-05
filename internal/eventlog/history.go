@@ -162,10 +162,15 @@ func (s *State) remember(env Envelope) {
 		s.history = slices.Clone(s.history[i:])
 		s.turnAt = max(0, s.turnAt-i)
 		s.stranded = slices.Concat(s.stranded, folded)
+		if s.turn.ID != "" {
+			s.settle(env.Seq)
+		}
 	}
 }
 
-// settle puts the stranded pinned segments at the end of the history.
+// settle puts the stranded pinned segments at the end of the history. A
+// compaction in a running turn settles at once, where the turn loop already
+// reads them.
 func (s *State) settle(seq uint64) {
 	for _, e := range s.stranded {
 		e.seq, e.by, e.turn = seq, s.turnBy, s.turnN
