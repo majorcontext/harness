@@ -13,6 +13,7 @@ var preInitModes = map[string]func(f *fake) bool{
 	"queued_empty_result":       queuedEmptyResult,
 	"queued_empty_result_error": queuedEmptyResult,
 	"question":                  question,
+	"question_continues":        question,
 	"mirror":                    replayMirror,
 	"no_init":                   noInit,
 	"mcp":                       mcpTurn,
@@ -90,7 +91,7 @@ var askQuestionInput = obj{"questions": []obj{{
 func (f *fake) questionState() string { return os.Getenv("FAKE_CLAUDE_STATE") }
 
 func (f *fake) questionParked() bool {
-	if f.mode != "question" {
+	if f.mode != "question" && f.mode != "question_continues" {
 		return false
 	}
 	_, err := os.Stat(f.questionState())
@@ -146,10 +147,30 @@ func resumeParkedQuestion(f *fake, state string) {
 		questionMirrorFrame(f, "dismissal-tail")
 		os.Exit(1)
 	}
+	if f.mode == "question_continues" {
+		continueInTool(f, line)
+		return
+	}
 	f.emit(
 		user(toolResult("toolu_q", line, false)),
 		system("init", obj{"session_id": f.sessionID}),
 		say("Noted."),
 		obj{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "stop_reason": "end_turn", "result": "Noted."},
 	)
+}
+
+// continueInTool continues the answered question with a tool call and waits
+// for a queued message while the tool runs. A driver that writes none ends the
+// run with the "no second message" result.
+func continueInTool(f *fake, answer string) {
+	f.emit(
+		user(toolResult("toolu_q", answer, false)),
+		system("init", obj{"session_id": f.sessionID}),
+		assistant(textBlock(waitingMarker), toolUse("toolu_c", "Bash", obj{"command": "sleep 1"})),
+	)
+	text := "no second message received"
+	if content, ok := awaitQueued(f); ok {
+		text = "received queued: " + content
+	}
+	f.emit(user(toolResult("toolu_c", "slept", false)), say(text), success(text, 5, 5))
 }

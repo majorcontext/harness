@@ -12,6 +12,8 @@ const (
 	specTaskInputs    = "Task notifications become inputs"
 	specChildReport   = "The report names the child, its agent, the outcome, and the error, and holds the last assistant text of the child"
 	specChildNoGoal   = "A child session has no `goal` tool"
+	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine?"
+	specAnswerNoSteer = "A run that answers a question takes no steer input"
 	specCrash         = "Append `turn.ended{interrupted, crashed}`; keep the partial"
 	specCrashQueue    = "The session then starts the next queued input, or waits for input when none is queued."
 	specHandoffResume = "A suspended turn has no open tool call, so the next owner resumes it automatically."
@@ -74,6 +76,7 @@ var runtimeRows = map[string]runtimeRow{
 	"busy_deferred_goal_with_max_turns":                           deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
 	"claudecode_context_window_from_model_usage":                  reGolden(specView),
@@ -82,6 +85,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_interrupt_mid_turn":                               reGolden(specView),
 	"claudecode_question_dismissed_by_compact":                    reGolden(specWaiting, specView, specCompactResult),
 	"claudecode_question_dismissed_by_next_prompt":                reGolden(specWaiting, specView),
+	"claudecode_question_answer_run_takes_no_steer_input":         reGolden(specWaiting, specView, specAnswerNoSteer, specOpenAnswerReceipt),
 	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specOpenAnswerReceipt),
 	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specOpenAnswerReceipt),
 	"claudecode_prompt_attachments":                               sameAsServe(),

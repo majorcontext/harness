@@ -62,7 +62,7 @@ func TestContractClaudeCodeTurns(t *testing.T) {
 		},
 		{
 			name:   "claudecode_queued_prompt_injected_mid_turn",
-			driver: claudeLaneDriver("queue_injection_in_tool"),
+			driver: claudeLaneDriver("queue_injection"),
 			actions: []action{
 				create{as: "a"},
 				submit{as: "a", text: "run it"},
@@ -150,6 +150,18 @@ func TestContractClaudeCodeQuestions(t *testing.T) {
 			driver: lane,
 			actions: withActions(parked,
 				compact{as: "a"},
+				claudeSession{as: "a"},
+				claudeInputs{as: "a"},
+			),
+		},
+		{
+			name:   "claudecode_question_answer_run_takes_no_steer_input",
+			driver: claudeLane{mode: "question_continues", ask: true}.newDriver,
+			actions: withActions(parked,
+				claudeAnswer{as: "a", callID: "toolu_q", answers: answers},
+				claudeAwaitText{as: "a", text: "WAITING_FOR_QUEUE"},
+				enqueue{as: "a", text: "second"},
+				waitIdle{as: "a"},
 				claudeSession{as: "a"},
 				claudeInputs{as: "a"},
 			),

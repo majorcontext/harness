@@ -34,6 +34,32 @@ func TestContractChildren(t *testing.T) {
 			},
 		},
 		{
+			name:       "child_report_reaches_a_busy_parent_at_the_tool_boundary",
+			concurrent: true,
+			model: []harnesstest.Step{
+				delegate,
+				// The child holds its tool call until the parent's ack request exists, so
+				// the child ends while the parent runs a tool.
+				{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "looking", Block: true, ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_2", Name: "ls", Input: map[string]any{"path": "."}},
+				}}},
+				{Name: "child_done", Match: harnesstest.LastToolResult("ls"), Reply: harnesstest.Reply{Text: "child done"}},
+				{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Block: true, ToolCalls: []harnesstest.ToolCall{
+					{ID: "toolu_bash", Name: "bash", Input: map[string]any{"command": "sleep 0.3"}},
+				}}},
+				{Name: "after", Reply: harnesstest.Reply{Text: "parent done"}, Repeat: true},
+			},
+			actions: []action{
+				create{as: "a"},
+				submit{as: "a", text: "delegate"},
+				awaitRequests{n: 3},
+				release{step: "child"},
+				awaitRequests{n: 4},
+				release{step: "ack"},
+				waitIdle{as: "a"},
+			},
+		},
+		{
 			name:       "child_error_delivered",
 			concurrent: true,
 			model: []harnesstest.Step{

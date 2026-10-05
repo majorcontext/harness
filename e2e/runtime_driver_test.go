@@ -210,13 +210,16 @@ func (d *runtimeDriver) Create(t *testing.T) string {
 	return v.ID
 }
 
-// input returns the route and body of an input. serve ran a prompt that
-// arrived during a turn at the next tool boundary, which is a steer input.
-// An enqueued input waits for the next turn.
+// input returns the route and body of an input. An empty delivery leaves the
+// field out, so the default applies: serve ran a prompt that arrived during a
+// turn at the next tool boundary, and so does a steer input.
 func (d *runtimeDriver) input(id, text, delivery, source string) (string, map[string]any) {
 	d.inputs++
-	body := map[string]any{"id": fmt.Sprintf("in%d", d.inputs), "delivery": delivery,
+	body := map[string]any{"id": fmt.Sprintf("in%d", d.inputs),
 		"parts": []protocol.Part{{Type: protocol.PartText, Text: text}}}
+	if delivery != "" {
+		body["delivery"] = delivery
+	}
 	if source != "" {
 		body["source"] = source
 	}
@@ -225,13 +228,13 @@ func (d *runtimeDriver) input(id, text, delivery, source string) (string, map[st
 
 func (d *runtimeDriver) Submit(t *testing.T, id, text string) {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	path, body := d.input(id, text, "", "")
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 
 func (d *runtimeDriver) Attach(t *testing.T, id, text string, atts []attachment) {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	path, body := d.input(id, text, "", "")
 	parts := body["parts"].([]protocol.Part)
 	for _, a := range atts {
 		parts = append(parts, protocol.Part{Type: protocol.PartBlob, MediaType: a.mediaType, Data: a.data})
@@ -242,13 +245,13 @@ func (d *runtimeDriver) Attach(t *testing.T, id, text string, atts []attachment)
 
 func (d *runtimeDriver) Enqueue(t *testing.T, id, text string) {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	path, body := d.input(id, text, "", "")
 	d.expect(t, http.StatusCreated, http.MethodPost, path, body, nil)
 }
 
 func (d *runtimeDriver) Send(t *testing.T, id, text string) callResult {
 	t.Helper()
-	path, body := d.input(id, text, protocol.DeliverySteer, "")
+	path, body := d.input(id, text, "", "")
 	return d.call(t, http.MethodPost, path, body)
 }
 

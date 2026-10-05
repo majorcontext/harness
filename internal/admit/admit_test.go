@@ -66,7 +66,7 @@ func TestInputKeepsTextAndStoresEachAttachmentUnderItsHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	if ev.InputID != "a" || ev.Delivery != eventlog.DeliverySteer || ev.Source != "user" || len(ev.Parts) != 3 {
-		t.Fatalf("record = %+v, want input a, queued, from the user, with 3 parts", ev)
+		t.Fatalf("record = %+v, want input a, steer, from the user, with 3 parts", ev)
 	}
 	img := ev.Parts[1]
 	if img.Type != eventlog.PartBlob || img.MediaType != "image/png" || img.Bytes != len(data) {
