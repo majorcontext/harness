@@ -25,6 +25,8 @@ import (
 	"github.com/majorcontext/harness/provider/openaicompat"
 )
 
+const defaultOpenRouter = "openrouter"
+
 // ErrUnavailable reports a model that no configured provider serves.
 var ErrUnavailable = errors.New("harness: model unavailable")
 
@@ -41,11 +43,20 @@ func NewRouter(backends map[string]turn.Backend, strict bool) *Router {
 	return &Router{backends: backends, strict: strict}
 }
 
-// New returns the Router of the providers of cfg. The backend of a
-// claude-code-cli provider runs in workDir.
+// New returns the Router of the providers of cfg, and of the providers that
+// need no entry: the native anthropic and openai, and the default openrouter.
+// The backend of a claude-code-cli provider runs in workDir.
 func New(cfg config.Config, workDir string, transport func(provider string) http.RoundTripper) *Router {
 	backends := map[string]turn.Backend{}
 	providers := maps.Clone(cfg.Providers)
+	if providers == nil {
+		providers = map[string]config.Provider{}
+	}
+	for _, name := range []string{anthropic.Family, responses.Family, defaultOpenRouter} {
+		if _, ok := providers[name]; !ok {
+			providers[name] = config.Provider{}
+		}
+	}
 	config.EnsureProviderDefaults(providers)
 	for name, p := range providers {
 		if p.Type == config.TypeClaudeCodeCLI {

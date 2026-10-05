@@ -7,6 +7,7 @@ import (
 )
 
 func TestContractModelTool(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
 	model := func(kv ...any) harnesstest.ToolCall { return ftTool("model", ftArgs(kv...)) }
 	runScenarios(t, []scenario{{
 		name: "model_tool_reports_lists_and_switches_the_model",
@@ -31,6 +32,15 @@ func TestContractModelTool(t *testing.T) {
 			model("action", "clear"),
 			model("action", "status"),
 		),
+		actions: oneTurn,
+	}, {
+		name: "model_tool_lists_the_registry_and_sets_native",
+		config: map[string]any{
+			"providers": map[string]any{
+				"gateway": map[string]any{"type": "openai-compat", "api_key_env": "ANTHROPIC_API_KEY", "base_url": "http://127.0.0.1:1"},
+			},
+		},
+		model:   toolChain(model("action", "list"), model("action", "set", "model", "openai/gpt-native-1"))[:2],
 		actions: oneTurn,
 	}, {
 		name:    "model_tool_false_removes_the_model_tool",
