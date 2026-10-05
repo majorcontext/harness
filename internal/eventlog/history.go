@@ -17,19 +17,48 @@ type entry struct {
 	// as this message, and last the seq of the newest of them.
 	promoted [][]Part
 	last     uint64
+	// pinned marks a segment that the model reads at this place in every
+	// later call and that the history readers never see.
+	pinned bool
 }
 
-// SteerMessage is the message that the model reads for inputs that join a
-// running turn at an item boundary: one numbered block that tells the model
-// to address them and then to continue its task. An input that reports a
-// child is not in the block; the model reads its task lines in one engine
-// context part, as the engine pinned them.
+// IsReport reports whether parts hold the report of a child. A caller cannot
+// write a task report part, so this tells a report from a prompt that names
+// source child.
+func IsReport(parts []Part) bool {
+	return slices.ContainsFunc(parts, func(p Part) bool { return p.Type == PartTaskReport })
+}
+
+// SteerMessages returns what the model reads for inputs that join a running
+// turn at an item boundary: one numbered block that tells the model to
+// address the inputs and then to continue its task, and then the pinned
+// segment that holds the task lines of the reports. A report is not in the
+// block, as the engine pinned its task lines.
+func SteerMessages(inputs [][]Part) []Message {
+	var ops, reports [][]Part
+	for _, parts := range inputs {
+		if IsReport(parts) {
+			reports = append(reports, parts)
+		} else {
+			ops = append(ops, parts)
+		}
+	}
+	var out []Message
+	if len(ops) > 0 {
+		out = append(out, SteerMessage(ops))
+	}
+	if len(reports) > 0 {
+		out = append(out, pinMessage(reports))
+	}
+	return out
+}
+
+// SteerMessage is the message for the inputs that join a running turn, with
+// no report among them.
 func SteerMessage(inputs [][]Part) Message {
 	var b strings.Builder
 	var blobs []Part
-	var tasks []string
-	n := 0
-	for _, parts := range inputs {
+	for n, parts := range inputs {
 		var text []string
 		for _, p := range parts {
 			switch p.Type {
@@ -37,27 +66,26 @@ func SteerMessage(inputs [][]Part) Message {
 				text = append(text, p.Text)
 			case PartBlob:
 				blobs = append(blobs, p)
-			case PartTaskReport:
-				tasks = append(tasks, p.Text)
 			}
 		}
-		if slices.ContainsFunc(parts, func(p Part) bool { return p.Type == PartTaskReport }) {
-			continue
-		}
-		if n++; n == 1 {
+		if n == 0 {
 			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 		}
-		fmt.Fprintf(&b, "%d. %s\n", n, strings.Join(text, "\n"))
+		fmt.Fprintf(&b, "%d. %s\n", n+1, strings.Join(text, "\n"))
 	}
-	var out []Part
-	if n > 0 {
-		out = append(out, Part{Type: PartText, Text: b.String()})
+	return Message{Role: RoleUser, Parts: append([]Part{{Type: PartText, Text: b.String()}}, blobs...)}
+}
+
+func pinMessage(reports [][]Part) Message {
+	var lines []string
+	for _, parts := range reports {
+		for _, p := range parts {
+			if p.Type == PartTaskReport {
+				lines = append(lines, p.Text)
+			}
+		}
 	}
-	out = append(out, blobs...)
-	if len(tasks) > 0 {
-		out = append(out, Part{Type: PartEngineContext, Text: TaskSegment(tasks)})
-	}
-	return Message{Role: RoleUser, Parts: out}
+	return Message{Role: RoleUser, Parts: []Part{{Type: PartEngineContext, Text: TaskSegment(lines)}}}
 }
 
 // TaskSegment is the segment of the engine that holds the task lines of
@@ -72,15 +100,30 @@ func withoutTaskReports(parts []Part) []Part {
 	return slices.DeleteFunc(slices.Clone(parts), func(p Part) bool { return p.Type == PartTaskReport })
 }
 
-// History returns the conversation that the model sees: the summary of the
+// History returns the conversation that readers see: the summary of the
 // newest compaction as a user message, then each later message in log order.
-func (s *State) History() []Message {
+// A pinned segment is not in it.
+func (s *State) History() []Message { return s.messages(false) }
+
+// ModelHistory returns History with each pinned segment at its place: the
+// conversation that the model reads.
+func (s *State) ModelHistory() []Message { return s.messages(true) }
+
+func (s *State) messages(pinned bool) []Message {
 	var out []Message
 	if c, ok := s.Compaction(); ok {
 		out = append(out, Message{Role: RoleUser, Parts: []Part{{Type: PartText, Text: c.Summary}}})
 	}
 	for _, e := range s.history {
+		if e.pinned && !pinned {
+			continue
+		}
 		out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+	}
+	if pinned {
+		for _, e := range s.stranded {
+			out = append(out, Message{Role: e.msg.Role, Parts: cloneParts(e.msg.Parts), ParentCallID: e.msg.ParentCallID})
+		}
 	}
 	return out
 }
@@ -92,16 +135,22 @@ func (s *State) remember(env Envelope) {
 		for _, id := range e.InputIDs {
 			s.say(env.Seq, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
 		}
+		s.settle(env.Seq)
 	case InputPromoted:
 		parts := s.inputs[e.InputID].event.Parts
-		if n := len(s.history); n > 0 && s.history[n-1].promoted != nil && s.history[n-1].last+1 == env.Seq {
+		pin := IsReport(parts)
+		build := SteerMessage
+		if pin {
+			build = pinMessage
+		}
+		if n := len(s.history); n > 0 && s.history[n-1].promoted != nil && s.history[n-1].pinned == pin && s.history[n-1].last+1 == env.Seq {
 			h := s.history[n-1]
 			h.promoted, h.last = append(slices.Clip(h.promoted), parts), env.Seq
-			h.msg = SteerMessage(h.promoted)
+			h.msg = build(h.promoted)
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, msg: SteerMessage([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq})
+		s.history = append(s.history, entry{seq: env.Seq, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
 	case ItemCompleted:
 		s.say(env.Seq, e.Message)
 	case CompactionApplied:
@@ -109,9 +158,25 @@ func (s *State) remember(env Envelope) {
 		if i < 0 {
 			i = len(s.history)
 		}
+		folded := slices.DeleteFunc(slices.Clone(s.history[:i]), func(h entry) bool { return !h.pinned })
 		s.history = slices.Clone(s.history[i:])
 		s.turnAt = max(0, s.turnAt-i)
+		s.stranded = slices.Concat(s.stranded, folded)
+		if s.turn.ID != "" {
+			s.settle(env.Seq)
+		}
 	}
+}
+
+// settle puts the stranded pinned segments at the end of the history. A
+// compaction in a running turn settles at once, where the turn loop already
+// reads them.
+func (s *State) settle(seq uint64) {
+	for _, e := range s.stranded {
+		e.seq, e.by, e.turn = seq, s.turnBy, s.turnN
+		s.history = append(s.history, e)
+	}
+	s.stranded = nil
 }
 
 func (s *State) say(seq uint64, m Message) {
@@ -158,7 +223,13 @@ func cloneParts(parts []Part) []Part {
 // turns or fewer exist, or when only the compaction summary would fold.
 func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 	h := s.History()
-	lead := len(h) - len(s.history)
+	var seqs []uint64
+	for _, e := range s.history {
+		if !e.pinned {
+			seqs = append(seqs, e.seq)
+		}
+	}
+	lead := len(h) - len(seqs)
 	var starts []int
 	for i, m := range h {
 		if m.Role == RoleUser {
@@ -172,7 +243,7 @@ func (s *State) Fold(keep int) (folded []Message, toSeq uint64, ok bool) {
 	if end <= lead {
 		return nil, 0, false
 	}
-	return h[:end], s.history[end-lead].seq - 1, true
+	return h[:end], seqs[end-lead] - 1, true
 }
 
 // dismissal is the result of the tool call that a dismissed request held

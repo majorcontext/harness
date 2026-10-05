@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -24,6 +25,8 @@ type codexScenario struct {
 	// mcpSchema, when set, serves one MCP tool named "send" with this input
 	// schema as the server "srv".
 	mcpSchema string
+	// mcpLoading is the mcp_tool_loading of the mcpSchema server; the default is eager.
+	mcpLoading string
 	// bareKey configures the lane under the built-in "openai" provider key
 	// with no type, as a deployment that points "openai" at the endpoint.
 	bareKey bool
@@ -125,7 +128,7 @@ func runCodexScenario(t *testing.T, sc codexScenario, h host) observation {
 		if extra == nil {
 			extra = map[string]any{}
 		}
-		extra["mcp_tool_loading"] = "eager"
+		extra["mcp_tool_loading"] = cmp.Or(sc.mcpLoading, "eager")
 		extra["mcp_servers"] = map[string]any{"srv": map[string]any{"url": serveMCPTool(t, sc.mcpSchema)}}
 	}
 	cfg := codexConfig(o.URL(), sc.websocket, extra)
@@ -219,7 +222,7 @@ func codexUsage(withBengalfox bool) harnesstest.OpenAIOptions {
 }
 
 func TestContractCodex(t *testing.T) {
-	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexHTTPRows(), codexPluginRows(t)))
+	runCodexScenarios(t, slices.Concat(codexWebSocketRows(), codexWarmRows(), codexHTTPRows(), codexPluginRows(t)))
 }
 
 // recordPrewarmHas records, for each websocket prewarm of the Responses
@@ -247,6 +250,30 @@ func codexPluginRows(t *testing.T) []codexScenario {
 		},
 		websocket: true,
 	}}
+}
+
+func codexWarmRows() []codexScenario {
+	return []codexScenario{
+		{
+			// The first turn after a wake chains from the prewarm only when the
+			// prewarm holds the tools that the turn holds, and the tool that the
+			// log selected loads from the history that the warm-up reads.
+			scenario: scenario{
+				name: "codex_ws_restart_prewarms_with_a_tool_the_log_selected",
+				model: []harnesstest.Step{
+					{Name: "select", Match: harnesstest.LastUserText("select"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{
+						{ID: "call_1", Name: "mcp", Input: map[string]any{"action": "select", "tools": []string{"mcp__srv__send"}}},
+					}}},
+					{Name: "selected", Match: harnesstest.LastToolResult("mcp"), Reply: codexText("selected")},
+					{Name: "again", Match: harnesstest.LastUserText("again"), Reply: codexText("again")},
+				},
+				actions: codexSession(codexTurn("a", "select"), []action{restart{}}, codexTurn("a", "again"), []action{recordWire{}}),
+			},
+			websocket:  true,
+			mcpSchema:  mcpToolSchemaWithRejectedKeywords,
+			mcpLoading: "lazy",
+		},
+	}
 }
 
 func codexWebSocketRows() []codexScenario {

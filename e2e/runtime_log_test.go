@@ -44,11 +44,11 @@ type logEntry struct {
 	last     uint64
 }
 
-// transcriptOfLog projects a session log as the model sees it: the summary
-// of the newest compaction, then each later message. An input becomes a user
-// message when a turn starts with it or promotes it. An input or item ID
-// gets the msg_ prefix of a transcript ID. A tool result has no name, and an
-// empty one reads as the model reads it.
+// transcriptOfLog projects a session log as a reader sees it: the summary
+// of the newest compaction, then each later message, with no pinned segment.
+// An input becomes a user message when a turn starts with it or promotes it.
+// An input or item ID gets the msg_ prefix of a transcript ID. A tool result
+// has no name, and an empty one reads as the model reads it.
 func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 	t.Helper()
 	inputs := map[string][]logPart{}
@@ -81,7 +81,9 @@ func transcriptOfLog(t *testing.T, evs []protocol.Event) []transcriptMessage {
 			}
 		case "input.promoted":
 			id := decodeEvent[logInput](t, ev).InputID
-			promote(ev.Seq, id, inputs[id])
+			if !slices.ContainsFunc(inputs[id], func(p logPart) bool { return p.Type == eventlog.PartTaskReport }) {
+				promote(ev.Seq, id, inputs[id])
+			}
 		case "item.completed":
 			it := decodeEvent[logItem](t, ev)
 			say(ev.Seq, "msg_"+it.ItemID, it.Message.Role, it.Message.Parts)

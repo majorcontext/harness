@@ -340,16 +340,6 @@
       },
       {
         "id": "msg#6",
-        "role": "user",
-        "parts": [
-          {
-            "type": "engine_context",
-            "text": "[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: provider capacity exhausted for this account: [permanent] anthropic: You have reached your specified API usage limits. You will regain access on api_key=*** later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later later  (rate_limit_error, HTTP 429) (usage: 5 in / 3 out) — provider exhausted, child preserved: do not spawn a replacement (every session on this provider account hits the same wall); resume this child after api_key=*** later later later later later later later later later later later later later later later later later later … [truncated] with task send on session_id \u003csession\u003e\n]"
-          }
-        ]
-      },
-      {
-        "id": "msg#7",
         "role": "assistant",
         "parts": [
           {
