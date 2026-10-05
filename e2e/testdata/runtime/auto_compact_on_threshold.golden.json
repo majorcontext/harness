@@ -13,6 +13,7 @@
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -45,6 +46,7 @@
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -129,6 +131,7 @@
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -183,6 +186,7 @@
         "process",
         "read_file",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],

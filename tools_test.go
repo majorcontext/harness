@@ -234,3 +234,15 @@ func TestNewRejectsAToolThatTakesTheHistoryToolName(t *testing.T) {
 		t.Errorf("New = %v, want ErrInvalidRequest", err)
 	}
 }
+
+func TestNewRejectsAToolThatTakesTheSessionInfoNameOnlyWithAWorkDir(t *testing.T) {
+	for _, tc := range []struct {
+		workDir string
+		want    error
+	}{{t.TempDir(), harness.ErrInvalidRequest}, {"", nil}} {
+		_, err := harness.New(harness.Options{Store: harness.NewMemStore(), WorkDir: tc.workDir, Tools: []harness.Tool{newProbe("session_info", false)}})
+		if !errors.Is(err, tc.want) {
+			t.Errorf("New with WorkDir %q = %v, want %v", tc.workDir, err, tc.want)
+		}
+	}
+}

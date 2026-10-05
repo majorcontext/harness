@@ -17,6 +17,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -53,6 +54,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -110,6 +112,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -192,6 +195,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -299,6 +303,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],
@@ -432,6 +437,7 @@
         "read_file",
         "read_mcp_resource",
         "read_tool_result",
+        "session_info",
         "task",
         "write_file"
       ],

@@ -24,7 +24,6 @@ import (
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/tree"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
@@ -103,8 +102,8 @@ type Runtime struct {
 	// models routes each turn to the backend of its model.
 	models *backend.Router
 	limits turn.Limits
-	// prompt reads the system prompt of a session.
-	prompt    func() string
+	// prompt reads the system prompt of a session with the files that it holds.
+	prompt    func() prompt.Info
 	evaluator string
 	resolve   func(string) string
 	tree      *tree.Tree
@@ -162,7 +161,7 @@ func New(opts Options) (*Runtime, error) {
 	if opts.Config.GoalEvaluatorModel != "" {
 		r.evaluator = opts.Config.ResolveModel(opts.Config.GoalEvaluatorModel)
 	}
-	r.prompt = func() string { return strings.Join(prompt.Build(opts.Config, opts.WorkDir), "\n\n") }
+	r.prompt = func() prompt.Info { return prompt.Describe(opts.Config, opts.WorkDir) }
 	r.resolve = opts.Config.ResolveModel
 	r.commandDirs = resolveDirs(opts.WorkDir, opts.Config.CommandsDirs, ".agents/commands")
 	r.agentDirs = resolveDirs(opts.WorkDir, opts.Config.AgentDefsDirs, ".agents")
@@ -370,6 +369,7 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 	if r.plugins != nil {
 		plug = r.plugins.Session(id)
 	}
+	sp := r.newSessionPrompt(c.Agent, profile)
 	cfg := session.Config{
 		ID:              id,
 		Store:           storeLog{r.store, id},
@@ -379,9 +379,9 @@ func (r *Runtime) start(ctx context.Context, id string, e *entry, l launch) (*Se
 		Banner:          r.banner,
 		AskUserQuestion: r.questions,
 		Evaluator:       r.evaluator,
-		Source:          r.source(id, c.ParentID != "", plug),
+		Source:          r.source(id, c.ParentID != "", plug, sp),
 		Retain:          r.workDir != "",
-		Prompt:          r.instructions(c.Agent, profile),
+		Prompt:          sp.system,
 		Appended:        r.appended(id, plug),
 		Sync:            r.sync,
 		Limits:          r.limits,
@@ -414,25 +414,6 @@ func (r *Runtime) profile(agent string, read *prompt.Profile) prompt.Profile {
 		return prompt.Profile{}
 	}
 	return prompt.Profiles(r.agentDirs)[agent]
-}
-
-// instructions reads the system prompt of a session once and returns the
-// system prompt of each of its turns: that prompt, the prompt of its agent
-// profile, and the process status.
-func (r *Runtime) instructions(agent string, p prompt.Profile) func() string {
-	base := r.prompt()
-	if agent != "" {
-		base = strings.Trim(base+"\n\n"+p.Prompt, "\n")
-	}
-	return func() string {
-		if r.procs == nil {
-			return base
-		}
-		if s := proc.StatusLine(r.procs, r.workDir); s != "" {
-			return strings.Join([]string{base, message.RenderEngineContext(s)}, "\n\n")
-		}
-		return base
-	}
 }
 
 // appended gives the events of session id to its plugins, and reports the

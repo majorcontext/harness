@@ -120,6 +120,12 @@ func TestContractPluginTools(t *testing.T) {
 			actions: oneTurn,
 		},
 		{
+			name:    "session_info_reports_the_plugin_and_its_system_segment",
+			config:  cfg,
+			model:   toolChain(ftTool("session_info", map[string]any{})),
+			actions: oneTurn,
+		},
+		{
 			name:   "plugin_system_transform_reads_session_messages",
 			config: pluginConfig(t, map[string]any{"recall": true}),
 			model: []harnesstest.Step{

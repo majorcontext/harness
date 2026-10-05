@@ -37,14 +37,15 @@ func (r *Runtime) owns(name string) bool {
 
 // builtin reports whether name is a built-in tool of the WorkDir.
 func (r *Runtime) builtin(name string) bool {
-	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName)
+	return r.workDir != "" && (slices.Contains(builtin.Names, name) || name == toolresult.ToolName || name == sessionInfoName)
 }
 
 // source returns the tools of session id for each model call: the runtime
 // tools, then the file, MCP, and plugin tools of the models that take them.
 // A session tool binds to the session or drops out. Each session has its own
-// file tools, because the write_file guard belongs to one session.
-func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session) turn.Source {
+// file tools, because the write_file guard belongs to one session, and its
+// own session_info tool, which reads what sp recorded of the session.
+func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session, sp *sessionPrompt) turn.Source {
 	var static []turn.Tool
 	for _, t := range r.tools {
 		if b, ok := t.(sessionTool); ok {
@@ -56,7 +57,7 @@ func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session) turn.So
 	}
 	srcs := turn.Sources{turn.Fixed(static)}
 	if r.workDir != "" {
-		files := turn.Fixed(builtin.Tools(r.workDir))
+		files := turn.Fixed(append(builtin.Tools(r.workDir), &sessionInfoTool{r: r, session: id, prompt: sp}))
 		srcs = append(srcs, perModel{r.models, func(c turn.Capabilities, _ []string) turn.Source {
 			if c.OwnsLoop {
 				return nil
@@ -80,7 +81,7 @@ func (r *Runtime) source(id string, child bool, plug *pluginsrc.Session) turn.So
 			return plug
 		}})
 	}
-	return srcs
+	return sp.recording(srcs)
 }
 
 // perModel gives each model call the Source that pick chooses for the
