@@ -140,7 +140,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:a",
             "model": "anthropic/claude-fable-5",
             "origin": "",
@@ -159,7 +159,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:b",
             "model": "anthropic/claude-fable-5",
             "origin": "",
@@ -178,7 +178,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:c",
             "model": "anthropic/claude-fable-5",
             "origin": "",
@@ -197,7 +197,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:d",
             "model": "anthropic/claude-fable-5",
             "origin": "",
@@ -216,7 +216,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:e",
             "model": "anthropic/claude-fable-5",
             "origin": "",
@@ -235,7 +235,7 @@
               "window": 1000000
             },
             "created_at": "\u003ctime\u003e",
-            "head_seq": 3,
+            "head_seq": 2,
             "id": "ses:f",
             "model": "anthropic/claude-fable-5",
             "origin": "",

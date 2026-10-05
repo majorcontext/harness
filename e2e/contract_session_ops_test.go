@@ -207,6 +207,11 @@ func TestContractSessionOpsSettings(t *testing.T) {
 				waitIdle{as: "a"},
 			},
 		},
+	})
+}
+
+func TestContractSessionOpsCommands(t *testing.T) {
+	runScenarios(t, []scenario{
 		{
 			name:  "builtin_commands_run_and_record",
 			model: []harnesstest.Step{agentStep("rest", "ok", true)},

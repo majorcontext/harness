@@ -1,0 +1,191 @@
+package e2e
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/majorcontext/harness/harnesstest"
+)
+
+// cliHost is a working directory, a session dir, and a config that point the
+// harness binary at a scripted model.
+type cliHost struct {
+	t                 *testing.T
+	config, dir, work string
+	fake              *harnesstest.Server
+}
+
+func newCLIHost(t *testing.T, extra map[string]any, steps ...harnesstest.Step) *cliHost {
+	t.Helper()
+	fake := harnesstest.New(t, steps...)
+	return &cliHost{t: t, fake: fake, dir: t.TempDir(), work: t.TempDir(),
+		config: writeGoalConfigWith(t, fake.URL(), scenarioConfig(extra))}
+}
+
+// run runs the harness binary with args and returns its output and exit code.
+func (h *cliHost) run(args ...string) (stdout, stderr string, code int) {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(h.t.Context(), waitBound)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, harnessBin, args...)
+	cmd.Dir = h.work
+	cmd.Env = cleanEnv(map[string]string{"HARNESS_CONFIG": h.config, "HARNESS_SESSION_DIR": h.dir, "ANTHROPIC_API_KEY": "e2e-dummy-key"})
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	err := cmd.Run()
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		code = exit.ExitCode()
+	case err != nil:
+		h.t.Fatalf("run %v: %v", args, err)
+	}
+	return out.String(), errOut.String(), code
+}
+
+// sessionID reads the ID that a run prints on stderr.
+func sessionID(t *testing.T, stderr string) string {
+	t.Helper()
+	for _, line := range strings.Split(stderr, "\n") {
+		if id, ok := strings.CutPrefix(line, "session: "); ok {
+			return id
+		}
+	}
+	t.Fatalf("stderr names no session:\n%s", stderr)
+	return ""
+}
+
+func TestContractCLIRunSavesAndContinuesTheSession(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	out, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 || out != "hello\n" {
+		t.Fatalf("run = %d %q, want 0 and the reply\n%s", code, out, errOut)
+	}
+	id := sessionID(t, errOut)
+
+	list, _, _ := h.run("sessions")
+	if fields := strings.Split(strings.TrimSpace(list), "\t"); len(fields) != 3 || fields[0] != id || fields[2] != "2" {
+		t.Errorf("sessions = %q, want the session with 2 messages", list)
+	}
+	raw, _, _ := h.run("sessions", "--json")
+	var rows []struct {
+		ID       string `json:"id"`
+		Messages int    `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].Messages != 2 {
+		t.Errorf("sessions --json = %q (%v), want one session with 2 messages", raw, err)
+	}
+
+	for _, args := range [][]string{{"run", "-c", "-p", "again"}, {"run", "-r", id, "-p", "third"}} {
+		if _, errOut, code := h.run(args...); code != 0 || sessionID(t, errOut) != id {
+			t.Fatalf("run %v = %d, want the same session\n%s", args, code, errOut)
+		}
+	}
+	if got := len(h.fake.Requests()); got != 3 {
+		t.Fatalf("model requests = %d, want 3", got)
+	}
+	if got := len(h.fake.Requests()[2].Messages); got != 5 {
+		t.Errorf("the third request holds %d messages, want the 5 of the history and the prompt", got)
+	}
+}
+
+func TestContractCLIRunNoSaveWritesNothing(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	out, errOut, code := h.run("run", "-no-save", "-p", "hi")
+	if code != 0 || out != "hello\n" || strings.Contains(errOut, "session:") {
+		t.Fatalf("run -no-save = %d %q\n%s", code, out, errOut)
+	}
+	if entries, _ := os.ReadDir(h.dir); len(entries) != 0 {
+		t.Errorf("session dir holds %d entries, want none", len(entries))
+	}
+	if _, errOut, code := h.run("run", "-no-save", "-c", "-p", "hi"); code == 0 || !strings.Contains(errOut, "-no-save") {
+		t.Errorf("run -no-save -c = %d %q, want a refusal that names -no-save", code, errOut)
+	}
+}
+
+func TestContractCLIRunJSONPrintsTheEvents(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	out, _, code := h.run("run", "-json", "-p", "hi")
+	if code != 0 {
+		t.Fatalf("run -json exit %d", code)
+	}
+	kinds := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev struct {
+			K string `json:"k"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line %q is not an event: %v", line, err)
+		}
+		kinds[ev.K] = true
+	}
+	for _, k := range []string{"input.admitted", "turn.started", "item.completed", "turn.ended"} {
+		if !kinds[k] {
+			t.Errorf("no %s event in:\n%s", k, out)
+		}
+	}
+}
+
+func TestContractCLIRunGoalExitCodes(t *testing.T) {
+	skipShort(t)
+	met := newCLIHost(t, nil, agentStep("work", "done", true), evaluatorStep("judge", "MET: said done", true))
+	if _, errOut, code := met.run("run", "-goal", "say done"); code != 0 || !strings.Contains(errOut, "goal achieved in 1 turn(s)") {
+		t.Errorf("met goal = %d, want 0 and the verdict\n%s", code, errOut)
+	}
+	unmet := newCLIHost(t, nil, agentStep("try", "try", true), evaluatorStep("judge", "NOT MET: keep going", true))
+	if _, errOut, code := unmet.run("run", "-goal", "say done", "-goal-max-turns", "2"); code != 3 || !strings.Contains(errOut, "goal not achieved after 2 turn(s)") {
+		t.Errorf("unmet goal = %d, want 3 and the verdict\n%s", code, errOut)
+	}
+}
+
+func TestContractCLIRunTypedCommandPrintsItsResult(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, replyText("hello"))
+	_, errOut, _ := h.run("run", "-p", "hi")
+	id := sessionID(t, errOut)
+	out, errOut, code := h.run("run", "-r", id, "-p", "/thinking high")
+	if code != 0 || !strings.Contains(out, "/thinking succeeded") {
+		t.Fatalf("/thinking = %d %q, want its result\n%s", code, out, errOut)
+	}
+	if _, errOut, code := h.run("run", "-r", id, "-p", "/compact abc"); code != 1 || !strings.Contains(errOut, "keep_turns must be a number") {
+		t.Errorf("a command with a bad argument = %d, want 1 and its text\n%s", code, errOut)
+	}
+}
+
+func TestContractCLIRunFailedTurnExitsOne(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, harnesstest.Step{Name: "fail", Reply: harnesstest.Reply{HTTPStatus: 400, ErrorMessage: "bad request body"}, Repeat: true})
+	if _, errOut, code := h.run("run", "-p", "hi"); code != 1 || !strings.Contains(errOut, "bad request body") {
+		t.Errorf("failed turn = %d, want 1 and the error\n%s", code, errOut)
+	}
+}
+
+func TestContractCLISessionsOfAnEmptyDir(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil)
+	if out, _, code := h.run("sessions", "--json"); code != 0 || strings.TrimSpace(out) != "[]" {
+		t.Errorf("sessions --json of an empty dir = %d %q, want []", code, out)
+	}
+}
+
+func TestContractCLIPluginProbePrintsHooks(t *testing.T) {
+	skipShort(t)
+	none := newCLIHost(t, nil)
+	if out, _, code := none.run("plugin", "probe"); code != 0 || strings.TrimSpace(out) != "no plugins configured" {
+		t.Errorf("plugin probe with none = %d %q", code, out)
+	}
+	h := newCLIHost(t, pluginConfig(t, nil))
+	out, errOut, code := h.run("plugin", "probe")
+	if code != 0 || !strings.HasPrefix(out, "fixture: ") || !strings.Contains(out, "system.transform") {
+		t.Errorf("plugin probe = %d %q, want the name and the hooks of the fixture\n%s", code, out, errOut)
+	}
+}

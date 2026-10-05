@@ -15,7 +15,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/majorcontext/harness/internal/testpoll"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -440,7 +442,9 @@ func (a claudeJournalEvents) run(t *testing.T, r *run) {
 var _ laneHost = (*runtimeDriver)(nil)
 
 // awaitAssistantText also takes the streamed text: the CLI can wait for
-// input before its message completes.
+// input before its message completes. A message that completes right after its
+// text is recorded by then, so a kill that follows loses nothing: the wait for
+// the record is bounded, because a message that waits for input never completes.
 func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 	t.Helper()
 	var streamed strings.Builder
@@ -455,7 +459,20 @@ func (d *runtimeDriver) awaitAssistantText(t *testing.T, id, text string) {
 		}
 		return false
 	})
+	testpoll.UntilNoT(recordGrace, func() bool {
+		for _, ev := range d.events(t, id) {
+			if ev.Kind == "item.completed" {
+				if it := decodeEvent[logItem](t, ev); it.Message.Role == "assistant" && strings.Contains(partsText(it.Message.Parts), text) {
+					return true
+				}
+			}
+		}
+		return false
+	}, 20*time.Millisecond)
 }
+
+// recordGrace bounds the wait of awaitAssistantText for the record of a message.
+const recordGrace = 2 * time.Second
 
 func (d *runtimeDriver) resolveQuestion(t *testing.T, id, callID string, res resolution) callResult {
 	t.Helper()

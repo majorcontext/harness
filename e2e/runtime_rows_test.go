@@ -6,6 +6,7 @@ const (
 	specUpdate        = "func (s *Session) Update(ctx context.Context, p protocol.SettingsPatch) (protocol.Session, error)"
 	specMessages      = "`GET /sessions/{id}/messages?before=&limit=` answers a `protocol.MessagePage` of the conversation that the model reads, oldest first, as the engine answered its message page"
 	specBootstrapGone = "The engine bootstrap form (`stream_from`, `live_from`, `seqs`) has no counterpart: one page route and one event cursor replace it."
+	specRestartOpens  = "A restart opens no session by itself: the embedder opens each session that has work to resume"
 	specErrors        = "Body: `{\"error\":{\"code\":\"...\",\"message\":\"...\",\"details\":{}}}`."
 	specReceipt       = "| New id | `201 {input_id, seq}` |"
 	specItems         = "| `item.completed` | `item_id`, `turn_id`, `message` (user, assistant, tool result) |"
@@ -241,7 +242,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_long_child_result_has_no_readable_handle":                 reGolden(specTaskInputs, specChildReport, specChildNoRead, specChildClaude),
 	"child_long_error_reaches_a_busy_parent":                              reGolden(specChildReport, specChildReason, specChildBound, specChildWording),
 	"child_long_result_reaches_a_busy_parent":                             reGolden(specChildReport, specChildLong, specChildWording),
-	"claudecode_compact_delegated":                                        reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge),
+	"claudecode_compact_delegated":                                        reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge, specRestartOpens),
 	"claudecode_child_report_waits_for_the_next_turn":                     reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_child_reports_share_the_next_turn":                        reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":              reGolden(specQueue, specChildReport, specChildClaude),
@@ -285,12 +286,12 @@ var runtimeRows = map[string]runtimeRow{
 	"codex_ws_usage_frame_reaches_session":                                reGolden(specView, specItems),
 	"codex_http_usage_headers_reach_session":                              reGolden(specView, specItems),
 	"compact_manual":                                                      reGolden(specMessages, specBootstrapGone, specErrors),
-	"compact_survives_restart":                                            reGolden(specMessages, specBootstrapGone, specErrors),
+	"compact_survives_restart":                                            reGolden(specMessages, specBootstrapGone, specErrors, specRestartOpens),
 	"context_overflow":                                                    reGolden(specView, specOverflowFails),
 	"deferred_goal_judges_finished_turn":                                  deletedBy(specGoalDeferred),
 	"deferred_goal_with_max_turns":                                        deletedBy(specGoalDeferred),
 	"driver_child_send_and_cancel":                                        reGolden(specTaskInputs, specChildNoGoal, specReceipt, specView),
-	"driver_clean_restart":                                                reGolden(specView),
+	"driver_clean_restart":                                                reGolden(specView, specRestartOpens),
 	"driver_compact":                                                      reGolden(specView, specCompactResult),
 	"driver_queue_goal_and_end":                                           reGolden(specView, specReceipt, specClearGoal),
 	"driver_resume_streams":                                               reGolden(specCursor, specBoxGlobal),
@@ -376,11 +377,11 @@ var runtimeRows = map[string]runtimeRow{
 	"session_info_reports_the_session":                                    reGolden(specPromptSwitch),
 	"session_info_reports_what_the_session_loaded":                        reGolden(specPromptSwitch),
 	"session_info_reports_the_plugin_and_its_system_segment":              reGolden(specPromptSwitch),
-	"session_settings_validation_and_persistence":                         reGolden(specModelCheck, specErrors, specUpdate, specView),
-	"sse_resume_after_kill":                                               reGolden(specCursor, specBoxGlobal),
+	"session_settings_validation_and_persistence":                         reGolden(specModelCheck, specErrors, specUpdate, specView, specRestartOpens),
+	"sse_resume_after_kill":                                               reGolden(specCursor, specBoxGlobal, specRestartOpens),
 	"sse_resume_cursor":                                                   reGolden(specCursor, specBoxGlobal),
-	"list_sessions_in_creation_order":                                     reGolden(specView, specListOrder),
-	"status_and_list_cold_after_restart":                                  reGolden(specView, specListOrder, specStatusRoute),
+	"list_sessions_in_creation_order":                                     reGolden(specView, specListOrder, specRestartOpens),
+	"status_and_list_cold_after_restart":                                  reGolden(specView, specListOrder, specStatusRoute, specRestartOpens),
 	"steer_joins_the_turn_at_the_tool_boundary":                           sameAsServe(),
 	"stream_stall":                                      reGolden(specView),
 	"task_child_result_reaches_parent":                  reGolden(specTaskInputs, specChildReport, specChildNoGoal),
@@ -459,7 +460,7 @@ var runtimeRows = map[string]runtimeRow{
 	"context_overflow_after_the_compaction_fails_the_turn":                   reGolden(specView, specOverflowFolds, specOverflowTwice),
 	"a_stalled_summary_fails_the_overflowed_turn":                            reGolden(specView, specOverflowFails),
 	"compact_during_a_turn_is_session_busy":                                  reGolden(specView, specErrors, specCompactBusy),
-	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue),
+	"provider_usage_limit_fails_the_turn_and_holds_the_queue":                reGolden(specView, specExhaustedHolds, specExhaustedQueue, specRestartOpens),
 	"a_failed_turn_runs_the_next_queued_input":                               reGolden(specView, specFailedRuns),
 	"session_usage_counts_every_model_call_but_the_evaluation":               reGolden(specView, specCompactResult),
 	"goal_impossible_verdict_fails_the_goal":                                 reGolden(specView, specGoalImpossible, specGoalPrompt),

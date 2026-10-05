@@ -107,30 +107,6 @@ func (d *runtimeDriver) start(t *testing.T) {
 	d.openAll(t)
 }
 
-// openAll opens each session of the store, as an embedder does when it
-// starts: a route that only reads a session never opens it, so a turn or a
-// queued input that a restart left resumes here.
-func (d *runtimeDriver) openAll(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), waitBound)
-	defer cancel()
-	for after := ""; ; {
-		page, err := d.rt.List(ctx, protocol.ListSessions{After: after})
-		if err != nil {
-			t.Fatalf("list sessions: %v", err)
-		}
-		for _, s := range page.Sessions {
-			if _, err := d.rt.Open(ctx, s.ID); err != nil {
-				t.Fatalf("open %s: %v", s.ID, err)
-			}
-		}
-		if page.Next == "" {
-			return
-		}
-		after = page.Next
-	}
-}
-
 // stop closes the runtime first, which ends its event streams, then the server.
 func (d *runtimeDriver) stop(t *testing.T, ctx context.Context) {
 	t.Helper()
@@ -583,57 +559,6 @@ func (d *runtimeDriver) SessionStatus(t *testing.T) callResult {
 	return deleted("GET /session/status")
 }
 
-func (d *runtimeDriver) MessagesPage(t *testing.T, id string, beforeSeq, limit int) callResult {
-	t.Helper()
-	return d.callPage(t, withQuery("/sessions/"+id+"/messages", "before", beforeSeq, "limit", limit))
-}
-
-// Bootstrap reads the newest messages. The runtime has one page route and
-// one event cursor, so the engine bootstrap envelope has no counterpart.
-func (d *runtimeDriver) Bootstrap(t *testing.T, id string, limit int) callResult {
-	t.Helper()
-	return d.callPage(t, withQuery("/sessions/"+id+"/messages", "limit", limit))
-}
-
-// callPage reads a message page and reports its messages in the vocabulary of
-// the oracle.
-func (d *runtimeDriver) callPage(t *testing.T, path string) callResult {
-	t.Helper()
-	res := d.call(t, http.MethodGet, path, nil)
-	if obj, ok := res.Body.(map[string]any); ok {
-		if list, ok := obj["messages"].([]any); ok {
-			raw, _ := json.Marshal(list)
-			var msgs []protocol.Message
-			if err := json.Unmarshal(raw, &msgs); err != nil {
-				t.Fatalf("GET %s: decode messages: %v (%s)", path, err, raw)
-			}
-			res.Messages = transcriptOfPage(t, msgs)
-			delete(obj, "messages")
-		}
-	}
-	return res
-}
-
-// transcriptOfPage maps messages of the runtime to the vocabulary of the oracle.
-func transcriptOfPage(t *testing.T, msgs []protocol.Message) []transcriptMessage {
-	t.Helper()
-	out := make([]transcriptMessage, 0, len(msgs))
-	for _, m := range msgs {
-		tm := transcriptMessage{ID: m.ID, Role: m.Role, Parts: make([]transcriptPart, 0, len(m.Parts))}
-		for _, p := range m.Parts {
-			tp := transcriptPart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, IsError: p.IsError, Content: p.Content}
-			if len(p.Arguments) > 0 {
-				if err := json.Unmarshal(p.Arguments, &tp.Arguments); err != nil {
-					t.Fatalf("decode arguments of %s: %v", m.ID, err)
-				}
-			}
-			tm.Parts = append(tm.Parts, tp)
-		}
-		out = append(out, tm)
-	}
-	return out
-}
-
 // JournalPage reads the page after the cursor from, as serve read the page
 // at its next_cursor.
 func (d *runtimeDriver) JournalPage(t *testing.T, id string, from, limit int) callResult {
@@ -658,21 +583,6 @@ func (d *runtimeDriver) events(t *testing.T, id string) []protocol.Event {
 			return out
 		}
 		after = page.Next
-	}
-}
-
-// Messages reads the whole conversation, page by page.
-func (d *runtimeDriver) Messages(t *testing.T, id string) []transcriptMessage {
-	t.Helper()
-	var out []transcriptMessage
-	for before := 0; ; {
-		var page protocol.MessagePage
-		d.expect(t, http.StatusOK, http.MethodGet, withQuery("/sessions/"+id+"/messages", "before", before, "limit", protocol.MaxMessageLimit), nil, &page)
-		out = append(transcriptOfPage(t, page.Messages), out...)
-		if !page.HasMore {
-			return out
-		}
-		before = int(page.FirstSeq)
 	}
 }
 
