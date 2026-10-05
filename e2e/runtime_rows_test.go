@@ -46,6 +46,9 @@ const (
 	specWarm          = "The session calls it once on create and on wake, fire-and-forget under the session context."
 	specCompactOwned  = "A backend with `OwnsContext` runs `/compact` as a turn. The backend logs `compaction.applied` with `by_backend: true`."
 
+	specClaudeGauge = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
+	specClaudeOnce  = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
+
 	specErrorText    = "the actor masks and bounds each error text that it writes to the log"
 	specGoalFailed   = "An error the user must fix yields `failed`."
 	specNoParkedGoal = "There is no deferred goal and no parked goal."
@@ -56,8 +59,6 @@ const (
 	specListOrder      = "list in creation order"
 	specStatusRoute    = "| `/wait`, `/request`, `/session/status`, `/event/tip` | Delete; the new API covers them |"
 	specAnswerReceipt  = "an answer replies 202 {seq, status}, a dismissal 204"
-	specOpenGauge      = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
-	specOpenRetry      = "Does a failed Claude Code turn run again?"
 	specOpenChildParts = "Does the log keep a `task_report` part and an `engine_context` part?"
 
 	specStopped       = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
@@ -164,7 +165,7 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_long_child_result_has_no_readable_handle":         reGolden(specTaskInputs, specChildReport, specChildNoRead, specChildClaude),
 	"child_long_error_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildBound, specChildWording, specOpenChildParts),
 	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specChildWording, specOpenChildParts),
-	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
+	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult, specClaudeGauge),
 	"claudecode_child_report_waits_for_the_next_turn":             reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_child_reports_share_the_next_turn":                reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_queued_prompt_and_child_report_share_a_turn":      reGolden(specQueue, specChildReport, specChildClaude),
@@ -172,23 +173,23 @@ var runtimeRows = map[string]runtimeRow{
 	"claudecode_bridge_model_tool_offers_list_only":               sameAsServe(),
 	"claudecode_bridge_refuses_set_on_the_model_tool":             sameAsServe(),
 	"claudecode_configured_mcp_servers_reach_the_cli":             sameAsServe(),
-	"claudecode_context_window_from_model_usage":                  reGolden(specView),
-	"claudecode_error_result_fails_turn":                          reGolden(specView, specOpenRetry, specOpenGauge),
-	"claudecode_history_bridge_after_native_turn":                 reGolden(specUpdate),
+	"claudecode_context_window_from_model_usage":                  reGolden(specView, specClaudeGauge),
+	"claudecode_error_result_fails_turn":                          reGolden(specView, specClaudeOnce, specClaudeGauge),
+	"claudecode_history_bridge_after_native_turn":                 reGolden(specUpdate, specClaudeGauge),
 	"claudecode_interrupt_mid_turn":                               reGolden(specView),
-	"claudecode_question_dismissed_by_compact":                    reGolden(specWaiting, specView, specCompactResult),
-	"claudecode_question_dismissed_by_next_prompt":                reGolden(specWaiting, specView),
-	"claudecode_question_answer_run_takes_no_steer_input":         reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt),
-	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specAnswerReceipt),
-	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specAnswerReceipt),
+	"claudecode_question_dismissed_by_compact":                    reGolden(specWaiting, specView, specCompactResult, specClaudeGauge),
+	"claudecode_question_dismissed_by_next_prompt":                reGolden(specWaiting, specView, specClaudeGauge),
+	"claudecode_question_answer_run_takes_no_steer_input":         reGolden(specWaiting, specView, specAnswerNoSteer, specAnswerReceipt, specClaudeGauge),
+	"claudecode_question_parks_then_answer_resumes":               reGolden(specWaiting, specView, specAnswerReceipt, specClaudeGauge),
+	"claudecode_question_unknown_call_id_conflicts":               reGolden(specWaiting, specView, specErrors, specAnswerReceipt, specClaudeGauge),
 	"claudecode_prompt_attachments":                               sameAsServe(),
-	"claudecode_queued_prompt_injected_mid_turn":                  reGolden(specView),
-	"claudecode_rate_limit_event_reaches_subscription_usage":      reGolden(specView),
+	"claudecode_queued_prompt_injected_mid_turn":                  reGolden(specView, specClaudeGauge),
+	"claudecode_rate_limit_event_reaches_subscription_usage":      reGolden(specView, specClaudeGauge),
 	"claudecode_resume_across_turns":                              sameAsServe(),
 	"claudecode_resume_survives_restart":                          sameAsServe(),
 	"claudecode_subagent_frames_keep_parent":                      sameAsServe(),
-	"claudecode_thinking_block_is_reasoning":                      reGolden(specExternal, specView),
-	"claudecode_turn_text_and_tool":                               reGolden(specView, specOpenGauge),
+	"claudecode_thinking_block_is_reasoning":                      reGolden(specExternal, specView, specClaudeGauge),
+	"claudecode_turn_text_and_tool":                               reGolden(specView, specClaudeGauge),
 	"codex_http_mcp_tool_schema_is_sanitized":                     reGolden(specItems),
 	"codex_http_reasoning_replays_on_tool_round_trip":             reGolden(specItems),
 	"codex_http_sse_text_turn":                                    reGolden(specItems),
@@ -337,7 +338,7 @@ var runtimeRows = map[string]runtimeRow{
 	"plugin_sees_the_model_of_each_call":                          reGolden(specUpdate),
 	"restart_lets_a_running_tool_finish_and_cuts_the_next_call":   reGolden(specView, specHandoff, specToolsSerial),
 	"retries_stop_after_prompt_retries":                           reGolden(specView, specRetryable),
-	"settings_change_to_claude_code_mid_turn_fails_the_turn":      reGolden(specUpdate, specView, specMidTurnFails),
+	"settings_change_to_claude_code_mid_turn_fails_the_turn":      reGolden(specUpdate, specView, specMidTurnFails, specClaudeGauge),
 	"typed_commands_record_their_outcome":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdOps, specCmdFailed, specReceipt),
 	"typed_compact_keeps_keep_turns_and_returns_the_range":        reGolden(specTypedReceipt, specCmdResult, specReceipt),
 	"unknown_tool_call_gets_an_error_result":                      reGolden(specMCPText),
@@ -363,11 +364,11 @@ var runtimeRows = map[string]runtimeRow{
 	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
 	"task_child_on_claude_code_gets_no_runtime_builtin":                  reGolden(specTaskInputs, specChildReport),
 	"claudecode_turn_gets_no_plugin_system_segment":                      sameAsServe(),
-	"claudecode_question_dismissed_by_resolve":                           reGolden(specDismissed, specNoStart, specWaiting, specView),
-	"claudecode_question_dismissed_by_a_model_of_another_provider":       reGolden(specProviderSwap, specDismissed, specView, specErrors),
-	"claudecode_question_answer_bodies_that_are_refused":                 reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specAnswerReceipt),
-	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specAnswerReceipt),
-	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView),
+	"claudecode_question_dismissed_by_resolve":                           reGolden(specDismissed, specNoStart, specWaiting, specView, specClaudeGauge),
+	"claudecode_question_dismissed_by_a_model_of_another_provider":       reGolden(specProviderSwap, specDismissed, specView, specErrors, specClaudeGauge),
+	"claudecode_question_answer_bodies_that_are_refused":                 reGolden(specAnswerMap, specRequestRoute, specErrors, specView, specAnswerReceipt, specClaudeGauge),
+	"claudecode_answered_call_with_no_result_gets_a_cut_off_result":      reGolden(specOneResult, specWaiting, specView, specAnswerReceipt, specClaudeGauge),
+	"claudecode_question_sibling_call_gets_a_result_when_the_turn_parks": reGolden(specOneResult, specDismissed, specWaiting, specView, specClaudeGauge),
 	"usage_survives_a_kill_mid_turn":                                     reGolden(specView, specCrash, specCrashMarker),
 
 	"a_negative_compaction_threshold_is_the_default_threshold":               reGolden(specView, specThreshold),

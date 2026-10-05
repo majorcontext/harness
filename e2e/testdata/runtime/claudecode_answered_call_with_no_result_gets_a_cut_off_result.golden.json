@@ -109,7 +109,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 9,
+        "head_seq": 10,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "awaiting_input",
@@ -118,7 +118,13 @@
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "waiting",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
@@ -135,7 +141,7 @@
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 15,
+        "head_seq": 17,
         "id": "ses:a",
         "last_turn": {
           "stop_reason": "completed",
@@ -144,7 +150,13 @@
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "idle",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

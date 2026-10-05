@@ -17,6 +17,17 @@ import (
 // ErrRetryable marks a backend error that a new attempt of the turn can fix.
 var ErrRetryable = errors.New("turn: retryable backend error")
 
+type onceError struct{ error }
+
+func (e onceError) Unwrap() error { return e.error }
+
+func (e onceError) Is(target error) bool { return target == errOnce }
+
+var errOnce = errors.New("turn: backend call runs once")
+
+// Once marks err as a failure that the turn never repeats; err keeps its class.
+func Once(err error) error { return onceError{err} }
+
 // ErrContextOverflow marks a model call whose request passes the context window.
 var ErrContextOverflow = errors.New("turn: context overflow")
 
@@ -107,6 +118,7 @@ type Telemetry struct {
 	Context eventlog.ContextMeasured
 	// SubscriptionUsage is the subscription limit snapshot of the call, or nil.
 	SubscriptionUsage *eventlog.SubscriptionUsage
+	CostUSD           *float64
 }
 
 // Sink receives the items of a running turn.
@@ -267,7 +279,7 @@ func run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 // times, after an ErrRetryable error that came before any item.
 func callModel(ctx context.Context, b Backend, req Request, s *sink, lim Limits) (Result, error) {
 	res, err := watch(ctx, b, req, s, lim.Idle)
-	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable); n++ {
+	for n := 0; n < lim.Retries && len(s.items) == 0 && errors.Is(err, ErrRetryable) && !errors.Is(err, errOnce); n++ {
 		s.item = ""
 		if err = s.wait(ctx, n); err == nil {
 			res, err = watch(ctx, b, req, s, lim.Idle)

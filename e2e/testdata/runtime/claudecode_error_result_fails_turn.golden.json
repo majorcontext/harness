@@ -28,28 +28,6 @@
           "resume": null,
           "strict_mcp_config": true,
           "thinking_display": "summarized"
-        },
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": "fake-session-1",
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
-        },
-        {
-          "disallowed_tools": "Agent,Workflow,ScheduleWakeup,CronCreate,CronDelete,CronList",
-          "forward_subagent_text": true,
-          "history_directive": false,
-          "mcp_config": true,
-          "model": "sonnet",
-          "question_tool_open": false,
-          "resume": "fake-session-1",
-          "strict_mcp_config": true,
-          "thinking_display": "summarized"
         }
       ]
     },
@@ -57,11 +35,11 @@
       "status": 200,
       "body": {
         "context": {
-          "tokens": 0,
+          "tokens": 11,
           "window": 0
         },
         "created_at": "\u003ctime\u003e",
-        "head_seq": 10,
+        "head_seq": 8,
         "id": "ses:a",
         "last_turn": {
           "error": "claudecode: the turn failed (error_during_execution): fake failure",
@@ -71,12 +49,18 @@
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "idle",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {
-          "input_tokens": 33,
-          "output_tokens": 9
+          "input_tokens": 11,
+          "output_tokens": 3
         }
       }
     }

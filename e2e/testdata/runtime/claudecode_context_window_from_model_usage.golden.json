@@ -92,7 +92,13 @@
         "model": "claude-code/sonnet",
         "origin": "",
         "status": "idle",
-        "subscription_usage": null,
+        "subscription_usage": {
+          "captured_at": "\u003ctime\u003e",
+          "plan": "",
+          "provider": "claude",
+          "session_cost_usd": 0,
+          "windows": []
+        },
         "synced_seq": 0,
         "updated_at": "\u003ctime\u003e",
         "usage": {

@@ -160,7 +160,7 @@ func TestClaudeCodeTurn(t *testing.T) {
 		{name: "a placeholder result of a queued notification does not end the turn", mode: "queued_empty_result",
 			want: []string{"backend.state", "item.completed assistant second", "context.measured", "turn.ended completed"}},
 		{name: "a compaction result with no local command ends the turn", mode: "compact_turn", env: []string{"FAKECLAUDE_COMPACT_LOCAL_COMMAND", ""},
-			want: []string{"backend.state", "compaction.applied", "turn.ended completed"}},
+			want: []string{"backend.state", "compaction.applied", "context.measured", "turn.ended completed"}},
 		{name: "a failed result fails the turn", mode: "error",
 			want: []string{"backend.state", "context.measured", "backend.state", "turn.ended failed claudecode: the turn failed (error_during_execution): fake failure"}},
 		{name: "a compaction by Claude Code is logged", mode: "compact_boundary",
@@ -216,7 +216,7 @@ func TestClaudeCodeCompactRunsTheCompactCommand(t *testing.T) {
 	if _, err := s.Compact(bg, protocol.Compact{}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
-	wantLog(t, st, 4, "backend.state", "compaction.applied", "turn.ended completed")
+	wantLog(t, st, 4, "backend.state", "compaction.applied", "context.measured", "turn.ended completed")
 	stdin := jsonLines[struct{ Message struct{ Content string } }](t, os.Getenv("FAKE_CLAUDE_STDIN_LOG"))
 	if len(stdin) != 1 || stdin[0].Message.Content != "/compact" {
 		t.Errorf("stdin lines = %+v, want /compact", stdin)

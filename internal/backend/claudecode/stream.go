@@ -178,7 +178,7 @@ func (r *run) outcome(err, exit error) error {
 	if res := r.result; res.IsError {
 		err = fmt.Errorf("claudecode: the turn failed (%s): %s", res.Subtype, res.Result)
 		if retryable(res.Subtype, res.Result) {
-			err = fmt.Errorf("%w: %w", turn.ErrRetryable, err)
+			err = turn.Once(fmt.Errorf("%w: %w", turn.ErrRetryable, err))
 		}
 	}
 	return err
@@ -433,8 +433,12 @@ func (r *run) settle(env envelope) error {
 }
 
 func (r *run) telemetry(env envelope) {
-	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits}
-	if w, tokens := env.ModelUsage[r.mainModel].ContextWindow, r.lastCall.prompt(); w > 0 || tokens > 0 {
+	t := turn.Telemetry{Usage: env.Usage.usage(), SubscriptionUsage: r.limits, CostUSD: &env.TotalCostUSD}
+	last := r.lastCall
+	if last == nil {
+		last = env.Usage
+	}
+	if w, tokens := env.ModelUsage[r.mainModel].ContextWindow, last.prompt(); w > 0 || tokens > 0 {
 		t.Context = eventlog.ContextMeasured{Tokens: tokens, Window: w, Source: stateKey}
 	}
 	r.out.Telemetry(t)

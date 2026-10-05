@@ -91,11 +91,12 @@ type LastTurn struct {
 // reported with the newest model call that carried one. Provider is claude
 // or codex, and CapturedAt is in Unix seconds.
 type SubscriptionUsage struct {
-	Provider   string                    `json:"provider"`
-	Plan       string                    `json:"plan"`
-	Windows    []SubscriptionUsageWindow `json:"windows"`
-	Overage    *SubscriptionOverage      `json:"overage,omitempty"`
-	CapturedAt int64                     `json:"captured_at"`
+	Provider       string                    `json:"provider"`
+	Plan           string                    `json:"plan"`
+	Windows        []SubscriptionUsageWindow `json:"windows"`
+	Overage        *SubscriptionOverage      `json:"overage,omitempty"`
+	CapturedAt     int64                     `json:"captured_at"`
+	SessionCostUSD *float64                  `json:"session_cost_usd,omitempty"`
 }
 
 // SubscriptionUsageWindow is one rate-limit window of a SubscriptionUsage.

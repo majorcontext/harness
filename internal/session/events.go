@@ -54,7 +54,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 }
 
 func subscriptionView(u *eventlog.SubscriptionUsage) *protocol.SubscriptionUsage {
-	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt,
+	v := &protocol.SubscriptionUsage{Provider: u.Provider, Plan: u.Plan, CapturedAt: u.CapturedAt, SessionCostUSD: u.SessionCostUSD,
 		Windows: make([]protocol.SubscriptionUsageWindow, len(u.Windows))}
 	for i, w := range u.Windows {
 		v.Windows[i] = protocol.SubscriptionUsageWindow(w)

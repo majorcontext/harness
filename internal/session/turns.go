@@ -141,7 +141,7 @@ func (a *Actor) telemetry(r *running, t turn.Telemetry) error {
 		return nil
 	}
 	m := t.Context
-	m.Usage, m.SubscriptionUsage = t.Usage, t.SubscriptionUsage
+	m.Usage, m.SubscriptionUsage, m.CostUSD = t.Usage, t.SubscriptionUsage, t.CostUSD
 	if sub := m.SubscriptionUsage; sub != nil && sub.CapturedAt == 0 {
 		stamped := *sub
 		stamped.CapturedAt = time.Now().Unix()

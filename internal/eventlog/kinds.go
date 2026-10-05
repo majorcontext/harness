@@ -238,24 +238,26 @@ type CommandRecorded struct {
 }
 
 // ContextMeasured records what one model call measured: the context size,
-// the usage of the call, and a subscription snapshot. A call with no prompt
-// tokens records no context size.
+// the usage of the call, a subscription snapshot, and the cost of the call. A
+// call with no prompt tokens records no context size.
 type ContextMeasured struct {
 	Tokens            int64              `json:"tokens"`
 	Window            int64              `json:"window"`
 	Source            string             `json:"source"`
 	Usage             Usage              `json:"usage,omitzero"`
 	SubscriptionUsage *SubscriptionUsage `json:"subscription_usage,omitempty"`
+	CostUSD           *float64           `json:"cost_usd,omitempty"`
 }
 
 // SubscriptionUsage is the subscription limit snapshot of a provider. Provider
 // is claude or codex, and CapturedAt is in Unix seconds.
 type SubscriptionUsage struct {
-	Provider   string                    `json:"provider"`
-	Plan       string                    `json:"plan"`
-	Windows    []SubscriptionUsageWindow `json:"windows"`
-	Overage    *SubscriptionOverage      `json:"overage,omitempty"`
-	CapturedAt int64                     `json:"captured_at"`
+	Provider       string                    `json:"provider"`
+	Plan           string                    `json:"plan"`
+	Windows        []SubscriptionUsageWindow `json:"windows"`
+	Overage        *SubscriptionOverage      `json:"overage,omitempty"`
+	CapturedAt     int64                     `json:"captured_at"`
+	SessionCostUSD *float64                  `json:"session_cost_usd,omitempty"`
 }
 
 // SubscriptionUsageWindow is one rate-limit window of a snapshot.

@@ -189,7 +189,13 @@ func (d *runtimeDriver) expect(t *testing.T, want int, method, path string, body
 func (d *runtimeDriver) call(t *testing.T, method, path string, body any) callResult {
 	t.Helper()
 	status, data := d.do(t, method, path, body)
-	return callResult{Status: status, Body: decodeBody(t, method+" "+path, data)}
+	res := callResult{Status: status, Body: decodeBody(t, method+" "+path, data)}
+	if v, ok := res.Body.(map[string]any); ok {
+		if sub, ok := v["subscription_usage"].(map[string]any); ok && sub["captured_at"] != json.Number("0") {
+			sub["captured_at"] = "<time>"
+		}
+	}
+	return res
 }
 
 // deleted is the result of a call whose route the spec deletes. The runtime

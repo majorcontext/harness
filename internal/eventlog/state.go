@@ -202,6 +202,8 @@ type State struct {
 	usage      Usage
 	context    ContextMeasured
 	subscribed *SubscriptionUsage
+	cost       *float64
+	costAt     time.Time
 	compaction CompactionApplied
 	compacted  int
 	children   map[string]Outcome
@@ -339,8 +341,22 @@ func (s *State) Usage() Usage { return s.usage }
 // Context returns the newest context measurement, with no usage.
 func (s *State) Context() ContextMeasured { return s.context }
 
-// SubscriptionUsage returns the newest subscription snapshot, or nil.
-func (s *State) SubscriptionUsage() *SubscriptionUsage { return s.subscribed }
+// SubscriptionUsage returns the newest snapshot with the summed cost, or nil.
+// A cost with no snapshot gets an empty snapshot of the claude lane.
+func (s *State) SubscriptionUsage() *SubscriptionUsage {
+	if s.cost == nil {
+		return s.subscribed
+	}
+	var u SubscriptionUsage
+	if s.subscribed != nil {
+		u = *s.subscribed
+	} else {
+		u = SubscriptionUsage{Provider: "claude", Windows: []SubscriptionUsageWindow{}, CapturedAt: s.costAt.Unix()}
+	}
+	cost := *s.cost
+	u.SessionCostUSD = &cost
+	return &u
+}
 
 // CompactionCount returns the number of compactions, by the harness or by a backend.
 func (s *State) CompactionCount() int { return s.compacted }
@@ -445,7 +461,7 @@ func (s *State) step(env Envelope) error {
 	case CommandRecorded:
 		return s.applyCommand(e, env.Seq)
 	case ContextMeasured:
-		s.applyMeasured(e)
+		s.applyMeasured(e, env.Time)
 		return nil
 	case BackendState:
 		return s.applyBackendState(e)
