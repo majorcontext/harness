@@ -193,6 +193,7 @@
             "type": "integer"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "Compacted": {
@@ -254,6 +255,7 @@
             "type": "array"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "Error": {
@@ -437,6 +439,7 @@
             "type": "string"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "id",
@@ -452,6 +455,7 @@
             "type": "boolean"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "ItemFrame": {
@@ -666,6 +670,7 @@
             "contentEncoding": "base64"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "type"
@@ -821,7 +826,23 @@
             "type": "boolean"
           }
         },
+        "additionalProperties": false,
         "type": "object"
+      },
+      "Resolved": {
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "seq",
+          "status"
+        ]
       },
       "Session": {
         "properties": {
@@ -945,6 +966,7 @@
             "type": "string"
           }
         },
+        "additionalProperties": false,
         "type": "object"
       },
       "StatusFrame": {
@@ -1482,7 +1504,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "201": {
@@ -1592,7 +1614,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "200": {
@@ -1639,7 +1661,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "200": {
@@ -1772,7 +1794,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "200": {
@@ -1857,9 +1879,19 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Admitted"
+                }
+              }
+            },
+            "description": "Success"
+          },
           "201": {
             "content": {
               "application/json": {
@@ -1942,7 +1974,7 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
           "204": {
@@ -2043,9 +2075,19 @@
               }
             }
           },
-          "required": true
+          "required": false
         },
         "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Resolved"
+                }
+              }
+            },
+            "description": "Success"
+          },
           "204": {
             "description": "Success"
           },

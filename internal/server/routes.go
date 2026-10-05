@@ -9,7 +9,9 @@ import (
 
 // Route is one route of the HTTP API. Request and Response hold a zero value
 // of the JSON body type, or nil when the route has none. Query names the
-// optional query parameters. Status is the success status.
+// optional query parameters. Status is the success status. A route that
+// answers with more than one success status has one entry for each status,
+// under its own name, and the entries share a handler.
 type Route struct {
 	// Name identifies the route, and is its OpenAPI operation ID.
 	Name     string
@@ -48,11 +50,13 @@ var Table = []Route{
 	{Name: "updateSession", Method: "PATCH", Path: "/sessions/{id}", Request: protocol.SettingsPatch{}, Response: protocol.Session{}, Status: 200,
 		Ops: []command.Op{command.OpSetModel, command.OpSetThinking, command.OpSetServiceTier}},
 	{Name: "submitInput", Method: "POST", Path: "/sessions/{id}/inputs", Request: protocol.Input{}, Response: protocol.Admitted{}, Status: 201},
+	{Name: "repeatInput", Method: "POST", Path: "/sessions/{id}/inputs", Request: protocol.Input{}, Response: protocol.Admitted{}, Status: 200},
 	{Name: "listInputs", Method: "GET", Path: "/sessions/{id}/inputs", Response: []string{}, Status: 200, Ops: []command.Op{command.OpQueueList}},
 	{Name: "withdrawInput", Method: "DELETE", Path: "/sessions/{id}/inputs/{input}", Status: 204},
 	{Name: "interruptSession", Method: "POST", Path: "/sessions/{id}/interrupt", Request: protocol.Interrupt{}, Status: 204, Ops: []command.Op{command.OpAbort}},
 	{Name: "compactSession", Method: "POST", Path: "/sessions/{id}/compact", Request: protocol.Compact{}, Response: protocol.Compacted{}, Status: 200, Ops: []command.Op{command.OpCompact}},
 	{Name: "resolveRequest", Method: "POST", Path: "/sessions/{id}/requests/{request}", Request: protocol.Resolution{}, Status: 204},
+	{Name: "answerRequest", Method: "POST", Path: "/sessions/{id}/requests/{request}", Request: protocol.Resolution{}, Response: protocol.Resolved{}, Status: 202},
 	{Name: "setGoal", Method: "PUT", Path: "/sessions/{id}/goal", Request: protocol.Goal{}, Response: protocol.Session{}, Status: 200, Ops: []command.Op{command.OpSetGoal}},
 	{Name: "clearGoal", Method: "DELETE", Path: "/sessions/{id}/goal", Status: 204, Ops: []command.Op{command.OpClearGoal}},
 	{Name: "listEvents", Method: "GET", Path: "/sessions/{id}/events", Query: []Param{afterParam, limitParam}, Response: protocol.EventPage{}, Status: 200},

@@ -250,6 +250,11 @@ export interface Resolution {
   dismiss?: boolean;
 }
 
+export interface Resolved {
+  seq: number;
+  status: string;
+}
+
 export interface Session {
   id: string;
   parent_id?: string;
@@ -350,11 +355,13 @@ export interface Operations {
   endSession: { query: Record<string, never>; request: void; response: void };
   updateSession: { query: Record<string, never>; request: SettingsPatch; response: Session };
   submitInput: { query: Record<string, never>; request: Input; response: Admitted };
+  repeatInput: { query: Record<string, never>; request: Input; response: Admitted };
   listInputs: { query: Record<string, never>; request: void; response: string[] };
   withdrawInput: { query: Record<string, never>; request: void; response: void };
   interruptSession: { query: Record<string, never>; request: Interrupt; response: void };
   compactSession: { query: Record<string, never>; request: Compact; response: Compacted };
   resolveRequest: { query: Record<string, never>; request: Resolution; response: void };
+  answerRequest: { query: Record<string, never>; request: Resolution; response: Resolved };
   setGoal: { query: Record<string, never>; request: Goal; response: Session };
   clearGoal: { query: Record<string, never>; request: void; response: void };
   listEvents: { query: { after?: string; limit?: number }; request: void; response: EventPage };
@@ -377,11 +384,13 @@ export const routes = [
   { name: "endSession", method: "DELETE", path: "/sessions/{id}", status: 204, stream: false },
   { name: "updateSession", method: "PATCH", path: "/sessions/{id}", status: 200, stream: false },
   { name: "submitInput", method: "POST", path: "/sessions/{id}/inputs", status: 201, stream: false },
+  { name: "repeatInput", method: "POST", path: "/sessions/{id}/inputs", status: 200, stream: false },
   { name: "listInputs", method: "GET", path: "/sessions/{id}/inputs", status: 200, stream: false },
   { name: "withdrawInput", method: "DELETE", path: "/sessions/{id}/inputs/{input}", status: 204, stream: false },
   { name: "interruptSession", method: "POST", path: "/sessions/{id}/interrupt", status: 204, stream: false },
   { name: "compactSession", method: "POST", path: "/sessions/{id}/compact", status: 200, stream: false },
   { name: "resolveRequest", method: "POST", path: "/sessions/{id}/requests/{request}", status: 204, stream: false },
+  { name: "answerRequest", method: "POST", path: "/sessions/{id}/requests/{request}", status: 202, stream: false },
   { name: "setGoal", method: "PUT", path: "/sessions/{id}/goal", status: 200, stream: false },
   { name: "clearGoal", method: "DELETE", path: "/sessions/{id}/goal", status: 204, stream: false },
   { name: "listEvents", method: "GET", path: "/sessions/{id}/events", status: 200, stream: false },

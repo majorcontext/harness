@@ -70,7 +70,39 @@ func components() (map[string]*jsonschema.Schema, error) {
 		}
 		adjust(def, st)
 	}
-	return defs, nil
+	return defs, closeRequests(defs)
+}
+
+// closeRequests refuses unknown fields in each type that only a request body
+// holds, because the handler answers an unknown request field with 400. A
+// type that a reply holds too stays open, as a client must accept new fields
+// in a reply.
+func closeRequests(defs map[string]*jsonschema.Schema) error {
+	requests, replies := map[string]reflect.Type{}, map[string]reflect.Type{}
+	for _, r := range server.Table {
+		for _, side := range []struct {
+			body any
+			into map[string]reflect.Type
+		}{{r.Request, requests}, {r.Response, replies}} {
+			if side.body == nil {
+				continue
+			}
+			if err := collectStructs(reflect.TypeOf(side.body), side.into); err != nil {
+				return err
+			}
+		}
+	}
+	for _, v := range wireTypes {
+		if err := collectStructs(reflect.TypeOf(v), replies); err != nil {
+			return err
+		}
+	}
+	for name := range requests {
+		if _, shared := replies[name]; !shared {
+			defs[name].AdditionalProperties = jsonschema.FalseSchema
+		}
+	}
+	return nil
 }
 
 // collectStructs records each named struct type that t reaches, by name, and
@@ -197,7 +229,7 @@ func openAPI(comps map[string]*jsonschema.Schema) ([]byte, error) {
 				op["parameters"] = params
 			}
 			if r.Request != nil {
-				op["requestBody"] = map[string]any{"required": true, "content": jsonContent(r.Request)}
+				op["requestBody"] = map[string]any{"required": false, "content": jsonContent(r.Request)}
 			}
 			paths[r.Path][method] = op
 		}
