@@ -265,7 +265,7 @@ func (c client) readBlob(ctx context.Context, sessionID, key string) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	return io.ReadAll(rc)
 }
 
