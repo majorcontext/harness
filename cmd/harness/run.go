@@ -123,8 +123,9 @@ func runCmd(args []string) error {
 	if err != nil {
 		return errors.Join(err, closeRuntime(rt))
 	}
-	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout),
-		streamed: map[string]bool{}, names: map[string]string{}, open: rt.Open, closing: make(chan struct{})}
+	out := &printer{out: os.Stdout, errW: os.Stderr, jsonOut: opts.jsonOut, enc: json.NewEncoder(os.Stdout), rootID: s.View().ID,
+		streamed: map[string]bool{}, names: map[string]string{}, open: rt.Open, store: store, followers: map[string]*follower{}, closing: make(chan struct{})}
+	out.markExisting(ctx, out.rootID, map[string]bool{})
 	runErr := drive(ctx, s, opts, out)
 	out.finishChildren()
 	if out.printedText {
@@ -254,25 +255,46 @@ func settled(v protocol.Session) bool {
 }
 
 // printer renders the events of a run: text as it streams, the tools of the
-// model, and a retry. With jsonOut it prints each event as one JSON line.
+// model, and a retry. With jsonOut it prints each event as one JSON line with
+// the ID of its session. It follows each task child of the run, which the
+// runtime runs, as the engine printed them through its shared callback.
 type printer struct {
 	out, errW   io.Writer
 	jsonOut     bool
 	enc         *json.Encoder
+	rootID      string
 	streamed    map[string]bool
 	names       map[string]string
 	printedText bool
-	// open opens a task child, which the runtime runs, to follow it. Only
-	// text output follows children.
-	open     func(context.Context, string) (*harness.Session, error)
-	mu       sync.Mutex
-	children sync.WaitGroup
+	// open opens a task child to follow it.
+	open  func(context.Context, string) (*harness.Session, error)
+	store harness.Store
+	mu    sync.Mutex
+	// followers holds each child that the run follows, by session ID.
+	followers map[string]*follower
+	children  sync.WaitGroup
 	// closing closes when the run has settled: a follower then prints up to
 	// the head that its child holds and returns.
 	closing chan struct{}
 	// streamedThis is set when text streamed since the last completed item.
 	streamedThis bool
 	command      *protocol.Event
+}
+
+// follower is the printing of one task child. mark is the seq of the newest
+// record that the run has printed or need not print: a child that an earlier
+// run spawned starts at its head when the run starts, so that only the records
+// of the run print. again is set when a spawn of the child arrives while a
+// pass runs.
+type follower struct {
+	mark           uint64
+	running, again bool
+}
+
+// jsonLine is an event with the ID of its session.
+type jsonLine struct {
+	SessionID string `json:"session_id"`
+	protocol.Event
 }
 
 // stream prints each event after seq, and returns when the session has
@@ -285,7 +307,7 @@ func (p *printer) stream(ctx context.Context, s *harness.Session, after uint64, 
 		if err != nil {
 			return err
 		}
-		p.handle(ev)
+		p.handle(p.rootID, ev)
 		p.follow(ctx, ev)
 		if !ev.Ephemeral && p.finished(s, ev, command) {
 			return nil
@@ -301,7 +323,7 @@ func (p *printer) drain(ctx context.Context, s *harness.Session, after uint64) e
 		if err != nil {
 			return err
 		}
-		p.handle(ev)
+		p.handle(p.rootID, ev)
 		if !ev.Ephemeral && ev.Seq >= head {
 			break
 		}
@@ -351,14 +373,14 @@ type loggedPart struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func (p *printer) handle(ev protocol.Event) {
+func (p *printer) handle(id string, ev protocol.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if ev.Kind == "command.recorded" {
+	if ev.Kind == "command.recorded" && id == p.rootID {
 		p.command = &ev
 	}
 	if p.jsonOut {
-		_ = p.enc.Encode(ev)
+		_ = p.enc.Encode(jsonLine{SessionID: id, Event: ev})
 		return
 	}
 	switch ev.Kind {
@@ -458,11 +480,9 @@ func (p *printer) commandResult() error {
 	return errors.New(c.Text)
 }
 
-// follow prints the events of a task child that ev names, and of the
-// children of that child, as the engine printed them through its shared
-// callback.
+// follow starts the printing of the task child that ev names, if any.
 func (p *printer) follow(ctx context.Context, ev protocol.Event) {
-	if p.jsonOut || p.open == nil || ev.Kind != "child.spawned" {
+	if p.open == nil || ev.Kind != "child.spawned" {
 		return
 	}
 	var c struct {
@@ -471,17 +491,113 @@ func (p *printer) follow(ctx context.Context, ev protocol.Event) {
 	if json.Unmarshal(ev.Data, &c) != nil || c.ChildID == "" {
 		return
 	}
-	p.children.Go(func() { p.printChild(ctx, c.ChildID) })
+	f := p.followerOf(c.ChildID)
+	p.mu.Lock()
+	if f.running {
+		f.again = true
+		p.mu.Unlock()
+		return
+	}
+	f.running = true
+	p.mu.Unlock()
+	p.children.Go(func() {
+		for {
+			p.printChild(ctx, c.ChildID, f)
+			p.mu.Lock()
+			if !f.again {
+				f.running = false
+				p.mu.Unlock()
+				return
+			}
+			f.again = false
+			p.mu.Unlock()
+		}
+	})
 }
 
-func (p *printer) printChild(ctx context.Context, id string) {
-	cs, err := p.open(ctx, id)
+func (p *printer) followerOf(id string) *follower {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f := p.followers[id]
+	if f == nil {
+		f = &follower{}
+		p.followers[id] = f
+	}
+	return f
+}
+
+// markExisting sets the mark of each task child that session id spawned in an
+// earlier run, and of their children, to the head of the child. A child that
+// the run spawns again then prints only what the new input adds.
+func (p *printer) markExisting(ctx context.Context, id string, seen map[string]bool) {
+	v, err := harness.OpenView(ctx, p.store, id)
 	if err != nil {
+		return
+	}
+	for ev, err := range v.Events(ctx, 0) {
+		if err != nil {
+			return
+		}
+		if ev.Kind != "child.spawned" {
+			continue
+		}
+		var c struct {
+			ChildID string `json:"child_id"`
+		}
+		if json.Unmarshal(ev.Data, &c) != nil || c.ChildID == "" || seen[c.ChildID] {
+			continue
+		}
+		seen[c.ChildID] = true
+		cv, err := harness.OpenView(ctx, p.store, c.ChildID)
+		if err != nil {
+			continue
+		}
+		f := p.followerOf(c.ChildID)
+		p.mu.Lock()
+		f.mark = cv.Session().HeadSeq
+		p.mu.Unlock()
+		p.markExisting(ctx, c.ChildID, seen)
+	}
+}
+
+// openChild opens a child that its parent has just spawned. The runtime
+// creates the child after the parent records the spawn, so an open can fail
+// until then; it ends when the run settles.
+func (p *printer) openChild(ctx context.Context, id string) *harness.Session {
+	for {
+		cs, err := p.open(ctx, id)
+		if err == nil {
+			return cs
+		}
+		select {
+		case <-p.closing:
+			return nil
+		case <-ctx.Done():
+			return nil
+		case <-time.After(openChildWait):
+		}
+	}
+}
+
+// openChildWait is the wait between two opens of a child that does not exist yet.
+const openChildWait = 5 * time.Millisecond
+
+// printChild prints the records of a child after the mark of f until the
+// child has settled. A child that waits for the input of a new spawn has not
+// settled before that input lands: the pass does not end before it has seen
+// an input.admitted record.
+func (p *printer) printChild(ctx context.Context, id string, f *follower) {
+	cs := p.openChild(ctx, id)
+	if cs == nil {
 		return
 	}
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	p.mu.Lock()
+	start := f.mark
+	p.mu.Unlock()
 	var last, target atomic.Uint64
+	last.Store(start)
 	go func() {
 		select {
 		case <-p.closing:
@@ -492,18 +608,26 @@ func (p *printer) printChild(ctx context.Context, id string) {
 		case <-sctx.Done():
 		}
 	}()
-	for ev, err := range cs.Events(sctx, 0) {
+	landed := false
+	for ev, err := range cs.Events(sctx, start) {
 		if err != nil {
 			return
 		}
-		p.handle(ev)
+		p.handle(id, ev)
 		p.follow(ctx, ev)
 		if ev.Ephemeral {
 			continue
 		}
 		last.Store(ev.Seq)
+		p.mu.Lock()
+		f.mark = ev.Seq
+		p.mu.Unlock()
+		landed = landed || ev.Kind == "input.admitted"
 		if t := target.Load(); t != 0 && ev.Seq >= t {
 			return
+		}
+		if !landed {
+			continue
 		}
 		if v := viewAt(cs, ev.Seq); settled(v) && ev.Seq >= v.HeadSeq {
 			return

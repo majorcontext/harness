@@ -272,12 +272,87 @@ func TestContractCLIRunRetryBeforeAnyTextPrintsNoRestartNotice(t *testing.T) {
 	}
 }
 
+func TestContractCLIRunRetryAfterStreamedTextPrintsTheRestartNotice(t *testing.T) {
+	skipShort(t)
+	o := harnesstest.NewOpenAI(t, harnesstest.OpenAIOptions{APIKey: codexAPIKey, Replies: map[string]harnesstest.CodexReply{"dropped": {Drop: true}}},
+		harnesstest.Step{Name: "dropped", Reply: codexText("partial")},
+		harnesstest.Step{Name: "retry", Reply: codexText("recovered")})
+	h := &cliHost{t: t, dir: t.TempDir(), work: t.TempDir(), config: writeGoalConfigWith(t, o.URL(), codexConfig(o.URL(), false, nil))}
+	out, errOut, code := h.run("run", "-p", "hi")
+	if code != 0 || out != "partial\nrecovered\n" || !strings.Contains(errOut, "[re-streaming after a transient provider error]") {
+		t.Errorf("run after a retry that followed streamed text = %d %q, want 0, the text before and after a line break, and the restart notice\n%s", code, out, errOut)
+	}
+}
+
 func TestContractCLIRunPrintsTheOutputOfATaskChild(t *testing.T) {
 	skipShort(t)
 	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
 	out, errOut, code := h.run("run", "-p", "delegate")
 	if code != 0 || !strings.Contains(out, "child says hello") || !strings.Contains(out, "waiting") {
 		t.Errorf("run with a task child = %d, want 0 and the text of the parent and of the child on stdout\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+}
+
+// childScript scripts a parent that spawns one child, holds its turn open
+// while the child runs, then sends the child more work when the prompt names
+// it. The child replies with the text of its task.
+func childScript(sendOn harnesstest.Matcher) []harnesstest.Step {
+	return []harnesstest.Step{
+		busyTaskStep("spawn", userStarts("delegate"), fixed(spawn("general-purpose", "child work"))),
+		{Name: "child", Match: userStarts("child work"), Reply: harnesstest.Reply{Text: "first child text"}},
+		busyTaskStep("send", sendOn, onKid(func(kid string) []map[string]any {
+			return []map[string]any{onSession("send", kid, "prompt", "second work")}
+		})),
+		{Name: "child again", Match: userStarts("second work"), Reply: harnesstest.Reply{Text: "second child text"}},
+		{Name: "rest", Reply: harnesstest.Reply{Text: "ok"}, Repeat: true},
+	}
+}
+
+func TestContractCLIRunPrintsEachOutputOfATaskChildOnceWhenTheParentSendsToItAfterItSettled(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, childScript(matchAll(rootStarts("delegate"), harnesstest.LastToolResult("bash")))...)
+	out, errOut, code := h.run("run", "-p", "delegate")
+	if first, second := strings.Count(out, "first child text"), strings.Count(out, "second child text"); code != 0 || first != 1 || second != 1 {
+		t.Errorf("run with a send to a settled child = %d, want 0 and each child text once (first %d, second %d)\nstdout: %s\nstderr: %s", code, first, second, out, errOut)
+	}
+}
+
+func TestContractCLIRunResumedPrintsOnlyTheNewOutputOfATaskChild(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, childScript(userStarts("again"))...)
+	out, errOut, code := h.run("run", "-p", "delegate")
+	if code != 0 || strings.Count(out, "first child text") != 1 {
+		t.Fatalf("first run = %d, want 0 and the child text once\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	out, errOut, code = h.run("run", "-r", sessionID(t, errOut), "-p", "again")
+	if first, second := strings.Count(out, "first child text"), strings.Count(out, "second child text"); code != 0 || first != 0 || second != 1 {
+		t.Errorf("resumed run = %d, want 0 and only the new text of the child (first %d, second %d)\nstdout: %s\nstderr: %s", code, first, second, out, errOut)
+	}
+}
+
+func TestContractCLIRunJSONPrintsTheEventsOfATaskChildWithTheirSession(t *testing.T) {
+	skipShort(t)
+	h := newCLIHost(t, nil, delegation("general-purpose", harnesstest.Reply{Text: "child says hello"})...)
+	out, errOut, code := h.run("run", "-json", "-p", "delegate")
+	if code != 0 {
+		t.Fatalf("run -json with a task child = %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	sessions, childText := map[string]bool{}, ""
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev struct {
+			SessionID string `json:"session_id"`
+			K         string `json:"k"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.SessionID == "" {
+			t.Fatalf("line %q is not an event with a session_id: %v", line, err)
+		}
+		sessions[ev.SessionID] = true
+		if ev.K == "item.completed" && strings.Contains(line, "child says hello") {
+			childText = ev.SessionID
+		}
+	}
+	if len(sessions) != 2 || childText == "" {
+		t.Errorf("run -json printed the events of %d sessions, want the parent and the child, with the child text in an item of the child\n%s", len(sessions), out)
 	}
 }
 
