@@ -214,6 +214,7 @@ var runtimeRows = map[string]runtimeRow{
 	"driver_resume_streams":                                       reGolden(specCursor, specBoxGlobal),
 	"driver_settings_and_reads":                                   pendingOn("phase 4"),
 	"end_then_send_runs_no_report_of_the_stopped_child":           reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
+	"end_then_open_before_the_child_turn_ends_runs_no_report":     reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_idle_parent_cancels_running_child":                       reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_session_semantics":                                       reGolden(specView, specErrors, specReceipt),
 	"enqueue_joins_the_turn_at_the_tool_boundary":                 sameAsServe(),
@@ -307,6 +308,7 @@ var runtimeRows = map[string]runtimeRow{
 	"two_turns_keep_history":            sameAsServe(),
 	"usage_survives_a_mid_turn_restart": reGolden(specView, specHandoffResume),
 
+	"end_is_refused_while_a_typed_command_runs":                       reGolden(specTypedReceipt, specErrors, specReceipt),
 	"a_kill_interrupts_an_unfinished_command":                         reGolden(specTypedReceipt, specCmdRepeat, specCmdInterrupt, specReceipt),
 	"banner_holds_its_place_when_a_turn_compacts_in_the_middle":       reGolden(specOverflowFolds, specBannerPrefix, specView),
 	"codex_http_truncated_and_empty_responses_are_retried":            reGolden(specView, specItems, specRetryable),

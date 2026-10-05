@@ -478,8 +478,9 @@ func (r *Runtime) loaded(ctx context.Context, id string) *Session {
 // has acknowledged every record. It appends nothing and deletes nothing: the
 // log stays in the store, and Open runs the session again. It also stops the
 // turn of each descendant that this runtime runs, and opens no session. A
-// session with a running turn fails with ErrSessionBusy and stops no
-// descendant; a running compaction or evaluation stops as under Release. A
+// session with a running turn or control command fails with ErrSessionBusy and
+// stops no descendant; a running compaction or evaluation that no command
+// started stops as under Release. A
 // session that this runtime does not run is ended already; an ID with no log
 // fails with ErrSessionNotFound.
 func (r *Runtime) End(ctx context.Context, id string) error {
@@ -487,11 +488,6 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 		return fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	s := r.loaded(ctx, id)
-	if s != nil {
-		if err := s.a.Idle(ctx); err != nil {
-			return err
-		}
-	}
 	return r.tree.End(ctx, id, func(ctx context.Context) error {
 		if s != nil {
 			return s.a.End(ctx)

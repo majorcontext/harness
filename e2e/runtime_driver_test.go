@@ -374,6 +374,35 @@ func (d *runtimeDriver) Models(t *testing.T) callResult {
 	return d.call(t, http.MethodGet, "/models", nil)
 }
 
+func (d *runtimeDriver) AwaitTurnEnd(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), waitBound)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.srv.URL+"/sessions/"+id+"/events?after=0", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := d.srv.Client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	sc := newSSEScanner(resp.Body)
+	for {
+		raw, err := sc.next()
+		if err != nil {
+			return fmt.Errorf("event stream of %s ended: %w", id, err)
+		}
+		var ev protocol.Event
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			return fmt.Errorf("decode frame %s: %w", raw, err)
+		}
+		if ev.Kind == "turn.ended" {
+			return nil
+		}
+	}
+}
+
 func (d *runtimeDriver) Interrupt(t *testing.T, id string) {
 	t.Helper()
 	d.expect(t, http.StatusNoContent, http.MethodPost, "/sessions/"+id+"/interrupt", map[string]any{}, nil)

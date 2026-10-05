@@ -9,21 +9,16 @@ import (
 )
 
 // cancelTurn withdraws the queued inputs of session id and stops its turn,
-// when this runtime runs it.
-func (t *Tree) cancelTurn(ctx context.Context, id string) error {
-	return t.cancelWith(ctx, id, (*session.Actor).Cancel)
-}
-
-// endTurn is cancelTurn for a session that the end of an ancestor stops: the
-// turn ends with cause ended.
-func (t *Tree) endTurn(ctx context.Context, id string) error {
-	return t.cancelWith(ctx, id, (*session.Actor).CancelForEnd)
-}
-
-func (t *Tree) cancelWith(ctx context.Context, id string, cancel func(*session.Actor, context.Context) error) error {
+// when this runtime runs it. For the end of an ancestor the turn ends with
+// cause ended.
+func (t *Tree) cancelTurn(ctx context.Context, id string, end bool) error {
 	s, ok := t.s.Loaded(ctx, id)
 	if !ok {
 		return nil
+	}
+	cancel := (*session.Actor).Cancel
+	if end {
+		cancel = (*session.Actor).CancelForEnd
 	}
 	if err := cancel(s.Actor, ctx); !errors.Is(err, session.ErrNotOwned) {
 		return err
@@ -37,30 +32,32 @@ func (t *Tree) cancelWith(ctx context.Context, id string, cancel func(*session.A
 // no parent inside the tree starts a turn on a report. The walk outlives
 // ctx, so a caller that leaves does not stop half of a tree.
 func (t *Tree) Interrupt(ctx context.Context, id string, stop func(context.Context) error) error {
-	return t.walk(ctx, id, stop, t.cancelTurn)
+	return t.walk(ctx, id, stop, false)
 }
 
 // End is Interrupt for the end of session id: each descendant turn that it
-// stops ends with cause ended, so no later open of a parent reports it.
+// stops ends with cause ended. It silences no child of id, so a report that
+// lands while stop refuses the end still reaches id; it marks them, so none
+// opens id again once stop has released it.
 func (t *Tree) End(ctx context.Context, id string, stop func(context.Context) error) error {
-	return t.walk(ctx, id, stop, t.endTurn)
+	return t.walk(ctx, id, stop, true)
 }
 
-func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) error, cancelTurn func(context.Context, string) error) error {
+func (t *Tree) walk(ctx context.Context, id string, stop func(context.Context) error, end bool) error {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	defer context.AfterFunc(t.cfg.Base, cancel)()
-	quiet := map[string]bool{}
+	marked := map[string]walkMark{}
 	defer func() {
-		for kid := range quiet {
-			t.silence(kid, -1)
+		for kid, m := range marked {
+			t.hush(kid, m, -1)
 		}
 	}()
-	return t.stopTree(ctx, id, stop, quiet, cancelTurn)
+	return t.stopTree(ctx, id, stop, marked, end, true)
 }
 
-func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, quiet map[string]bool, cancelTurn func(context.Context, string) error) error {
-	silence := func() ([]string, error) {
+func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Context) error, marked map[string]walkMark, end, top bool) error {
+	mark := func() ([]string, error) {
 		var kids []string
 		err := t.s.Read(ctx, id, func(st *eventlog.State) { kids = st.Children() })
 		if errors.Is(err, session.ErrNotFound) {
@@ -70,22 +67,23 @@ func (t *Tree) stopTree(ctx context.Context, id string, stop func(context.Contex
 			return nil, err
 		}
 		for _, kid := range kids {
-			if !quiet[kid] {
-				quiet[kid] = true
-				t.silence(kid, 1)
+			if _, ok := marked[kid]; !ok {
+				m := walkMark{quiet: !end || !top, ending: end}
+				marked[kid] = m
+				t.hush(kid, m, 1)
 			}
 		}
 		return kids, nil
 	}
-	if _, err := silence(); err != nil {
+	if _, err := mark(); err != nil {
 		return err
 	}
 	if err := stop(ctx); err != nil {
 		return err
 	}
-	kids, err := silence()
+	kids, err := mark()
 	for _, kid := range kids {
-		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return cancelTurn(ctx, kid) }, quiet, cancelTurn))
+		err = errors.Join(err, t.stopTree(ctx, kid, func(ctx context.Context) error { return t.cancelTurn(ctx, kid, end) }, marked, end, false))
 	}
 	return err
 }

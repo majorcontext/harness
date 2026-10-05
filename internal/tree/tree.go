@@ -78,14 +78,16 @@ type Tree struct {
 	s   Sessions
 	cfg Config
 
-	mu    sync.Mutex
-	locks map[string]*treeLock
-	quiet map[string]int
+	mu     sync.Mutex
+	locks  map[string]*treeLock
+	quiet  map[string]int
+	ending map[string]int
+	muted  map[string]int
 }
 
 // New returns the Tree of runtime s.
 func New(s Sessions, cfg Config) *Tree {
-	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}}
+	return &Tree{s: s, cfg: cfg, locks: map[string]*treeLock{}, quiet: map[string]int{}, ending: map[string]int{}, muted: map[string]int{}}
 }
 
 // Choice is what a spawn takes from its caller beside the agent and the task:
@@ -280,16 +282,23 @@ func (t *Tree) tokens(ctx context.Context, id string) (int64, error) {
 // Report delivers the outcome of a child to its parent, which it opens
 // when the runtime does not run it, even when the child has settled. It
 // never waits for the child. A child that a tree interrupt stops settles
-// with no report input, so no parent inside the tree starts a turn. A child
-// that the end of a session stopped (cause ended) leaves a parent that the
-// runtime does not run closed: the end never opens a session.
+// with no report input. A child that an end walk marked reaches only a parent
+// that the runtime runs, and never opens one: the end never opens a session,
+// and a parent that has stopped settles the child when it opens.
 func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Report) {
-	quiet := t.quieted(s.ChildID)
+	quiet, ending := t.hushed(s.ChildID)
 	if quiet {
 		report = nil
+		t.mute(s.ChildID, 1)
 	}
 	t.cfg.Go(func() {
-		if _, ok := t.s.Running(parent); quiet && !ok && t.endedBy(s.ChildID) {
+		if quiet {
+			defer t.mute(s.ChildID, -1)
+		}
+		if ending {
+			if p, ok := t.s.Running(parent); ok {
+				_ = p.Actor.Settle(t.cfg.Base, s, report)
+			}
 			return
 		}
 		if p, err := t.s.Open(t.cfg.Base, parent); err == nil {
@@ -298,35 +307,26 @@ func (t *Tree) Report(parent string, s eventlog.ChildSettled, report *session.Re
 	})
 }
 
-// endedBy reports whether the last turn of session id was stopped by the end
-// of a session.
-func (t *Tree) endedBy(id string) bool {
-	var ended bool
-	_ = t.s.Read(t.cfg.Base, id, func(st *eventlog.State) { ended = st.LastEnded().Cause == eventlog.CauseEnded })
-	return ended
-}
-
 // Recover settles each unsettled child of a that has ended, or that never
 // started, and opens each other one, which reports when its turn ends. A
 // crash can come between the end of a child turn and its child.settled
-// record. A child whose last turn the end of a session stopped (cause ended)
-// settles canceled with no report input; every other child reports its
-// outcome, a canceled one included.
+// record. A child whose last turn the end of a session stopped (cause ended),
+// and a child whose silenced report Report is delivering, settle with no
+// report input; every other child reports its outcome, a canceled one included.
 func (t *Tree) Recover(a *session.Actor) {
 	for _, id := range a.View().Unsettled {
 		var s eventlog.ChildSettled
 		var report *session.Report
-		var ended, byEnd bool
+		var ended bool
 		err := t.s.Read(t.cfg.Base, id, func(st *eventlog.State) {
 			s, report, ended = session.Settlement(id, st)
-			byEnd = st.LastEnded().Cause == eventlog.CauseEnded
 		})
 		switch {
 		case errors.Is(err, session.ErrNotFound):
 			_ = a.Settle(t.cfg.Base, eventlog.ChildSettled{ChildID: id, Outcome: eventlog.OutcomeFailed}, nil)
 		case err != nil:
 		case ended:
-			if byEnd {
+			if t.muting(id) {
 				report = nil
 			}
 			_ = a.Settle(t.cfg.Base, s, report)
@@ -364,17 +364,45 @@ func (t *Tree) lock(root string) (unlock func()) {
 	}
 }
 
-// silence adds n to the tree interrupts that stop child.
-func (t *Tree) silence(child string, n int) {
+// walkMark names the walks that stop a child: a quiet child settles with no
+// report input; an ending child never opens its parent.
+type walkMark struct{ quiet, ending bool }
+
+// hush adds n to the walks that stop child.
+func (t *Tree) hush(child string, h walkMark, n int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.quiet[child] += n; t.quiet[child] <= 0 {
-		delete(t.quiet, child)
+	if h.quiet {
+		count(t.quiet, child, n)
+	}
+	if h.ending {
+		count(t.ending, child, n)
 	}
 }
 
-func (t *Tree) quieted(child string) bool {
+func (t *Tree) hushed(child string) (quiet, ending bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.quiet[child] > 0
+	return t.quiet[child] > 0, t.ending[child] > 0
+}
+
+// mute adds n to the silenced reports of child that Report has not settled yet.
+// Report runs before any read can show the child as ended, so Recover that
+// reads it ended also sees the hold.
+func (t *Tree) mute(child string, n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	count(t.muted, child, n)
+}
+
+func (t *Tree) muting(child string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.muted[child] > 0
+}
+
+func count(by map[string]int, child string, n int) {
+	if by[child] += n; by[child] <= 0 {
+		delete(by, child)
+	}
 }

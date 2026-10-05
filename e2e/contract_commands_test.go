@@ -98,3 +98,27 @@ func TestContractCommands(t *testing.T) {
 		},
 	})
 }
+
+func TestContractCommandsEnd(t *testing.T) {
+	turn := func(user string) harnesstest.Step {
+		return harnesstest.Step{Name: user, Match: harnesstest.LastUserText(user), Reply: harnesstest.Reply{Text: "ok"}}
+	}
+	runScenarios(t, []scenario{{
+		name:   "end_is_refused_while_a_typed_command_runs",
+		config: map[string]any{"compaction_keep_turns": 1},
+		model:  []harnesstest.Step{turn("one"), turn("two"), {Name: "summary", Reply: harnesstest.Reply{Text: "gist", Block: true}}},
+		actions: []action{
+			create{as: "a"},
+			submit{as: "a", text: "one"}, waitIdle{as: "a"},
+			submit{as: "a", text: "two"}, waitIdle{as: "a"},
+			command{as: "a", text: "/compact"},
+			awaitRequests{n: 3},
+			endSession{as: "a"},
+			release{step: "summary"},
+			awaitCommands{as: "a"},
+			waitIdle{as: "a"},
+			commandRecords{as: "a"},
+			endSession{as: "a"},
+		},
+	}})
+}

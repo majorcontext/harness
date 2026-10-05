@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -45,6 +46,9 @@ type enqueueNext struct{ as, text string }
 // submitAttachments submits text with the PNG and the PDF of rowAttachments.
 type submitAttachments struct{ as, text string }
 type waitIdle struct{ as string }
+
+// awaitTurnEnd waits for the end of a turn in the log of the session. On serve, waitIdle does not: a session that was canceled reads idle before its turn finalizes.
+type awaitTurnEnd struct{ as string }
 type interrupt struct{ as string }
 type setGoal struct {
 	as, condition string
@@ -137,6 +141,12 @@ func (a submitAttachments) run(t *testing.T, r *run) {
 func (a enqueue) run(t *testing.T, r *run)     { r.drv.Enqueue(t, r.id(t, a.as), a.text) }
 func (a enqueueNext) run(t *testing.T, r *run) { r.drv.EnqueueNext(t, r.id(t, a.as), a.text) }
 func (a waitIdle) run(t *testing.T, r *run)    { r.drv.WaitIdle(t, r.id(t, a.as)) }
+func (a awaitTurnEnd) run(t *testing.T, r *run) {
+	id := r.id(t, a.as)
+	if err := r.drv.AwaitTurnEnd(id); err != nil {
+		t.Fatalf("%v\nstderr:\n%s", err, r.drv.Stderr())
+	}
+}
 func (a interrupt) run(t *testing.T, r *run) {
 	r.drv.Interrupt(t, r.id(t, a.as))
 }
@@ -174,6 +184,9 @@ type setModel struct{ as, model string }
 type setThinking struct{ as, level string }
 type setServiceTier struct{ as, tier string }
 type endSession struct{ as string }
+
+// endWhileOpened ends the session while the test opens it again and again until the end returns, so an open can come between the stop of the session and the stop of its children.
+type endWhileOpened struct{ as string }
 type endMissingSession struct{}
 type sendToSession struct{ as, text string }
 
@@ -269,6 +282,32 @@ func (a setServiceTier) run(t *testing.T, r *run) {
 }
 func (a endSession) run(t *testing.T, r *run) {
 	r.record(t, "end_session", a.as, r.drv.EndSession(t, r.id(t, a.as)))
+}
+func (a endWhileOpened) run(t *testing.T, r *run) {
+	id := r.id(t, a.as)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					if err := r.drv.AwaitTurnEnd(id); err != nil {
+						t.Errorf("%v", err)
+						return
+					}
+				}
+			}
+		}()
+	}
+	res := r.drv.EndSession(t, id)
+	close(stop)
+	wg.Wait()
+	r.record(t, "end_session", a.as, res)
 }
 func (endMissingSession) run(t *testing.T, r *run) {
 	r.record(t, "end_missing_session", "", r.drv.EndSession(t, "missing"))
