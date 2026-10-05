@@ -98,13 +98,7 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 	}
 	var m *toolresult.Meta
 	err := a.onRun(run, func() error {
-		used, last := 0, 0
-		for _, r := range a.state.Retained() {
-			used += r.Bytes
-			if n, _ := toolresult.Number(r.Handle); n > last {
-				last = n
-			}
-		}
+		used, last := a.retainedTotals()
 		if used+len(masked) <= toolresult.Budget {
 			handle := toolresult.Handle(last + 1)
 			m = new(toolresult.NewMeta(handle, tool, fmt.Sprintf("%s-%d", handle, a.fenced), masked))
@@ -121,10 +115,23 @@ func (a *Actor) retain(run *running, tool string, res protocol.ToolResult) proto
 	if err := a.cfg.Store.PutBlob(a.cfg.Base, m.Key, strings.NewReader(masked)); err != nil {
 		return res
 	}
+	refused := false
 	err = a.onRun(run, func() error {
+		used, last := a.retainedTotals()
+		if used+len(masked) > toolresult.Budget {
+			refused = true
+			return nil
+		}
+		if handleNumber(m.Handle) <= last {
+			m = new(toolresult.NewMeta(toolresult.Handle(last+1), tool, m.Key, masked))
+		}
 		return a.append(eventlog.ToolResultRetained{Handle: m.Handle, Tool: m.Tool, BlobKey: m.Key, Bytes: m.Bytes, Lines: m.Lines, Head: m.Head})
 	})
-	if err == nil {
+	switch {
+	case err != nil:
+	case refused:
+		res.Text = toolresult.Refused(tool, masked)
+	default:
 		res.Text = toolresult.Preview(*m, masked)
 	}
 	return res

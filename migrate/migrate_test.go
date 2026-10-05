@@ -226,7 +226,7 @@ var journalCases = []struct {
 			t.Errorf("last ended %+v", e)
 		}
 		const want = "ses_0000000000000014 (agent=explore) failed: provider capacity exhausted for this account: usage limit reached (usage: 9 in / 7 out)" + wallGuidanceAfter + "ses_0000000000000014"
-		if _, report, ok := session.Settlement("ses_0000000000000014", s); !ok || report[1].Text != want {
+		if _, report, ok := session.Settlement("ses_0000000000000014", s); !ok || report.Parts("")[1].Text != want {
 			t.Errorf("report %+v, want line %q", report, want)
 		}
 	}},
@@ -235,12 +235,12 @@ var journalCases = []struct {
 			t.Errorf("last ended %+v", e)
 		}
 		const want = "ses_0000000000000015 (agent=explore) failed: provider rate limit outlasted the retry budget for this account: too many requests (usage: 9 in / 7 out)" + wallGuidance + "ses_0000000000000015"
-		if _, report, ok := session.Settlement("ses_0000000000000015", s); !ok || report[1].Text != want {
+		if _, report, ok := session.Settlement("ses_0000000000000015", s); !ok || report.Parts("")[1].Text != want {
 			t.Errorf("report %+v, want line %q", report, want)
 		}
 	}},
 	{"child in a turn at the cutover fails as lost to restart", "ses_0000000000000012", func(t *testing.T, s *eventlog.State, _ harness.Store) {
-		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Error != lostToRestart {
+		if e := s.LastEnded(); e.StopReason != eventlog.StopFailed || e.Error != session.ReasonLostToRestart {
 			t.Errorf("last ended %+v", e)
 		}
 	}},

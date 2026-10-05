@@ -302,7 +302,7 @@
             },
             {
               "kind": "text",
-              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: crashed (usage: 0 in / 0 out)\n]\n\u003c/harness-engine-context\u003e"
+              "text": "\u003charness-engine-context\u003e\n[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: lost to restart: turn was in flight when the process last stopped (usage: 0 in / 0 out)\n]\n\u003c/harness-engine-context\u003e"
             }
           ]
         }
@@ -398,7 +398,7 @@
         "parts": [
           {
             "type": "engine_context",
-            "text": "[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: crashed (usage: 0 in / 0 out)\n]"
+            "text": "[tasks:\n- \u003csession\u003e (agent=general-purpose) failed: lost to restart: turn was in flight when the process last stopped (usage: 0 in / 0 out)\n]"
           }
         ]
       },

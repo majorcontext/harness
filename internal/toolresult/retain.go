@@ -113,6 +113,10 @@ func countLines(s string) int {
 	return n
 }
 
+// Cut returns the longest prefix of s of at most n bytes that does not split
+// a rune.
+func Cut(s string, n int) string { return truncate(s, n) }
+
 // truncate returns the longest prefix of s of at most n bytes that does
 // not split a rune.
 func truncate(s string, n int) string {

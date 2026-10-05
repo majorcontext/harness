@@ -11,9 +11,12 @@ const (
 	specExternal      = "| Items | External items become `item.completed` | stream-json frames | `item/completed` |"
 	specTaskInputs    = "Task notifications become inputs"
 	specChildReport   = "The report names the child, its agent, the outcome, and the reason, and holds the last assistant text of the child"
-	specChildReason   = "The reason is the classified text of the engine: a fixed prefix by `error_class`, then the `error` as the log holds it."
+	specChildReason   = "The reason is the classified text of the engine: a fixed prefix by `error_class`, then the error text of the turn end."
 	specChildCrash    = "A crashed child turn ends `crashed` and settles `failed`."
-	specChildLong     = "The report holds at most 4000 runes of the result, cut with `… [truncated]`"
+	specChildLong     = "A result of at most 4096 bytes stays whole in the report, and so does a larger result that is 4096 bytes or less once masked"
+	specChildLost     = "except that a crashed turn reads `lost to restart: turn was in flight when the process last stopped`"
+	specChildBound    = "the engine masked the cause with its secret patterns and cut it at 500 runes with `… [truncated]`, and the runtime does the same"
+	specChildStatus   = "The `status` and `log` actions of the `task` tool show this reason, as the engine showed its classified reason."
 	specChildClaude   = "On Claude Code the engine checked out reports only when a turn started, so a busy parent gets no report in the middle of its turn"
 	specChildNoGoal   = "A child session has no `goal` tool"
 	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
@@ -50,8 +53,6 @@ const (
 	specOpenAnswerReceipt = "Does the answer route keep the serve receipt"
 	specOpenGauge         = "Does the switch keep the context gauge and the session cost of a Claude Code turn?"
 	specOpenRetry         = "Does a failed Claude Code turn run again?"
-	specOpenChildLong     = "Does a long result in a report keep the retention of the engine?"
-	specOpenChildCrash    = "What does a report give for a crashed child?"
 	specOpenChildParts    = "Does the log keep a `task_report` part and an `engine_context` part?"
 
 	specStopped       = "Keep the partial; unfinished tool calls get `interrupted` results; the next queued input runs"
@@ -123,14 +124,16 @@ var runtimeRows = map[string]runtimeRow{
 	"builtin_commands_run_and_record":                             pendingOn("phase 4"),
 	"busy_deferred_goal_with_max_turns":                           deletedBy(specGoalDeferred),
 	"child_crash_recovered":                                       reGolden(specView, specCrash, specChildReport),
-	"child_crash_reaches_a_busy_parent":                           reGolden(specView, specCrash, specChildReport, specChildCrash, specOpenChildCrash, specChildWording, specOpenChildParts),
+	"child_crash_reaches_a_busy_parent":                           reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording, specOpenChildParts),
 	"child_usage_limit_delivered":                                 reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
 	"child_error_delivered":                                       reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":     reGolden(specChildReport, specChildWording, specOpenChildParts),
 	"child_error_reaches_a_busy_parent_at_the_tool_boundary":      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_usage_limit_reaches_a_busy_parent":                     reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
 	"child_rate_limit_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildWording, specOpenChildParts),
-	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specOpenChildLong, specChildWording, specOpenChildParts),
+	"child_result_within_the_byte_limit_reaches_a_busy_parent":    reGolden(specChildReport, specChildLong, specChildWording, specOpenChildParts),
+	"child_long_error_reaches_a_busy_parent":                      reGolden(specChildReport, specChildReason, specChildBound, specChildWording, specOpenChildParts),
+	"child_long_result_reaches_a_busy_parent":                     reGolden(specChildReport, specChildLong, specChildWording, specOpenChildParts),
 	"claudecode_compact_delegated":                                reGolden(specView, specCompactOwned, specCompactResult),
 	"claudecode_child_report_waits_for_the_next_turn":             reGolden(specTaskInputs, specChildReport, specChildClaude),
 	"claudecode_child_reports_share_the_next_turn":                reGolden(specTaskInputs, specChildReport, specChildClaude),
@@ -311,6 +314,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_refusals":                                                      pendingOn(specTaskWording),
 	"task_refusal_past_max_task_depth":                                   pendingOn(specLimitFails, specTaskWording),
 	"task_refusal_past_max_concurrent_tasks":                             pendingOn(specLimitFails, specTaskWording),
+	"task_status_and_log_of_a_failed_child":                              reGolden(specChildReport, specChildReason, specChildBound, specChildStatus, specItems, specOneResult),
 	"task_status_and_log_of_a_settled_child":                             reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_cancel_and_send_to_a_running_child":                            reGolden(specTaskInputs, specChildWording, specOpenChildParts, specChildNoGoal, specItems, specOneResult),
 	"task_spawn_past_max_tree_tokens_is_refused":                         pendingOn(specLimitFails, specTaskWording),

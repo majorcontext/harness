@@ -160,7 +160,7 @@ func inFlightEnd(history []message.Message) eventlog.TurnEnded {
 		!slices.ContainsFunc(history[n-1].Parts, func(p message.Part) bool { _, ok := p.(*message.ToolCall); return ok }) {
 		return eventlog.TurnEnded{StopReason: eventlog.StopCompleted}
 	}
-	return eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: lostToRestart}
+	return eventlog.TurnEnded{StopReason: eventlog.StopFailed, Error: session.ReasonLostToRestart}
 }
 
 // children returns child.spawned for each child, and child.settled for each
