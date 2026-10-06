@@ -43,6 +43,9 @@ type run struct {
 	// reports it with the usage of its call.
 	limits  *eventlog.SubscriptionUsage
 	started bool
+	// early holds the mirror frames that arrive before the init frame names
+	// the session that they belong to.
+	early   []envelope
 	sendErr error
 	tailErr error
 	result  *envelope
@@ -268,6 +271,10 @@ func (r *run) addMirror(env envelope) error {
 		return nil
 	}
 	r.taken = true
+	if !r.started {
+		r.early = append(r.early, env)
+		return nil
+	}
 	return r.mirror.Add(r.dir, env.FilePath, env.Entries)
 }
 
@@ -280,8 +287,18 @@ func (r *run) system(env envelope) error {
 			return err
 		}
 		r.taken = r.taken || r.dir == ""
-		if env.SessionID != "" && env.SessionID != r.mirror.SessionID {
+		reset := env.SessionID != "" && env.SessionID != r.mirror.SessionID
+		if reset {
 			r.mirror.SessionID, r.mirror.Path, r.mirror.Entries = env.SessionID, "", nil
+		}
+		early := r.early
+		r.early = nil
+		for _, e := range early {
+			if err := r.mirror.Add(r.dir, e.FilePath, e.Entries); err != nil {
+				return err
+			}
+		}
+		if reset {
 			return r.save()
 		}
 	case "compact_boundary":

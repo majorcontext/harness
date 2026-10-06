@@ -35,6 +35,7 @@ func TestContractRuntimeClaudeCodeStateChunks(t *testing.T) {
 		{"claude_code_state_continues_its_chain_after_a_handoff", rowCCStateContinuesAfterAHandoff},
 		{"claude_code_state_of_a_new_cli_session_starts_a_new_chain", rowCCStateNewSessionStartsANewChain},
 		{"claude_code_state_of_one_blob_resumes_and_the_next_save_starts_a_chain", rowCCStateOneBlobStartsAChain},
+		{"claude_code_state_keeps_mirror_frames_that_arrive_before_the_init_frame", rowCCStateKeepsEarlyMirrors},
 	}
 	for _, row := range rows {
 		t.Run(row.name, row.run)
@@ -66,6 +67,13 @@ func ccTranscript(entries ...[]string) string {
 // one mirror frame for each entry, and a result.
 func ccFixture(t *testing.T, session string, entries []string) string {
 	t.Helper()
+	return ccFixtureOrdered(t, session, entries, false)
+}
+
+// ccFixtureOrdered is ccFixture with the mirror frames before the init frame
+// when early is set, the order of a recorded CLI run.
+func ccFixtureOrdered(t *testing.T, session string, entries []string, early bool) string {
+	t.Helper()
 	file := "/home/u/cfg/projects/p/" + session + ".jsonl"
 	var b strings.Builder
 	line := func(v any) {
@@ -76,9 +84,17 @@ func ccFixture(t *testing.T, session string, entries []string) string {
 		b.Write(data)
 		b.WriteByte('\n')
 	}
-	line(map[string]any{"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku-4-5-20251001", "tools": []string{}})
+	init := func() {
+		line(map[string]any{"type": "system", "subtype": "init", "session_id": session, "model": "claude-haiku-4-5-20251001", "tools": []string{}})
+	}
+	if !early {
+		init()
+	}
 	for _, e := range entries {
 		b.WriteString(`{"type":"transcript_mirror","filePath":` + fmt.Sprintf("%q", file) + `,"entries":[` + e + "]}\n")
+	}
+	if early {
+		init()
 	}
 	line(map[string]any{"type": "assistant", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "ok"}}}})
 	line(map[string]any{"type": "result", "subtype": "success", "is_error": false, "num_turns": 1, "result": "ok", "session_id": session, "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}})
@@ -452,5 +468,24 @@ func rowCCStateOneBlobStartsAChain(t *testing.T) {
 	}
 	if next := states[2]; next.Restart || next.Chunk == "" {
 		t.Errorf("second save = %+v, want it to continue the chain with a chunk", next)
+	}
+}
+
+func rowCCStateKeepsEarlyMirrors(t *testing.T) {
+	a, b := ccEntries("a", 3, 1<<10), ccEntries("b", 1, 1<<10)
+	l := newCCLane(t, "", ccFixtureOrdered(t, "S", a, true), ccFixture(t, "S", b))
+	r := l.runtime()
+	s := l.create(r)
+	l.send(s, "1")
+	awaitTurns(t, s, 1)
+	l.close(r)
+	r = l.runtime()
+	s = l.open(r)
+	l.send(s, "2")
+	awaitTurns(t, s, 2)
+	l.close(r)
+	seen := l.seenFiles()
+	if len(seen) != 2 || seen[1]["projects/p/S.jsonl"] != ccTranscript(a) {
+		t.Errorf("transcripts at start: %d spawns, want none, then the entries that came before the init frame", len(seen))
 	}
 }

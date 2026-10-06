@@ -398,7 +398,7 @@ type BackendChain struct {
 // BackendState returns the state of backend and whether it saved any.
 func (s *State) BackendState(backend string) (BackendChain, bool) {
 	c, ok := s.backends[backend]
-	c.Chunks = slices.Clone(c.Chunks)
+	c.Head, c.Chunks = slices.Clone(c.Head), slices.Clone(c.Chunks)
 	return c, ok
 }
 
