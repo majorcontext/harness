@@ -236,6 +236,25 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 	return session.Stored(ctx, storeLog{v.st, v.id}, after, v.state.HeadSeq)
 }
 
+// ReadEvents yields the stored events of session id after seq after, through
+// the head that it reads first. It neither owns the session nor replays the
+// log, so it equals View.Events only for a log that replays. A session with no
+// log yields nothing; a record that does not decode yields its error and ends.
+func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error] {
+	return func(yield func(protocol.Event, error) bool) {
+		head, err := st.Head(ctx, id)
+		if err != nil {
+			yield(protocol.Event{}, err)
+			return
+		}
+		for e, err := range session.Stored(ctx, storeLog{st, id}, after, head) {
+			if !yield(e, err) {
+				return
+			}
+		}
+	}
+}
+
 // Update changes the settings of the session and returns its view. A running
 // turn that owns no loop uses them from its next model call; a backend that
 // owns its loop uses them from its next run.
