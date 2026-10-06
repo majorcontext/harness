@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -370,6 +371,9 @@ func wantBlobs(t *testing.T, h http.Handler, label string) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" || !bytes.Equal(rec.Body.Bytes(), pngBytes(t)) {
 		t.Errorf("%s: GET blob = %d %s %d bytes, want 200 image/png with the attachment", label, rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
 	}
+	if got := rec.Header().Get("Content-Length"); got != strconv.Itoa(len(pngBytes(t))) {
+		t.Errorf("%s: GET blob Content-Length = %q, want the recorded size %d", label, got, len(pngBytes(t)))
+	}
 	var events protocol.EventPage
 	if err := json.Unmarshal(get(t, h, "/sessions/s1/events").Body.Bytes(), &events); err != nil {
 		t.Fatal(err)
@@ -406,6 +410,29 @@ func TestAHistoryAttachmentReadsBackByItsKeyOnBothHandlers(t *testing.T) {
 	t.Cleanup(func() { closeRuntime(t, r2) })
 	wantBlobs(t, r2.Handler(), "runtime handler")
 	wantBlobs(t, harness.ReadHandler(st, nil), "read handler")
+}
+
+type failingQueue struct{}
+
+func (failingQueue) Queued(context.Context, string) ([]protocol.QueuedInput, error) {
+	return nil, errors.New("queue backend down")
+}
+
+func TestAFailingQueueLeavesTheStoredHistoryReadable(t *testing.T) {
+	st := harness.NewMemStore()
+	attachmentLog(t, st)
+	ro := harness.ReadHandler(st, failingQueue{})
+	key := "attachment-" + hex.EncodeToString(sha256Sum(pngBytes(t)))
+	for _, path := range []string{"/sessions/s1/messages", "/sessions/s1/events", "/sessions/s1/blobs/" + key} {
+		if rec := get(t, ro, path); rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d %s, want 200 while the queue fails", path, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/sessions/s1", "/sessions/s1/inputs", "/sessions"} {
+		if rec := get(t, ro, path); rec.Code != http.StatusInternalServerError {
+			t.Errorf("GET %s = %d %s, want 500 while the queue fails", path, rec.Code, rec.Body)
+		}
+	}
 }
 
 type fakeQueue map[string][]protocol.QueuedInput

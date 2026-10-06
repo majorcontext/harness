@@ -17,17 +17,22 @@ import (
 	"github.com/majorcontext/harness/protocol"
 )
 
-// Blob is the bytes of an attachment and its media type.
+// Blob is the bytes of an attachment, its media type, and the size that its
+// part records.
 type Blob struct {
 	MediaType string
+	Size      int
 	Body      io.ReadCloser
 }
 
 // Reads is what the routes that only read need: the list of sessions, a
-// reader for each, and the inputs that wait to run. The Runtime of an embedder
-// with an owner implements it, and so does a Store with none.
+// reader for each, and the views that count the inputs that wait to run. The
+// Runtime of an embedder with an owner implements it, and so does a Store with
+// none.
 type Reads interface {
 	Read(ctx context.Context, id string) (Reader, error)
+	// Session returns the state of session id, with the IDs of its queued inputs.
+	Session(ctx context.Context, id string) (protocol.Session, error)
 	List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error)
 	// Inputs returns the queued inputs of session id, oldest first, never nil.
 	Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error)
@@ -123,11 +128,11 @@ func (h *readHandler) list(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (h *readHandler) view(w http.ResponseWriter, r *http.Request) error {
-	rd, err := h.reads.Read(r.Context(), r.PathValue("id"))
+	s, err := h.reads.Session(r.Context(), r.PathValue("id"))
 	if err != nil {
 		return err
 	}
-	reply(w, http.StatusOK, rd.Session())
+	reply(w, http.StatusOK, s)
 	return nil
 }
 
@@ -182,6 +187,7 @@ func (h *readHandler) blob(w http.ResponseWriter, r *http.Request) error {
 	}
 	defer func() { _ = b.Body.Close() }()
 	w.Header().Set("Content-Type", b.MediaType)
+	w.Header().Set("Content-Length", strconv.Itoa(b.Size))
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, b.Body)
 	return nil

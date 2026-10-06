@@ -207,6 +207,13 @@ func (s stub) Read(context.Context, string) (server.Reader, error)          { re
 func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, error) {
 	return protocol.SessionPage{}, nil
 }
+func (s stub) Session(ctx context.Context, id string) (protocol.Session, error) {
+	rd, err := s.Read(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Session(), nil
+}
 func (s stub) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
 	rd, err := s.Read(ctx, id)
 	if err != nil {

@@ -102,11 +102,11 @@ func (c stored) Inputs(context.Context) ([]protocol.QueuedInput, error) {
 // Blob returns the attachment that a blob part of an input of the session
 // names by key. Any other key fails with ErrBlobNotFound.
 func (c stored) Blob(ctx context.Context, key string) (server.Blob, error) {
-	mediaType, ok := c.log.Attachment(key)
-	return attachment(ctx, c.st, c.id, key, mediaType, ok)
+	mediaType, size, ok := c.log.Attachment(key)
+	return attachment(ctx, c.st, c.id, key, mediaType, size, ok)
 }
 
-func attachment(ctx context.Context, st Store, id, key, mediaType string, ok bool) (server.Blob, error) {
+func attachment(ctx context.Context, st Store, id, key, mediaType string, size int, ok bool) (server.Blob, error) {
 	if !ok {
 		return server.Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
 	}
@@ -114,7 +114,16 @@ func attachment(ctx context.Context, st Store, id, key, mediaType string, ok boo
 	if errors.Is(err, fs.ErrNotExist) {
 		return server.Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
 	}
-	return server.Blob{MediaType: mediaType, Body: body}, err
+	return server.Blob{MediaType: mediaType, Size: size, Body: body}, err
+}
+
+// Session returns the state of session id.
+func (r reads) Session(ctx context.Context, id string) (protocol.Session, error) {
+	rd, err := r.Read(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Session(), nil
 }
 
 // Inputs returns the queued inputs of session id.
@@ -148,11 +157,12 @@ func (l live) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) {
 
 func (l live) Blob(ctx context.Context, key string) (server.Blob, error) {
 	var mediaType string
+	var size int
 	var ok bool
-	if err := l.s.a.Read(ctx, func(s *eventlog.State) { mediaType, ok = s.Attachment(key) }); err != nil {
+	if err := l.s.a.Read(ctx, func(s *eventlog.State) { mediaType, size, ok = s.Attachment(key) }); err != nil {
 		return server.Blob{}, err
 	}
-	return attachment(ctx, l.s.r.store, l.s.id, key, mediaType, ok)
+	return attachment(ctx, l.s.r.store, l.s.id, key, mediaType, size, ok)
 }
 
 func (l live) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {

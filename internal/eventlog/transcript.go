@@ -129,15 +129,15 @@ func (s *State) QueuedInputs() []protocol.QueuedInput {
 	return out
 }
 
-// Attachment returns the media type of the blob part that an input.admitted
-// record of the session names by key.
-func (s *State) Attachment(key string) (mediaType string, ok bool) {
+// Attachment returns the media type and the recorded size of the blob part that
+// an input.admitted record of the session names by key.
+func (s *State) Attachment(key string) (mediaType string, size int, ok bool) {
 	for _, in := range s.inputs {
 		for _, p := range in.event.Parts {
 			if p.Type == PartBlob && p.BlobKey == key {
-				return p.MediaType, true
+				return p.MediaType, p.Bytes, true
 			}
 		}
 	}
-	return "", false
+	return "", 0, false
 }

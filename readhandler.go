@@ -36,7 +36,23 @@ func (s storeReads) Read(ctx context.Context, id string) (server.Reader, error) 
 	if err := checkName("session", id); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	return s.open(ctx, id)
+	v, err := OpenView(ctx, s.st, id)
+	if err != nil {
+		return nil, err
+	}
+	return stored{View: v}, nil
+}
+
+// Session returns the session with the IDs of the queued inputs of the log and then those of the queue.
+func (s storeReads) Session(ctx context.Context, id string) (protocol.Session, error) {
+	if err := checkName("session", id); err != nil {
+		return protocol.Session{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
+	}
+	rd, err := s.open(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Session(), nil
 }
 
 func (s storeReads) open(ctx context.Context, id string) (queued, error) {
