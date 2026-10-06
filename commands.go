@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/internal/session"
@@ -215,7 +216,11 @@ func (s *Session) prompt(in protocol.Input, name string) (*plan, protocol.Input,
 	if strings.TrimSpace(expanded) == "" {
 		return nil, in, fmt.Errorf("%w: prompt command expanded to empty text", ErrInvalidRequest)
 	}
-	in.Parts, in.Source = []protocol.Part{{Type: protocol.PartText, Text: expanded}}, "command"
+	label, err := admit.Provenance(in.SourceID, in.Parts[0].Text)
+	if err != nil {
+		return nil, in, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
+	}
+	in.Parts, in.Source, in.SourceLabel = []protocol.Part{{Type: protocol.PartText, Text: expanded}}, "command", label
 	return nil, in, nil
 }
 

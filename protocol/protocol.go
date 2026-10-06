@@ -182,6 +182,9 @@ type Input struct {
 	Parts    []Part `json:"parts"`
 	Delivery string `json:"delivery,omitempty"`
 	Source   string `json:"source,omitempty"`
+	// SourceID names the instance of Source, at most 128 printable ASCII bytes. SourceLabel is a name for a reader, valid UTF-8, cut at 256 bytes.
+	SourceID    string `json:"source_id,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
 	// ExpectedTurnID makes a steer input fail unless that turn is running.
 	ExpectedTurnID string `json:"expected_turn_id,omitempty"`
 }

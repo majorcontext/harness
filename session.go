@@ -69,6 +69,9 @@ func detach(s protocol.Session) protocol.Session {
 // admission. A typed slash command records command.recorded instead of an
 // input, and the receipt carries its status; see docs/architecture.md.
 func (s *Session) Submit(ctx context.Context, in protocol.Input) (protocol.Admitted, error) {
+	if _, err := admit.Provenance(in.SourceID, in.SourceLabel); err != nil {
+		return protocol.Admitted{}, fmt.Errorf("%w: input %s: %w", ErrInvalidRequest, in.ID, err)
+	}
 	if in.Source == protocol.SourceTyped && in.ID != "" && len(in.Parts) == 1 && in.Parts[0].Type == protocol.PartText {
 		p, next, err := s.resolve(in)
 		if err != nil {

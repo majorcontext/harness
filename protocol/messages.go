@@ -33,6 +33,21 @@ type Message struct {
 	Parts []MessagePart `json:"parts"`
 	// ParentCallID names the call that started the subagent of the message.
 	ParentCallID string `json:"parent_call_id,omitempty"`
+	// Source, SourceID, and SourceLabel are the provenance of the input that started a turn with this user message.
+	Source      string `json:"source,omitempty"`
+	SourceID    string `json:"source_id,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
+	// OperatorBatch holds one entry for each input that a user message of steer inputs joined, in the order that the message numbers them.
+	OperatorBatch []OperatorBatchEntry `json:"operator_batch,omitempty"`
+}
+
+// OperatorBatchEntry is one input that joined a running turn, with its provenance.
+type OperatorBatchEntry struct {
+	ID          string `json:"id"`
+	Text        string `json:"text"`
+	Source      string `json:"source"`
+	SourceID    string `json:"source_id,omitempty"`
+	SourceLabel string `json:"source_label,omitempty"`
 }
 
 // MessageCommand is the newest record of a typed slash command.

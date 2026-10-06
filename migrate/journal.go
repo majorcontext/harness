@@ -94,7 +94,7 @@ func readJournal(dir, id string, model message.ModelRef) (old, error) {
 			parts = append(parts, attachment(b, o.blobs))
 		}
 		o.tail = append(o.tail, eventlog.InputAdmitted{InputID: cmp.Or(p.MessageID, fmt.Sprintf("queued_%d", p.ID)),
-			Delivery: eventlog.DeliveryQueue, Source: cmp.Or(string(p.Source), "user"), Parts: parts})
+			Delivery: eventlog.DeliveryQueue, Source: cmp.Or(string(p.Source), "user"), SourceID: p.SourceID, SourceLabel: p.SourceLabel, Parts: parts})
 	}
 	return o, nil
 }

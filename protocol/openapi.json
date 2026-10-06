@@ -435,6 +435,12 @@
           "source": {
             "type": "string"
           },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
           "expected_turn_id": {
             "type": "string"
           }
@@ -516,6 +522,21 @@
           },
           "parent_call_id": {
             "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "operator_batch": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorBatchEntry"
+            },
+            "type": "array"
           }
         },
         "type": "object",
@@ -652,6 +673,31 @@
           "id",
           "provider",
           "context_window"
+        ]
+      },
+      "OperatorBatchEntry": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "source"
         ]
       },
       "Part": {

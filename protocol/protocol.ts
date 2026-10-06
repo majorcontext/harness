@@ -130,6 +130,8 @@ export interface Input {
   parts: Part[];
   delivery?: string;
   source?: string;
+  source_id?: string;
+  source_label?: string;
   expected_turn_id?: string;
 }
 
@@ -157,6 +159,10 @@ export interface Message {
   role: string;
   parts: MessagePart[];
   parent_call_id?: string;
+  source?: string;
+  source_id?: string;
+  source_label?: string;
+  operator_batch?: OperatorBatchEntry[];
 }
 
 export interface MessageCommand {
@@ -197,6 +203,14 @@ export interface Model {
   id: string;
   provider: string;
   context_window: number;
+}
+
+export interface OperatorBatchEntry {
+  id: string;
+  text: string;
+  source: string;
+  source_id?: string;
+  source_label?: string;
 }
 
 export interface Part {

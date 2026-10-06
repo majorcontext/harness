@@ -102,10 +102,12 @@ type SettingsChanged struct {
 
 // InputAdmitted queues an input.
 type InputAdmitted struct {
-	InputID  string   `json:"input_id"`
-	Delivery Delivery `json:"delivery"`
-	Source   string   `json:"source"`
-	Parts    []Part   `json:"parts"`
+	InputID     string   `json:"input_id"`
+	Delivery    Delivery `json:"delivery"`
+	Source      string   `json:"source"`
+	SourceID    string   `json:"source_id,omitempty"`
+	SourceLabel string   `json:"source_label,omitempty"`
+	Parts       []Part   `json:"parts"`
 }
 
 // InputPromoted moves a queued steer input into the running turn.

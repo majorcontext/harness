@@ -15,6 +15,7 @@ import (
 	_ "image/png"  // register the PNG decoder for image.DecodeConfig
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	_ "golang.org/x/image/webp" // register the WebP decoder for image.DecodeConfig
 
@@ -25,6 +26,13 @@ import (
 // MaxAttachmentBytes bounds one attachment. A PDF past the request ceiling
 // of a provider would fail every turn, and nothing can repair a document.
 const MaxAttachmentBytes = 20 << 20
+
+// MaxSourceIDBytes and MaxSourceLabelBytes bound the provenance fields of an
+// input. The log keeps both, and a reader gets them with every message.
+const (
+	MaxSourceIDBytes    = 128
+	MaxSourceLabelBytes = 256
+)
 
 // Blob is the bytes of an attachment, to store under Key before the record
 // that names it.
@@ -46,7 +54,7 @@ var attachmentTypes = map[string]func(mediaType string, data []byte) error{
 // Input returns the record of in and the blobs of its attachments. Its error
 // names the part that is not valid.
 func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
-	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source}
+	ev := eventlog.InputAdmitted{InputID: in.ID, Delivery: eventlog.Delivery(in.Delivery), Source: in.Source, SourceID: in.SourceID}
 	if ev.Delivery == "" {
 		ev.Delivery = eventlog.DeliverySteer
 	}
@@ -61,6 +69,11 @@ func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
 	case ev.Delivery != eventlog.DeliveryQueue && ev.Delivery != eventlog.DeliverySteer:
 		return ev, nil, fmt.Errorf("input %s has delivery %q", in.ID, in.Delivery)
 	}
+	label, err := Provenance(in.SourceID, in.SourceLabel)
+	if err != nil {
+		return ev, nil, fmt.Errorf("input %s: %w", in.ID, err)
+	}
+	ev.SourceLabel = label
 	var blobs []Blob
 	for _, p := range in.Parts {
 		switch p.Type {
@@ -78,6 +91,55 @@ func Input(in protocol.Input) (eventlog.InputAdmitted, []Blob, error) {
 		}
 	}
 	return ev, blobs, nil
+}
+
+// Provenance checks the source_id and source_label of an input and returns the
+// label that the log holds. Every route checks them before it resolves a typed
+// command, so a bad one leaves no trace of either kind.
+func Provenance(sourceID, sourceLabel string) (string, error) {
+	if err := checkSourceID(sourceID); err != nil {
+		return "", err
+	}
+	return cleanSourceLabel(sourceLabel)
+}
+
+// checkSourceID rejects an ID that is long or holds a byte outside printable
+// ASCII. It never cuts or strips one: an ID that was changed names nothing.
+func checkSourceID(id string) error {
+	if len(id) > MaxSourceIDBytes {
+		return fmt.Errorf("source_id exceeds %d bytes", MaxSourceIDBytes)
+	}
+	for i := range len(id) {
+		if c := id[i]; c < 0x20 || c > 0x7e {
+			return fmt.Errorf("source_id must be printable ASCII")
+		}
+	}
+	return nil
+}
+
+// cleanSourceLabel rejects a label that is not valid UTF-8, cuts it at
+// MaxSourceLabelBytes on a rune boundary, and drops the control, bidi
+// override, and zero-width characters that could change how a console shows
+// the text around it.
+func cleanSourceLabel(label string) (string, error) {
+	if !utf8.ValidString(label) {
+		return "", fmt.Errorf("source_label is not valid UTF-8")
+	}
+	if len(label) > MaxSourceLabelBytes {
+		label = label[:MaxSourceLabelBytes]
+		for !utf8.ValidString(label) {
+			label = label[:len(label)-1]
+		}
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r <= 0x1f, r >= 0x7f && r <= 0x9f,
+			r == 0x200e, r == 0x200f, r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069,
+			r >= 0x200b && r <= 0x200d, r == 0xfeff:
+			return -1
+		}
+		return r
+	}, label), nil
 }
 
 // attachment checks one blob part and returns the part that the log holds.
