@@ -111,6 +111,7 @@ export interface GoalView {
   max_turns?: number;
   state: string;
   turns: number;
+  pauses?: number;
   reason?: string;
   retry_at?: string;
 }

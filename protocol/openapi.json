@@ -365,6 +365,9 @@
           "turns": {
             "type": "integer"
           },
+          "pauses": {
+            "type": "integer"
+          },
           "reason": {
             "type": "string"
           },

@@ -158,12 +158,13 @@ type Goal struct {
 }
 
 // GoalView is the goal of a session. State is active, paused, achieved,
-// failed, exhausted, or cleared. Turns counts the judged turns. A paused
-// goal runs again at RetryAt, or at the next input.
+// failed, exhausted, or cleared. Turns counts the judged turns; Pauses, the
+// pauses since the last verdict. A paused goal runs again at RetryAt or at an input.
 type GoalView struct {
 	Goal
 	State   string    `json:"state"`
 	Turns   int       `json:"turns"`
+	Pauses  int       `json:"pauses,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
 	RetryAt time.Time `json:"retry_at,omitzero"`
 }

@@ -52,7 +52,7 @@ func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	}
 	if g, ok := s.Goal(); ok {
 		v.Goal = &protocol.GoalView{Goal: protocol.Goal{Condition: g.Condition, MaxTurns: g.MaxTurns},
-			State: string(g.State), Turns: g.Turns, Reason: g.Reason, RetryAt: g.RetryAt}
+			State: string(g.State), Turns: g.Turns, Pauses: g.Pauses, Reason: g.Reason, RetryAt: g.RetryAt}
 	}
 	return v
 }
