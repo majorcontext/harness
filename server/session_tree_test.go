@@ -72,7 +72,9 @@ func multiProviderHarnessInDir(t *testing.T, dir string, model message.ModelRef,
 	}
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
-	return &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	h := &harness{t: t, dir: dir, token: "secret-run-token", srv: srv, ts: ts}
+	t.Cleanup(h.drainSessions)
+	return h
 }
 
 // waitForLineageStatus blocks until id's lineage.status, read over the
