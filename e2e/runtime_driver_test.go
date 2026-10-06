@@ -533,11 +533,11 @@ func (d *runtimeDriver) EndSession(t *testing.T, id string) callResult {
 // call, and records the status of the last call.
 func (d *runtimeDriver) DeleteQueued(t *testing.T, id string) callResult {
 	t.Helper()
-	var queued []string
+	var queued []protocol.QueuedInput
 	d.expect(t, http.StatusOK, http.MethodGet, "/sessions/"+id+"/inputs", nil, &queued)
 	res := callResult{Status: http.StatusNoContent}
 	for _, in := range queued {
-		res = d.call(t, http.MethodDelete, "/sessions/"+id+"/inputs/"+in, nil)
+		res = d.call(t, http.MethodDelete, "/sessions/"+id+"/inputs/"+in.ID, nil)
 	}
 	return res
 }

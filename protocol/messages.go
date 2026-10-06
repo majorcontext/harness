@@ -13,7 +13,7 @@ const (
 	MessagePartEngineContext = "engine_context"
 )
 
-// MessagePart is one part of a Message. A tool result holds its text in Content; a blob part names its media type and size.
+// MessagePart is one part of a Message. A tool result holds its text in Content; a blob part names its media type, size, and Key, which GET /sessions/{id}/blobs/{key} reads.
 type MessagePart struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -24,6 +24,7 @@ type MessagePart struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	MediaType string          `json:"media_type,omitempty"`
 	Bytes     int             `json:"bytes,omitempty"`
+	Key       string          `json:"key,omitempty"`
 }
 
 // Message is one message of the conversation that the model reads. Its ID derives from the log.

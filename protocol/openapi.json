@@ -649,6 +649,9 @@
           },
           "bytes": {
             "type": "integer"
+          },
+          "key": {
+            "type": "string"
           }
         },
         "type": "object",
@@ -863,6 +866,38 @@
           "name",
           "ready",
           "log"
+        ]
+      },
+      "QueuedInput": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/MessagePart"
+            },
+            "type": "array"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "parts",
+          "delivery",
+          "source"
         ]
       },
       "Resolution": {
@@ -1686,6 +1721,52 @@
         }
       }
     },
+    "/sessions/{id}/blobs/{key}": {
+      "get": {
+        "operationId": "getBlob",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        }
+      }
+    },
     "/sessions/{id}/compact": {
       "post": {
         "operationId": "compactSession",
@@ -1885,7 +1966,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/QueuedInput"
                   },
                   "type": "array"
                 }

@@ -197,6 +197,7 @@ export interface MessagePart {
   is_error?: boolean;
   media_type?: string;
   bytes?: number;
+  key?: string;
 }
 
 export interface Model {
@@ -257,6 +258,15 @@ export interface ProcessStatus {
   log: string;
   note?: string;
   ports?: number[];
+}
+
+export interface QueuedInput {
+  id: string;
+  parts: MessagePart[];
+  delivery: string;
+  source: string;
+  source_id?: string;
+  source_label?: string;
 }
 
 export interface Resolution {
@@ -370,7 +380,7 @@ export interface Operations {
   updateSession: { query: Record<string, never>; request: SettingsPatch; response: Session };
   submitInput: { query: Record<string, never>; request: Input; response: Admitted };
   repeatInput: { query: Record<string, never>; request: Input; response: Admitted };
-  listInputs: { query: Record<string, never>; request: void; response: string[] };
+  listInputs: { query: Record<string, never>; request: void; response: QueuedInput[] };
   withdrawInput: { query: Record<string, never>; request: void; response: void };
   interruptSession: { query: Record<string, never>; request: Interrupt; response: void };
   compactSession: { query: Record<string, never>; request: Compact; response: Compacted };
@@ -380,6 +390,7 @@ export interface Operations {
   clearGoal: { query: Record<string, never>; request: void; response: void };
   listEvents: { query: { after?: string; limit?: number }; request: void; response: EventPage };
   listMessages: { query: { before?: number; limit?: number }; request: void; response: MessagePage };
+  getBlob: { query: Record<string, never>; request: void; response: Blob };
   listModels: { query: Record<string, never>; request: void; response: Model[] };
   listCommands: { query: Record<string, never>; request: void; response: Commands };
   listProcesses: { query: Record<string, never>; request: void; response: ProcessInfo[] };
@@ -410,6 +421,7 @@ export const routes = [
   { name: "listEvents", method: "GET", path: "/sessions/{id}/events", status: 200, stream: false },
   { name: "streamEvents", method: "GET", path: "/sessions/{id}/events", status: 200, stream: true },
   { name: "listMessages", method: "GET", path: "/sessions/{id}/messages", status: 200, stream: false },
+  { name: "getBlob", method: "GET", path: "/sessions/{id}/blobs/{key}", status: 200, stream: false },
   { name: "listModels", method: "GET", path: "/models", status: 200, stream: false },
   { name: "listCommands", method: "GET", path: "/commands", status: 200, stream: false },
   { name: "listProcesses", method: "GET", path: "/processes", status: 200, stream: false },

@@ -44,7 +44,11 @@ func typescript(comps map[string]*jsonschema.Schema) []byte {
 		if r.Stream {
 			continue
 		}
-		fmt.Fprintf(&b, "  %s: { query: %s; request: %s; response: %s };\n", r.Name, tsQuery(r), tsBody(r.Request), tsBody(r.Response))
+		response := tsBody(r.Response)
+		if r.Raw {
+			response = "Blob"
+		}
+		fmt.Fprintf(&b, "  %s: { query: %s; request: %s; response: %s };\n", r.Name, tsQuery(r), tsBody(r.Request), response)
 	}
 	b.WriteString("}\n\nexport const routes = [\n")
 	for _, r := range server.Table {

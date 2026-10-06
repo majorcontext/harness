@@ -3,6 +3,7 @@ package harness
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -10,7 +11,39 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/session"
+	"github.com/majorcontext/harness/protocol"
 )
+
+// listSessions returns a page of sessions in creation order. describe reads
+// the view of one session; a session that does not replay is skipped with a
+// WARN log line.
+func listSessions(ctx context.Context, st Store, b *births, q protocol.ListSessions, describe func(context.Context, string) (protocol.Session, error)) (protocol.SessionPage, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	ids, err := sessionsByCreation(ctx, st, b, q.After, limit)
+	if err != nil {
+		return protocol.SessionPage{}, err
+	}
+	page := protocol.SessionPage{Sessions: []protocol.Session{}}
+	for _, id := range ids {
+		v, err := describe(ctx, id)
+		if errors.Is(err, session.ErrUnreplayable) {
+			slog.Warn("harness: session skipped in the list", "session", id, "err", err)
+			continue
+		}
+		if err != nil {
+			return protocol.SessionPage{}, err
+		}
+		page.Sessions = append(page.Sessions, v)
+	}
+	if len(ids) == limit {
+		page.Next = ids[len(ids)-1]
+	}
+	return page, nil
+}
 
 // births remembers the creation time of each session, which never changes, so
 // a page reads the first record only of a session that it has not seen.
@@ -36,7 +69,7 @@ func (b *births) keep(at map[string]time.Time) {
 // creation order. The creation time of a session is the time of its first
 // record; equal times order by ID. A session whose first record does not
 // decode is skipped with a WARN log line. An after that names no session fails.
-func (r *Runtime) sessionsByCreation(ctx context.Context, after string, limit int) ([]string, error) {
+func sessionsByCreation(ctx context.Context, st Store, b *births, after string, limit int) ([]string, error) {
 	type created struct {
 		id string
 		at time.Time
@@ -45,14 +78,14 @@ func (r *Runtime) sessionsByCreation(ctx context.Context, after string, limit in
 	seen := map[string]time.Time{}
 	cursor := ""
 	for {
-		ids, err := r.store.Sessions(ctx, cursor, 1000)
+		ids, err := st.Sessions(ctx, cursor, 1000)
 		if err != nil {
 			return nil, err
 		}
 		for _, id := range ids {
-			at, ok := r.births.get(id)
+			at, ok := b.get(id)
 			if !ok {
-				recs, err := r.store.Read(ctx, id, 0, 1)
+				recs, err := st.Read(ctx, id, 0, 1)
 				if err != nil {
 					return nil, err
 				}
@@ -74,7 +107,7 @@ func (r *Runtime) sessionsByCreation(ctx context.Context, after string, limit in
 		}
 		cursor = ids[len(ids)-1]
 	}
-	r.births.keep(seen)
+	b.keep(seen)
 	slices.SortFunc(all, func(a, b created) int {
 		return cmp.Or(a.at.Compare(b.at), cmp.Compare(a.id, b.id))
 	})

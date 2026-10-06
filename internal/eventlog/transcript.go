@@ -58,6 +58,9 @@ func messageParts(parts []Part) []protocol.MessagePart {
 	for _, p := range parts {
 		mp := protocol.MessagePart{Type: p.Type, Text: p.Text, CallID: p.CallID, Name: p.Name, Arguments: slices.Clone(p.Arguments),
 			IsError: p.IsError, MediaType: p.MediaType, Bytes: p.Bytes}
+		if p.Type == PartBlob {
+			mp.Key = p.BlobKey
+		}
 		if p.Type == PartToolResult {
 			mp.Text, mp.Name, mp.Content = "", "", cmp.Or(p.Text, noToolOutput)
 		}
@@ -114,4 +117,27 @@ func (s *State) commandsIn(window []protocol.Message, fromFirst bool) []protocol
 			Text: r.Text, Result: r.Result, ResultTruncated: r.ResultTruncated, AfterMessageID: c.after, Seq: c.seq})
 	}
 	return out
+}
+
+// QueuedInputs returns the queued inputs as a reader sees them, oldest first.
+func (s *State) QueuedInputs() []protocol.QueuedInput {
+	out := make([]protocol.QueuedInput, len(s.queue))
+	for i, in := range s.queue {
+		out[i] = protocol.QueuedInput{ID: in.InputID, Parts: messageParts(in.Parts), Delivery: string(in.Delivery),
+			Source: in.Source, SourceID: in.SourceID, SourceLabel: in.SourceLabel}
+	}
+	return out
+}
+
+// Attachment returns the media type of the blob part that an input.admitted
+// record of the session names by key.
+func (s *State) Attachment(key string) (mediaType string, ok bool) {
+	for _, in := range s.inputs {
+		for _, p := range in.event.Parts {
+			if p.Type == PartBlob && p.BlobKey == key {
+				return p.MediaType, true
+			}
+		}
+	}
+	return "", false
 }

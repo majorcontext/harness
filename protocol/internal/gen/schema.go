@@ -263,6 +263,10 @@ func addSuccess(responses map[string]any, r server.Route) {
 		ok = map[string]any{"description": "Success"}
 		responses[key] = ok
 	}
+	if r.Raw {
+		ok["content"] = map[string]any{"*/*": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}
+		return
+	}
 	if r.Response == nil {
 		return
 	}

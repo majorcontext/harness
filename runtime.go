@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"slices"
@@ -35,6 +34,8 @@ var (
 	ErrInvalidRequest = errors.New("harness: invalid request")
 	// ErrSessionNotFound reports a session with no log.
 	ErrSessionNotFound = session.ErrNotFound
+	// ErrBlobNotFound reports a blob key that no blob part of an input of the session names, or whose bytes the Store lacks.
+	ErrBlobNotFound = errors.New("harness: blob not found")
 	// ErrSessionExists reports a Create with the ID of an existing session.
 	ErrSessionExists = session.ErrExists
 	// ErrSessionNotOwned reports a session that this runtime does not run.
@@ -461,30 +462,7 @@ func (r *Runtime) End(ctx context.Context, id string) error {
 // List returns a page of sessions in creation order. The After of a page is
 // the ID of the last session of the page before it.
 func (r *Runtime) List(ctx context.Context, q protocol.ListSessions) (protocol.SessionPage, error) {
-	limit := q.Limit
-	if limit <= 0 {
-		limit = 100
-	}
-	ids, err := r.sessionsByCreation(ctx, q.After, limit)
-	if err != nil {
-		return protocol.SessionPage{}, err
-	}
-	page := protocol.SessionPage{Sessions: []protocol.Session{}}
-	for _, id := range ids {
-		v, err := r.describe(ctx, id)
-		if errors.Is(err, session.ErrUnreplayable) {
-			slog.Warn("harness: session skipped in the list", "session", id, "err", err)
-			continue
-		}
-		if err != nil {
-			return protocol.SessionPage{}, err
-		}
-		page.Sessions = append(page.Sessions, v)
-	}
-	if len(ids) == limit {
-		page.Next = ids[len(ids)-1]
-	}
-	return page, nil
+	return listSessions(ctx, r.store, &r.births, q, r.describe)
 }
 
 // pluginInfo returns the state of each plugin, or nil without plugins.
