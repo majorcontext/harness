@@ -239,7 +239,8 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 // ReadEvents yields the stored events of session id after seq after, through
 // the head that it reads first. It neither owns the session nor replays the
 // log, so it equals View.Events only for a log that replays. A session with no
-// log yields nothing; a record that does not decode yields its error and ends.
+// log yields nothing; a record that does not decode, or whose envelope seq
+// differs from its store seq, yields its error and ends.
 func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error] {
 	return func(yield func(protocol.Event, error) bool) {
 		head, err := st.Head(ctx, id)

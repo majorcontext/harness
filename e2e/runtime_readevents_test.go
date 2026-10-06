@@ -36,39 +36,7 @@ func TestReadEventsEqualsAViewOfTheSameLog(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			st := newStore(t)
-			fake := harnesstest.NewChat(t,
-				harnesstest.Step{Name: "bash", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: ftArgs("command", "echo hi")}}}},
-				harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}},
-				harnesstest.Step{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "second"}})
-			r, err := harness.New(harness.Options{Store: st, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
-				Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			s, err := r.Create(ctx, protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			for turn, text := range []string{"go", "two"} {
-				if _, err := s.Submit(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
-					t.Fatal(err)
-				}
-				ended := 0
-				for e, err := range s.Events(ctx, 0) {
-					if err != nil {
-						t.Fatal(err)
-					}
-					if e.Kind == "turn.ended" {
-						ended++
-					}
-					if ended == turn+1 {
-						break
-					}
-				}
-			}
-			if err := r.Close(ctx); err != nil {
-				t.Fatal(err)
-			}
+			writeTwoTurnLog(t, ctx, st)
 
 			head, err := st.Head(ctx, "s1")
 			if err != nil {
@@ -103,6 +71,64 @@ func TestReadEventsEqualsAViewOfTheSameLog(t *testing.T) {
 			if after, err := st.Head(ctx, "unknown"); err != nil || after != 0 {
 				t.Errorf("head of the unknown session after ReadEvents = %d, %v, want 0", after, err)
 			}
+
+			checkSkewedRecordFails(t, ctx, st)
 		})
+	}
+}
+
+func checkSkewedRecordFails(t *testing.T, ctx context.Context, st harness.Store) {
+	t.Helper()
+	bad := `{"v":1,"seq":7,"t":"2026-01-01T00:00:00Z","k":"owner.acquired","d":{"epoch":1,"owner":"x"}}`
+	if err := st.Append(ctx, "skewed", 0, []byte(bad)); err != nil {
+		t.Fatal(err)
+	}
+	yielded, failed := 0, false
+	for _, err := range harness.ReadEvents(ctx, st, "skewed", 0) {
+		if err != nil {
+			failed = true
+			continue
+		}
+		yielded++
+	}
+	if yielded != 0 || !failed {
+		t.Errorf("ReadEvents of a record whose envelope seq differs from its store seq yielded %d events, failed = %v, want an error and no event", yielded, failed)
+	}
+}
+
+func writeTwoTurnLog(t *testing.T, ctx context.Context, st harness.Store) {
+	t.Helper()
+	fake := harnesstest.NewChat(t,
+		harnesstest.Step{Name: "bash", Match: harnesstest.LastUserText("go"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{ID: "call_1", Name: "bash", Input: ftArgs("command", "echo hi")}}}},
+		harnesstest.Step{Name: "after", Match: harnesstest.LastToolResult("bash"), Reply: harnesstest.Reply{Text: "ok"}},
+		harnesstest.Step{Name: "two", Match: harnesstest.LastUserText("two"), Reply: harnesstest.Reply{Text: "second"}})
+	r, err := harness.New(harness.Options{Store: st, WorkDir: t.TempDir(), Config: config.Config{ContextWindowTokens: 100000,
+		Providers: map[string]config.Provider{"bifrost": {Type: config.TypeOpenAICompat, BaseURL: fake.URL(), APIKeyEnv: "HARNESS_E2E_KEY"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := r.Create(ctx, protocol.CreateSession{ID: "s1", Model: "bifrost/gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for turn, text := range []string{"go", "two"} {
+		if _, err := s.Submit(ctx, protocol.Input{ID: text, Parts: []protocol.Part{{Type: protocol.PartText, Text: text}}}); err != nil {
+			t.Fatal(err)
+		}
+		ended := 0
+		for e, err := range s.Events(ctx, 0) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if e.Kind == "turn.ended" {
+				ended++
+			}
+			if ended == turn+1 {
+				break
+			}
+		}
+	}
+	if err := r.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }
