@@ -310,3 +310,67 @@ func TestRecordedUsageFoldsIntoTheState(t *testing.T) {
 		t.Errorf("CompactionCount = %d, want 1", got)
 	}
 }
+
+func TestBackendStateFoldsIntoAChain(t *testing.T) {
+	head := json.RawMessage(`{"session_id":"S"}`)
+	newer := json.RawMessage(`{"session_id":"S","turn":"t1"}`)
+	for _, tc := range []struct {
+		name   string
+		events []Event
+		want   BackendChain
+		err    string
+	}{
+		{"a chunk starts a chain", []Event{BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"}},
+			BackendChain{Head: head, Chunks: []string{"cc-3-0"}, Entries: 2, Sum: "s2"}, ""},
+		{"a chunk continues the chain", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-1", Entries: 3, Sum: "s3"}},
+			BackendChain{Head: head, Chunks: []string{"cc-3-0", "cc-3-1"}, Entries: 3, Sum: "s3"}, ""},
+		{"a record with no chunk replaces the head", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: newer, Entries: 2, Sum: "s2"}},
+			BackendChain{Head: newer, Chunks: []string{"cc-3-0"}, Entries: 2, Sum: "s2"}, ""},
+		{"a restart drops the chunks of the chain", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: newer, Chunk: "cc-5-0", Restart: true, Entries: 1, Sum: "t1"}},
+			BackendChain{Head: newer, Chunks: []string{"cc-5-0"}, Entries: 1, Sum: "t1"}, ""},
+		{"a restart with no chunk empties the chain", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: newer, Restart: true}},
+			BackendChain{Head: newer}, ""},
+		{"a one-blob record is a chain of its blob", []Event{BackendState{Backend: "cc", BlobKey: "cc-3"}}, BackendChain{Legacy: "cc-3"}, ""},
+		{"a restart replaces a one-blob record", []Event{
+			BackendState{Backend: "cc", BlobKey: "cc-3"},
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-5-0", Restart: true, Entries: 1, Sum: "s1"}},
+			BackendChain{Head: head, Chunks: []string{"cc-5-0"}, Entries: 1, Sum: "s1"}, ""},
+		{"a chunk cannot continue a one-blob record", []Event{
+			BackendState{Backend: "cc", BlobKey: "cc-3"},
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-5-0", Entries: 1, Sum: "s1"}}, BackendChain{}, "continues a one-blob state"},
+		{"a one-blob record has no chain fields", []Event{BackendState{Backend: "cc", BlobKey: "cc-3", Head: head}}, BackendChain{}, "one blob"},
+		{"a chain record has a head", []Event{BackendState{Backend: "cc", Chunk: "cc-3-0", Restart: true, Entries: 1}}, BackendChain{}, "needs a head"},
+		{"a chunk adds entries", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-1", Entries: 2, Sum: "s2"}}, BackendChain{}, "entries"},
+		{"a record with no chunk keeps the entries", []Event{
+			BackendState{Backend: "cc", Head: head, Chunk: "cc-3-0", Restart: true, Entries: 2, Sum: "s2"},
+			BackendState{Backend: "cc", Head: head, Entries: 3, Sum: "s3"}}, BackendChain{}, "entries"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var s State
+			for _, e := range with(base, tc.events...) {
+				if err := s.Apply(record(t, s.Head()+1, e)); err != nil {
+					if tc.err == "" || !strings.Contains(err.Error(), tc.err) {
+						t.Fatalf("apply %s = %v, want %q", e.Kind(), err, tc.err)
+					}
+					return
+				}
+			}
+			if tc.err != "" {
+				t.Fatalf("no error, want %q", tc.err)
+			}
+			if got, _ := s.BackendState("cc"); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("chain = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

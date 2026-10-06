@@ -138,7 +138,12 @@ func TestReplayMatchesLiveApply(t *testing.T) {
 	if got := live.Settings(); got != (Settings{Effort: "high", ServiceTier: "flex"}) {
 		t.Fatalf("Settings = %+v", got)
 	}
-	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || live.BackendState("codex") != "b1" || len(live.Retained()) != 1 {
-		t.Fatalf("Usage = %+v, Context = %+v, BackendState = %q, Retained = %+v", live.Usage(), live.Context(), live.BackendState("codex"), live.Retained())
+	if live.Usage().InputTokens != 10 || live.Context().Tokens != 900 || backendBlob(live) != "b1" || len(live.Retained()) != 1 {
+		t.Fatalf("Usage = %+v, Context = %+v, BackendState = %q, Retained = %+v", live.Usage(), live.Context(), backendBlob(live), live.Retained())
 	}
+}
+
+func backendBlob(s State) string {
+	c, _ := s.BackendState("codex")
+	return c.Legacy
 }

@@ -278,10 +278,18 @@ type SubscriptionOverage struct {
 	ResetsAt int64  `json:"resets_at"`
 }
 
-// BackendState points at the newest state blob of a backend.
+// BackendState records the private state of a backend: Head, which each
+// record replaces, and a chain of immutable Chunk blobs of its entries. Restart
+// starts a new chain. Entries and Sum describe the chain after the record.
+// BlobKey alone is the older form: one blob of the head line and the entries.
 type BackendState struct {
-	Backend string `json:"backend"`
-	BlobKey string `json:"blob_key"`
+	Backend string          `json:"backend"`
+	BlobKey string          `json:"blob_key,omitempty"`
+	Head    json.RawMessage `json:"head,omitempty"`
+	Chunk   string          `json:"chunk,omitempty"`
+	Restart bool            `json:"restart,omitempty"`
+	Entries int             `json:"entries,omitempty"`
+	Sum     string          `json:"sum,omitempty"`
 }
 
 // ToolResultRetained points at the blob that holds a tool result that the

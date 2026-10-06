@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +22,6 @@ type run struct {
 	mcpConfig string
 	dir       string
 	mirror    external.Mirror
-	saved     []byte
 	allowed   map[string]bool
 	bridged   map[string]bool
 	names     map[string]string
@@ -45,6 +43,9 @@ type run struct {
 	// reports it with the usage of its call.
 	limits  *eventlog.SubscriptionUsage
 	started bool
+	// early holds the mirror frames that arrive before the init frame names
+	// the session that they belong to.
+	early   []envelope
 	sendErr error
 	tailErr error
 	result  *envelope
@@ -184,17 +185,13 @@ func (r *run) outcome(err, exit error) error {
 	return err
 }
 
-// save saves the external session when it changed since the last save.
+// save saves the external session. The saved state keeps only what changed.
 func (r *run) save() error {
-	blob, err := r.mirror.Encode()
-	if err != nil || bytes.Equal(blob, r.saved) {
+	head, err := r.mirror.Head()
+	if err != nil {
 		return err
 	}
-	if err := r.out.SaveState(stateKey, blob); err != nil {
-		return err
-	}
-	r.saved = blob
-	return nil
+	return r.out.SaveState(stateKey, turn.Snapshot{Head: head, Entries: r.mirror.Entries})
 }
 
 // tail maps a frame that the CLI writes after its result or after the turn
@@ -274,6 +271,10 @@ func (r *run) addMirror(env envelope) error {
 		return nil
 	}
 	r.taken = true
+	if !r.started {
+		r.early = append(r.early, env)
+		return nil
+	}
 	return r.mirror.Add(r.dir, env.FilePath, env.Entries)
 }
 
@@ -286,8 +287,18 @@ func (r *run) system(env envelope) error {
 			return err
 		}
 		r.taken = r.taken || r.dir == ""
-		if env.SessionID != "" && env.SessionID != r.mirror.SessionID {
-			r.mirror.SessionID = env.SessionID
+		reset := env.SessionID != "" && env.SessionID != r.mirror.SessionID
+		if reset {
+			r.mirror.SessionID, r.mirror.Path, r.mirror.Entries = env.SessionID, "", nil
+		}
+		early := r.early
+		r.early = nil
+		for _, e := range early {
+			if err := r.mirror.Add(r.dir, e.FilePath, e.Entries); err != nil {
+				return err
+			}
+		}
+		if reset {
 			return r.save()
 		}
 	case "compact_boundary":

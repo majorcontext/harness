@@ -98,7 +98,7 @@
     "backend_states.a": {
       "status": 200,
       "body": {
-        "blobs": 2
+        "blobs": 3
       }
     },
     "claude_mirror.a": {

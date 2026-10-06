@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/majorcontext/harness"
@@ -250,8 +251,9 @@ var journalCases = []struct {
 		}
 	}},
 	{"delegated session resumes its CLI session and denies its parked question", "ses_000000000000000f", func(t *testing.T, s *eventlog.State, st harness.Store) {
-		key := s.BackendState(claudeCodeState)
-		m, err := external.LoadMirror([]byte(readBlob(t, st, "ses_000000000000000f", key)))
+		chain, _ := s.BackendState(claudeCodeState)
+		head, _, _ := strings.Cut(readBlob(t, st, "ses_000000000000000f", chain.Legacy), "\n")
+		m, err := external.MirrorOf(json.RawMessage(head), nil)
 		if err != nil || m.SessionID != "cli-123" || m.Parked != "toolu_q1" {
 			t.Errorf("mirror %+v %v", m, err)
 		}

@@ -149,7 +149,9 @@ type Actor struct {
 
 	state *eventlog.State
 	// fenced is the seq of the owner.acquired record of this actor.
-	fenced    uint64
+	fenced uint64
+	// chunks counts the state chunks that this ownership wrote for each backend.
+	chunks    map[string]int
 	run       *running
 	releasing []func(struct{}, error)
 	stopped   bool

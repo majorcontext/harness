@@ -84,12 +84,17 @@ func (f *fake) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.R
 func (f *fake) loadAndSave(out turn.Sink) string {
 	prior, err := out.State("fake")
 	if err == nil {
-		err = out.SaveState("fake", []byte(f.save))
+		var v json.RawMessage
+		if v, err = json.Marshal(f.save); err == nil {
+			err = out.SaveState("fake", turn.Snapshot{Head: v, Entries: []json.RawMessage{v}})
+		}
 	}
 	if err != nil {
 		return err.Error()
 	}
-	return string(prior)
+	var head string
+	_ = json.Unmarshal(prior.Head, &head)
+	return head
 }
 
 // report reports m, then an answer to each steer input that it takes.

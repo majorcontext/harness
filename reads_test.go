@@ -3,6 +3,7 @@ package harness_test
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -382,10 +383,10 @@ func wantBlobs(t *testing.T, h http.Handler, label string) {
 	for _, e := range events.Events {
 		if e.Kind == "backend.state" {
 			var d struct {
-				BlobKey string `json:"blob_key"`
+				Chunk string `json:"chunk"`
 			}
 			_ = json.Unmarshal(e.Data, &d)
-			state = d.BlobKey
+			state = cmp.Or(d.Chunk, state)
 		}
 	}
 	if state == "" {

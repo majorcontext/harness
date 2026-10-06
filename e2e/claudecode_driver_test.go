@@ -627,7 +627,7 @@ func (a claudeWorkDir) run(t *testing.T, r *run) {
 	r.record(t, "claude_work_dir", a.as, callResult{Status: http.StatusOK, Body: out})
 }
 
-// claudeBackendStates records the number of distinct blobs that the
+// claudeBackendStates records the number of distinct chunk blobs that the
 // backend.state events of the session name.
 type claudeBackendStates struct{ as string }
 
@@ -640,9 +640,11 @@ func (d *runtimeDriver) backendStateKeys(t *testing.T, id string) callResult {
 	keys := map[string]bool{}
 	for _, ev := range d.events(t, id) {
 		if ev.Kind == "backend.state" {
-			keys[decodeEvent[struct {
-				BlobKey string `json:"blob_key"`
-			}](t, ev).BlobKey] = true
+			if key := decodeEvent[struct {
+				Chunk string `json:"chunk"`
+			}](t, ev).Chunk; key != "" {
+				keys[key] = true
+			}
 		}
 	}
 	return callResult{Status: http.StatusOK, Body: map[string]any{"blobs": len(keys)}}

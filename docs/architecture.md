@@ -263,7 +263,7 @@ var ErrConflict = errors.New("harness: append conflict")
 
 ```
 <root>/<session>/log.jsonl          source of truth; line N holds seq N
-<root>/<session>/blobs/<key>        backend state; retained tool results from phase 3; prompt attachments
+<root>/<session>/blobs/<key>        backend state chunks; retained tool results from phase 3; prompt attachments
 ```
 
 The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
@@ -301,7 +301,7 @@ The box-global `events.jsonl`, `<id>.index.json`, and `<id>.snap` are deleted.
 | `child.settled` | `child_id`, `outcome` (`done`, `failed`, `canceled`), `result_ref` |
 | `command.recorded` | `input_id`, `line`, `name`, `args?`, `status`, `text?`, `result?`, `result_truncated?` |
 | `context.measured` | `tokens`, `window`, `source`, `usage?`, `subscription_usage?`, `cost_usd?` |
-| `backend.state` | `backend`, `blob_key` |
+| `backend.state` | `backend`, `head`, `chunk?`, `restart?`, `entries?`, `sum?`; the older form is `backend` and `blob_key` alone |
 | `tool_result.retained` | `handle`, `tool`, `blob_key`, `bytes`, `lines`, `head` |
 
 Ephemeral frames go to subscribers and never to the store: `item.started`, `item.delta`, `status`. Each has `ephemeral: true` and the last durable seq, and an item frame carries its `item_id`, so a client can place it.
@@ -582,7 +582,7 @@ A typed slash command answers the same way. Its receipt adds `command`, the newe
 - Only SSE frames for durable records carry `id: <seq>`. `Last-Event-ID` and `after=` resume exactly, across processes.
 - A live frame (`item.started`, `item.delta`, `status`) sets `protocol.Event.Ephemeral` and is never stored. Its `seq` is the last durable seq when it was sent.
 - A subscriber reads durable records from the log, so a slow subscriber never misses one. A full subscriber drops ephemeral frames, so the deltas of an item can have holes; its `item.completed` holds the whole item. An error ends a stream with an `error` frame.
-- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: `backend.state`, `tool_result.retained`, and the blob parts of `input.admitted`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
+- Replication is `Options.Sync`: each `protocol.SyncBatch{epoch, session, from_seq, records, blobs}` is a remote append. The blobs of a batch are those that its records name: the chunk of a `backend.state` record, the blob of `tool_result.retained`, and the blob parts of `input.admitted`. The receiver rejects an older epoch. A batch with `from_seq` at its head plus one is appended. A batch whose records are all at or below its head is a retry: identical bytes are acknowledged as a duplicate, and different bytes are rejected. Any other `from_seq` is a seq mismatch. Every reply is a `protocol.SyncAck{head}`, including a seq mismatch, so the sender resends from `head+1` out of its own Store; that also heals a receiver that missed records before a crash. `harness.ApplySync` implements these receiver rules over any `Store`.
 - The sender reacts to a rejection by its error. `ErrStaleEpoch` (an older epoch), `ErrConflict` (different bytes at a seq), and `ErrSyncRejected` (a request that a resend cannot fix) are final: a resend cannot change them. Each one stops the session with no further append and releases its `Ownership`. `Session.Release` then returns the rejection, and `ErrSessionNotOwned` after a stale epoch. Any other error resends the same batch with backoff (250 ms, doubling to 30 s) until it succeeds or the ownership ends. On start, a box harness replicates every session that its `Store` holds, not only the sessions that it opens, so the logs that the cutover conversion wrote reach the receiver through this path. A receiver diverges when two owners at one epoch write one store, or when a box disk is restored behind the receiver.
 - A box harness replicates through the config keys `owner_epoch` and `sync {url, token_file}`, which `boxinit` writes from `BootConfig`. With `sync` set and no `Options.Sync`, `New` builds a sender that posts each `protocol.SyncBatch` as JSON to `sync.url` with `Authorization: Bearer <token>`, and reads the token from `token_file` for each post. Boxes serves `POST /v1/boxes/{id}/sync`; a `200` carries the `protocol.SyncAck{head}`, also on a seq mismatch. The reply follows one contract, and every status that it lists as final stops the session: `200` with `SyncAck{head}`; `409` with `stale_epoch` is `ErrStaleEpoch`; `409` with `sync_conflict` is `ErrConflict`, so the sender stops replicating that session and logs the rejection; `400` with `invalid_request` is `ErrInvalidRequest`; `413` with `too_large` when the body is over 32 MiB; `401` and `403`. The `400`, `413`, `401`, and `403` rejections also match `ErrSyncRejected`. A `5xx` and a transport error resend the batch with backoff. The sender keeps the JSON body of a batch under 32 MiB by cutting it after fewer records than the page of 512, with the blobs of the records that it keeps, so a `413` happens only when one record with its blobs is over the bound, and it is final. `New` refuses `owner_epoch` beside `Options.Owner`, and `sync` beside `Options.Sync`.
 - `Runtime.CatchUp` is the start of a box harness: for each session in the `Store` that this runtime does not run, it takes a grant of the `Owner`, sends the log in pages from seq 1 (each acknowledgement moves the next page to the head that the receiver reports), and releases the grant. It appends nothing, so an idle session gets no `owner.acquired`. `Open` of a session that `CatchUp` holds ends the catch-up of that session first, and the opened session replicates itself. `Close` ends `CatchUp` with `ErrDraining`, and the next start catches up again. A stale epoch ends it with `ErrStaleEpoch`. If that `Open` fails, `CatchUp` replicates the session itself. Two calls at once run one after the other. A session that fails for another reason, such as a log that cannot be read, is skipped, and `CatchUp` returns each failure with its session ID after the other sessions finish. The phase 4 switch makes `cmd/harness` call it at start, beside the opens of the sessions that have work to resume.
@@ -674,14 +674,19 @@ type Capabilities struct {
 	Tools         []string // built-in tools of a delegated backend
 }
 
+type Snapshot struct {
+	Head    json.RawMessage   // small; each save replaces it
+	Entries []json.RawMessage // grow by appending
+}
+
 type Sink interface {
 	Item(m eventlog.Message) error
 	Delta(itemID string, d Delta)
 	Alive()
 	Telemetry(t Telemetry)
 	Steer() ([]eventlog.Message, error)
-	State(backend string) ([]byte, error)
-	SaveState(backend string, blob []byte) error
+	State(backend string) (Snapshot, error)  // the saved state, or the zero Snapshot
+	SaveState(backend string, s Snapshot) error // stores only the entries that the saved ones lack
 	Compacted(summary string) error
 	Ask(callID, kind string, payload json.RawMessage) error // open a request on an open tool call
 	Resolution(id string) (eventlog.RequestResolved, bool)  // the record that closed it
@@ -712,7 +717,7 @@ func Run(ctx, step context.Context, b Backend, req Request, src Source, to Turn,
 - A backend marks a failed model call with a `turn` sentinel. `ErrRetryable` (a 429, a 5xx, a truncated stream, a response with no output) calls the model again after a wait of 1 s that doubles up to 8 s, with jitter, up to `prompt_retries` times, when the call has recorded no item. A backend with `OwnsLoop` runs its call once, as the engine ran every delegated turn, and its retryable error keeps its class, so a goal still pauses on it. `ErrContextOverflow` compacts (see Compaction). `ErrExhausted` ends the turn with cause `provider_exhausted`. Any other error fails the turn.
 - The stall watchdog ends a model call that reports nothing for `stream_idle_timeout_s` (default 300, as Codex). A delta, an item, and `Sink.Alive` each reset it. `modelapi` calls `Alive` for each provider event with no delta, such as a keep-alive or a tool argument that still streams. The stall is retryable. A compaction summary has the same watchdog and no retry. A negative value turns it off. A backend with `OwnsLoop` has no watchdog: its own tools can run silently for a long time.
 - `Result.MaxTokens` reports a response that the output cap cut off. The loop runs none of its tool calls and records an error result for each. `modelapi` records a tool call with arguments that are not valid JSON, such as arguments that the cap cut, with no arguments. The next call ends with a continuation message that the log never holds, in `<harness-engine-context>` tags, so the model reads it as engine text. After `max_tokens_continuations` (default 3) continuations, the next cut-off response fails the turn; 0 or less ends the turn at the first one. The count never resets in a turn.
-- Private backend state is one `backend.state` event plus a blob, one blob key for each owner. The Claude Code transcript mirror is that blob. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
+- Private backend state is a chain of `backend.state` records (Andy, 2026-10-06, Sync finality). Each record carries the head, the small fields that each save replaces. The entries, the Claude Code transcript mirror, are appended as chunk blobs, never one growing blob, so no `SyncBatch` nears 32 MiB. A save writes only the entries that the chain lacks, as chunks of whole entries of at most 4 MiB (an entry over 4 MiB is a chunk of its own), and each chunk has its own record. A chunk key holds the backend, the fence of the owner, and an index that no chunk of that owner used before, so a fenced owner never overwrites the chunk of another owner and no key is written twice. A record says whether its chunk continues the current chain or starts a new one (`restart`). A save whose entries do not extend the chain, such as the entries of a new CLI session, starts a new chain. `Apply` keeps the chunk keys of the current chain, and `Sink.State` reads them in order. A record of the older form, with `blob_key` and no chain fields, reads as a chain of one blob that holds the head line and the entries; the next save starts a new chain. The runtime has none of the eight `claudeCode*` fields of the engine or their record kinds.
 - Model metadata comes from `modelmeta`. An unknown model fails with `model_unavailable` at create and at a settings change.
 - `Telemetry` carries the usage of one model call, its context reading, the subscription snapshot that the provider reported with it, and its cost.
 
@@ -740,7 +745,7 @@ Delegating a turn to another agent harness is permanent. Claude Code is built; p
 | Steer | A `steer` input reaches the running turn | stdin | `turn/steer` with `expectedTurnId` |
 | Interrupt | Stops the external turn; reports `interrupted` | SIGINT | `turn/interrupt` |
 | Requests | Questions and approvals become `request.opened`; the resolution goes back | `AskUserQuestion` defer | `requestApproval`, `requestUserInput` |
-| State | External session id and transcript mirror are one `backend.state` blob | `--session-mirror` | rollout file |
+| State | External session id and transcript mirror are `backend.state` records with appended entry chunks | `--session-mirror` | rollout file |
 | Tools | Harness tools reach the external harness through a harness-hosted MCP endpoint; `AllowedTools` applies. An unrestricted turn gives `Config.MCPServers` to the external harness beside that endpoint | `--mcp-config` with `--strict-mcp-config` | MCP config |
 | Context | The external harness compacts; harness logs `compaction.applied` with `by_backend` | `/compact` | native |
 | Telemetry | Usage, cost, and context window arrive through `Sink.Telemetry` | `result` event | `thread/tokenUsage/updated` |
