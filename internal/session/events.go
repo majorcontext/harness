@@ -148,6 +148,9 @@ func event(r eventlog.Record) (protocol.Event, error) {
 	if err != nil {
 		return protocol.Event{}, err
 	}
+	if env.Seq != r.Seq {
+		return protocol.Event{}, fmt.Errorf("%w: record %d holds envelope seq %d", eventlog.ErrSeq, r.Seq, env.Seq)
+	}
 	data, err := json.Marshal(env.Event)
 	return protocol.Event{Seq: env.Seq, Time: env.Time, Kind: env.Event.Kind(), Data: data}, err
 }

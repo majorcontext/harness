@@ -90,7 +90,7 @@ These are the compatibility surface.
 
 | Package | Owns | Consumer |
 | --- | --- | --- |
-| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `View`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
+| `harness` | `Runtime`, `Options`, `Session`, `OpenView`, `ReadEvents`, `View`, `Store`, `Owner`, `Ownership`, `Sync`, `ApplySync`, `Tool`, `DiskStore`, `MemStore`, sentinel errors | meta home chat, boxes control plane, CLI |
 | `harness/config` | `Config`, `Defaults`, `Validate`, `ApplyEnv`; imports only the standard library | boxinit `BootConfig` |
 | `harness/protocol` | Data types shared by the Go API and HTTP, including `SyncBatch`; source of the generated OpenAPI and TS | boxes server, web, boxctl |
 | `harness/storetest` | Conformance suite for a `Store` | boxes `pgstore` |
@@ -168,6 +168,9 @@ func (v *View) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Even
 func (v *View) Messages(ctx context.Context, before uint64, limit int) (protocol.MessagePage, error)
 // Resumable reports whether Open would resume something: a running or suspended turn, a queued input, an active or paused goal, a command that no owner finished, or a child that has not settled.
 func (v *View) Resumable() bool
+
+// ReadEvents yields the stored events after `after`, through the head it reads first; it neither owns the session nor replays the log.
+func ReadEvents(ctx context.Context, st Store, id string, after uint64) iter.Seq2[protocol.Event, error]
 
 // Sync replicates each session's records elsewhere, in seq order.
 type Sync interface {
@@ -253,7 +256,7 @@ var ErrConflict = errors.New("harness: append conflict")
 - Compare-and-append alone does not fence a lease handoff: an old owner's in-flight append can still hold the current `expectedSeq`. The new owner therefore appends `owner.acquired` before it replays or runs (see Ownership). Any later append from the old owner conflicts. A shared store may also check its lease in the same transaction as the append.
 - `Append` is durable on return. `DiskStore` writes the records of one `Append` with one `fsync`. `MemStore` is for tests.
 - `DiskStore` takes an exclusive `flock` of the session log for each append, from its first byte to its `fsync` or rollback, and compares `expectedSeq` with the head read under that lock. Each `Head` takes a shared `flock`, so it never reads bytes that a failed append cuts again, and scans again the bytes that another instance appended since the last scan, which a change of the file size shows. A wait for a lock ends with the context of the call. Where `flock` does not exist, only the instance fences its appends.
-- There are no checkpoints. `Open` and `OpenView` replay the whole log. `List` reads the view of a session that this runtime runs, and replays the log of any other session. Add a checkpoint only when a measurement shows that replay costs too much.
+- There are no checkpoints. `Open` and `OpenView` replay the whole log. `ReadEvents` reads the events after a seq without a replay. `List` reads the view of a session that this runtime runs, and replays the log of any other session. Add a checkpoint only when a measurement shows that replay costs too much.
 - `storetest.Run(t, newStore)` is the conformance suite. Every `Store` runs it. `storetest.RunInstances(t, newStorage)` checks the fence across instances: for each case, `newStorage` returns an opener of new storage, and each call of the opener returns one more instance over that storage. A `Store` that is fenced against another process runs it too.
 
 ### Layout on disk
@@ -545,7 +548,7 @@ GET    /health
 
 There is no version prefix: harness and its clients change together.
 
-A route that only reads a session, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, and the page form of `GET /sessions/{id}/events`, answers from the view of a session that this runtime runs, and replays the log of any other session as `OpenView` does. It never opens a session, so it appends nothing and starts no turn. `Runtime.Open` runs for each route that changes a session and for the SSE stream of its events, which tails them as they happen. `DELETE /sessions/{id}` calls `Runtime.End`, which opens nothing: it stops a session that this runtime runs when no run is on, and stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`. A session that this runtime does not run stays closed, also when a descendant of it settles, and the child settles when the session opens, with no report input for a turn that ended with cause `ended`. A child that a direct interrupt stops still reports `canceled` to its parent; a tree interrupt keeps its rule of no report input. It answers 204 for any session that has a log, and 404 for an ID with no log. A restart opens no session by itself: the embedder opens each session that has work to resume (`View.Resumable`), `cmd/harness` when it starts and boxes when it wakes the box. A session that has no work stays closed and gets no `owner.acquired`; a log that does not replay is skipped and logged.
+A route that only reads a session, `GET /sessions/{id}`, `GET /sessions/{id}/inputs`, `GET /sessions/{id}/messages`, and the page form of `GET /sessions/{id}/events`, answers from the view of a session that this runtime runs, and replays the log of any other session as `OpenView` does. `ReadEvents` is the read-only form of the events page for an embedder with a `Store` and no runtime: it reads the events after a seq with no replay. It never opens a session, so it appends nothing and starts no turn. `Runtime.Open` runs for each route that changes a session and for the SSE stream of its events, which tails them as they happen. `DELETE /sessions/{id}` calls `Runtime.End`, which opens nothing: it stops a session that this runtime runs when no run is on, and stops the turn of each descendant that this runtime runs, as the tree interrupt does, and each of those turns ends with cause `ended`. A session that this runtime does not run stays closed, also when a descendant of it settles, and the child settles when the session opens, with no report input for a turn that ended with cause `ended`. A child that a direct interrupt stops still reports `canceled` to its parent; a tree interrupt keeps its rule of no report input. It answers 204 for any session that has a log, and 404 for an ID with no log. A restart opens no session by itself: the embedder opens each session that has work to resume (`View.Resumable`), `cmd/harness` when it starts and boxes when it wakes the box. A session that has no work stays closed and gets no `owner.acquired`; a log that does not replay is skipped and logged.
 
 `Runtime.Handler` serves every route above. A route that answers with more than one success status has one entry for each status in the route table: `POST /sessions/{id}/inputs` answers 201 for a new input and 200 for a repeat, with the same body, and `POST /sessions/{id}/requests/{request}` answers 202 with `{seq, status}` for an answer and 204 for a dismissal. `interrupt` takes `tree`. `GET /health` answers `protocol.Health`: `status`, `version`, `vcs_revision`, `vcs_time`, `session_sync` (`fsync` or `volume`), `started_at` (the start of the runtime, RFC 3339 UTC), and `capabilities` (`delta_row_identity`, which says that each `item.delta` frame names its item). The handler has no authentication; the embedder wraps it.
 
@@ -990,6 +993,7 @@ Boxes has its own re-architecture ("Boxes architecture") built on this one. The 
 | Open after a forced stop | the `crashed` cause | 2 |
 | `Models()` with no sessions | `New` does no I/O | 2 |
 | External lease that fences a stale epoch | `Ownership.Epoch`; `ErrStaleEpoch` stops the session and releases its `Ownership` | 2 |
+| Events after a cursor, without a replay | `ReadEvents` | 4 |
 
 Combined sequence:
 
