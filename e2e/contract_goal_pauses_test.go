@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
@@ -9,6 +10,33 @@ import (
 func TestContractGoalPauses(t *testing.T) {
 	skipShort(t)
 	onHosts(t, func(t *testing.T, h host) {
+		t.Run("a_goal_that_keeps_hitting_a_usage_limit_fails_after_six_pauses", func(t *testing.T) {
+			t.Parallel()
+			const budget = 6
+			steps := make([]harnesstest.Step, 0, budget+2)
+			for i := range budget + 1 {
+				steps = append(steps, harnesstest.Step{Name: fmt.Sprintf("wall%d", i+1), Match: notEvaluator, Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}})
+			}
+			steps = append(steps, agentStep("work", "done", false))
+			d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil, steps...)
+			id := d.Create(t)
+			d.SetGoal(t, id, "say done", 0, false)
+			d.WaitIdle(t, id)
+			for want := 1; want <= budget; want++ {
+				if g := d.view(t, id).Goal; g == nil || g.State != "paused" || g.Pauses != want {
+					t.Fatalf("goal after pause %d = %+v, want paused with %d pauses", want, g, want)
+				}
+				d.Submit(t, id, fmt.Sprintf("again %d", want))
+				d.WaitIdle(t, id)
+			}
+			g := d.view(t, id).Goal
+			if g == nil || g.State != "failed" || g.Reason != "retries_exhausted" {
+				t.Fatalf("goal after the seventh wall = %+v, want failed with reason retries_exhausted", g)
+			}
+			d.Submit(t, id, "continue")
+			d.WaitIdle(t, id)
+		})
+
 		t.Run("a_paused_goal_reports_its_pause_count_and_a_verdict_resets_it", func(t *testing.T) {
 			t.Parallel()
 			wall := func(name string) harnesstest.Step {
