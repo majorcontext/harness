@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+type provenance struct{ source, id, label string }
+
 type entry struct {
 	seq uint64
 	// id is the ID that a reader sees for the message.
@@ -17,8 +19,11 @@ type entry struct {
 	turn int
 	// promoted holds the inputs that one append promoted into a running turn
 	// as this message, and last the seq of the newest of them.
-	promoted [][]Part
+	promoted []InputAdmitted
 	last     uint64
+	// from is the provenance of the one input that started a turn with this
+	// message. A message of promoted inputs keeps each input's own.
+	from provenance
 	// pinned marks a segment that the model reads at this place in every
 	// later call and that the history readers never see.
 	pinned bool
@@ -61,21 +66,36 @@ func SteerMessage(inputs [][]Part) Message {
 	var b strings.Builder
 	var blobs []Part
 	for n, parts := range inputs {
-		var text []string
-		for _, p := range parts {
-			switch p.Type {
-			case PartText:
-				text = append(text, p.Text)
-			case PartBlob:
-				blobs = append(blobs, p)
-			}
-		}
 		if n == 0 {
 			b.WriteString("OPERATOR MESSAGES (address these, then continue the task):\n")
 		}
-		fmt.Fprintf(&b, "%d. %s\n", n+1, strings.Join(text, "\n"))
+		fmt.Fprintf(&b, "%d. %s\n", n+1, textOf(parts))
+		for _, p := range parts {
+			if p.Type == PartBlob {
+				blobs = append(blobs, p)
+			}
+		}
 	}
 	return Message{Role: RoleUser, Parts: append([]Part{{Type: PartText, Text: b.String()}}, blobs...)}
+}
+
+// textOf joins the text parts of an input, one to a line.
+func textOf(parts []Part) string {
+	var text []string
+	for _, p := range parts {
+		if p.Type == PartText {
+			text = append(text, p.Text)
+		}
+	}
+	return strings.Join(text, "\n")
+}
+
+func partsOf(inputs []InputAdmitted) [][]Part {
+	out := make([][]Part, len(inputs))
+	for i, in := range inputs {
+		out[i] = in.Parts
+	}
+	return out
 }
 
 func pinMessage(reports [][]Part) Message {
@@ -135,24 +155,26 @@ func (s *State) remember(env Envelope) {
 	switch e := env.Event.(type) {
 	case TurnStarted:
 		for _, id := range e.InputIDs {
-			s.say(env.Seq, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(s.inputs[id].event.Parts)})
+			in := s.inputs[id].event
+			s.say(env.Seq, "msg_"+id, Message{Role: RoleUser, Parts: withoutTaskReports(in.Parts)})
+			s.history[len(s.history)-1].from = provenance{in.Source, in.SourceID, in.SourceLabel}
 		}
 		s.settle(env.Seq)
 	case InputPromoted:
-		parts := s.inputs[e.InputID].event.Parts
-		pin := IsReport(parts)
+		in := s.inputs[e.InputID].event
+		pin := IsReport(in.Parts)
 		build := SteerMessage
 		if pin {
 			build = pinMessage
 		}
 		if n := len(s.history); n > 0 && s.history[n-1].promoted != nil && s.history[n-1].pinned == pin && s.history[n-1].last+1 == env.Seq {
 			h := s.history[n-1]
-			h.promoted, h.last = append(slices.Clip(h.promoted), parts), env.Seq
-			h.msg = build(h.promoted)
+			h.promoted, h.last = append(slices.Clip(h.promoted), in), env.Seq
+			h.msg = build(partsOf(h.promoted))
 			s.history = append(s.history[:n-1:n-1], h)
 			break
 		}
-		s.history = append(s.history, entry{seq: env.Seq, id: "msg_" + e.InputID, msg: build([][]Part{parts}), by: s.turnBy, turn: s.turnN, promoted: [][]Part{parts}, last: env.Seq, pinned: pin})
+		s.history = append(s.history, entry{seq: env.Seq, id: "msg_" + e.InputID, msg: build([][]Part{in.Parts}), by: s.turnBy, turn: s.turnN, promoted: []InputAdmitted{in}, last: env.Seq, pinned: pin})
 	case ItemCompleted:
 		s.say(env.Seq, "msg_"+e.ItemID, e.Message)
 	case CompactionApplied:

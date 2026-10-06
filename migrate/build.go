@@ -132,7 +132,7 @@ func (b *builder) message(i int, m message.Message, msg eventlog.Message) error 
 		}
 		b.turn = "turn_" + id
 		return b.add(at,
-			eventlog.InputAdmitted{InputID: id, Delivery: eventlog.DeliveryQueue, Source: cmp.Or(string(m.Source), m.Origin, "user"), Parts: msg.Parts},
+			eventlog.InputAdmitted{InputID: id, Delivery: eventlog.DeliveryQueue, Source: cmp.Or(string(m.Source), m.Origin, "user"), SourceID: m.SourceID, SourceLabel: m.SourceLabel, Parts: msg.Parts},
 			eventlog.TurnStarted{TurnID: b.turn, InputIDs: []string{id}})
 	}
 	if b.turn == "" {

@@ -383,3 +383,28 @@ func TestConvertMessageKeepsTheSubagentParent(t *testing.T) {
 		t.Errorf("converted ParentCallID = %q, want toolu_parent", got.ParentCallID)
 	}
 }
+
+func TestDirKeepsThePromptProvenanceOfAMessageAndAQueuedPrompt(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	journal := `{"type":"session","id":"ses_0000000000000016","model":"anthropic/claude-sonnet-4-5","created_at":"2026-09-08T07:00:00Z"}
+{"type":"message","message":{"id":"msg_s1","role":"user","source":"slack","source_id":"slack:C1:1.2","source_label":"Ann (Slack)","parts":[{"type":"text","text":"hi"}]}}
+{"type":"message","message":{"id":"msg_s2","role":"assistant","parts":[{"type":"text","text":"hello"}]}}
+{"type":"prompt.queued","created_at":"2026-09-08T07:01:00Z","prompt":{"id":1,"text":"later","message_id":"msg_s3","source":"schedule","source_id":"cron-7","source_label":"Nightly"}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "ses_0000000000000016.jsonl"), []byte(journal), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := harness.NewMemStore()
+	if results, err := Dir(ctx, dir, st, message.ModelRef{}); err != nil || len(Failed(results)) != 0 {
+		t.Fatalf("results %+v, %v", results, err)
+	}
+	s := replay(t, st, "ses_0000000000000016")
+	sent, _, _ := s.Input("msg_s1")
+	if sent.Source != "slack" || sent.SourceID != "slack:C1:1.2" || sent.SourceLabel != "Ann (Slack)" {
+		t.Errorf("the message converts to %+v", sent)
+	}
+	if q := s.Queue(); len(q) != 1 || q[0].Source != "schedule" || q[0].SourceID != "cron-7" || q[0].SourceLabel != "Nightly" {
+		t.Errorf("the queued prompt converts to %+v", q)
+	}
+}

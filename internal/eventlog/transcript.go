@@ -38,7 +38,17 @@ func (s *State) Transcript() []protocol.Message {
 		if e.pinned {
 			continue
 		}
-		out = append(out, protocol.Message{ID: e.id, Role: e.msg.Role, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts)})
+		out = append(out, protocol.Message{ID: e.id, Role: e.msg.Role, ParentCallID: e.msg.ParentCallID, Parts: messageParts(e.msg.Parts),
+			Source: e.from.source, SourceID: e.from.id, SourceLabel: e.from.label, OperatorBatch: operatorBatch(e.promoted)})
+	}
+	return out
+}
+
+// operatorBatch returns one entry for each input that a steer message joined.
+func operatorBatch(inputs []InputAdmitted) []protocol.OperatorBatchEntry {
+	var out []protocol.OperatorBatchEntry
+	for _, in := range inputs {
+		out = append(out, protocol.OperatorBatchEntry{ID: in.InputID, Text: textOf(in.Parts), Source: in.Source, SourceID: in.SourceID, SourceLabel: in.SourceLabel})
 	}
 	return out
 }
