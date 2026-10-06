@@ -33,11 +33,8 @@ const (
 	// a verdict doubles it, up to goalRetryMax.
 	goalRetry    = 30 * time.Second
 	goalRetryMax = 30 * time.Minute
-	// goalMaxPauses bounds the pauses between verdicts. The next retryable
-	// or usage-limit failure ends the goal as failed with reason
-	// goalRetriesExhausted.
-	goalMaxPauses = 6
-	// goalRetriesExhausted is the failed reason of a goal that used its pauses.
+	// goalMaxPauses bounds the pauses between verdicts.
+	goalMaxPauses        = 6
 	goalRetriesExhausted = "retries_exhausted"
 	// partBytes and transcriptBytes bound the transcript of the evaluator,
 	// which keeps the newest messages.
@@ -298,9 +295,8 @@ func transcript(h []eventlog.Message) string {
 }
 
 // goalStop returns the goal change after err ended a goal turn or its
-// evaluation: paused for a retryable error or a usage limit, else failed. A
-// goal that has paused goalMaxPauses times since its last verdict fails with
-// reason retries_exhausted instead of pausing again.
+// evaluation: paused for a retryable error or a usage limit, else failed. The
+// goalMaxPauses+1th pause fails with retries_exhausted.
 func (a *Actor) goalStop(err error) []eventlog.Event {
 	g, _ := a.state.Goal()
 	if g.State != eventlog.GoalActive {
