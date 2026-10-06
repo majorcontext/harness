@@ -33,9 +33,11 @@ const (
 	// a verdict doubles it, up to goalRetryMax.
 	goalRetry    = 30 * time.Second
 	goalRetryMax = 30 * time.Minute
-	// goalMaxPauses is the pauses a goal takes between verdicts. The next
-	// failure of that kind ends the goal as failed.
-	goalMaxPauses        = 6
+	// goalMaxPauses bounds the pauses between verdicts. The next retryable
+	// or usage-limit failure ends the goal as failed with reason
+	// goalRetriesExhausted.
+	goalMaxPauses = 6
+	// goalRetriesExhausted is the failed reason of a goal that used its pauses.
 	goalRetriesExhausted = "retries_exhausted"
 	// partBytes and transcriptBytes bound the transcript of the evaluator,
 	// which keeps the newest messages.

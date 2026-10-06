@@ -13,19 +13,36 @@ func TestContractGoalPauses(t *testing.T) {
 		t.Run("a_goal_that_keeps_hitting_a_usage_limit_fails_after_six_pauses", func(t *testing.T) {
 			t.Parallel()
 			const budget = 6
-			steps := make([]harnesstest.Step, 0, budget+2)
-			for i := range budget + 1 {
-				steps = append(steps, harnesstest.Step{Name: fmt.Sprintf("wall%d", i+1), Match: notEvaluator, Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}})
+			const before = 2
+			wall := func(name string) harnesstest.Step {
+				return harnesstest.Step{Name: name, Match: notEvaluator, Reply: harnesstest.Reply{HTTPStatus: 429, ErrorMessage: usageLimitMessage}}
 			}
-			steps = append(steps, agentStep("work", "done", false))
+			var steps []harnesstest.Step
+			for i := range before {
+				steps = append(steps, wall(fmt.Sprintf("early%d", i+1)))
+			}
+			steps = append(steps, agentStep("work", "partial", false), evaluatorStep("judge", "NOT MET: keep going", false))
+			for i := range budget + 1 {
+				steps = append(steps, wall(fmt.Sprintf("wall%d", i+1)))
+			}
+			steps = append(steps, agentStep("after", "done", false))
 			d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil, steps...)
 			id := d.Create(t)
 			d.SetGoal(t, id, "say done", 0, false)
 			d.WaitIdle(t, id)
-			for want := 1; want <= budget; want++ {
+			expectPaused := func(want int) {
+				t.Helper()
 				if g := d.view(t, id).Goal; g == nil || g.State != "paused" || g.Pauses != want {
-					t.Fatalf("goal after pause %d = %+v, want paused with %d pauses", want, g, want)
+					t.Fatalf("goal = %+v, want paused with %d pauses", g, want)
 				}
+			}
+			for want := 1; want <= before; want++ {
+				expectPaused(want)
+				d.Submit(t, id, fmt.Sprintf("early %d", want))
+				d.WaitIdle(t, id)
+			}
+			for want := 1; want <= budget; want++ {
+				expectPaused(want)
 				d.Submit(t, id, fmt.Sprintf("again %d", want))
 				d.WaitIdle(t, id)
 			}
