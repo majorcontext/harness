@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -181,8 +182,9 @@ func CatchUp(ctx context.Context, st Storage, sy Sync, epoch uint64, id string) 
 	return nil
 }
 
-// recordBlobs reads each blob that r points to. A later save under the same
-// key overwrites the blob, so the batch carries its newest content.
+// recordBlobs reads each blob that r points to. A state chunk never changes. A
+// later save under the key of a one-blob state overwrites that blob, so the
+// batch carries its newest content.
 func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][]byte, error) {
 	env, err := eventlog.Decode(r.Data)
 	if err != nil {
@@ -191,7 +193,9 @@ func recordBlobs(ctx context.Context, st Blobs, r eventlog.Record) (map[string][
 	var keys []string
 	switch e := env.Event.(type) {
 	case eventlog.BackendState:
-		keys = []string{e.BlobKey}
+		if key := cmp.Or(e.Chunk, e.BlobKey); key != "" {
+			keys = []string{key}
+		}
 	case eventlog.ToolResultRetained:
 		keys = []string{e.BlobKey}
 	case eventlog.InputAdmitted:

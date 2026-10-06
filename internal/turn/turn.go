@@ -110,6 +110,13 @@ type Telemetry struct {
 	CostUSD           *float64
 }
 
+// Snapshot is the private state of a backend between turns: a small Head that
+// each save replaces, and Entries that grow by appending.
+type Snapshot struct {
+	Head    json.RawMessage
+	Entries []json.RawMessage
+}
+
 // Sink receives the items of a running turn.
 type Sink interface {
 	// Item records one completed message. An error stops the turn.
@@ -124,10 +131,10 @@ type Sink interface {
 	// Steer takes the queued steer inputs into the turn. A backend with
 	// Steering calls it at each item boundary and must use each message.
 	Steer() ([]eventlog.Message, error)
-	// State returns the newest state blob that backend saved, or nil.
-	State(backend string) ([]byte, error)
-	// SaveState records blob as the newest state of backend.
-	SaveState(backend string, blob []byte) error
+	// State returns the saved state of backend, or a zero Snapshot.
+	State(backend string) (Snapshot, error)
+	// SaveState records s, and stores only the entries that it adds.
+	SaveState(backend string, s Snapshot) error
 	// Compacted records that the backend compacted its own context.
 	Compacted(summary string) error
 	// Ask opens a request on the open tool call callID; Resolution reads the record that closed it.

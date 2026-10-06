@@ -1,7 +1,6 @@
 package external
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -10,7 +9,8 @@ import (
 )
 
 // Mirror is the state of one external session: its ID and the transcript
-// that the external harness mirrors as it writes it. One state blob holds it.
+// that the external harness mirrors as it writes it. A backend state holds it:
+// the fields as its head and the entries as its entries.
 type Mirror struct {
 	SessionID string
 	// Turn is the harness turn whose input the external session holds.
@@ -29,35 +29,30 @@ type mirrorHead struct {
 	Path      string `json:"path,omitempty"`
 }
 
-// LoadMirror decodes a state blob. A nil blob is an empty Mirror.
-func LoadMirror(blob []byte) (Mirror, error) {
-	var m Mirror
-	if len(blob) == 0 {
-		return m, nil
-	}
-	sc := bufio.NewScanner(bytes.NewReader(blob))
-	sc.Buffer(make([]byte, 0, 64*1024), len(blob)+1)
-	for first := true; sc.Scan(); first = false {
-		if first {
-			var h mirrorHead
-			if err := json.Unmarshal(sc.Bytes(), &h); err != nil {
-				return Mirror{}, fmt.Errorf("external: mirror head: %w", err)
-			}
-			if h.Path != "" && !filepath.IsLocal(h.Path) {
-				return Mirror{}, fmt.Errorf("external: mirror path %q is not local", h.Path)
-			}
-			m.SessionID, m.Turn, m.Parked, m.Path = h.SessionID, h.Turn, h.Parked, h.Path
-			continue
+// MirrorOf returns the Mirror of a saved head and entries. An empty head is
+// an empty Mirror.
+func MirrorOf(head json.RawMessage, entries []json.RawMessage) (Mirror, error) {
+	var h mirrorHead
+	if len(head) > 0 {
+		if err := json.Unmarshal(head, &h); err != nil {
+			return Mirror{}, fmt.Errorf("external: mirror head: %w", err)
 		}
-		m.Entries = append(m.Entries, append(json.RawMessage(nil), sc.Bytes()...))
 	}
-	return m, sc.Err()
+	if h.Path != "" && !filepath.IsLocal(h.Path) {
+		return Mirror{}, fmt.Errorf("external: mirror path %q is not local", h.Path)
+	}
+	return Mirror{SessionID: h.SessionID, Turn: h.Turn, Parked: h.Parked, Path: h.Path, Entries: entries}, nil
 }
 
-// Encode returns the state blob: a head line, then one line per entry.
+// Head returns the fields of m other than its entries as a JSON object.
+func (m Mirror) Head() (json.RawMessage, error) {
+	return json.Marshal(mirrorHead{SessionID: m.SessionID, Turn: m.Turn, Parked: m.Parked, Path: m.Path})
+}
+
+// Encode returns the one-blob form of m: a head line, then one line per entry.
 func (m Mirror) Encode() ([]byte, error) {
 	var buf bytes.Buffer
-	head, err := json.Marshal(mirrorHead{SessionID: m.SessionID, Turn: m.Turn, Parked: m.Parked, Path: m.Path})
+	head, err := m.Head()
 	if err != nil {
 		return nil, err
 	}

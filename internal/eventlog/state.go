@@ -1,6 +1,7 @@
 package eventlog
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -208,7 +209,7 @@ type State struct {
 	compactedAt uint64
 	compacted   int
 	children    map[string]Outcome
-	backends    map[string]string
+	backends    map[string]BackendChain
 	retained    []ToolResultRetained
 	commands    map[string]command
 	history     []entry
@@ -382,8 +383,24 @@ func (s *State) Compaction() (CompactionApplied, bool) {
 	return s.compaction, s.compaction.ToSeq != 0
 }
 
-// BackendState returns the newest state blob key of backend, or "".
-func (s *State) BackendState(backend string) string { return s.backends[backend] }
+// BackendChain is the state of a backend that its backend.state records
+// fold into: the newest head and the chunk blobs of the current chain in
+// order. Legacy is the blob of a record of the older form, which holds the
+// head and the entries, and no chunk then.
+type BackendChain struct {
+	Head    json.RawMessage
+	Chunks  []string
+	Legacy  string
+	Entries int
+	Sum     string
+}
+
+// BackendState returns the state of backend and whether it saved any.
+func (s *State) BackendState(backend string) (BackendChain, bool) {
+	c, ok := s.backends[backend]
+	c.Chunks = slices.Clone(c.Chunks)
+	return c, ok
+}
 
 // Retained returns the retained tool results in the order of their records.
 func (s *State) Retained() []ToolResultRetained { return slices.Clone(s.retained) }

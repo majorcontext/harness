@@ -87,8 +87,8 @@ func (a *answer) Telemetry(t Telemetry) { a.usage = a.usage.Add(t.Usage) }
 func (*answer) Delta(string, Delta)                {}
 func (*answer) Alive()                             {}
 func (*answer) Steer() ([]eventlog.Message, error) { return nil, nil }
-func (*answer) State(string) ([]byte, error)       { return nil, nil }
-func (*answer) SaveState(string, []byte) error     { return nil }
+func (*answer) State(string) (Snapshot, error)     { return Snapshot{}, nil }
+func (*answer) SaveState(string, Snapshot) error   { return nil }
 func (*answer) Compacted(string) error             { return nil }
 
 func (*answer) Ask(string, string, json.RawMessage) error {

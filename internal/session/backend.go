@@ -9,43 +9,75 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/turn"
 )
 
-// State returns the newest state blob of backend, or nil when it saved none.
-// It reads the blob outside the actor.
-func (t *turnRun) State(backend string) ([]byte, error) {
+// State returns the state that backend saved, read in order from its chain
+// of chunks, or a zero Snapshot when it saved none. It reads the blobs
+// outside the actor.
+func (t *turnRun) State(backend string) (turn.Snapshot, error) {
 	a := t.a
-	key, err := call(context.Background(), a, func(reply func(string, error)) {
+	chain, err := call(context.Background(), a, func(reply func(eventlog.BackendChain, error)) {
 		if a.run != t.r {
-			reply("", ErrTurnMismatch)
+			reply(eventlog.BackendChain{}, ErrTurnMismatch)
 			return
 		}
-		reply(a.state.BackendState(backend), nil)
+		c, _ := a.state.BackendState(backend)
+		reply(c, nil)
 	})
-	if err != nil || key == "" {
-		return nil, err
-	}
-	rc, err := a.cfg.Store.GetBlob(a.cfg.Base, key)
 	if err != nil {
-		return nil, err
+		return turn.Snapshot{}, err
 	}
-	defer func() { _ = rc.Close() }()
-	return io.ReadAll(rc)
+	return snapshotOf(chain, func(key string) ([]byte, error) {
+		rc, err := a.cfg.Store.GetBlob(a.cfg.Base, key)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rc.Close() }()
+		return io.ReadAll(rc)
+	})
 }
 
-// SaveState writes blob under the key of this ownership, then appends
-// backend.state. A key per ownership keeps a fenced owner from overwriting
-// the blob of the next one, and keeps one blob per owner.
-func (t *turnRun) SaveState(backend string, blob []byte) error {
+type saveBase struct {
+	chain  eventlog.BackendChain
+	exists bool
+	next   int
+}
+
+// SaveState writes the entries of s that the chain of backend lacks as
+// chunk blobs, then appends one backend.state record for each chunk. A chunk
+// key holds the backend, the fence of this ownership, and an index that no
+// earlier chunk of this ownership used, so a fenced owner never overwrites a
+// chunk of another owner and no chunk is written twice.
+func (t *turnRun) SaveState(backend string, s turn.Snapshot) error {
 	a := t.a
-	key := fmt.Sprintf("%s-%d", backend, a.fenced)
-	if err := a.onRun(t.r, func() error { return nil }); err != nil {
+	base, err := call(context.Background(), a, func(reply func(saveBase, error)) {
+		if a.run != t.r {
+			reply(saveBase{}, ErrTurnMismatch)
+			return
+		}
+		c, ok := a.state.BackendState(backend)
+		reply(saveBase{c, ok, a.chunks[backend]}, nil)
+	})
+	if err != nil {
 		return err
 	}
-	if err := a.cfg.Store.PutBlob(a.cfg.Base, key, bytes.NewReader(blob)); err != nil {
+	plan, err := planSave(backend, a.fenced, base.next, base.chain, base.exists, s)
+	if err != nil || len(plan.events) == 0 {
 		return err
 	}
-	return a.onRun(t.r, func() error { return a.append(eventlog.BackendState{Backend: backend, BlobKey: key}) })
+	for _, b := range plan.blobs {
+		if err := a.cfg.Store.PutBlob(a.cfg.Base, b.key, bytes.NewReader(b.data)); err != nil {
+			return err
+		}
+	}
+	return a.onRun(t.r, func() error {
+		if a.chunks == nil {
+			a.chunks = map[string]int{}
+		}
+		a.chunks[backend] = base.next + len(plan.blobs)
+		return a.append(plan.events...)
+	})
 }
 
 // Compacted records a compaction by the backend of every record since the

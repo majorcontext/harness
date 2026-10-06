@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -116,9 +117,9 @@ func TestContractBlobs(t *testing.T) {
 			var state string
 			for _, ev := range d.events(t, id) {
 				if ev.Kind == "backend.state" {
-					state = decodeEvent[struct {
-						BlobKey string `json:"blob_key"`
-					}](t, ev).BlobKey
+					state = cmp.Or(decodeEvent[struct {
+						Chunk string `json:"chunk"`
+					}](t, ev).Chunk, state)
 				}
 			}
 			if state == "" {

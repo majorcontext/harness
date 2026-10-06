@@ -49,9 +49,9 @@ func (*recorder) Ask(string, string, json.RawMessage) error { return nil }
 func (*recorder) Resolution(string) (eventlog.RequestResolved, bool) {
 	return eventlog.RequestResolved{}, false
 }
-func (*recorder) State(string) ([]byte, error)   { return nil, nil }
-func (*recorder) SaveState(string, []byte) error { return nil }
-func (*recorder) Compacted(string) error         { return nil }
+func (*recorder) State(string) (turn.Snapshot, error)   { return turn.Snapshot{}, nil }
+func (*recorder) SaveState(string, turn.Snapshot) error { return nil }
+func (*recorder) Compacted(string) error                { return nil }
 func (r *recorder) Status(f protocol.StatusFrame) {
 	r.statuses = append(r.statuses, string(f.Status))
 	if f.Status == protocol.StatusRetrying {

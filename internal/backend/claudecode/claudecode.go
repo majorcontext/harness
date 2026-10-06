@@ -24,7 +24,7 @@ import (
 	"github.com/majorcontext/harness/message"
 )
 
-// stateKey names the state blob of the external session.
+// stateKey names the backend state of the external session.
 const stateKey = "claude-code"
 
 // continuation is the prompt of a run that continues a turn whose input the
@@ -87,39 +87,39 @@ func (b *Backend) Capabilities(string) turn.Capabilities {
 	return turn.Capabilities{OwnsLoop: true, OwnsContext: true, OwnsMCP: true, Steering: true, Tools: slices.Clone(builtins)}
 }
 
-// Run runs one turn of the CLI on the external session in the state blob. A
+// Run runs one turn of the CLI on the external session in the saved state. A
 // session that waits on a question first gets its resolution: an answer with
 // no input is this turn, and anything else is a denial in a run of its own.
 func (b *Backend) Run(ctx context.Context, req turn.Request, out turn.Sink) (turn.Result, error) {
-	blob, err := out.State(stateKey)
-	if err != nil {
-		return turn.Result{}, err
-	}
-	mirror, err := external.LoadMirror(blob)
+	mirror, err := loadMirror(out)
 	if err != nil || mirror.Parked == "" {
-		return b.once(ctx, req, out, blob, nil, err)
+		return b.once(ctx, req, out, mirror, nil, err)
 	}
 	res, only, err := resolve(req, out, mirror.Parked)
 	if err == nil && !only {
-		if _, err = b.once(ctx, req, out, blob, res, nil); err == nil {
-			blob, err = out.State(stateKey)
+		if _, err = b.once(ctx, req, out, mirror, res, nil); err == nil {
+			mirror, err = loadMirror(out)
 		}
 		res = nil
 	}
-	return b.once(ctx, req, out, blob, res, err)
+	return b.once(ctx, req, out, mirror, res, err)
+}
+
+func loadMirror(out turn.Sink) (external.Mirror, error) {
+	snap, err := out.State(stateKey)
+	if err != nil {
+		return external.Mirror{}, err
+	}
+	return external.MirrorOf(snap.Head, snap.Entries)
 }
 
 // once runs the CLI once. A failed earlier step is err. With res, the run
 // sends no prompt and answers the parked call.
-func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, blob []byte, res *resolution, err error) (turn.Result, error) {
+func (b *Backend) once(ctx context.Context, req turn.Request, out turn.Sink, mirror external.Mirror, res *resolution, err error) (turn.Result, error) {
 	if err != nil {
 		return turn.Result{}, err
 	}
-	mirror, err := external.LoadMirror(blob)
-	if err != nil {
-		return turn.Result{}, err
-	}
-	r := &run{out: out, turnID: req.TurnID, mirror: mirror, saved: blob, allowed: restriction(req), names: map[string]string{},
+	r := &run{out: out, turnID: req.TurnID, mirror: mirror, allowed: restriction(req), names: map[string]string{},
 		continues: b.resumes(mirror) && mirror.Turn == req.TurnID, resolution: res, questions: req.Questions || res != nil}
 	defer r.cleanup()
 	cmd, err := b.command(ctx, req, r)

@@ -62,8 +62,8 @@ const (
 	specClaudeGauge   = "A Claude Code turn reads its context gauge and its cost from the `result` frame, as the engine did"
 	specClaudeOnce    = "A failed Claude Code turn runs the CLI once and fails with the text of the `result` frame"
 	specHistoryBridge = "When another provider recorded a message after the newest message that this backend saw"
-	specBackendState  = "Private backend state is one `backend.state` event plus a blob"
-	specMirrorBlob    = "The Claude Code transcript mirror is that blob."
+	specBackendState  = "Private backend state is a chain of `backend.state` records"
+	specMirrorBlob    = "The entries, the Claude Code transcript mirror, are appended as chunk blobs"
 	specKeepOwned     = "A `keep_turns` below 1, or any `keep_turns` for a backend with `OwnsContext`, is `invalid_request`."
 
 	specErrorText    = "the actor masks and bounds each error text that it writes to the log"

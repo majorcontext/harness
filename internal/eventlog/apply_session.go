@@ -18,7 +18,7 @@ func (s *State) applyCreated(e SessionCreated, t time.Time) error {
 	s.inputs = map[string]input{}
 	s.turnIDs = map[string]bool{}
 	s.children = map[string]Outcome{}
-	s.backends = map[string]string{}
+	s.backends = map[string]BackendChain{}
 	return nil
 }
 
@@ -95,10 +95,34 @@ func (s *State) applyChildSettled(e ChildSettled) error {
 }
 
 func (s *State) applyBackendState(e BackendState) error {
-	if e.Backend == "" || e.BlobKey == "" {
-		return illegal("backend.state needs a backend and a blob key")
+	if e.Backend == "" {
+		return illegal("backend.state needs a backend")
 	}
-	s.backends[e.Backend] = e.BlobKey
+	if e.BlobKey != "" {
+		if e.Head != nil || e.Chunk != "" || e.Restart || e.Entries != 0 || e.Sum != "" {
+			return illegal("backend.state of one blob %s carries chain fields", e.BlobKey)
+		}
+		s.backends[e.Backend] = BackendChain{Legacy: e.BlobKey}
+		return nil
+	}
+	if len(e.Head) == 0 {
+		return illegal("backend.state of %s needs a head", e.Backend)
+	}
+	chain := s.backends[e.Backend]
+	switch {
+	case e.Restart:
+		chain = BackendChain{}
+	case chain.Legacy != "":
+		return illegal("backend.state of %s continues a one-blob state", e.Backend)
+	}
+	if want := chain.Entries; e.Chunk == "" && e.Entries != want || e.Chunk != "" && e.Entries <= want {
+		return illegal("backend.state of %s has %d entries after a chain of %d", e.Backend, e.Entries, want)
+	}
+	if e.Chunk != "" {
+		chain.Chunks = append(slices.Clip(chain.Chunks), e.Chunk)
+	}
+	chain.Head, chain.Entries, chain.Sum = e.Head, e.Entries, e.Sum
+	s.backends[e.Backend] = chain
 	return nil
 }
 

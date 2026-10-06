@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,7 +22,6 @@ type run struct {
 	mcpConfig string
 	dir       string
 	mirror    external.Mirror
-	saved     []byte
 	allowed   map[string]bool
 	bridged   map[string]bool
 	names     map[string]string
@@ -184,17 +182,13 @@ func (r *run) outcome(err, exit error) error {
 	return err
 }
 
-// save saves the external session when it changed since the last save.
+// save saves the external session. The saved state keeps only what changed.
 func (r *run) save() error {
-	blob, err := r.mirror.Encode()
-	if err != nil || bytes.Equal(blob, r.saved) {
+	head, err := r.mirror.Head()
+	if err != nil {
 		return err
 	}
-	if err := r.out.SaveState(stateKey, blob); err != nil {
-		return err
-	}
-	r.saved = blob
-	return nil
+	return r.out.SaveState(stateKey, turn.Snapshot{Head: head, Entries: r.mirror.Entries})
 }
 
 // tail maps a frame that the CLI writes after its result or after the turn
@@ -287,7 +281,7 @@ func (r *run) system(env envelope) error {
 		}
 		r.taken = r.taken || r.dir == ""
 		if env.SessionID != "" && env.SessionID != r.mirror.SessionID {
-			r.mirror.SessionID = env.SessionID
+			r.mirror.SessionID, r.mirror.Path, r.mirror.Entries = env.SessionID, "", nil
 			return r.save()
 		}
 	case "compact_boundary":
