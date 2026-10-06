@@ -2,7 +2,9 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"iter"
 	"net/http"
 
@@ -35,6 +37,7 @@ var codes = []server.Code{
 	{Err: ErrRequestNotPending, Code: protocol.CodeRequestNotPending},
 	{Err: ErrModelUnavailable, Code: protocol.CodeModelUnavailable},
 	{Err: ErrDraining, Code: protocol.CodeDraining},
+	{Err: ErrBlobNotFound, Code: protocol.CodeBlobNotFound},
 }
 
 // reads is the Runtime with the read route of the server.
@@ -75,20 +78,61 @@ func (r reads) Read(ctx context.Context, id string) (server.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cold{v, r.pluginInfo()}, nil
+	return stored{v, r.pluginInfo()}, nil
 }
 
-// cold is a session that this runtime does not run, as a server.Reader. The
-// log does not hold the plugins, so it names those of this runtime.
-type cold struct {
+// stored is a session that no runtime runs, as a server.Reader. The log does
+// not hold the plugins, so it names those of the runtime that serves it, if any.
+type stored struct {
 	*View
 	plugins []protocol.Plugin
 }
 
-func (c cold) Session() protocol.Session {
+func (c stored) Session() protocol.Session {
 	s := c.View.Session()
 	s.Plugins = c.plugins
 	return s
+}
+
+// Inputs returns the inputs that no turn has taken, oldest first, as of OpenView.
+func (c stored) Inputs(context.Context) ([]protocol.QueuedInput, error) {
+	return c.log.QueuedInputs(), nil
+}
+
+// Blob returns the attachment that a blob part of an input of the session
+// names by key. Any other key fails with ErrBlobNotFound.
+func (c stored) Blob(ctx context.Context, key string) (server.Blob, error) {
+	mediaType, size, ok := c.log.Attachment(key)
+	return attachment(ctx, c.st, c.id, key, mediaType, size, ok)
+}
+
+func attachment(ctx context.Context, st Store, id, key, mediaType string, size int, ok bool) (server.Blob, error) {
+	if !ok {
+		return server.Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
+	}
+	body, err := st.GetBlob(ctx, id, key)
+	if errors.Is(err, fs.ErrNotExist) {
+		return server.Blob{}, fmt.Errorf("%w: %s", ErrBlobNotFound, key)
+	}
+	return server.Blob{MediaType: mediaType, Size: size, Body: body}, err
+}
+
+// Session returns the state of session id.
+func (r reads) Session(ctx context.Context, id string) (protocol.Session, error) {
+	rd, err := r.Read(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Session(), nil
+}
+
+// Inputs returns the queued inputs of session id.
+func (r reads) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
+	rd, err := r.Read(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return rd.Inputs(ctx)
 }
 
 // live is a session that this runtime runs, as a server.Reader.
@@ -103,6 +147,22 @@ func (l live) Messages(ctx context.Context, before uint64, limit int) (protocol.
 	var page protocol.MessagePage
 	err := l.s.a.Read(ctx, func(s *eventlog.State) { page = s.MessagePage(before, limit) })
 	return page, err
+}
+
+func (l live) Inputs(ctx context.Context) ([]protocol.QueuedInput, error) {
+	var in []protocol.QueuedInput
+	err := l.s.a.Read(ctx, func(s *eventlog.State) { in = s.QueuedInputs() })
+	return in, err
+}
+
+func (l live) Blob(ctx context.Context, key string) (server.Blob, error) {
+	var mediaType string
+	var size int
+	var ok bool
+	if err := l.s.a.Read(ctx, func(s *eventlog.State) { mediaType, size, ok = s.Attachment(key) }); err != nil {
+		return server.Blob{}, err
+	}
+	return attachment(ctx, l.s.r.store, l.s.id, key, mediaType, size, ok)
 }
 
 func (l live) Events(ctx context.Context, after uint64) iter.Seq2[protocol.Event, error] {

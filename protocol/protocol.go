@@ -190,6 +190,16 @@ type Input struct {
 	ExpectedTurnID string `json:"expected_turn_id,omitempty"`
 }
 
+// QueuedInput is an input that no turn has taken. Its parts hold the text of each text part and, for an attachment, its media type, size, and Key, never its data.
+type QueuedInput struct {
+	ID          string        `json:"id"`
+	Parts       []MessagePart `json:"parts"`
+	Delivery    string        `json:"delivery"`
+	Source      string        `json:"source"`
+	SourceID    string        `json:"source_id,omitempty"`
+	SourceLabel string        `json:"source_label,omitempty"`
+}
+
 // Admitted is the receipt of an input: the seq of its input.admitted
 // record. A typed slash command has no input.admitted record: Seq is its
 // first command.recorded record, and Command is its newest status. Repeat
@@ -351,6 +361,7 @@ const (
 	CodeNoBase            = "no_base"
 	CodeTooManyChanges    = "too_many_changes"
 	CodeProcessNotFound   = "process_not_found"
+	CodeBlobNotFound      = "blob_not_found"
 	CodeUnauthorized      = "unauthorized"
 )
 

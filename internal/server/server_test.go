@@ -207,6 +207,20 @@ func (s stub) Read(context.Context, string) (server.Reader, error)          { re
 func (stub) List(context.Context, protocol.ListSessions) (protocol.SessionPage, error) {
 	return protocol.SessionPage{}, nil
 }
+func (s stub) Session(ctx context.Context, id string) (protocol.Session, error) {
+	rd, err := s.Read(ctx, id)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	return rd.Session(), nil
+}
+func (s stub) Inputs(ctx context.Context, id string) ([]protocol.QueuedInput, error) {
+	rd, err := s.Read(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return rd.Inputs(ctx)
+}
 func (stub) Models() []protocol.Model                            { return nil }
 func (stub) Commands() (protocol.Commands, error)                { return protocol.Commands{}, nil }
 func (s stub) Withdraw(context.Context, string) error            { return nil }
@@ -233,6 +247,12 @@ func (r reader) Session() protocol.Session { return r.View() }
 func (reader) Messages(context.Context, uint64, int) (protocol.MessagePage, error) {
 	return protocol.MessagePage{}, nil
 }
+
+func (reader) Inputs(context.Context) ([]protocol.QueuedInput, error) {
+	return []protocol.QueuedInput{}, nil
+}
+
+func (reader) Blob(context.Context, string) (server.Blob, error) { return server.Blob{}, nil }
 
 func TestInternalErrorHidesItsCause(t *testing.T) {
 	srv := httptest.NewServer(server.New(stub{openErr: errors.New("dial postgres://user:hunter2@db")}, server.Options{}))
