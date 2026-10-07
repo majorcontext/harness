@@ -1,8 +1,8 @@
 # Harness Plugin Protocol — v1
 
 Plugins are separate processes speaking **JSON-RPC 2.0 over stdio, one
-message per line** (NDJSON). Any language works; `github.com/majorcontext/harness/internal/plugin`
-is the Go SDK. Log to stderr — stdout belongs to the protocol.
+message per line** (NDJSON). Any language works; the TypeScript SDK is the published SDK, and
+`internal/plugin` is the Go SDK, internal to the harness module. Log to stderr — stdout belongs to the protocol.
 
 The channel is **bidirectional**: the harness sends hook dispatches and tool
 executions; the plugin sends client API calls back — including while one of

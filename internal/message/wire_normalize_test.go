@@ -358,7 +358,7 @@ func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
 // test for demoteToolResult keeping EVERY demoted Blob as a real Part,
 // including a non-image or data-less/URL-less one, which provider/openai
 // and provider/openaicompat hard-error building (see buildSafeBlob's own
-// doc comment, message/wire_normalize.go) -- turning the orphan-tool_result
+// doc comment, internal/message/wire_normalize.go) -- turning the orphan-tool_result
 // wedge this file exists to fix back into a total request-BUILD failure
 // for that shape. A build-safe image Blob must still survive byte-for-byte
 // (the anthropic fidelity win this file preserves); a non-build-safe one
@@ -685,7 +685,7 @@ func checkNoDataLossAllowingDemotion(input, output []Message) []wireViolation {
 			bodyFound = strings.Contains(rendered, body)
 		}
 		// Blobs split into two survival classes, mirroring demoteToolResult's
-		// own split (see buildSafeBlob, message/wire_normalize.go): a
+		// own split (see buildSafeBlob, internal/message/wire_normalize.go): a
 		// buildSafeBlob (image/* with Data or URL) must survive
 		// byte-identical as a real, loose Blob part -- unrelaxed from the
 		// check this replaces. Anything else is deliberately note-flattened

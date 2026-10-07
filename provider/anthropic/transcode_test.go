@@ -639,7 +639,7 @@ func TestTranscodeUnanswerableToolResultDemotedNotShippedAsBlock(t *testing.T) {
 // build-safe image (must arrive as a real wire "image" block) and a
 // non-image Blob (must be note-flattened, never a raw wire block of any
 // kind), proving the intersection gating (buildSafeBlob,
-// message/wire_normalize.go) is applied even where anthropic's own code
+// internal/message/wire_normalize.go) is applied even where anthropic's own code
 // alone would have tolerated more.
 func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *testing.T) {
 	png := tinyPNG(t)
@@ -693,7 +693,7 @@ func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *test
 }
 
 // TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
-// a golden regression test for message/wire_normalize.go:370: a demoted
+// a golden regression test for internal/message/wire_normalize.go:370: a demoted
 // ToolResult's Blob must never be
 // left inside a RoleAssistant wire turn — the Anthropic Messages API
 // rejects an image block there (images are user-turn only), even though
@@ -702,7 +702,7 @@ func TestTranscodeUnanswerableToolResultImageBlobArrivesAsRealImageBlock(t *test
 // no ToolCall anywhere) is the shape that reaches demoteWireInvalidToolResults'
 // assistant-run branch at all: a single one would instead be force-relocated,
 // still a ToolResult, by NormalizeForWire's own earlier pass (see
-// message/wire_normalize_test.go's
+// internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for the
 // canonical-level account of why).
 func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
@@ -742,7 +742,7 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 // (adjacent same-role wire messages merge, so tool_use and tool_result
 // stay in one merged block regardless), but this test pins the shape here
 // too so a future change to the merge rule is caught by the same golden
-// repro all three providers share. See message/wire_normalize_test.go's
+// repro all three providers share. See internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for
 // the canonical-level account (why TWO ToolResults, A and B, are needed
 // alongside the live, answered ToolCall C).

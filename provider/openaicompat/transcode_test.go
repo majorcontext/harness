@@ -603,7 +603,7 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 }
 
 // TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is a
-// golden regression test on message/wire_normalize.go:496: a demoted
+// golden regression test on internal/message/wire_normalize.go:496: a demoted
 // ToolResult's Blob used to
 // survive as a raw Part regardless of media type, and this adapter's own
 // blobURL (~line 343) hard-errors building a request containing ANY
@@ -660,13 +660,13 @@ func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) 
 }
 
 // TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
-// a golden regression test on message/wire_normalize.go:370: a demoted
+// a golden regression test on internal/message/wire_normalize.go:370: a demoted
 // ToolResult's Blob left inside a RoleAssistant message used to make
 // transcodeAssistantMessage hard-error "unsupported part type
 // *message.Blob in assistant message". Two ToolResults sharing one
 // assistant message (both with no ToolCall anywhere) reach
 // demoteWireInvalidToolResults' assistant-run branch at all -- see
-// message/wire_normalize_test.go's
+// internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
 // a single one alone would not.
 func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
@@ -714,7 +714,7 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 // interposed "user" message breaks the tool_calls' required contiguity
 // with their "tool" answer -- the same wedge class already closed for the
 // non-assistant branch's own hoist, one branch over. See
-// message/wire_normalize_test.go's
+// internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for the
 // canonical-level account of the shape (why TWO ToolResults, A and B, are
 // needed alongside the live, answered ToolCall C).
@@ -1026,7 +1026,7 @@ func TestTranscodeAssistantEngineContextRendered(t *testing.T) {
 
 // TestUserPDFOmittedWithNoteInsteadOfError is the durability regression for
 // the narrowest lane. This transcoder has no wire form for a non-image blob
-// (message/wire_normalize.go's intersection comment says so explicitly), and
+// (internal/message/wire_normalize.go's intersection comment says so explicitly), and
 // blobURL errors on one. Returning that error from here would not fail a
 // single request: an attachment lives in the session's DURABLE history, so a
 // session that attached a PDF under anthropic and then switched to a
