@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, and `provider/claudecode` are deleted (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -220,7 +220,7 @@ Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), 
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It still deletes `mcpserver` (merged into `internal/mcp`) and `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client; `mcp` moves to `internal/mcp` as above). It still deletes `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 

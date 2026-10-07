@@ -12,7 +12,6 @@ import (
 
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/mcp"
-	"github.com/majorcontext/harness/mcpserver"
 )
 
 // codexScenario runs against the scripted Responses server, with the model
@@ -38,7 +37,7 @@ const mcpToolSchemaWithRejectedKeywords = `{"type":"object","properties":{"email
 
 func serveMCPTool(t *testing.T, schema string) string {
 	t.Helper()
-	reg := mcpserver.NewRegistry("srv", "1")
+	reg := mcp.NewRegistry("srv", "1")
 	reg.RegisterTool(mcp.Tool{Name: "send", Description: "send a message", InputSchema: json.RawMessage(schema)},
 		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: "text", Text: "sent"}}}, nil
