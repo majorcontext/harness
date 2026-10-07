@@ -25,7 +25,6 @@ func (c *Config) validateFile() error {
 		validatePlugins(c.Plugins),
 		validateMCPServers(c.MCPServers),
 		validateProcesses(c.Processes),
-		validateEventSink(c.EventSink),
 		validateSessionSync(c.SessionSync),
 		validateSync(c.OwnerEpoch, c.Sync),
 		validateMCPToolLoading(c.MCPToolLoading, c.MCPToolLoadingThreshold),

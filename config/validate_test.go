@@ -23,7 +23,6 @@ func TestValidate(t *testing.T) {
 		{name: "a process with two ready gates", cfg: Config{Processes: map[string]ProcessSpec{"web": {Command: []string{"x"}, ReadyPort: 80, ReadyRegex: "up"}}}, want: "at most one of"},
 		{name: "an unknown session_sync", cfg: Config{SessionSync: "bogus"}, want: "session_sync"},
 		{name: "an unknown mcp_tool_loading", cfg: Config{MCPToolLoading: "bogus"}, want: "mcp_tool_loading"},
-		{name: "a negative event_sink flush_ms", cfg: Config{EventSink: &EventSinkSpec{URL: "https://e.test", FlushMS: -1}}, want: "flush_ms"},
 		{name: "a sync block with an owner epoch and a token file", cfg: Config{OwnerEpoch: 3, Sync: &SyncSpec{URL: "https://b.test/sync", TokenFile: "/run/t"}}},
 		{name: "an owner epoch of zero with no sync block"},
 		{name: "a negative owner_epoch", cfg: Config{OwnerEpoch: -1}, want: "owner_epoch"},

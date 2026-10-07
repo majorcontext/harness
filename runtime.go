@@ -164,9 +164,6 @@ func New(opts Options) (*Runtime, error) {
 	if err := opts.Config.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
-	if key := ignoredKey(opts.Config); key != "" {
-		return nil, fmt.Errorf("%w: config key %s is not read by the runtime", ErrInvalidRequest, key)
-	}
 	if err := checkEmbedder(opts); err != nil {
 		return nil, err
 	}

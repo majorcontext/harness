@@ -10,12 +10,9 @@ func Defaults() Config {
 		ContextWindowRequired:   new(true),
 		PromptRetries:           new(2),
 		MaxTokensContinuations:  new(3),
-		SnapshotEveryRecords:    new(64),
 		StreamIdleTimeoutS:      300,
 		CompactionThreshold:     0.8,
 		CompactionKeepTurns:     2,
-		ToolResultInlineBytes:   new(16384),
-		ToolResultRetainedBytes: new(4 << 20),
 		ModelTool:               new(true),
 		InstructionsMaxBytes:    64 << 10,
 		MCPToolLoadingThreshold: 20,
@@ -68,21 +65,6 @@ func (c *Config) ContextWindowRequiredValue() bool {
 // MaxTokensContinuationsValue returns max_tokens_continuations, or its default.
 func (c *Config) MaxTokensContinuationsValue() int {
 	return valueOr(c, func(c *Config) *int { return c.MaxTokensContinuations })
-}
-
-// SnapshotEveryRecordsValue returns snapshot_every_records, or its default.
-func (c *Config) SnapshotEveryRecordsValue() int {
-	return valueOr(c, func(c *Config) *int { return c.SnapshotEveryRecords })
-}
-
-// ToolResultInlineBytesValue returns tool_result_inline_bytes, or its default.
-func (c *Config) ToolResultInlineBytesValue() int {
-	return valueOr(c, func(c *Config) *int { return c.ToolResultInlineBytes })
-}
-
-// ToolResultRetainedBytesValue returns tool_result_retained_bytes, or its default.
-func (c *Config) ToolResultRetainedBytesValue() int {
-	return valueOr(c, func(c *Config) *int { return c.ToolResultRetainedBytes })
 }
 
 // ModelToolEnabled returns model_tool, or its default.
