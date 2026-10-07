@@ -116,8 +116,6 @@ type Config struct {
 // View is an immutable snapshot that the actor publishes after each append.
 type View struct {
 	Session protocol.Session
-	// Agent is the profile of a child session, or "".
-	Agent string
 	// Unsettled are the spawned children that have not settled, sorted.
 	Unsettled []string
 	Stopped   bool
@@ -424,7 +422,7 @@ func (a *Actor) Read(ctx context.Context, f func(*eventlog.State)) error {
 
 func (a *Actor) publish(stopped bool) {
 	window := a.cfg.Backend.Capabilities(a.state.Model()).ContextWindow
-	next := &View{Session: Describe(a.cfg.ID, a.state, window), Agent: a.state.Agent(), Unsettled: a.state.Unsettled(),
+	next := &View{Session: Describe(a.cfg.ID, a.state, window), Unsettled: a.state.Unsettled(),
 		Stopped: stopped, changed: make(chan struct{})}
 	a.live.mu.Lock()
 	defer a.live.mu.Unlock()

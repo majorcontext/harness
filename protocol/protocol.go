@@ -117,10 +117,12 @@ type SubscriptionOverage struct {
 // Session is a view of one session at HeadSeq. Usage sums every model and
 // summary call, but no goal evaluator call. SubscriptionUsage is null until a
 // call carries a snapshot. Plugins lists each configured plugin as the runtime
-// that serves the view knows it; the log does not hold it.
+// that serves the view knows it; the log does not hold it. Agent is the agent
+// profile that a task child was spawned with; a root session has none.
 type Session struct {
 	ID                string             `json:"id"`
 	ParentID          string             `json:"parent_id,omitempty"`
+	Agent             string             `json:"agent,omitempty"`
 	Origin            string             `json:"origin"`
 	Model             string             `json:"model"`
 	Effort            string             `json:"effort,omitempty"`

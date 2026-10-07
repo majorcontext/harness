@@ -936,6 +936,9 @@
           "parent_id": {
             "type": "string"
           },
+          "agent": {
+            "type": "string"
+          },
           "origin": {
             "type": "string"
           },

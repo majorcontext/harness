@@ -25,6 +25,7 @@ const (
 	specChildNoRead   = "the preview ends `… [truncated; full result unavailable]`"
 	specChildClaude   = "On Claude Code the engine checked out reports only when a turn started, so a busy parent gets no report in the middle of its turn"
 	specChildNoGoal   = "A child session has no `goal` tool"
+	specChildAgent    = "`protocol.Session.agent` is the agent profile name that the child was spawned with"
 	specChildWording  = "Does a child report to a busy parent keep the task notification of the engine? Yes, built"
 	specChildPinned   = "the segment is pinned for the model calls and kept out of history, as the engine pinned it"
 	specPinSlot       = "the model reads it at the same place in each later model call"
@@ -222,10 +223,10 @@ var runtimeRows = map[string]runtimeRow{
 	"bootstrap_cold_window_after_kill":                                    reGolden(specMessages, specBootstrapGone, specErrors),
 	"builtin_commands_run_and_record":                                     reGolden(specCmdSwitch, specTypedReceipt, specCmdMenuRoutes),
 	"busy_deferred_goal_with_max_turns":                                   deletedBy(specGoalDeferred),
-	"child_crash_recovered":                                               reGolden(specView, specCrash, specChildReport),
-	"child_crash_reaches_a_busy_parent":                                   reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording),
-	"child_usage_limit_delivered":                                         reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
-	"child_error_delivered":                                               reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView),
+	"child_crash_recovered":                                               reGolden(specView, specCrash, specChildReport, specChildAgent),
+	"child_crash_reaches_a_busy_parent":                                   reGolden(specView, specCrash, specChildReport, specChildCrash, specChildLost, specChildWording, specChildAgent),
+	"child_usage_limit_delivered":                                         reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
+	"child_error_delivered":                                               reGolden(specTaskInputs, specChildReport, specChildReason, specChildNoGoal, specView, specChildAgent),
 	"child_report_reaches_a_busy_parent_at_the_tool_boundary":             reGolden(specChildReport, specChildWording),
 	"child_error_reaches_a_busy_parent_at_the_tool_boundary":              reGolden(specChildReport, specChildReason, specChildWording),
 	"child_usage_limit_reaches_a_busy_parent":                             reGolden(specChildReport, specChildReason, specChildWording),
@@ -292,7 +293,7 @@ var runtimeRows = map[string]runtimeRow{
 	"context_overflow":                                                    reGolden(specView, specOverflowFails),
 	"deferred_goal_judges_finished_turn":                                  deletedBy(specGoalDeferred),
 	"deferred_goal_with_max_turns":                                        deletedBy(specGoalDeferred),
-	"driver_child_send_and_cancel":                                        reGolden(specTaskInputs, specChildNoGoal, specReceipt, specView),
+	"driver_child_send_and_cancel":                                        reGolden(specTaskInputs, specChildNoGoal, specReceipt, specView, specChildAgent),
 	"driver_clean_restart":                                                reGolden(specView, specRestartOpens),
 	"driver_compact":                                                      reGolden(specView, specCompactResult),
 	"driver_queue_goal_and_end":                                           reGolden(specView, specReceipt, specClearGoal),
@@ -300,7 +301,7 @@ var runtimeRows = map[string]runtimeRow{
 	"driver_settings_and_reads":                                           reGolden(specMessages, specBootstrapGone, specErrors),
 	"end_then_send_runs_no_report_of_the_stopped_child":                   reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
 	"end_then_open_before_the_child_turn_ends_runs_no_report":             reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
-	"end_idle_parent_cancels_running_child":                               reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal),
+	"end_idle_parent_cancels_running_child":                               reGolden(specView, specEndTree, specTaskInputs, specChildNoGoal, specChildAgent),
 	"end_session_semantics":                                               reGolden(specView, specErrors, specReceipt),
 	"enqueue_joins_the_turn_at_the_tool_boundary":                         sameAsServe(),
 	"enqueue_while_busy_runs_after":                                       sameAsServe(),
@@ -374,7 +375,7 @@ var runtimeRows = map[string]runtimeRow{
 	"queued_input_survives_kill":                                          deletedBy(specCrashQueue),
 	"queued_prompt_runs_before_deferred_auto_arm":                         deletedBy(specGoalDeferred),
 	"replay_after_kill_full_transcript":                                   reGolden(specMessages, specBootstrapGone, specErrors),
-	"send_to_child_and_cancel_tree":                                       reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView),
+	"send_to_child_and_cancel_tree":                                       reGolden(specChildResend, specChildNoGoal, specReceipt, specTaskInputs, specView, specChildAgent),
 	"settings_model_change_reaches_the_next_model_call_of_a_turn":         reGolden(specUpdate),
 	"session_info_reports_the_session":                                    reGolden(specPromptSwitch),
 	"session_info_reports_what_the_session_loaded":                        reGolden(specPromptSwitch),
@@ -387,7 +388,7 @@ var runtimeRows = map[string]runtimeRow{
 	"steer_joins_the_turn_at_the_tool_boundary":                           sameAsServe(),
 	"stream_stall":                                      reGolden(specView),
 	"task_child_result_reaches_parent":                  reGolden(specTaskInputs, specChildReport, specChildNoGoal),
-	"task_spawn_runs_the_child_on_its_model_and_effort": reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"task_spawn_runs_the_child_on_its_model_and_effort": reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"text_reply":                                        sameAsServe(),
 	"tool_error_reaches_model":                          sameAsServe(),
 	"two_tool_calls_one_turn":                           reGolden(specOneResult),
@@ -427,7 +428,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_profile_sets_the_tools_model_and_prompt_of_the_child":   reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"task_spawn_fails_on_an_agent_name_repeated_in_one_dir":       reGolden(specRepeatName, specErrors, specView),
 	"task_spawn_fails_on_an_agent_name_repeated_across_dirs":      reGolden(specRepeatName, specErrors, specView),
-	"session_of_a_child_opens_after_an_agent_name_is_repeated":    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specReceipt, specView),
+	"session_of_a_child_opens_after_an_agent_name_is_repeated":    reGolden(specTaskInputs, specChildReport, specChildNoGoal, specReceipt, specView, specChildAgent),
 	"agent_defs_dirs_replace_the_default_profile_dir":             reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"task_explore_and_plan_children_get_read_only_tools":          pendingOn(specReadOnlyKinds),
 	"task_refusals":                                                      pendingOn(specTaskWording),
@@ -442,7 +443,7 @@ var runtimeRows = map[string]runtimeRow{
 	"task_action_refusals":                                               reGolden(specTaskInputs, specChildReport, specChildNoGoal, specItems, specOneResult),
 	"task_tree_reaches_a_grandchild":                                     reGolden(specTaskInputs, specChildReport, specChildNoGoal),
 	"task_cancel_of_a_child_stops_the_grandchild":                        pendingOn(specCancelReport),
-	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView),
+	"task_tree_interrupt_stops_the_grandchild":                           reGolden(specTaskInputs, specChildReport, specChildNoGoal, specView, specChildAgent),
 	"task_profile_keeps_the_plugin_tools_of_its_list":                    reGolden(specProfileKnown, specTaskInputs, specItems, specOneResult),
 	"task_child_on_claude_code_gets_no_runtime_builtin":                  reGolden(specTaskInputs, specChildReport),
 	"claudecode_turn_gets_no_plugin_system_segment":                      sameAsServe(),

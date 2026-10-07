@@ -283,6 +283,7 @@ export interface Resolved {
 export interface Session {
   id: string;
   parent_id?: string;
+  agent?: string;
   origin: string;
   model: string;
   effort?: string;
