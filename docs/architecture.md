@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built, except that the five docs under "Historical" of `docs/README.md` are still to be deleted: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -220,7 +220,7 @@ Phase 6 has moved the leaf packages to `internal/`: `message` (conversation type
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client). It still deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client). It has deleted the config keys that `New` refused (`instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`) with their `Defaults` entries, and split `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -877,7 +877,7 @@ With a `WorkDir`, the runtime builds one `process.Manager` from `Config.Processe
 
 One `Config` struct. `Defaults` is the one defaults table, and each accessor reads it for an unset key. `Validate` is the one rule set. `LoadProject` runs it on the merged config, and `New` runs it on `Options.Config`. It never changes the config. `ProcessSpec.Validate` is the per-entry rule that `process.Declare` also uses.
 
-`New` also refuses a config that sets a key which the runtime does not read, with `ErrInvalidRequest` that names the key: `instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`. `session_dir` stays for `cmd/harness`, and `session_sync` sets the engine banner. The switch stops reading these keys and changes boxinit in the same release, and phase 6 deletes them; `model_tool` turns the `model` tool off, and `New` reads it.
+`Load` rejects a key that `Config` has no field for, with an error that names the key, so a file that sets `instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, or `tool_result_retained_bytes`, which only the engine read, fails to load. `New` takes a `config.Config` value, which cannot hold them. `session_dir` stays for `cmd/harness`, and `session_sync` sets the engine banner; `model_tool` turns the `model` tool off, and `New` reads it.
 
 `owner_epoch` (a number) and `sync {url, token_file}` are the keys of a box harness; `Validate` requires an `http` or `https` URL with no userinfo, and a token file. Only the user file sets them: a project file cannot. A project file is still read as a file, so an invalid `sync` there fails the load, and a valid one is dropped.
 
@@ -1063,7 +1063,7 @@ Each row is a difference between the runtime and the engine that remains after t
 | Cause of a child that `DELETE /sessions/{id}` stops | No `cause` field on a turn end | Cause `ended` on the `turn.ended` of the child | Decided by the cause list of State machines | `end_idle_parent_cancels_running_child` and `end_then_send_runs_no_report_of_the_stopped_child` |
 | Place of a pinned segment that a compaction folds into a kept tail | The pin sits at its slot inside the tail, between a tool call and its result | The pin sits at the end of the history, after the next input | Decided by Andy (2026-10-05): the runtime keeps the call and its result paired; see Settle | `child_report_to_a_busy_parent_folded_with_a_long_kept_tail` |
 | Pinned segment after a restart | The segment is gone | The segment is rebuilt from the log | Decided by Andy (2026-10-05): the runtime keeps the report; see Settle | `child_report_to_a_busy_parent_survives_a_restart` |
-| `event_sink` | The engine posts each journal record to the URL | `New` refuses the key; a box harness replicates through the config key `sync` (see Events) | Closed: boxes moves to `Sync` at the cutover (see Decided) | None: no row sets `event_sink` |
+| `event_sink` | The engine posts each journal record to the URL | `Load` rejects the key as unknown; a box harness replicates through the config key `sync` (see Events) | Closed: boxes moves to `Sync` at the cutover (see Decided) | None: no row sets `event_sink` |
 
 ## Decided
 
