@@ -8,12 +8,9 @@ import (
 	"testing"
 )
 
-// This file tests NormalizeForWire, the transcode-only sibling of
-// ResolveOrphanToolCalls (see NormalizeForWire's own doc comment).
-// Every case below is checked against the independent
-// wire-model oracle in wire_oracle_test.go — never against this function's
-// own internals — exactly as message/wire_oracle_meta_test.go's red-
-// verification cases do for ResolveOrphanToolCalls.
+// This file tests NormalizeForWire. Every case below is checked against the
+// independent wire-model oracle in wire_oracle_test.go, never against this
+// function's own internals.
 
 // TestNormalizeForWireRepairsDuplicateCallID is gap 1: two tool_use blocks
 // in one assistant message share a CallID, answered by a single
@@ -38,7 +35,7 @@ func TestNormalizeForWireRepairsDuplicateCallID(t *testing.T) {
 
 // TestNormalizeForWireRepairsToolCallInNonAssistantMessage is gap 2: a
 // ToolCall sits in a RoleUser message, never scanned by
-// ResolveOrphanToolCalls's RoleAssistant-gated scan. A tool_use block is
+// a scan gated on RoleAssistant. A tool_use block is
 // wire-valid ONLY inside an assistant turn (invariant 2's tool_use half,
 // message/wire_oracle_test.go) independent of whether anything answers it,
 // so NormalizeForWire must DEMOTE the misplaced ToolCall to plain text,
@@ -233,9 +230,8 @@ func TestNormalizeForWireNoOpOnValidHistory(t *testing.T) {
 	}
 }
 
-// TestNormalizeForWireOrdinaryOrphanAtEndOfHistory pins that the ordinary,
-// already-repaired-by-ResolveOrphanToolCalls case (a trailing unanswered
-// tool_use) is still handled.
+// TestNormalizeForWireOrdinaryOrphanAtEndOfHistory pins that the ordinary
+// case (a trailing unanswered tool_use) is still handled.
 func TestNormalizeForWireOrdinaryOrphanAtEndOfHistory(t *testing.T) {
 	in := []Message{
 		{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
@@ -250,8 +246,7 @@ func TestNormalizeForWireOrdinaryOrphanAtEndOfHistory(t *testing.T) {
 }
 
 // TestNormalizeForWireIsFixedPoint proves re-applying NormalizeForWire to
-// its own output changes nothing further, mirroring
-// TestResolveOrphanToolCallsPropertyFixedPoint in properties_test.go.
+// its own output changes nothing further.
 func TestNormalizeForWireIsFixedPoint(t *testing.T) {
 	cases := [][]Message{
 		{
@@ -277,55 +272,6 @@ func TestNormalizeForWireIsFixedPoint(t *testing.T) {
 		if string(raw1) != string(raw2) {
 			t.Fatalf("case %d: NormalizeForWire is not a fixed point:\n first: %s\nsecond: %s", i, raw1, raw2)
 		}
-	}
-}
-
-// TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes guards the
-// architecture NormalizeForWire requires: ResolveOrphanToolCalls is the
-// function engine.LoadSession applies to LIVE history (engine/store.go),
-// so it must stay purely additive FOREVER, even for the four gap shapes
-// NormalizeForWire (this file's own subject) exists specifically to
-// repair at transcode time. This test pins that ResolveOrphanToolCalls's
-// own output, run through EVERY one of the four gap shapes, never drops or
-// reorders a real ToolResult — regardless of whether it also manages to
-// make the shape wire-valid (it is documented NOT to, for most of these;
-// see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired and
-// TestLegitimate* cases, which pin the precise wire-validity gaps this
-// test deliberately does not re-assert). A future change that makes
-// ResolveOrphanToolCalls itself destructive — the exact defect class that
-// was reverted once already — fails this test first, before it could ever
-// reach LIVE history.
-func TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes(t *testing.T) {
-	shapes := map[string][]Message{
-		"duplicate call id": {
-			{Role: RoleAssistant, Parts: Parts{
-				toolCallPart("A", "bash", `{}`),
-				toolCallPart("A", "bash", `{}`),
-			}},
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
-		},
-		"tool call in non-assistant message": {
-			{Role: RoleUser, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-			{Role: RoleAssistant, Parts: Parts{&Text{Text: "carries on"}}},
-		},
-		"tool result preceding its tool call": {
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stray, too early"}}}}},
-			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-		},
-		"tool result separated by an intervening assistant message": {
-			{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
-			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-			{Role: RoleAssistant, Parts: Parts{&Text{Text: "thinking out loud"}}},
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL OUTPUT"}}}}},
-		},
-	}
-	for name, in := range shapes {
-		t.Run(name, func(t *testing.T) {
-			out := ResolveOrphanToolCalls(in)
-			if v := checkNoDataLoss(in, out); len(v) != 0 {
-				t.Fatalf("ResolveOrphanToolCalls lost or reordered real data for shape %q: %s", name, violationStrings(v))
-			}
-		})
 	}
 }
 
@@ -370,7 +316,7 @@ func TestNormalizeForWireDemotesUnanswerableToolResult(t *testing.T) {
 // note, discarding the actual bytes. On anthropic a tool_result Blob
 // transcodes to a real image block (provider/anthropic/transcode.go's
 // transcodeBlob), so the demote path used to lose real pixel data the
-// pre-stack additive ResolveOrphanToolCalls path kept. The fix must carry
+// Blob. The fix must carry
 // the Blob PART itself into the demoted message, not merely describe it.
 func TestNormalizeForWireDemotionPreservesImageBlob(t *testing.T) {
 	img := &Blob{MediaType: "image/png", Data: []byte{1, 2, 3, 4, 5}}

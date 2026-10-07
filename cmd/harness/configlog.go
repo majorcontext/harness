@@ -42,10 +42,8 @@ func logConfigSummary(logger *slog.Logger, info config.LoadInfo) {
 	msg := fmt.Sprintf("config: %s (%s)", info.Path, formatConfigCounts(info))
 	// Only called out when it changes behavior from the built-in default:
 	// "" and the explicit "fsync" are behaviorally identical (see
-	// engine.Config.SessionSync), so only "volume" is worth an operator's
-	// attention here. "volume" rather than a third string
-	// literal spelling — config can't import engine (cycle), but cmd/harness
-	// already does.
+	// config.Config.SessionSync), so only "volume" is worth an operator's
+	// attention here.
 	if info.SessionSync == "volume" {
 		msg += fmt.Sprintf(", session_sync=%s", info.SessionSync)
 	}

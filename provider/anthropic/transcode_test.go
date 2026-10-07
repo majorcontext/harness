@@ -428,7 +428,7 @@ func TestTranscodeEmptyHistoryFails(t *testing.T) {
 // (the turn died before the engine could execute it, or append one — see
 // engine/engine.go's own primary fix), buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
-// message.ResolveOrphanToolCalls, this produced a wire request with a
+// message.NormalizeForWire, this produced a wire request with a
 // dangling tool_use block and no tool_result anywhere adjacent — exactly
 // the shape the Anthropic API rejects with HTTP 400 "tool_use ids were
 // found without tool_result blocks immediately after". After the fix, a
@@ -482,7 +482,7 @@ func TestTranscodeOrphanToolUseFinalMessage(t *testing.T) {
 // tool_use block with matching id with a tool_result carrying the same
 // tool_use_id in the immediately-following message — the invariant the
 // Anthropic API enforces (HTTP 400 otherwise) and the one
-// message.ResolveOrphanToolCalls (see provider/anthropic/transcode.go)
+// message.NormalizeForWire (see provider/anthropic/transcode.go)
 // exists to guarantee even over a poisoned history.
 func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
 	t.Helper()
@@ -526,9 +526,8 @@ func assertToolUseFollowedByResult(t *testing.T, out *apiRequest, id string) {
 // This adapter merges adjacent same-role canonical messages into one wire
 // turn (transcodeRequest, "The API requires strict user/assistant
 // alternation; merge adjacent same-role messages"), so the wire sees ONE
-// assistant turn spanning both assistant messages below. Before
-// NormalizeForWire, message.ResolveOrphanToolCalls reasoned about strict
-// messages[i+1] adjacency instead: it saw messages[1] (the SECOND
+// assistant turn spanning both assistant messages below. A check of
+// strict messages[i+1] adjacency would instead see messages[1] (the SECOND
 // assistant message) is not a tool message, concluded the tool_use was
 // unanswered, and spliced a SYNTHETIC is_error tool_result in between —
 // leaving the REAL result dangling at the end with no tool_use immediately

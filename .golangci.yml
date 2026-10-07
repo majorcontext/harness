@@ -16,8 +16,6 @@ linters:
           files:
             - "**/internal/**"
           deny:
-            - pkg: github.com/majorcontext/harness/server
-              desc: internal packages never import server
             - pkg: github.com/majorcontext/harness/cmd
               desc: internal packages never import cmd
         eventlog-leaf:
@@ -48,24 +46,12 @@ linters:
               desc: backends and tools sit below the child tree
             - pkg: github.com/majorcontext/harness/internal/server
               desc: backends and tools sit below the HTTP mapping
-        internal-new-stack:
-          files:
-            - "**/internal/**"
-          deny:
-            - pkg: github.com/majorcontext/harness/engine
-              desc: internal packages never import the engine
-            - pkg: github.com/majorcontext/harness/provider/claudecode
-              desc: the claudecode backend does not use the engine provider
         provider-wires:
           files:
             - $all
             - "!**/internal/backend/**"
             - "!**/provider/**"
-            - "!**/engine/**"
-            - "!**/server/**"
-            - "!**/cmd/**"
             - "!**/e2e/**"
-            - "!**/harnesstest/**"
             - "!**/examples/**"
             - "!$test"
           deny:

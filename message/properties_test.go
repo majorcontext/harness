@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -93,30 +92,11 @@ import (
 //     ProviderData entries, invalid ToolCall.Arguments). Nothing on a
 //     Message survives a second pass differently from the first, since
 //     Normalize's mutations are all saturating (delete once; nil once).
-//  4. ResolveOrphanToolCalls never loses data, re-applying it to its own
-//     output changes nothing further, and the input is never mutated in
-//     place ("messages is never mutated in place" — ResolveOrphanToolCalls's
-//     doc). See TestResolveOrphanToolCallsPropertyNoDataLoss,
-//     TestResolveOrphanToolCallsPropertyFixedPoint, and
-//     TestResolveOrphanToolCallsPropertyDoesNotMutateInput.
-//
-//     This file used to check a fifth property here — "output carries no
-//     orphaned ToolCall" — via a predicate named hasOrphanToolCall that
-//     re-derived ResolveOrphanToolCalls's own documented scan line-for-line
-//     (RoleAssistant-gated, checks only messages[i+1], set-membership
-//     presence). That predicate is DELETED, not merely renamed: an oracle
-//     that shares its implementation's definition of correctness cannot
-//     catch a rewrite of ResolveOrphanToolCalls that deletes genuine tool
-//     output while preserving that same wrong definition — hasOrphanToolCall
-//     could never catch that shape. See message/wire_oracle_test.go (an
-//     independent oracle built only from the provider wire contract, never
-//     from this function's own scan) and
-//     TestResolveOrphanToolCallsPropertyNoDataLoss below, and the
-//     deliberate-gap tests in message/wire_oracle_meta_test.go, which
-//     replace it. Wire VALIDITY is not asserted against
-//     ResolveOrphanToolCalls at all: it is additive-only by design and
-//     leaves several shapes wire-invalid forever. The transcode-only
-//     repair NormalizeForWire introduces owns that property instead.
+//  4. NormalizeForWire never loses data and yields a wire-valid history; see
+//     TestNormalizeForWirePropertyNoDataLoss and
+//     TestNormalizeForWirePropertyWireValid. The independent oracle behind
+//     them is message/wire_oracle_test.go, built only from the provider wire
+//     contract.
 
 // --- Generators --------------------------------------------------------
 //
@@ -124,17 +104,13 @@ import (
 // PartType enumerates (Text, Blob, ToolCall, ToolResult, Reasoning),
 // deliberately WITHOUT constraining which roles carry which parts: none of
 // the properties below depend on role/part correspondence (Normalize and
-// the marshal round trip are role-agnostic by construction, and
-// ResolveOrphanToolCalls's own "orphan" definition already ignores any
-// ToolCall not sitting in a RoleAssistant message — see that function's
-// RoleAssistant-gated scan),
-// so generating "off-label" combinations, e.g. a ToolCall inside a
+// the marshal round trip are role-agnostic by construction), so generating "off-label" combinations, e.g. a ToolCall inside a
 // RoleUser message, is still valid input space and exercises that ignoring
 // behavior directly instead of assuming it.
 //
 // A CallID pool is threaded through a whole generated message (or, for
 // genMessageSequence, a whole sequence) so ToolCall and ToolResult CallIDs
-// coincide often enough to exercise ResolveOrphanToolCalls's matching logic,
+// coincide often enough to exercise NormalizeForWire's matching logic,
 // not just its "definitely orphaned" path.
 
 func genMessage(t *rapid.T) Message {
@@ -146,7 +122,7 @@ func genMessage(t *rapid.T) Message {
 // pool across the whole sequence, so a ToolCall in one message and a
 // ToolResult in a later one frequently reference the same CallID —
 // producing realistic matched, partially-matched, and orphaned shapes for
-// ResolveOrphanToolCalls, rather than relying on pure chance.
+// NormalizeForWire, rather than relying on pure chance.
 func genMessageSequence(t *rapid.T) []Message {
 	n := rapid.IntRange(0, 8).Draw(t, "seqLen")
 	var pool []string
@@ -463,28 +439,9 @@ func TestNormalizeIdempotent(t *testing.T) {
 	})
 }
 
-// TestResolveOrphanToolCallsPropertyNoDataLoss is invariant 5 from the
-// independent wire-model oracle (message/wire_oracle_test.go): every
-// ToolResult present in the input is present, unchanged and in the same
-// relative order, in ResolveOrphanToolCalls's output. This is the property
-// that actually matters here — see this file's doc comment above for why
-// the predicate this test used to rely on (hasOrphanToolCall, now deleted)
-// could never have caught the exact bug class this checks for: a rewrite
-// of ResolveOrphanToolCalls that deletes genuine tool output.
-func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		out := ResolveOrphanToolCalls(in)
-		if v := checkNoDataLoss(in, out); len(v) != 0 {
-			t.Fatalf("ResolveOrphanToolCalls lost or altered a genuine tool_result: %v", v)
-		}
-	})
-}
-
 // TestNormalizeForWirePropertyNoDataLoss is NormalizeForWire's own
 // no-data-loss guard, run against the SAME fully arbitrary, unconstrained
-// generator (genMessageSequence) TestResolveOrphanToolCallsPropertyNoDataLoss
-// above uses. This is the one invariant that must hold unconditionally,
+// generator (genMessageSequence) the other properties in this file use. This is the one invariant that must hold unconditionally,
 // for ANY input whatsoever, including the adversarial/unrealistic shapes
 // (TestNormalizeForWirePropertyWireValid asserts full wire VALIDITY over
 // the same generator; that is a distinct property from this one): NormalizeForWire may decline
@@ -540,21 +497,6 @@ func TestNormalizeForWirePropertyNoDataLoss(t *testing.T) {
 // still-necessary complement verifying every demotion's REAL content
 // survives.
 //
-// # Why this checks NormalizeForWire, not ResolveOrphanToolCalls
-//
-// NormalizeForWire's required architecture keeps ResolveOrphanToolCalls
-// purely additive forever
-// — engine.LoadSession applies it to LIVE history, where a destructive
-// repair would lose data for the session's whole life, not one request —
-// and puts every destructive/relocating repair in a NEW transcode-only
-// function, NormalizeForWire (message/wire_normalize.go), which every
-// transcoder now calls instead. Full wire-validity is consequently a claim
-// about NormalizeForWire, not ResolveOrphanToolCalls: the latter is
-// documented (see its own doc comment and
-// TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes in
-// wire_normalize_test.go) to still leave several shapes wire-invalid, on
-// purpose, forever.
-//
 // Each message is Normalized before repair, mirroring the real pipeline
 // (Session.append and LoadSession always Normalize before any transcoder
 // calls NormalizeForWire) — otherwise this property would also flag raw
@@ -580,135 +522,4 @@ func TestNormalizeForWirePropertyWireValid(t *testing.T) {
 			t.Fatalf("NormalizeForWire lost or altered real data:\n input: %s\noutput: %s\n violations: %s", ij, oj, violationStrings(v))
 		}
 	})
-}
-
-// TestResolveOrphanToolCallsPropertyFixedPoint checks the second of
-// property 4's three parts: re-applying ResolveOrphanToolCalls to its own
-// output changes nothing further — every orphan it can find, it resolves in
-// one pass.
-func TestResolveOrphanToolCallsPropertyFixedPoint(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		out := ResolveOrphanToolCalls(in)
-
-		raw1, err := json.Marshal(out)
-		if err != nil {
-			t.Fatalf("Marshal(out): %v", err)
-		}
-		again := ResolveOrphanToolCalls(out)
-		raw2, err := json.Marshal(again)
-		if err != nil {
-			t.Fatalf("Marshal(again): %v", err)
-		}
-		if !bytes.Equal(raw1, raw2) {
-			t.Fatalf("ResolveOrphanToolCalls is not a fixed point on its own output:\n first: %s\nsecond: %s", raw1, raw2)
-		}
-	})
-}
-
-// TestResolveOrphanToolCallsPropertyDoesNotMutateInput pins ResolveOrphanToolCalls's
-// doc comment: "messages is never mutated in place; the input slice and its
-// Message values are safe to reuse after this call."
-//
-// This check used to compare json.Marshal(in) before and after the call
-// (byte-for-byte). That was insufficient: Marshal CANONICALIZES —
-// ProviderData.MarshalJSON drops zero-length/invalid entries, and
-// ToolCall.safeArguments coerces empty Arguments to "{}" — so an in-place
-// mutation that only touches bytes the canonical encoding already erases
-// (e.g. overwriting the value of an already-empty ProviderData entry, or an
-// already-empty Arguments) would marshal identically before and after and
-// slip through undetected. A structural snapshot compared with
-// reflect.DeepEqual has no such blind spot: it sees every byte regardless
-// of whether the canonical encoding would keep it.
-func TestResolveOrphanToolCallsPropertyDoesNotMutateInput(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		snapshot := deepCloneMessages(t, in)
-
-		_ = ResolveOrphanToolCalls(in)
-
-		if !reflect.DeepEqual(snapshot, in) {
-			t.Fatalf("ResolveOrphanToolCalls mutated its input in place:\nbefore: %+v\nafter:  %+v", snapshot, in)
-		}
-	})
-}
-
-// deepCloneMessages returns an independent structural copy of in: every
-// Part is cloned by concrete type, and every raw byte slice a part carries
-// (ToolCall.Arguments, Blob.Data, and each ProviderData entry) is copied
-// byte-for-byte rather than aliased, so a later in-place mutation of the
-// original can never be observed through the clone — including a mutation
-// that a canonical json.Marshal would hide (see
-// TestResolveOrphanToolCallsPropertyDoesNotMutateInput's doc comment for
-// why that matters here). message doesn't expose a Clone/Copy helper
-// (checked before writing this), so this is hand-rolled, one case per
-// concrete Part type the package defines.
-func deepCloneMessages(tb rapid.TB, in []Message) []Message {
-	tb.Helper()
-	out := make([]Message, len(in))
-	for i, m := range in {
-		out[i] = m
-		out[i].Parts = deepCloneParts(tb, m.Parts)
-	}
-	return out
-}
-
-func deepCloneParts(tb rapid.TB, parts Parts) Parts {
-	tb.Helper()
-	if parts == nil {
-		return nil
-	}
-	out := make(Parts, len(parts))
-	for i, p := range parts {
-		switch v := p.(type) {
-		case *Text:
-			c := *v
-			out[i] = &c
-		case *Blob:
-			c := *v
-			c.Data = cloneBytes(v.Data)
-			out[i] = &c
-		case *ToolCall:
-			c := *v
-			c.Arguments = json.RawMessage(cloneBytes(v.Arguments))
-			out[i] = &c
-		case *ToolResult:
-			c := *v
-			c.Content = deepCloneParts(tb, v.Content)
-			out[i] = &c
-		case *Reasoning:
-			c := *v
-			c.ProviderData = deepCloneProviderData(v.ProviderData)
-			out[i] = &c
-		default:
-			tb.Fatalf("deepCloneParts: unhandled Part type %T", p)
-		}
-	}
-	return out
-}
-
-func deepCloneProviderData(pd ProviderData) ProviderData {
-	if pd == nil {
-		return nil
-	}
-	out := make(ProviderData, len(pd))
-	for family, raw := range pd {
-		out[family] = json.RawMessage(cloneBytes(raw))
-	}
-	return out
-}
-
-// cloneBytes copies b's contents into a freshly allocated slice, preserving
-// the nil-vs-non-nil-but-empty distinction exactly (nil stays nil; a
-// non-nil zero-length slice clones to a distinct non-nil zero-length
-// slice) — collapsing that distinction would make deepCloneMessages'
-// snapshot diverge from an untouched original under reflect.DeepEqual,
-// producing a false mutation report.
-func cloneBytes(b []byte) []byte {
-	if b == nil {
-		return nil
-	}
-	c := make([]byte, len(b))
-	copy(c, b)
-	return c
 }

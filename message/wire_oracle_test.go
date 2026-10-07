@@ -8,13 +8,9 @@ import (
 
 // This file is an INDEPENDENT oracle for "does this canonical history
 // transcode to a protocol-valid provider request." It exists because of a
-// structural bug class: message/properties_test.go used to define
-// hasOrphanToolCall by re-deriving ResolveOrphanToolCalls's own documented
-// scan line-for-line (RoleAssistant-gated, "check only messages[i+1]",
-// set-membership presence) — an oracle that shares its implementation's
-// definition of correctness cannot catch a rewrite of
-// ResolveOrphanToolCalls that deletes genuine tool output while
-// preserving that same wrong definition.
+// structural bug class: an oracle that shares its implementation's
+// definition of correctness cannot catch a rewrite that deletes genuine
+// tool output while preserving that same wrong definition.
 //
 // Every type and function below is built ONLY from two things: this
 // package's own doc comments (Message.Role, ToolCall, ToolResult,
@@ -24,15 +20,11 @@ import (
 // transcoders' wire mapping (provider/anthropic, provider/openai,
 // provider/openaicompat/transcode.go): specifically, that every transcoder
 // maps message.RoleAssistant to a wire "assistant" turn and every other
-// Role to a non-assistant turn, and that Anthropic (the strictest — see
-// ResolveOrphanToolCalls's own doc comment, "An orphaned tool_use id
-// wedges every retry") merges adjacent same-side canonical
+// Role to a non-assistant turn, and that Anthropic (the strictest) merges adjacent same-side canonical
 // messages into one wire turn and requires every tool_use in an assistant
 // turn to be answered, id for id, by a tool_result in the IMMEDIATELY
 // FOLLOWING turn. This file never calls, imports, or copies
-// ResolveOrphanToolCalls's internals, and never calls hasToolCall (there is
-// no such symbol left in this package — see the note in properties_test.go
-// on hasOrphanToolCall's removal).
+// NormalizeForWire's internals.
 
 // wireMsg is this oracle's minimal model of one canonical Message as it
 // would reach a provider's wire: which side of the exchange it lands on,
@@ -93,9 +85,7 @@ func foldWire(messages []Message) []wireMsg {
 // convergence on one wire rule, not the coupling this file's header
 // forbids: the header's rule is that the oracle never derives its notion
 // of CORRECTNESS from the code under test, and isEmpty is not under test
-// here — ResolveOrphanToolCalls, and the transcode-only repair
-// NormalizeForWire adds, are. If isEmpty ever
-// changes, this function must NOT follow it; it must keep encoding what
+// here — NormalizeForWire is. If isEmpty ever changes, this function must NOT follow it; it must keep encoding what
 // the provider does, and the disagreement is the signal.
 //
 // It reads the RAW Content field, never SafeContent or isEmpty themselves
@@ -275,8 +265,7 @@ type toolResultRecord struct {
 // toolResultRecords extracts every ToolResult in messages, in encounter
 // order (message order, then part order). When excludeSynthetic is true, a
 // ToolResult whose Content is exactly message.SyntheticOrphanResultText —
-// the fixed marker ResolveOrphanToolCalls's doc comment says it always and
-// only uses for a result IT inserted — is skipped, so the remaining
+// the fixed marker NormalizeForWire uses only for a result IT inserted — is skipped, so the remaining
 // sequence is "only what was already there."
 func toolResultRecords(messages []Message, excludeSynthetic bool) []toolResultRecord {
 	var out []toolResultRecord
@@ -310,8 +299,8 @@ func toolResultRecords(messages []Message, excludeSynthetic bool) []toolResultRe
 // Comparing the FILTERED-synthetic output sequence against the input
 // sequence, rather than trying to map each result to "the same message
 // index," sidesteps needing any notion of message identity across the
-// call (ResolveOrphanToolCalls's doc says messages may be merged into or
-// inserted after — this check does not need to know which): a genuine
+// call (messages may be merged into or inserted after — this check does not
+// need to know which): a genuine
 // result that survives, unmoved relative to every OTHER genuine result,
 // is exactly what "not lost, not reordered, not relocated" means for a
 // flattened wire stream, which is what a provider actually reads.
@@ -321,7 +310,7 @@ func toolResultRecords(messages []Message, excludeSynthetic bool) []toolResultRe
 // ever did, it would count in before, be filtered from after, and report a
 // false no-data-loss violation. The assumption is load-bearing and currently
 // only implicit: no generator seeds that marker, and no production path
-// writes it except ResolveOrphanToolCalls itself. A generator that ever
+// writes it except NormalizeForWire itself. A generator that ever
 // seeds known markers must filter both sides symmetrically instead.
 func checkNoDataLoss(input, output []Message) []wireViolation {
 	before := toolResultRecords(input, false)

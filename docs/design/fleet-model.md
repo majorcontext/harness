@@ -258,7 +258,7 @@ image run unmodified whether it was spawned by an orchestrator, a human
 running a script by hand (who sets `HARNESS_SESSION_DIR` directly), or a test
 harness.
 
-Scoped implementation rules live in `engine/AGENTS.md` and `server/AGENTS.md`.
+Scoped implementation rules live in the `AGENTS.md` files of the packages.
 
 ## 9. Wire fields (summary)
 

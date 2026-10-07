@@ -620,23 +620,14 @@ func demoteToolCall(tc *ToolCall) *Text {
 // approximates provider message merging; zero-block messages can reduce fidelity.
 // No tool_result remains in an assistant-role block.
 //
-// # Additive vs transcode-only: the line this function sits on
+// # Transcode-only
 //
-// ResolveOrphanToolCalls is purely additive and is the function
-// engine.LoadSession applies to LIVE history — it must never delete,
-// reorder, or relocate a part another producer wrote (see its own doc
-// comment and AGENTS.md's "A history repair that runs on live or persisted
-// state is additive-only"). NormalizeForWire is its transcode-only sibling:
-// every call site here builds ONE throwaway provider request and never
-// touches the durable record, so it MAY relocate a real ToolResult to a
-// different position in the returned slice, closing gaps
-// ResolveOrphanToolCalls's strict messages[i+1] adjacency model cannot see
-// (see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired cases). It still
-// never DELETES a real ToolResult — every one that goes in comes out
-// somewhere, unchanged, in the same relative order among all other real
-// results (see checkNoDataLoss in wire_oracle_test.go: an earlier
-// ResolveOrphanToolCalls rewrite broke exactly this promise and was
-// reverted).
+// Every call site builds ONE throwaway provider request and never touches
+// the durable record, so this function MAY relocate a real ToolResult to a
+// different position in the returned slice. It still never DELETES a real
+// ToolResult: every one that goes in comes out somewhere, unchanged, in the
+// same relative order among all other real results (see checkNoDataLoss in
+// wire_oracle_test.go).
 //
 // # The gaps this closes
 //
@@ -656,16 +647,12 @@ func demoteToolCall(tc *ToolCall) *Text {
 //     real result forward to sit in the run that answers its (later)
 //     ToolCall, rather than leaving it in place AND adding a synthetic.
 //  4. A ToolResult separated from its ToolCall by an intervening
-//     same-side message: this is not actually a distinct repair — once
-//     demand/supply is computed at wire-RUN granularity (this function's
-//     central fix, replacing ResolveOrphanToolCalls's raw
-//     messages[i+1] check), the run-merged wire is already valid and no
-//     change is needed at all. The bug in the additive function is that it
-//     reasons about a single next MESSAGE and, seeing a non-tool message
-//     there, wrongly concludes the call is unanswered and splices in a
-//     synthetic "no result" error ahead of the real one — see this
-//     function's own tests for the wire dump this produces on current
-//     main.
+//     same-side message: this is not actually a distinct repair. Demand and
+//     supply are computed at wire-RUN granularity, so the run-merged wire is
+//     already valid and no change is needed. A check of the single next
+//     MESSAGE would see a non-tool message there, wrongly conclude the call
+//     is unanswered, and splice in a synthetic "no result" error ahead of
+//     the real one.
 //  5. A ToolResult that can NEVER be wire-valid anywhere it could be
 //     placed: relocation and counting both assume a demanding ToolCall
 //     exists SOMEWHERE to place the answer next to; this one has none

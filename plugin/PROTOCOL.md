@@ -23,7 +23,7 @@ own requests independently.
 `InitializeParams` carries `serve_url` and `run_token` when (and only when)
 the harness is running in `harness serve` mode: a plugin process — in any
 language, not just the Go SDK — can then also hit the HTTP API directly
-(`GET /session/{id}/message`, etc.) instead of going through the stdio
+(`GET /sessions/{id}/messages`, etc.) instead of going through the stdio
 client API. Both are empty in `harness run` mode, where there is no HTTP
 API to reach. See "Trust model" below.
 
@@ -74,16 +74,16 @@ Only hooks named in the plugin's manifest are dispatched to it.
 model routing, credentials, and observability, and never carry API keys.
 
 `client/session.messages` is backed by the same session store the HTTP
-`GET /session/{id}/message` handler reads: it returns the canonical message
+`GET /sessions/{id}/messages` handler reads: it returns the canonical message
 list for any session the harness process owns (live or reloaded from disk
 in serve mode; the one in-flight session in run mode). An unknown session
 id is an RPC error, never an empty/silent success.
 
 `client/mcp.call` routes to the harness's configured `mcp_servers` (see the
-config package doc and engine/mcp.go): `Server` names one of them, `Tool` is
+config package doc and `internal/tool/mcpsrc`): `Server` names one of them, `Tool` is
 the tool's unnamespaced name on that server (not the
 `mcp__<server>__<tool>` form a model-issued tool call uses). It reaches the
-exact same connected MCP clients the engine's own namespaced tool calls
+exact same connected MCP clients the runtime's own namespaced tool calls
 use. An unconfigured or connection-failed server is a clear RPC error, not
 a panic or a silently empty result. `client/generate` is wired into the
 dispatch path and type-checks end to end, but is not implemented yet:

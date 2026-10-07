@@ -3,20 +3,20 @@
 Rules for agents that edit harness. Also read the AGENTS.md in each directory you change.
 
 ## Design
-- The target architecture is docs/architecture.md. New code follows it. Do not add new concerns to `engine` or `server`.
+- The target architecture is docs/architecture.md. New code follows it.
 - Design each interface from its consumer's need. Nothing is kept because it exists. There is no backward compatibility.
 - One owner and one source of truth for each piece of state.
 - Build session state from the event log with one `Apply` function, live and on replay.
 - Give one goroutine each session's state. Other code sends it commands and reads immutable views.
 - An interface lives in the package that consumes it. Never branch on a provider or backend name.
-- Imports are one-way. Internal packages never import `server` or `cmd`.
+- Imports are one-way. Internal packages never import `cmd`.
 
 ## Invariants
 - A session is an append-only log of canonical messages, never provider wire objects.
 - A repair of live or persisted history is additive-only. Never delete a real tool result.
 - An empty tool result never serializes as `null`. Read `ToolResult.SafeContent`.
 - Model references use `provider/model`. Aliases resolve before a request reaches a provider.
-- Only the engine creates `message.EngineContext`. User text never gains that trust.
+- Only the runtime creates `message.EngineContext`. User text never gains that trust.
 
 ## Settled non-goals
 Add none of these without a new design decision:

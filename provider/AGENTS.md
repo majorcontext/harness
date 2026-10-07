@@ -7,7 +7,7 @@ Read the root AGENTS.md. Read `message/AGENTS.md` for canonical data rules.
 - Apply `imageclamp.Clamp`. Map tool-call IDs deterministically.
 - Replay opaque `ProviderData` only for the matching family.
 - Keep prompt-cache markers out of history. Keep request bytes stable and ordered.
-- Classify errors with typed `provider.Error`. Engine code never matches error text.
+- Classify errors with typed `provider.Error`. No caller matches error text.
 - A stream that ends without a terminal event is `RetryableStreamTruncated`.
 - `message.EffortUnset` sends no control. It is not `message.EffortOff`.
 - Reasoning-history stripping differs by adapter. Never use one shared `!Reasoning()` check.

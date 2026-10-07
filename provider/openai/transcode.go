@@ -399,9 +399,7 @@ func transcodeRequestFamilyWithOptions(req *provider.Request, family string, omi
 	// message.NormalizeForWire is the transcode-only
 	// repair — this call site builds one throwaway request and never
 	// touches the durable record, so its destructive/relocating repairs
-	// are safe here; see its doc comment for the full mechanism and the
-	// additive (message.ResolveOrphanToolCalls, used only against LIVE
-	// history) / transcode-only split. Composed with image clamping
+	// are safe here; see its doc comment for the full mechanism. Composed with image clamping
 	// exactly as the anthropic transcoder does; imageLimits.RecurseToolResults
 	// is false because tool-result images are omitted on the wire (see
 	// toolResultOutput), so clamping them would be wasted work.

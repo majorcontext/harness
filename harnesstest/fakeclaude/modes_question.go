@@ -9,19 +9,18 @@ import (
 // preInitModes print before the init frame, or never print it. A handler
 // reports whether it ended the turn.
 var preInitModes = map[string]func(f *fake) bool{
-	"crash_before_init":         crashBeforeInit,
-	"compact_turn":              compactTurn,
-	"compact_after_tokens":      compactAfterTokens,
-	"compact_after_window":      compactAfterTokens,
-	"queued_empty_result":       queuedEmptyResult,
-	"queued_empty_result_error": queuedEmptyResult,
-	"question":                  question,
-	"question_continues":        question,
-	"question_no_result":        question,
-	"question_sibling":          question,
-	"mirror":                    replayMirror,
-	"no_init":                   noInit,
-	"mcp":                       mcpTurn,
+	"crash_before_init":    crashBeforeInit,
+	"compact_turn":         compactTurn,
+	"compact_after_tokens": compactAfterTokens,
+	"compact_after_window": compactAfterTokens,
+	"queued_empty_result":  queuedEmptyResult,
+	"question":             question,
+	"question_continues":   question,
+	"question_no_result":   question,
+	"question_sibling":     question,
+	"mirror":               replayMirror,
+	"no_init":              noInit,
+	"mcp":                  mcpTurn,
 }
 
 // noInit prints a hook frame and a reply, but no init frame.
@@ -80,14 +79,9 @@ func compactAfterTokens(f *fake) bool {
 }
 
 // queuedEmptyResult prints a task notification, init, and an empty zero-turn
-// result. The "_error" mode then ends with an error result. The other mode
-// prints a second init, a reply, and a final result.
+// result, a second init, a reply, and a final result.
 func queuedEmptyResult(f *fake) bool {
 	f.emit(system("task_notification", obj{"session_id": f.sessionID}), system("init", obj{"session_id": f.sessionID}))
-	if f.mode == "queued_empty_result_error" {
-		f.emit(result("error_during_execution", true, "", 0, 0).set("num_turns", 0))
-		return true
-	}
 	f.emit(
 		success("", 3, 1).set("num_turns", 0).set("duration_ms", 80),
 		system("init", obj{"session_id": f.sessionID}),

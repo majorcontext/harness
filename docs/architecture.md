@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`, and imports neither `engine` nor `server`. `engine` and `server` stay in the tree until phase 6, and nothing in `cmd` calls them. A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, and `provider/claudecode` are deleted (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -214,13 +214,13 @@ Free to change.
 | `internal/prompt` | System-prompt segments and agent profiles |
 | `internal/workspace` | The git diff of the work tree for `GET /workspace/changes` |
 
-The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `server`, no internal package imports `engine`, and, in the new runtime, only `internal/backend` builds a provider wire; `engine`, `server`, `cmd`, and `harnesstest` still import the wires until phase 6.
+The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
 
 Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 deletes `engine`, `server`, `provider/claudecode`, `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them), their `Defaults` entries, and `harnesstest.SinkReceiver`, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It still deletes `mcpserver` (merged into `internal/mcp`) and `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -601,7 +601,7 @@ Body: `{"error":{"code":"...","message":"...","details":{}}}`.
 | `unauthorized` | 401 |
 | `internal` | 500 |
 
-Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound` (see Inputs, Andy 2026-10-06). `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
+Each code except `internal`, `payload_too_large`, and `unauthorized` is a sentinel error, and every code is a `protocol` constant. `cmd/harness serve` writes `unauthorized` in its token check, before the request reaches `internal/server`. The session codes are sentinels in `harness`, and `blob_not_found` is `ErrBlobNotFound` (see Inputs, Andy 2026-10-06). `process_not_found` is `process.ErrUnknownProcess`, and the three git codes are sentinels of `internal/workspace`. `internal/server` maps it with `errors.Is`. A body above its limit fails with `payload_too_large`: 32 MiB for `POST /sessions/{id}/inputs`, and 8 MiB for any other route. Any other error is `internal`, and its message is a fixed string. A path or method that no route serves answers 404 or 405 with `invalid_request`.
 
 As the engine did, the actor masks and bounds each error text that it writes to the log (`turn.ended` error, `goal.changed` reason): recognized credential shapes are redacted (best effort: a free-form text can hold a shape that the fixed patterns miss), and a text longer than 256 runes keeps its first 256 runes and ends with `...[truncated]`. A failed `turn.ended` also holds the message as a report to a parent reads it, in `error_detail`, when that differs from `error`: masked by the secret patterns of the engine, and cut at 500 runes with `… [truncated]` (see Settle).
 
@@ -624,7 +624,7 @@ As the engine did, the actor masks and bounds each error text that it writes to 
 
 ### Contract source
 
-Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `server` exports. CI regenerates and fails on a diff. A test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted. The generated contract holds what the handler does: each request body is optional, because the handler reads an empty body as the zero request; a type that only a request holds refuses unknown fields, as the handler answers `invalid_request`; and each success status of a route is an entry of the table. The process, logs, and health bodies are `protocol` types (`ProcessInfo`, `ProcessStatus`, `ProcessLogs`, and `Health`).
+Go types in `protocol` are the source. `go generate ./protocol` writes `protocol/openapi.json` and `protocol/protocol.ts` with `github.com/invopop/jsonschema` and a route table that `internal/server` exports. CI regenerates and fails on a diff. A test walks the route table against the mux. The hand-written `server/openapi.yaml` is deleted. The generated contract holds what the handler does: each request body is optional, because the handler reads an empty body as the zero request; a type that only a request holds refuses unknown fields, as the handler answers `invalid_request`; and each success status of a route is an entry of the table. The process, logs, and health bodies are `protocol` types (`ProcessInfo`, `ProcessStatus`, `ProcessLogs`, and `Health`).
 
 ### Command
 
@@ -846,7 +846,7 @@ A file that cannot be read, is empty, or is not UTF-8 is skipped, and so is a sk
 
 A backend that owns the loop ignores `Instructions` and builds its own prompt. The runtime still reads the prompt when such a session starts, and the backend does not use it. Claude Code gets `append_system_prompt` as one `--append-system-prompt` value, and the CLI runs in `WorkDir`.
 
-Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. The engine keeps its own sentence, about the newest user message, through `prompt.EngineBase` until phase 6. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
+Each turn sends the prompt with one process status line after it, built when the turn starts. See "processes". Each model call then adds the MCP segment, then the plugin segments. See "MCP tools" and "plugins". There is no outline mode, no chain ceiling, and no other ambient segment than the engine banner. With `Options.Version`, each model call of a harness-loop turn sends `[engine: harness <version> · session_sync=<mode> · engine started <time>]` in `<harness-engine-context>` tags after the history message that was newest when the first request of the session left. Each request is a prefix of the next, also after a compaction in the middle of a turn, and a compaction can only move the place earlier. A backend that owns its loop gets no banner. The base prompt says that the status follows the system prompt. Tools run one at a time, so the tool-batching segment is gone. At the switch, the `runtime_prompt` contract rows change in three ways: the `instructions_mode` and outline rows go, a bad file degrades instead of failing the turn, and no batching segment follows the base prompt.
 
 ### processes
 
@@ -948,7 +948,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and th
 | `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
 | `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
 | Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |
-| Imports | `depguard`: internal packages never import `server` or `cmd` |
+| Imports | `depguard`: internal packages never import `cmd` |
 | Lint | `govet`, `staticcheck`, `errcheck`, `unused`, `revive` |
 
 Gates compare a branch with its merge base, so old code never blocks a change and new code starts strict. The protocol drift gate regenerates `protocol/` and fails on a diff; it is the Protocol drift step of CI. `AGENTS.md` shrinks to these gates and the four rules.

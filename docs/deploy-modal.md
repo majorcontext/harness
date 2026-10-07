@@ -107,60 +107,31 @@ Volume can `harness run -c` (continue the most recent session) or `-r <id>`
 sessions.
 
 **Use Volumes v2 (`version=2`).** Classic Volumes commit in the background
-and can silently lose the tail of the session log and event journal when a
+and can silently lose the tail of the session log when a
 sandbox is terminated abruptly — verified empirically: an abrupt kill on a
 classic Volume preserved 1 of 7 messages; the same test on a v2 Volume
 preserved all of them. v2 syncs continuously and needs no explicit
 `commit()` calls.
 
-### Set `session_sync: "volume"` for Modal Volume v2
+### Durability of the session log
 
-Harness's durable-enqueue and session-create paths (`POST
-/session/{id}/enqueue`, session Persist) attest durability by fsyncing the
-session log file and, on first creation, its containing directory — the
-right thing on a local POSIX filesystem, but not on a Volume v2 mount:
+`DiskStore` appends each record to the session log, `log.jsonl`, and calls
+`fsync` on the file before it acknowledges the append. When it creates a
+session, it also calls `fsync` on the directory of the session. This is the
+right behavior on a local POSIX filesystem. On a Volume v2 mount the file
+`fsync` adds nothing to the continuous sync of the volume, which is the
+durability boundary (see "Use Volumes v2" above).
 
-- **fsync adds no durability there.** v2's continuous background sync is
-  itself the documented durability boundary (see "Use Volumes v2" above) —
-  an fsync round-trip on top of it commits nothing an attestation doesn't
-  already have once the write(2) lands.
-- **fsync can wedge the mount.** The volume is mounted over a FUSE/9p-style
-  transport, and some such transports deadlock permanently on `fsync`
-  (`fsync(dirfd)` especially) rather than returning an error. A syscall
-  cannot be cancelled from userspace once it wedges, so the only fix is not
-  issuing it in the first place.
+The config key `session_sync` accepts `"fsync"` (the default) and `"volume"`.
+The runtime does not change how `DiskStore` writes for either value. It
+reports the value in `GET /health` as `session_sync` and in the engine banner.
+The config summary that `harness serve` logs at start echoes it only when it is
+`"volume"`. A reader can see which mode a given box is configured for.
 
-In production this showed up as a boot-time hang traceable directly to the
-in-flight store/create watchdog's logs: the very first session create's
-`sync_dir` phase climbed past 134 seconds with no completion, and every
-create attempted afterward got stuck at a bare `open` on the same file —
-the wedged fsync had taken the whole mount down with it, not just the one
-call. Look for that shape (`sync_dir` — or `fsync` for the durable-enqueue
-path — reported "in flight" for an implausibly long time by the watchdog,
-followed by unrelated opens on the same volume also stalling) as the signal
-to set this.
-
-Set it in config (`~/.harness/config.json` or the project `.harness.json`,
-whichever layer configures the box):
-
-```json
-{
-  "session_sync": "volume"
-}
-```
-
-This skips both fsync round-trips entirely for this process — no syscall is
-issued, so there is nothing left to wedge. It does not weaken durability
-relative to what the backend actually provides: v2's own commit layer is
-already the durability boundary, so an attestation under `"volume"` means
-exactly what v2's continuous sync guarantees, no more and no less. Nothing
-else changes — the write(2) calls, the torn-tail repair on reopen, and the
-last-writer-wins replay fold that heals a lost tail all behave identically
-in both modes, because a volume can still lose an unsynced tail on an
-abrupt kill exactly like a torn fsync can (see "Ephemerality e2e" below,
-which continues to exercise this survival path either way). The boot log
-line (`harness serve`'s config summary) echoes `session_sync=volume` when
-set, so it's visible at a glance which mode a given box is running.
+A torn tail of the log, left by an abrupt kill, is repaired when the session
+opens. The `store phase in flight` warning (see
+[fleet-and-serve.md](fleet-and-serve.md)) names a store operation that hangs
+on a mount.
 
 ### (c) Keys via a credential-injecting proxy (alternative to Secrets)
 
@@ -187,7 +158,7 @@ env, or Modal Secret attached to the workload.
 ### Project instructions in the box
 
 `harness serve` (and `harness run`) sets each session's `WorkDir` to the
-process's current directory, and the engine auto-injects the nearest `AGENTS.md`
+process's current directory, and the runtime injects the nearest `AGENTS.md`
 found by walking up from `WorkDir`. So box sessions automatically pick up the
 cloned repo's `AGENTS.md` — as long as `harness serve` is launched from inside
 the clone (set the sandbox working directory to the repo root, or `cd` into it
@@ -217,22 +188,18 @@ cloned repository's `.harness.json`. A repository can add facts but cannot
 remove platform entries through this key. A `claude-code/*` session sends the
 entries as one `--append-system-prompt` value. Do not also put either Claude
 Code append-prompt option in provider `extra_args`; Harness rejects that
-conflict. See [engine-request-cycle.md](engine-request-cycle.md).
+conflict. See "Prompt" in [architecture.md](architecture.md).
 
 ### Verifying what reaches the model
 
-For native providers, three surfaces show what Harness assembled:
-`GET /session/{id}/request`, durable `request.meta` events, and the built-in
-`session_info` tool. The request endpoint contains the ordered system segments,
-tool names, message count, and sampling parameters. Harness stores full requests
-in memory only, so a session that has not prompted in this process returns
-`404`. A `request.meta` event includes the system hash and counts. It includes
-the full system only when the hash changes.
+For a session on a model API backend, the built-in `session_info` tool
+returns the exact system segments that the model received in the turn, the
+active tool names, the source of the project instructions, the discovered
+skills, and the configured plugins.
 
-Delegated Claude Code turns do not use Harness request assembly. They therefore
-do not populate these three native-request surfaces. Use child-process argv
-logging or Claude Code diagnostics to verify its effective appended prompt.
-The engine tests assert the exact managed CLI option.
+Delegated Claude Code turns do not use Harness request assembly, so
+`session_info` does not describe their prompt. Use child-process argv logging
+or Claude Code diagnostics to verify the appended prompt that the CLI gets.
 
 The `e2e/` suite verifies that a native request contains the exact configured
 segments in their expected positions. It also verifies project instructions
@@ -283,12 +250,12 @@ What it does:
 2. Launches a sandbox on a **v2** Volume, creates a session, and drives one
    tiny real prompt through the tunnel (a bash `echo`) using the real
    `ANTHROPIC_API_KEY` from the environment. Records the message count `N` and
-   the max event seq.
+   the `head_seq` of the session.
 3. `sb.terminate()`s the sandbox abruptly (no graceful shutdown).
 4. Relaunches a fresh sandbox on the same Volume and asserts: the session is
-   listed, the message count is still `N`, the event journal's seq continues
-   above the prior max (the counter resumed from disk rather than resetting),
-   and the session is still promptable with one more tiny prompt.
+   listed, the message count is still `N`, the `head_seq` of the
+   session continues above the prior value (the counter resumed from disk
+   rather than resetting), and the session is still promptable with one more tiny prompt.
 
 Sandboxes it creates are terminated on exit (including on exception), and it
 prints a final `PASS`/`FAIL` line with the counts.
@@ -301,7 +268,7 @@ python scripts/modal-e2e.py --classic-volume   # also run the v1 negative contro
 
 The optional `--classic-volume` flag repeats the flow on a `version=1` Volume as
 an **informational negative control**: classic Volumes commit in the background
-and can lose the tail of the session log / event journal on an abrupt kill (see
+and can lose the tail of the session log on an abrupt kill (see
 "Use Volumes v2" above). The control only reports its delta — it never affects
 the exit code either way.
 

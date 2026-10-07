@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"sync"
@@ -756,29 +755,6 @@ func (p *procConn) Close() error {
 		<-done
 	}
 	return nil
-}
-
-// NewTestSpec builds a Spec that runs an in-process fake plugin — over a
-// net.Pipe, no subprocess — speaking the real protocol with the given
-// hooks. It exists so integration tests in other packages (e.g. server,
-// which cannot reach Spec's unexported dial field) can drive a real Host
-// dispatch end-to-end without spawning a binary, per the "no subprocess
-// fixtures unless the subprocess machinery itself is under test" testing
-// rule. serve() fills in the manifest's hooks/tools/protocol version exactly
-// as a real plugin process would.
-func NewTestSpec(name string, hooks *Hooks) Spec {
-	m := Manifest{Name: name, ProtocolVersion: ProtocolVersion, Hooks: hooks.hookList()}
-	for _, tool := range hooks.Tools {
-		m.Tools = append(m.Tools, tool.Def)
-	}
-	return Spec{
-		Manifest: m,
-		dial: func() (io.ReadWriteCloser, error) {
-			hostSide, pluginSide := net.Pipe()
-			go serve(pluginSide, Manifest{Name: name}, hooks) //nolint:errcheck
-			return hostSide, nil
-		},
-	}
 }
 
 // ProbeSpec spawns a plugin binary using the full spec — command, Env, Dir,

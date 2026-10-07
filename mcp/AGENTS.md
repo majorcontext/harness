@@ -1,8 +1,8 @@
 # MCP client
 
-Read the root AGENTS.md. `engine/AGENTS.md` owns connection policy.
+Read the root AGENTS.md.
 
-- Keep this package independent from engine, server, and command code.
+- Keep this package independent from runtime, server, and command code.
 - Keep JSON-RPC framing dependency-free. Preserve request ID correlation.
 - Stdio uses one JSON-RPC message per line.
 - Streamable HTTP accepts a JSON or SSE response. Preserve `MCP-Session-Id`.
