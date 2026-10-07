@@ -8,22 +8,6 @@ import (
 	"net/url"
 )
 
-// protocolVersion is the MCP revision this server implements.
-const protocolVersion = "2025-11-25"
-
-// rpcMessage is a JSON-RPC 2.0 envelope. ID stays raw so replies preserve its
-// string or number form.
-type rpcMessage struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *RPCError       `json:"error,omitempty"`
-}
-
-func (m rpcMessage) isNotification() bool { return m.Method != "" && len(m.ID) == 0 }
-
 // callToolRequest is the tools/call request payload.
 type callToolRequest struct {
 	Name      string          `json:"name"`
@@ -95,7 +79,7 @@ func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var msg rpcMessage
+	var msg message
 	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
 		reg.writeError(w, nil, codeParseError, fmt.Sprintf("parse error: %v", err))
 		return
@@ -150,7 +134,7 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 	case methodInitialize:
 		// The request body (initializeParams) is intentionally not even
 		// decoded: this server implements exactly one protocol revision
-		// (protocolVersion) and always reports THAT version, never the
+		// (LatestProtocolVersion) and always reports THAT version, never the
 		// client's own requested one. Per the transport spec, a server
 		// that does not support the client's requested version responds
 		// with a version it DOES support so the client can decide whether
@@ -158,7 +142,7 @@ func (reg *Registry) dispatch(ctx context.Context, method string, params json.Ra
 		// would claim support for a revision this server may not actually
 		// implement.
 		return InitializeResult{
-			ProtocolVersion: protocolVersion,
+			ProtocolVersion: LatestProtocolVersion,
 			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{}},
 			ServerInfo:      reg.serverInfo,
 			Instructions:    reg.instructions,
@@ -199,7 +183,7 @@ func (reg *Registry) writeResult(w http.ResponseWriter, id json.RawMessage, resu
 		reg.writeError(w, id, codeInternalError, fmt.Sprintf("encoding result: %v", err))
 		return
 	}
-	body, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Result: raw})
+	body, err := json.Marshal(message{JSONRPC: "2.0", ID: id, Result: raw})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -212,11 +196,11 @@ func (reg *Registry) writeResult(w http.ResponseWriter, id json.RawMessage, resu
 // writeError writes a JSON-RPC error response. A nil id (a request this
 // server could not even parse an id out of, e.g. a parse-error body) is
 // written as JSON null, per the spec's guidance for that case.
-func (reg *Registry) writeError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
+func (reg *Registry) writeError(w http.ResponseWriter, id json.RawMessage, code int, text string) {
 	if id == nil {
 		id = json.RawMessage("null")
 	}
-	body, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Error: &RPCError{Code: code, Message: message}})
+	body, err := json.Marshal(message{JSONRPC: "2.0", ID: id, Error: &RPCError{Code: code, Message: text}})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -225,8 +209,8 @@ func (reg *Registry) writeError(w http.ResponseWriter, id json.RawMessage, code 
 	// JSON-RPC errors still ride an HTTP 200: the error is at the JSON-RPC
 	// protocol layer, not the HTTP transport layer (the Streamable HTTP
 	// spec reserves non-2xx status codes for transport-level failures,
-	// e.g. an unrecognized session ID) — mirrors package mcp's own client,
-	// which reads msg.Error regardless of a 200 status.
+	// e.g. an unrecognized session ID); the client reads msg.Error
+	// regardless of a 200 status.
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }
