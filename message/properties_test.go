@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -463,24 +462,6 @@ func TestNormalizeIdempotent(t *testing.T) {
 	})
 }
 
-// TestResolveOrphanToolCallsPropertyNoDataLoss is invariant 5 from the
-// independent wire-model oracle (message/wire_oracle_test.go): every
-// ToolResult present in the input is present, unchanged and in the same
-// relative order, in ResolveOrphanToolCalls's output. This is the property
-// that actually matters here — see this file's doc comment above for why
-// the predicate this test used to rely on (hasOrphanToolCall, now deleted)
-// could never have caught the exact bug class this checks for: a rewrite
-// of ResolveOrphanToolCalls that deletes genuine tool output.
-func TestResolveOrphanToolCallsPropertyNoDataLoss(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		out := ResolveOrphanToolCalls(in)
-		if v := checkNoDataLoss(in, out); len(v) != 0 {
-			t.Fatalf("ResolveOrphanToolCalls lost or altered a genuine tool_result: %v", v)
-		}
-	})
-}
-
 // TestNormalizeForWirePropertyNoDataLoss is NormalizeForWire's own
 // no-data-loss guard, run against the SAME fully arbitrary, unconstrained
 // generator (genMessageSequence) TestResolveOrphanToolCallsPropertyNoDataLoss
@@ -578,57 +559,6 @@ func TestNormalizeForWirePropertyWireValid(t *testing.T) {
 			ij, _ := json.MarshalIndent(in, "", "  ")
 			oj, _ := json.MarshalIndent(out, "", "  ")
 			t.Fatalf("NormalizeForWire lost or altered real data:\n input: %s\noutput: %s\n violations: %s", ij, oj, violationStrings(v))
-		}
-	})
-}
-
-// TestResolveOrphanToolCallsPropertyFixedPoint checks the second of
-// property 4's three parts: re-applying ResolveOrphanToolCalls to its own
-// output changes nothing further — every orphan it can find, it resolves in
-// one pass.
-func TestResolveOrphanToolCallsPropertyFixedPoint(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		out := ResolveOrphanToolCalls(in)
-
-		raw1, err := json.Marshal(out)
-		if err != nil {
-			t.Fatalf("Marshal(out): %v", err)
-		}
-		again := ResolveOrphanToolCalls(out)
-		raw2, err := json.Marshal(again)
-		if err != nil {
-			t.Fatalf("Marshal(again): %v", err)
-		}
-		if !bytes.Equal(raw1, raw2) {
-			t.Fatalf("ResolveOrphanToolCalls is not a fixed point on its own output:\n first: %s\nsecond: %s", raw1, raw2)
-		}
-	})
-}
-
-// TestResolveOrphanToolCallsPropertyDoesNotMutateInput pins ResolveOrphanToolCalls's
-// doc comment: "messages is never mutated in place; the input slice and its
-// Message values are safe to reuse after this call."
-//
-// This check used to compare json.Marshal(in) before and after the call
-// (byte-for-byte). That was insufficient: Marshal CANONICALIZES —
-// ProviderData.MarshalJSON drops zero-length/invalid entries, and
-// ToolCall.safeArguments coerces empty Arguments to "{}" — so an in-place
-// mutation that only touches bytes the canonical encoding already erases
-// (e.g. overwriting the value of an already-empty ProviderData entry, or an
-// already-empty Arguments) would marshal identically before and after and
-// slip through undetected. A structural snapshot compared with
-// reflect.DeepEqual has no such blind spot: it sees every byte regardless
-// of whether the canonical encoding would keep it.
-func TestResolveOrphanToolCallsPropertyDoesNotMutateInput(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		in := genMessageSequence(t)
-		snapshot := deepCloneMessages(t, in)
-
-		_ = ResolveOrphanToolCalls(in)
-
-		if !reflect.DeepEqual(snapshot, in) {
-			t.Fatalf("ResolveOrphanToolCalls mutated its input in place:\nbefore: %+v\nafter:  %+v", snapshot, in)
 		}
 	})
 }

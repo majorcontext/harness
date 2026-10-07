@@ -39,9 +39,6 @@ jobs:
           - id: message-unmarshal
             package: ./message/
             target: FuzzUnmarshalMessage
-          - id: typeid-parse
-            package: ./typeid/
-            target: FuzzParse
           - id: skill-frontmatter
             package: ./skill/
             target: FuzzParseFrontmatter

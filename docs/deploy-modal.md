@@ -124,9 +124,9 @@ durability boundary (see "Use Volumes v2" above).
 
 The config key `session_sync` accepts `"fsync"` (the default) and `"volume"`.
 The runtime does not change how `DiskStore` writes for either value. It
-reports the value in `GET /health` as `session_sync`, in the engine banner, and
-in the config summary that `harness serve` logs at start, so a reader can see
-which mode a given box is configured for.
+reports the value in `GET /health` as `session_sync` and in the engine banner.
+The config summary that `harness serve` logs at start echoes it only when it is
+`"volume"`. A reader can see which mode a given box is configured for.
 
 A torn tail of the log, left by an abrupt kill, is repaired when the session
 opens. The `store phase in flight` warning (see

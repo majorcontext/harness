@@ -29,8 +29,6 @@ func mergeModes(ms ...map[string]mode) map[string]mode {
 
 var modes = mergeModes(basicModes, threadModes, stdinModes, childModes)
 
-const credentialError = "API Error: 502 credential resolution failed. This is a server-side issue, usually temporary — try again in a moment."
-
 func normalTurn(f *fake) {
 	f.emit(
 		say("Let me check that."),
@@ -66,7 +64,7 @@ func perCallUsage(f *fake) {
 	)
 }
 
-func rateLimitTurn(withOverage bool) mode {
+func rateLimitTurn() mode {
 	return func(f *fake) {
 		info := obj{
 			"status": "allowed", "resetsAt": 1788785267, "rateLimitType": "five_hour",
@@ -75,10 +73,6 @@ func rateLimitTurn(withOverage bool) mode {
 				"five_hour": obj{"utilization": 0.02, "resetsAt": 1788785267},
 				"seven_day": obj{"utilization": 0.13, "resetsAt": 1789200000},
 			},
-		}
-		if !withOverage {
-			info["overageStatus"] = ""
-			info["overageResetsAt"] = 0
 		}
 		f.emit(rateLimitEvent(info), say("Here is my answer."), success("Here is my answer.", 9, 4))
 	}
@@ -97,38 +91,28 @@ func hang(f *fake) {
 	time.Sleep(time.Hour)
 }
 
-// basicModes cover result classification and process exit. The retry class
-// comes from the result subtype and text: "rate_limit_error" and
-// "transient_server_error" are retryable, "deterministic_error" (max turns)
-// is not, and the credential modes are permanent failures. "crash" exits
+// basicModes cover result classification and process exit. "crash" exits
 // nonzero after init and is retryable, while "crash_before_init"
 // (modes_question.go) exits before any frame and is not. "fast_no_drain"
 // closes stdin before the driver writes, so a broken-pipe write must not
 // fail a complete turn.
 var basicModes = map[string]mode{
-	"per_call_usage":              perCallUsage,
-	"compact_after_window":        perCallUsage,
-	"compact_boundary":            compactBoundary,
-	"rate_limit_event":            rateLimitTurn(true),
-	"rate_limit_event_no_overage": rateLimitTurn(false),
-	"hang":                        hang,
-	"hang_after_text":             hangAfterText,
-	"hang_after_listing":          hangAfterListing,
-	"hang_in_tool":                hangInTool,
-	"tool_on_interrupt":           hangAfterText,
-	"tool_result_on_interrupt":    hangAfterText,
-	"success_on_interrupt":        hangAfterText,
-	"placeholder_on_interrupt":    hangAfterText,
-	"exit_on_interrupt":           hangAfterText,
-	"crash":                       crashAfter(),
-	"fast_no_drain":               frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
-	"error":                       frames(result("error_during_execution", true, "fake failure", 11, 3)),
-	"empty_result_no_num_turns":   frames(success("", 0, 0)),
-	"rate_limit_error":            frames(result("error_during_execution", true, "rate_limit_error: please retry later", 6, 1)),
-	"deterministic_error":         frames(result("error_max_turns", true, "exceeded maximum turns", 8, 2)),
-	"credential_error_execution":  frames(result("error_during_execution", true, credentialError, 0, 0)),
-	"credential_error_success":    frames(result("success", true, credentialError, 0, 0)),
-	"transient_server_error":      frames(result("error_during_execution", true, "API Error: 500 internal server error", 0, 0)),
+	"per_call_usage":           perCallUsage,
+	"compact_after_window":     perCallUsage,
+	"compact_boundary":         compactBoundary,
+	"rate_limit_event":         rateLimitTurn(),
+	"hang_after_text":          hangAfterText,
+	"hang_after_listing":       hangAfterListing,
+	"hang_in_tool":             hangInTool,
+	"tool_on_interrupt":        hangAfterText,
+	"tool_result_on_interrupt": hangAfterText,
+	"success_on_interrupt":     hangAfterText,
+	"placeholder_on_interrupt": hangAfterText,
+	"exit_on_interrupt":        hangAfterText,
+	"crash":                    crashAfter(),
+	"fast_no_drain":            frames(say("Done before you finished writing."), success("Done before you finished writing.", 4, 6)),
+	"error":                    frames(result("error_during_execution", true, "fake failure", 11, 3)),
+	"rate_limit_error":         frames(result("error_during_execution", true, "rate_limit_error: please retry later", 6, 1)),
 }
 
 func hangAfterText(f *fake) {

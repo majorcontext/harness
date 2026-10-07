@@ -11,7 +11,6 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/majorcontext/harness/message"
@@ -278,16 +277,4 @@ type Provider interface {
 	// ProviderData tag this adapter reads and writes.
 	Name() string
 	Stream(ctx context.Context, req *Request) (Stream, error)
-}
-
-// Registry maps provider family names to adapters.
-type Registry map[string]Provider
-
-// For returns the adapter for a model ref.
-func (r Registry) For(ref message.ModelRef) (Provider, error) {
-	p, ok := r[ref.Provider]
-	if !ok {
-		return nil, fmt.Errorf("provider: no adapter for %q (model %s)", ref.Provider, ref)
-	}
-	return p, nil
 }

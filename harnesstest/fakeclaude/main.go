@@ -10,7 +10,6 @@
 //	FAKE_CLAUDE_STDIN_LOG  append every input line read
 //	FAKE_CLAUDE_SESSION_ID session id in the init frame (default fake-session-1)
 //	FAKE_CLAUDE_STATE      file path that keeps the "question" mode parked state
-//	FAKE_CLAUDE_LEAK_PID_FILE  receives the pid of a leaked grandchild
 //	FAKE_CLAUDE_DISMISS_DIES   makes a dismissed parked question exit at once
 //	FAKE_CLAUDE_INIT_TOOLS     JSON tool list of the init frame
 //	FAKE_CLAUDE_ENV_LOG        receives the environment as a JSON array
@@ -148,16 +147,8 @@ func exitWithParent() {
 }
 
 func main() {
-	spawn := 0
-	mode := os.Getenv("FAKE_CLAUDE_MODE")
-	if mode != "bg_leak_child" {
-		spawn = spawnNumber()
-		mode = modeOfSpawn(spawn)
-	}
-	if mode == "bg_leak_child" {
-		time.Sleep(time.Hour)
-		return
-	}
+	spawn := spawnNumber()
+	mode := modeOfSpawn(spawn)
 	if mode == "fast_no_drain" {
 		_ = os.Stdin.Close()
 	}

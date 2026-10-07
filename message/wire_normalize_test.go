@@ -280,55 +280,6 @@ func TestNormalizeForWireIsFixedPoint(t *testing.T) {
 	}
 }
 
-// TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes guards the
-// architecture NormalizeForWire requires: ResolveOrphanToolCalls is the
-// function engine.LoadSession applies to LIVE history (engine/store.go),
-// so it must stay purely additive FOREVER, even for the four gap shapes
-// NormalizeForWire (this file's own subject) exists specifically to
-// repair at transcode time. This test pins that ResolveOrphanToolCalls's
-// own output, run through EVERY one of the four gap shapes, never drops or
-// reorders a real ToolResult — regardless of whether it also manages to
-// make the shape wire-valid (it is documented NOT to, for most of these;
-// see wire_oracle_meta_test.go's TestResolveOrphanToolCallsLeaves*Unrepaired and
-// TestLegitimate* cases, which pin the precise wire-validity gaps this
-// test deliberately does not re-assert). A future change that makes
-// ResolveOrphanToolCalls itself destructive — the exact defect class that
-// was reverted once already — fails this test first, before it could ever
-// reach LIVE history.
-func TestResolveOrphanToolCallsRemainsAdditiveAcrossAllGapShapes(t *testing.T) {
-	shapes := map[string][]Message{
-		"duplicate call id": {
-			{Role: RoleAssistant, Parts: Parts{
-				toolCallPart("A", "bash", `{}`),
-				toolCallPart("A", "bash", `{}`),
-			}},
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "ok"}}}}},
-		},
-		"tool call in non-assistant message": {
-			{Role: RoleUser, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-			{Role: RoleAssistant, Parts: Parts{&Text{Text: "carries on"}}},
-		},
-		"tool result preceding its tool call": {
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "stray, too early"}}}}},
-			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-		},
-		"tool result separated by an intervening assistant message": {
-			{Role: RoleUser, Parts: Parts{&Text{Text: "go"}}},
-			{Role: RoleAssistant, Parts: Parts{toolCallPart("A", "bash", `{}`)}},
-			{Role: RoleAssistant, Parts: Parts{&Text{Text: "thinking out loud"}}},
-			{Role: RoleTool, Parts: Parts{&ToolResult{CallID: "A", Content: Parts{&Text{Text: "REAL OUTPUT"}}}}},
-		},
-	}
-	for name, in := range shapes {
-		t.Run(name, func(t *testing.T) {
-			out := ResolveOrphanToolCalls(in)
-			if v := checkNoDataLoss(in, out); len(v) != 0 {
-				t.Fatalf("ResolveOrphanToolCalls lost or reordered real data for shape %q: %s", name, violationStrings(v))
-			}
-		})
-	}
-}
-
 // TestNormalizeForWireDemotesUnanswerableToolResult is the golden
 // regression test for the fifth gap: a ToolResult whose CallID matches NO
 // ToolCall anywhere in history at all. Neither counting nor relocation can

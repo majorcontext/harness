@@ -16,8 +16,8 @@ import (
 // re-running `harness plugin install` — must fail to start with the
 // reinstall message, and the hook must never run.
 //
-// NewTestSpec's fake plugin always reports Manifest{Name: name} (the name
-// given to NewTestSpec) at initialize time, independent of whatever the
+// testPlugin's fake plugin always reports Manifest{Name: name} (the name
+// given to testPlugin) at initialize time, independent of whatever the
 // returned Spec's Manifest field is changed to afterward. Mutating
 // spec.Manifest.Name post-construction reproduces exactly the stale-cache
 // scenario: the cache (spec.Manifest) diverges from what the live process

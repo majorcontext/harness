@@ -220,7 +220,7 @@ Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), 
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, and `prompt.EngineBase`. It still deletes `mcpserver` (merged into `internal/mcp`), and `imageclamp` and `typeid` (merged into their one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It still deletes `mcpserver` (merged into `internal/mcp`) and `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 

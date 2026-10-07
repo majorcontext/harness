@@ -43,7 +43,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -183,40 +182,4 @@ func (s *Skill) Instructions() (string, error) {
 		return "", fmt.Errorf("%s: %w", s.Path, err)
 	}
 	return body, nil
-}
-
-// Discover loads every immediate subdirectory of root that contains a
-// SKILL.md. Directories without a SKILL.md are skipped. A missing root
-// returns an empty slice and no error. Any invalid skill fails the whole
-// Discover with the error from Load (which names the offending SKILL.md).
-// Results are sorted by name.
-func Discover(root string) ([]*Skill, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var skills []*Skill
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		dir := filepath.Join(root, e.Name())
-		if _, err := os.Stat(filepath.Join(dir, Filename)); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, err
-		}
-		s, err := Load(dir)
-		if err != nil {
-			return nil, err
-		}
-		skills = append(skills, s)
-	}
-	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
-	return skills, nil
 }
