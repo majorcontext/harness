@@ -1,4 +1,4 @@
-package mcpserver
+package mcp
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/majorcontext/harness/mcp"
 )
 
 // rpcResponse decodes one JSON-RPC 2.0 response body for assertions below.
@@ -17,7 +15,7 @@ type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result"`
-	Error   *mcp.RPCError   `json:"error"`
+	Error   *RPCError       `json:"error"`
 }
 
 func post(t *testing.T, reg *Registry, method string, id string, params any) (int, rpcResponse) {
@@ -58,7 +56,7 @@ func TestRegistryInitializeReturnsCapabilities(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("initialize returned an error: %+v", resp.Error)
 	}
-	var result mcp.InitializeResult
+	var result InitializeResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decoding InitializeResult: %v", err)
 	}
@@ -68,26 +66,26 @@ func TestRegistryInitializeReturnsCapabilities(t *testing.T) {
 	if result.Capabilities.Tools == nil {
 		t.Error("Capabilities.Tools is nil, want a non-nil tools capability")
 	}
-	if result.ProtocolVersion != protocolVersion {
-		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q", result.ProtocolVersion, protocolVersion)
+	if result.ProtocolVersion != LatestProtocolVersion {
+		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q", result.ProtocolVersion, LatestProtocolVersion)
 	}
 }
 
 // TestRegistryInitializeReportsOwnVersionNotClientsUnsupportedOne proves
 // initialize never echoes back a client-requested protocolVersion this
 // server does not actually implement — it always reports its own single
-// supported revision (protocolVersion), regardless of what the client
+// supported revision (LatestProtocolVersion), regardless of what the client
 // asked for. Echoing an arbitrary client value would falsely claim
 // support for a revision this server may not speak at all.
 func TestRegistryInitializeReportsOwnVersionNotClientsUnsupportedOne(t *testing.T) {
 	reg := NewRegistry("test-server", "1.0.0")
 	_, resp := post(t, reg, methodInitialize, "1", map[string]any{"protocolVersion": "1999-01-01"})
-	var result mcp.InitializeResult
+	var result InitializeResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decoding InitializeResult: %v", err)
 	}
-	if result.ProtocolVersion != protocolVersion {
-		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q, not the client's unsupported request", result.ProtocolVersion, protocolVersion)
+	if result.ProtocolVersion != LatestProtocolVersion {
+		t.Errorf("ProtocolVersion = %q, want this server's own supported version %q, not the client's unsupported request", result.ProtocolVersion, LatestProtocolVersion)
 	}
 }
 
@@ -95,15 +93,15 @@ func TestRegistryInitializeReportsOwnVersionNotClientsUnsupportedOne(t *testing.
 // call is reflected verbatim in tools/list.
 func TestRegistryToolsListIncludesRegisteredTools(t *testing.T) {
 	reg := NewRegistry("test-server", "1.0.0")
-	reg.RegisterTool(mcp.Tool{Name: "get_conversation_history", Description: "reads prior history"}, func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
-		return mcp.CallToolResult{}, nil
+	reg.RegisterTool(Tool{Name: "get_conversation_history", Description: "reads prior history"}, func(context.Context, json.RawMessage) (CallToolResult, error) {
+		return CallToolResult{}, nil
 	})
 
 	code, resp := post(t, reg, methodToolsList, "1", nil)
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
-	var result mcp.ListToolsResult
+	var result ListToolsResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decoding ListToolsResult: %v", err)
 	}
@@ -119,9 +117,9 @@ func TestRegistryToolsListIncludesRegisteredTools(t *testing.T) {
 func TestRegistryToolsCallDispatchesToHandlerWithArguments(t *testing.T) {
 	var gotArgs, gotMeta json.RawMessage
 	reg := NewRegistry("test-server", "1.0.0")
-	reg.RegisterTool(mcp.Tool{Name: "echo"}, func(ctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
+	reg.RegisterTool(Tool{Name: "echo"}, func(ctx context.Context, args json.RawMessage) (CallToolResult, error) {
 		gotArgs, gotMeta = args, CallMeta(ctx)
-		return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: "echoed"}}}, nil
+		return CallToolResult{Content: []Content{{Type: ContentTypeText, Text: "echoed"}}}, nil
 	})
 
 	code, resp := post(t, reg, methodToolsCall, "1", map[string]any{
@@ -135,7 +133,7 @@ func TestRegistryToolsCallDispatchesToHandlerWithArguments(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("tools/call returned an error: %+v", resp.Error)
 	}
-	var result mcp.CallToolResult
+	var result CallToolResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decoding CallToolResult: %v", err)
 	}
@@ -167,8 +165,8 @@ func TestRegistryToolsCallDispatchesToHandlerWithArguments(t *testing.T) {
 // protocol-level RPCError an unknown tool name gets (see the next test).
 func TestRegistryToolsCallHandlerErrorBecomesIsErrorResult(t *testing.T) {
 	reg := NewRegistry("test-server", "1.0.0")
-	reg.RegisterTool(mcp.Tool{Name: "fails"}, func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
-		return mcp.CallToolResult{}, errors.New("boom")
+	reg.RegisterTool(Tool{Name: "fails"}, func(context.Context, json.RawMessage) (CallToolResult, error) {
+		return CallToolResult{}, errors.New("boom")
 	})
 
 	code, resp := post(t, reg, methodToolsCall, "1", map[string]any{"name": "fails"})
@@ -178,7 +176,7 @@ func TestRegistryToolsCallHandlerErrorBecomesIsErrorResult(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("tools/call returned a protocol-level error for a tool-level failure: %+v", resp.Error)
 	}
-	var result mcp.CallToolResult
+	var result CallToolResult
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("decoding CallToolResult: %v", err)
 	}
@@ -297,15 +295,15 @@ func TestRegistryAcceptsAbsentOrLoopbackOrigin(t *testing.T) {
 // it in tools/list.
 func TestRegistryRegisterToolReplacesExistingByName(t *testing.T) {
 	reg := NewRegistry("test-server", "1.0.0")
-	reg.RegisterTool(mcp.Tool{Name: "t", Description: "first"}, func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
-		return mcp.CallToolResult{}, nil
+	reg.RegisterTool(Tool{Name: "t", Description: "first"}, func(context.Context, json.RawMessage) (CallToolResult, error) {
+		return CallToolResult{}, nil
 	})
-	reg.RegisterTool(mcp.Tool{Name: "t", Description: "second"}, func(context.Context, json.RawMessage) (mcp.CallToolResult, error) {
-		return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: "second handler"}}}, nil
+	reg.RegisterTool(Tool{Name: "t", Description: "second"}, func(context.Context, json.RawMessage) (CallToolResult, error) {
+		return CallToolResult{Content: []Content{{Type: ContentTypeText, Text: "second handler"}}}, nil
 	})
 
 	_, resp := post(t, reg, methodToolsList, "1", nil)
-	var listResult mcp.ListToolsResult
+	var listResult ListToolsResult
 	if err := json.Unmarshal(resp.Result, &listResult); err != nil {
 		t.Fatalf("decoding ListToolsResult: %v", err)
 	}
@@ -314,7 +312,7 @@ func TestRegistryRegisterToolReplacesExistingByName(t *testing.T) {
 	}
 
 	_, callResp := post(t, reg, methodToolsCall, "1", map[string]any{"name": "t"})
-	var callResult mcp.CallToolResult
+	var callResult CallToolResult
 	if err := json.Unmarshal(callResp.Result, &callResult); err != nil {
 		t.Fatalf("decoding CallToolResult: %v", err)
 	}

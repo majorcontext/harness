@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// LatestProtocolVersion is the protocol version this client requests during
-// initialization.
+// LatestProtocolVersion is the MCP revision the client requests and the server
+// reports during initialization.
 const LatestProtocolVersion = "2025-11-25"
 
 // supportedProtocolVersions are the versions this client can speak if a
@@ -22,7 +22,7 @@ func isSupportedProtocolVersion(v string) bool {
 	return supportedProtocolVersions[v]
 }
 
-// Method names used by this client. Notification methods live under
+// Method names used by the client and the server. Notification methods live under
 // "notifications/" per the spec.
 const (
 	methodInitialize    = "initialize"
@@ -46,7 +46,7 @@ const (
 )
 
 // RPCError is a JSON-RPC 2.0 error object, returned from Client methods when
-// the server responds with an error.
+// the server responds with an error, and written by Registry in its replies.
 type RPCError struct {
 	Code    int             `json:"code"`
 	Message string          `json:"message"`

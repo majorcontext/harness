@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, and `provider/claudecode` are deleted (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -220,7 +220,7 @@ Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), 
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It still deletes `mcpserver` (merged into `internal/mcp`) and `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client; `mcp` moves to `internal/mcp` as above). It still deletes `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -805,7 +805,7 @@ With a `WorkDir`, each session of the harness loop gets the built-in tools of th
 
 ### MCP tools
 
-`internal/tool/mcpsrc` gives the tools of `Config.MCPServers` to each model call. The `mcp` package does not change. `turn` declares the one seam: a `Source` returns a `Toolset` of described tools, deferred tools, and a prompt segment. The turn reads it before each model call, so a tool that the model loads in a turn is callable on the next request of that turn. A deferred tool runs when the model calls it. A backend that owns the loop gets every tool described. A backend with `OwnsMCP` gets no MCP tool on a turn with no `AllowedTools`: the runtime asks no server, and the backend gives every server to the external harness. With `AllowedTools`, the allowed MCP tools reach it through the harness-hosted MCP endpoint.
+`internal/tool/mcpsrc` gives the tools of `Config.MCPServers` to each model call. `mcpsrc` does not change the `mcp` client. `turn` declares the one seam: a `Source` returns a `Toolset` of described tools, deferred tools, and a prompt segment. The turn reads it before each model call, so a tool that the model loads in a turn is callable on the next request of that turn. A deferred tool runs when the model calls it. A backend that owns the loop gets every tool described. A backend with `OwnsMCP` gets no MCP tool on a turn with no `AllowedTools`: the runtime asks no server, and the backend gives every server to the external harness. With `AllowedTools`, the allowed MCP tools reach it through the harness-hosted MCP endpoint.
 
 - Connection. The first model call of a session that the runtime serves MCP tools for connects every configured server, in parallel, once for each runtime. An unrestricted turn of an `OwnsMCP` backend connects none: the external harness connects them. `connect_timeout_s` (default 15) bounds each attempt. A server that fails stays down, with no background retry, until `mcp(action="connect")` makes one more attempt. A connected server is never dialed again. `Runtime.Close` closes every connection and stops each stdio server.
 - Names. Each tool is `mcp__<server>__<tool>`. With `mcp_servers`, an embedder tool named `mcp`, `list_mcp_resources`, `read_mcp_resource`, or `mcp__…` fails `New`. `AllowedTools` restricts these tools and the deferred list, and a backend that owns the loop accepts these names. MCP needs no `WorkDir`: the embedder asks for it in its config.

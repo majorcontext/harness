@@ -17,7 +17,6 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
 	"github.com/majorcontext/harness/mcp"
-	"github.com/majorcontext/harness/mcpserver"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -33,7 +32,7 @@ func TestClaudeCodeKeepsTheConfiguredMCPServersOnTheBridgeOfARestrictedTurn(t *t
 	mcpLog, configLog := filepath.Join(dir, "mcp"), filepath.Join(dir, "config")
 	argvLog := fakeClaude(t, "mcp", toolsInit, `["Read"]`, "FAKE_CLAUDE_MCP_CALL", "echo", "FAKE_CLAUDE_MCP_LOG", mcpLog,
 		"FAKE_CLAUDE_MCP_CONFIG_LOG", configLog)
-	reg := mcpserver.NewRegistry("gateway", "1")
+	reg := mcp.NewRegistry("gateway", "1")
 	reg.RegisterTool(mcp.Tool{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		func(context.Context, json.RawMessage) (mcp.CallToolResult, error) { return mcp.CallToolResult{}, nil })
 	gateway := httptest.NewServer(reg)

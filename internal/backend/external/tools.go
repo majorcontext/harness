@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/majorcontext/harness/mcp"
-	"github.com/majorcontext/harness/mcpserver"
 	"github.com/majorcontext/harness/protocol"
 )
 
@@ -47,7 +46,7 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	t := &Tools{srv: &http.Server{}, cancel: cancel, served: make(chan struct{}), closed: make(chan struct{})}
-	reg := mcpserver.NewRegistry(ToolServer, "")
+	reg := mcp.NewRegistry(ToolServer, "")
 	for _, s := range specs {
 		schema := s.InputSchema
 		if len(schema) == 0 {
@@ -55,7 +54,7 @@ func ServeTools(ctx context.Context, specs []protocol.ToolSpec, idMeta string,
 		}
 		reg.RegisterTool(mcp.Tool{Name: s.Name, Description: s.Description, InputSchema: schema},
 			func(rctx context.Context, args json.RawMessage) (mcp.CallToolResult, error) {
-				id := metaString(mcpserver.CallMeta(rctx), idMeta)
+				id := metaString(mcp.CallMeta(rctx), idMeta)
 				if id == "" {
 					return mcp.CallToolResult{}, fmt.Errorf("the call has no %q in _meta", idMeta)
 				}
