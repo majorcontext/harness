@@ -1,5 +1,0 @@
-{"type":"session","id":"ses_000000000000000d","created_at":"2026-09-03T08:00:03Z","model":"openai/gpt-5","task_parent_id":"ses_000000000000000c","task_agent_type":"explore","task_tool_names":["read","grep"],"task_depth":1}
-{"type":"message","message":{"id":"msg_d1","role":"user","parts":[{"type":"text","text":"area one"}],"source":"task","created_at":"2026-09-03T08:00:03Z"}}
-{"type":"message","message":{"id":"msg_d2","role":"assistant","parts":[{"type":"text","text":"area one is fine"}],"created_at":"2026-09-03T08:00:59Z"},"usage":{"input_tokens":9,"output_tokens":5}}
-{"type":"task.outcome_committed","created_at":"2026-09-03T08:01:00Z","task_notify":{"child_id":"ses_000000000000000d","agent":"explore","status":"done","result":"area one is fine"}}
-{"type":"child_turn.settled","created_at":"2026-09-03T08:01:00Z"}

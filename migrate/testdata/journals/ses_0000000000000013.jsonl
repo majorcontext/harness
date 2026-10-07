@@ -1,7 +1,0 @@
-{"type":"session","id":"ses_0000000000000013","created_at":"2026-09-07T09:00:00Z","model":"openai/gpt-5","task_parent_id":"ses_000000000000000c","task_agent_type":"explore","task_depth":1}
-{"type":"message","message":{"id":"msg_j1","role":"user","parts":[{"type":"text","text":"first"}],"source":"task","created_at":"2026-09-07T09:00:01Z"}}
-{"type":"message","message":{"id":"msg_j2","role":"assistant","parts":[{"type":"text","text":"I cannot."}],"created_at":"2026-09-07T09:00:02Z"}}
-{"type":"task.outcome_committed","created_at":"2026-09-07T09:00:03Z","task_notify":{"child_id":"ses_0000000000000013","agent":"explore","status":"failed","fail_reason":"boom"}}
-{"type":"child_turn.settled","created_at":"2026-09-07T09:00:03Z"}
-{"type":"message","message":{"id":"msg_j3","role":"user","parts":[{"type":"text","text":"second"}],"source":"task","created_at":"2026-09-07T09:01:00Z"}}
-{"type":"message","message":{"id":"msg_j4","role":"assistant","parts":[{"type":"text","text":"second done"}],"created_at":"2026-09-07T09:01:01Z"}}
