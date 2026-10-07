@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// LatestProtocolVersion is the protocol version this client requests during
-// initialization.
+// LatestProtocolVersion is the MCP revision the client requests and the server
+// reports during initialization.
 const LatestProtocolVersion = "2025-11-25"
 
 // supportedProtocolVersions are the versions this client can speak if a
