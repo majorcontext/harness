@@ -233,8 +233,7 @@ func transcodeRequestOpts(req *provider.Request, family string, opts transcodeOp
 	// is the transcode-only repair used here — this call site builds one
 	// throwaway request and never touches the durable record, so its
 	// destructive/relocating repairs are safe here; see its doc comment
-	// for the full mechanism and the additive (message.ResolveOrphanToolCalls,
-	// LIVE history only) / transcode-only split. Note this adapter's own
+	// for the full mechanism. Note this adapter's own
 	// transcodeMessage below is role-strict (RoleUser/RoleAssistant/RoleTool
 	// each accept only their expected part types and error otherwise), so
 	// a ToolCall stranded in a non-assistant message already fails loudly

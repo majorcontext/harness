@@ -215,7 +215,7 @@ func TestTranscodeAssistantTextAndToolCalls(t *testing.T) {
 	))
 	// The assistant message itself, not necessarily the last wire message:
 	// its tool_call has no result anywhere in this request, so
-	// message.ResolveOrphanToolCalls (see transcodeRequest) appends a
+	// message.NormalizeForWire (see transcodeRequest) appends a
 	// synthetic "tool" message after it — see
 	// TestTranscodeOrphanToolCallFinalMessage for that behavior.
 	p := findWireMessage(t, out, "assistant")
@@ -241,7 +241,7 @@ func TestTranscodeAssistantToolCallOnlyNoContent(t *testing.T) {
 	))
 	// Look at the assistant message specifically: this tool_call is
 	// orphaned (nothing else in this request resolves it), so
-	// transcodeRequest's message.ResolveOrphanToolCalls call appends a
+	// transcodeRequest's message.NormalizeForWire call appends a
 	// synthetic "tool" message right after it — that message's own content
 	// is deliberately non-empty (see TestTranscodeOrphanToolCallFinalMessage)
 	// and irrelevant to what this test actually checks.
@@ -438,7 +438,7 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 // one — see
 // engine/engine.go's own primary fix), buried mid-transcript, followed by
 // ordinary later turns. Before the transcoder called
-// message.ResolveOrphanToolCalls, this produced a wire request with a
+// message.NormalizeForWire, this produced a wire request with a
 // dangling tool_calls entry and no "tool"-role message anywhere adjacent —
 // a shape this wire protocol rejects the same way Anthropic's does. After
 // the fix, a synthetic error "tool" message is injected immediately after
@@ -481,7 +481,7 @@ func TestTranscodeOrphanToolCallFinalMessage(t *testing.T) {
 // carrying the matching tool_call_id somewhere after it (the id needed to
 // find the *right* one, since each ToolResult is its own wire message —
 // see transcodeToolMessages), and that the paired result is the synthetic
-// error message.ResolveOrphanToolCalls injects (see
+// error message.NormalizeForWire injects (see
 // message.SyntheticOrphanResultText).
 func assertToolCallFollowedByToolMessage(t *testing.T, out *apiRequest, id string) {
 	t.Helper()

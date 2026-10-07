@@ -495,10 +495,8 @@ func jsonEqual(t *testing.T, a, b json.RawMessage) bool {
 	return string(ab) == string(bb)
 }
 
-// TestTranscodeResolvesOrphanToolCalls: the Responses transcoder was the
-// one transcoder NOT calling message.ResolveOrphanToolCalls at request
-// build (anthropic and openaicompat both do — see their transcode.go and
-// message.ResolveOrphanToolCalls's doc comment), so an assistant ToolCall
+// TestTranscodeResolvesOrphanToolCalls: the Responses transcoder once did
+// not repair orphans at request build, so an assistant ToolCall
 // with no following ToolResult transcoded to a dangling function_call item
 // the API rejects on every retry. The repair must run here too: the
 // dangling call gets a synthetic function_call_output immediately after.

@@ -5,25 +5,10 @@ import (
 	"testing"
 )
 
-// This file has two jobs:
-//
-//  1. Meta-tests proving the oracle in wire_oracle_test.go can actually
-//     fail — an oracle that always passes is worthless. One test per
-//     invariant, feeding a known-bad wire shape and asserting checkWire (or
-//     checkNoDataLoss) flags it.
-//  2. Deliberate-gap documentation: ResolveOrphanToolCalls is purely
-//     additive and PERMANENTLY leaves several shapes unrepaired (see its
-//     own doc comment). Each is run through that REAL
-//     function and then the oracle, which must flag it. These tests
-//     assert the gap EXISTS, so they pass today and must keep passing.
-//     They are not pending work, and closing them here would be a BUG.
-//     ResolveOrphanToolCalls must stay additive because LoadSession writes
-//     its output back into live history — see AGENTS.md's additive-only
-//     history-repair invariant. NormalizeForWire closes these shapes in a
-//     separate transcode-only repair instead, on the side of that line
-//     where a destructive rule is safe. If one of these tests ever goes
-//     red, ResolveOrphanToolCalls has become destructive and that
-//     invariant is broken.
+// Meta-tests proving the oracle in wire_oracle_test.go can actually fail:
+// an oracle that always passes is worthless. One test per invariant, feeding
+// a known-bad wire shape and asserting checkWire (or checkNoDataLoss) flags
+// it.
 
 // --- Meta-tests: one per invariant, proving checkWire/checkNoDataLoss can fail ---
 

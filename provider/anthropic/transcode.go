@@ -354,7 +354,7 @@ func transcodeRequest(req *provider.Request, ttl string) (*apiRequest, error) {
 	// engine/engine.go), but this backstops any OTHER producer of history
 	// — a plugin hook, a hand-rolled adapter, a replayed log from an
 	// older binary — so a request never ships an orphaned tool_use.
-	// NormalizeForWire, not ResolveOrphanToolCalls, belongs here: this call
+	// NormalizeForWire belongs here: this call
 	// site builds one throwaway request and never touches the durable
 	// record, so the destructive/relocating repairs only NormalizeForWire
 	// performs are safe here specifically. See its doc comment for the full
