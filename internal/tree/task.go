@@ -280,7 +280,7 @@ func (t *Tree) send(ctx context.Context, up []string, child, text string) (bool,
 	}
 	rearm := !slices.Contains(p.Actor.View().Unsettled, child)
 	if rearm {
-		if _, err := t.SpawnChild(ctx, p, child, c.Actor.View().Agent); err != nil {
+		if _, err := t.SpawnChild(ctx, p, child, c.Actor.View().Session.Agent); err != nil {
 			return false, err
 		}
 	}

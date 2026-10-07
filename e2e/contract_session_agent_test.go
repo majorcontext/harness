@@ -13,16 +13,22 @@ func TestContractSessionAgent(t *testing.T) {
 	onHosts(t, func(t *testing.T, h host) {
 		t.Run("a_task_child_reports_its_agent_type_and_a_root_session_has_none", func(t *testing.T) {
 			t.Parallel()
-			d, _ := startOn(t, h, runtimeWorkdir(t, nil), nil,
+			d, fake := startOn(t, h, runtimeWorkdir(t, nil), nil,
 				harnesstest.Step{Name: "delegate", Match: harnesstest.LastUserText("delegate"), Reply: harnesstest.Reply{ToolCalls: []harnesstest.ToolCall{{
 					ID: "toolu_1", Name: "task", Input: map[string]any{"agent": "explore", "prompt": "child work"},
 				}}}},
-				harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done"}},
+				harnesstest.Step{Name: "child", Match: harnesstest.LastUserText("child work"), Reply: harnesstest.Reply{Text: "child done", Block: true}},
 				harnesstest.Step{Name: "ack", Match: harnesstest.LastToolResult("task"), Reply: harnesstest.Reply{Text: "waiting"}},
 				harnesstest.Step{Name: "parent", Match: harnesstest.LastUserText("child done"), Reply: harnesstest.Reply{Text: "parent done"}},
 			)
 			root := d.Create(t)
 			d.Submit(t, root, "delegate")
+			// The child holds its reply until the parent's ack request exists, so the
+			// report cannot ride on that request.
+			if !fake.AwaitRequests(3, waitBound) {
+				t.Fatal("the parent did not send its ack request")
+			}
+			fake.Release("child")
 			d.WaitIdle(t, root)
 			kid := d.Child(t, root, 0)
 			d.WaitIdle(t, kid)
