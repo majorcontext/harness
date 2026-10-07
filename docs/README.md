@@ -1,7 +1,7 @@
 # Harness documentation
 
 Use this index to find technical documentation. The current source and tests
-remain authoritative when historical material describes an earlier behavior.
+are authoritative.
 
 ## Runtime behavior
 
@@ -10,18 +10,6 @@ remain authoritative when historical material describes an earlier behavior.
 | [plugins-and-protocols.md](plugins-and-protocols.md) | Plugin lifecycle and external protocol boundaries |
 | [fleet-and-serve.md](fleet-and-serve.md) | Fleet state, lineage, exhaustion, and diagnostics |
 | [deploy-modal.md](deploy-modal.md) | Deployment modal behavior |
-
-## Historical
-
-These documents describe the deleted `engine` and `server` packages. `architecture.md` and the source are authoritative for `harness.Runtime`.
-
-| Document | Subject |
-|---|---|
-| [engine-request-cycle.md](engine-request-cycle.md) | Request assembly, file tools, retries, and metrics |
-| [goal-loop.md](goal-loop.md) | Goal supervision and evaluator behavior |
-| [session-storage-and-queue.md](session-storage-and-queue.md) | Indexes, snapshots, paging, queues, and processes |
-| [models-and-providers.md](models-and-providers.md) | Model state, effort, cache affinity, and adapters |
-| [mcp-tool-loading.md](mcp-tool-loading.md) | Deferred MCP schemas and stable tool ordering |
 
 The plugin wire contract is in [internal/plugin/PROTOCOL.md](../internal/plugin/PROTOCOL.md).
 

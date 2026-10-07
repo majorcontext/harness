@@ -558,8 +558,6 @@ state.
 
 Update these documents with implemented behavior:
 
-- `docs/models-and-providers.md`: Codex lineage, scope, and `store:false`.
-- `docs/engine-request-cycle.md`: startup prewarm and first-turn resolution.
 - `provider/AGENTS.md`: Codex-only lineage and full-fallback invariants.
 - `engine/AGENTS.md`: bounded prewarm ownership and no-turn accounting.
 

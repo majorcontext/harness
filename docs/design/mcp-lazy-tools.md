@@ -14,9 +14,7 @@ turn, before the model has read one word of the user's request.
 The cost is structural, not incidental:
 
 - Tool schemas sit at the FRONT of the cached prefix on every provider
-  (Anthropic caches tools, then system, then messages — see
-  `docs/mcp-tool-loading.md`, "The tool array is byte-stable across requests").
-  A large catalog
+  (Anthropic caches tools, then system, then messages). A large catalog
   inflates every cache write and every cache read for the life of the
   session.
 - A catalog the model never uses still competes for attention with the
@@ -313,9 +311,8 @@ plan to after it, so two things change for that hook:
   `system.transform` is handed the session id and the model, never the
   tools array or the system slice.
 
-Both are behavior changes outside the opt-in path. Record them in
-`docs/mcp-tool-loading.md` and `docs/engine-request-cycle.md`, and pin them
-with regression tests.
+Both are behavior changes outside the opt-in path. Pin them with regression
+tests.
 
 Shape:
 

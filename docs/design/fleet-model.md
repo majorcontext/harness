@@ -197,7 +197,7 @@ for the next round of work on the same task). It is:
 
 ## 7. Goal pause vocabulary
 
-A goal (`engine.Session.PursueGoal`, see `docs/goal-loop.md`) can be
+A goal (`engine.Session.PursueGoal`) can be
 *active* with no loop currently driving it, for two structurally different
 reasons — and an operator or composer needs to tell them apart, not just
 know "active":
