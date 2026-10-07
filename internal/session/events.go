@@ -24,7 +24,7 @@ func contextWindow(model int, c eventlog.ContextMeasured) int64 {
 func Describe(id string, s *eventlog.State, window int) protocol.Session {
 	sum, set, u := s.Summary(), s.Settings(), s.Usage()
 	v := protocol.Session{
-		ID: id, ParentID: sum.ParentID, Origin: sum.Origin, Model: sum.Model,
+		ID: id, ParentID: sum.ParentID, Agent: s.Agent(), Origin: sum.Origin, Model: sum.Model,
 		Effort: set.Effort, ServiceTier: set.ServiceTier, Status: string(sum.Status),
 		Usage:   protocol.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens},
 		HeadSeq: sum.HeadSeq, CreatedAt: sum.CreatedAt, UpdatedAt: sum.UpdatedAt,

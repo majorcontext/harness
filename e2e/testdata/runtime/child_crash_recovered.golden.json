@@ -326,6 +326,7 @@
     "get_session.kid": {
       "status": 200,
       "body": {
+        "agent": "general-purpose",
         "context": {
           "tokens": 0,
           "window": 1000000
@@ -350,6 +351,7 @@
     "get_session.kid#2": {
       "status": 200,
       "body": {
+        "agent": "general-purpose",
         "context": {
           "tokens": 0,
           "window": 1000000
