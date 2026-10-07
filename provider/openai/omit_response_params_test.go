@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // float64Ptr is a tiny helper so tests can take the address of a literal.

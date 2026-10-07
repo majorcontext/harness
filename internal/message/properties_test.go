@@ -485,7 +485,7 @@ func TestNormalizeForWirePropertyNoDataLoss(t *testing.T) {
 // an earlier attempt at this repair, there by bending the oracle to match
 // the implementation, here by bending the input space instead. Both gaps
 // are
-// now closed by demoteWireInvalidToolResults (message/wire_normalize.go):
+// now closed by demoteWireInvalidToolResults (internal/message/wire_normalize.go):
 // any ToolResult still wire-invalid after every relocation and synthesis
 // NormalizeForWire's main pass can perform is rewritten to plain text
 // (see that function's own doc comment for why changing its part type,

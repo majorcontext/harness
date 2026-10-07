@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/provider"
 )
 

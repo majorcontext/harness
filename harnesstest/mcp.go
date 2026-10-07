@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 // MCPSpecEnv is the environment variable that carries a JSON MCPSpec to a
@@ -37,19 +37,81 @@ type MCPSpec struct {
 // MCPTool is one scripted tool. A tools/call answers with the first of
 // RPCError, Echo, Cwd, and Result that applies.
 type MCPTool struct {
-	Def      mcp.Tool
-	Result   mcp.CallToolResult
-	Echo     bool          // answer with the call arguments as one text item
-	Cwd      bool          // answer with the base name of the server's working directory
-	RPCError *mcp.RPCError // answer with a JSON-RPC error
+	Name        string
+	Description string
+	InputSchema json.RawMessage // defaults to {"type":"object"}
+	Result      MCPResult
+	Echo        bool      // answer with the call arguments as one text item
+	Cwd         bool      // answer with the base name of the server's working directory
+	RPCError    *MCPError // answer with a JSON-RPC error
+}
+
+// MCPError is a scripted JSON-RPC error.
+type MCPError struct {
+	Code    int
+	Message string
+}
+
+// MCPResult is a scripted tools/call result.
+type MCPResult struct {
+	Content []MCPContent
+	IsError bool
+}
+
+// The MCPContent.Type values.
+const (
+	MCPContentText         = "text"
+	MCPContentImage        = "image"
+	MCPContentResourceLink = "resource_link"
+	MCPContentResource     = "resource"
+)
+
+// MCPContent is one item of a scripted tool result. Which fields apply
+// depends on Type.
+type MCPContent struct {
+	Type     string
+	Text     string
+	Data     string // base64, for MCPContentImage
+	MimeType string
+	URI      string
+	Name     string
+	Resource *MCPEmbedded // for MCPContentResource
+}
+
+// MCPEmbedded is the payload of an MCPContentResource item.
+type MCPEmbedded struct {
+	URI      string
+	MimeType string
+	Text     string
 }
 
 // MCPResource is one scripted resource. A non-empty Blob (base64) is served
 // instead of Text.
 type MCPResource struct {
-	Resource mcp.Resource
+	URI      string
+	Name     string
+	MimeType string
 	Text     string
 	Blob     string
+}
+
+func (e *MCPError) rpc() *mcp.RPCError {
+	if e == nil {
+		return nil
+	}
+	return &mcp.RPCError{Code: e.Code, Message: e.Message}
+}
+
+func (r MCPResult) wire() mcp.CallToolResult {
+	out := mcp.CallToolResult{IsError: r.IsError}
+	for _, c := range r.Content {
+		w := mcp.Content{Type: c.Type, Text: c.Text, Data: c.Data, MimeType: c.MimeType, URI: c.URI, Name: c.Name}
+		if c.Resource != nil {
+			w.Resource = &mcp.EmbeddedResource{URI: c.Resource.URI, MimeType: c.Resource.MimeType, Text: c.Resource.Text}
+		}
+		out.Content = append(out.Content, w)
+	}
+	return out
 }
 
 // MCPCall is a tools/call or resources/read the server received. Name is
@@ -163,7 +225,7 @@ func (h *mcpHandler) listTools(params json.RawMessage) any {
 	start, end, next := h.page(params, len(h.spec.Tools))
 	tools := make([]mcp.Tool, 0, end-start)
 	for _, t := range h.spec.Tools[start:end] {
-		def := t.Def
+		def := mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
 		if len(def.InputSchema) == 0 {
 			def.InputSchema = json.RawMessage(`{"type":"object"}`)
 		}
@@ -192,12 +254,12 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 	}
 	h.record("tools/call", p.Name, args, auth)
 	for _, t := range h.spec.Tools {
-		if t.Def.Name != p.Name {
+		if t.Name != p.Name {
 			continue
 		}
 		switch {
 		case t.RPCError != nil:
-			return nil, t.RPCError
+			return nil, t.RPCError.rpc()
 		case t.Echo:
 			text, _ := json.Marshal(args)
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: string(text)}}}, nil
@@ -205,7 +267,7 @@ func (h *mcpHandler) callTool(params json.RawMessage, auth string) (any, *mcp.RP
 			wd, _ := os.Getwd()
 			return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: filepath.Base(wd)}}}, nil
 		}
-		return t.Result, nil
+		return t.Result.wire(), nil
 	}
 	return nil, &mcp.RPCError{Code: -32602, Message: "unknown tool: " + p.Name}
 }
@@ -214,7 +276,7 @@ func (h *mcpHandler) listResources(params json.RawMessage) any {
 	start, end, next := h.page(params, len(h.spec.Resources))
 	list := make([]mcp.Resource, 0, end-start)
 	for _, r := range h.spec.Resources[start:end] {
-		list = append(list, r.Resource)
+		list = append(list, mcp.Resource{URI: r.URI, Name: r.Name, MimeType: r.MimeType})
 	}
 	return mcp.ListResourcesResult{Resources: list, NextCursor: next}
 }
@@ -228,10 +290,10 @@ func (h *mcpHandler) readResource(params json.RawMessage, auth string) (any, *mc
 	}
 	h.record("resources/read", p.URI, nil, auth)
 	for _, r := range h.spec.Resources {
-		if r.Resource.URI != p.URI {
+		if r.URI != p.URI {
 			continue
 		}
-		c := mcp.ResourceContents{URI: r.Resource.URI, MimeType: r.Resource.MimeType, Text: r.Text}
+		c := mcp.ResourceContents{URI: r.URI, MimeType: r.MimeType, Text: r.Text}
 		if r.Blob != "" {
 			c.Text, c.Blob = "", &r.Blob
 		}

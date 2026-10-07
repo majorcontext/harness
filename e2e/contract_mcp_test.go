@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/mcp"
 )
 
 const mcpToken = "Bearer e2e-mcp"
@@ -96,38 +95,35 @@ func mcpStubBin(t *testing.T) string {
 	return mcpStub.path
 }
 
-func mcpText(s string) mcp.CallToolResult {
-	return mcp.CallToolResult{Content: []mcp.Content{{Type: mcp.ContentTypeText, Text: s}}}
+func mcpText(s string) harnesstest.MCPResult {
+	return harnesstest.MCPResult{Content: []harnesstest.MCPContent{{Type: harnesstest.MCPContentText, Text: s}}}
 }
 
 func mcpWeather(instructions string) harnesstest.MCPSpec {
-	tool := func(name, desc string) mcp.Tool {
-		return mcp.Tool{Name: name, Description: desc, InputSchema: json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`)}
-	}
+	schema := json.RawMessage(`{"type":"object","properties":{"city":{"type":"string"}}}`)
 	isErr := mcpText("upstream timeout")
 	isErr.IsError = true
 	return harnesstest.MCPSpec{
 		Name:         "weather",
 		Instructions: instructions,
 		Tools: []harnesstest.MCPTool{
-			{Def: tool("forecast", "Get the weather forecast for a city"), Result: mcpText("Oslo: 3C, snow")},
-			{Def: tool("alerts", "List active weather alerts"), Result: mcpText("no active alerts")},
-			{Def: tool("echo", "Return the call arguments"), Echo: true},
-			{Def: tool("flaky", "Always reports a tool error"), Result: isErr},
-			{Def: tool("strict", "Always fails with a JSON-RPC error"), RPCError: &mcp.RPCError{Code: -32602, Message: "city is required"}},
+			{Name: "forecast", Description: "Get the weather forecast for a city", InputSchema: schema, Result: mcpText("Oslo: 3C, snow")},
+			{Name: "alerts", Description: "List active weather alerts", InputSchema: schema, Result: mcpText("no active alerts")},
+			{Name: "echo", Description: "Return the call arguments", InputSchema: schema, Echo: true},
+			{Name: "flaky", Description: "Always reports a tool error", InputSchema: schema, Result: isErr},
+			{Name: "strict", Description: "Always fails with a JSON-RPC error", InputSchema: schema, RPCError: &harnesstest.MCPError{Code: -32602, Message: "city is required"}},
 		},
 	}
 }
 
 func mcpDocs() harnesstest.MCPSpec {
-	res := func(uri, name, mime string) mcp.Resource { return mcp.Resource{URI: uri, Name: name, MimeType: mime} }
 	return harnesstest.MCPSpec{
 		Name:         "docs",
 		Instructions: "Read doc://guide before searching.",
-		Tools:        []harnesstest.MCPTool{{Def: mcp.Tool{Name: "search", Description: "Search the docs"}, Result: mcpText("no hits")}},
+		Tools:        []harnesstest.MCPTool{{Name: "search", Description: "Search the docs", Result: mcpText("no hits")}},
 		Resources: []harnesstest.MCPResource{
-			{Resource: res("doc://guide", "guide", "text/markdown"), Text: "# Guide\nbe brief"},
-			{Resource: res("doc://logo", "logo", "image/png"), Blob: "aGVsbG8="},
+			{URI: "doc://guide", Name: "guide", MimeType: "text/markdown", Text: "# Guide\nbe brief"},
+			{URI: "doc://logo", Name: "logo", MimeType: "image/png", Blob: "aGVsbG8="},
 		},
 	}
 }
@@ -203,7 +199,7 @@ func mcpEchoTools(n int) harnesstest.MCPSpec {
 	spec := harnesstest.MCPSpec{Name: "weather"}
 	for i := 1; i <= n; i++ {
 		spec.Tools = append(spec.Tools, harnesstest.MCPTool{
-			Def:  mcp.Tool{Name: fmt.Sprintf("t%02d", i), Description: "numbered tool"},
+			Name: fmt.Sprintf("t%02d", i), Description: "numbered tool",
 			Echo: true,
 		})
 	}
@@ -282,12 +278,12 @@ func TestContractMCPEager(t *testing.T) {
 		{
 			name: "mcp_non_text_results_become_text_and_blobs",
 			setup: mcpSetup(nil, mcpServerDef{name: "weather", spec: harnesstest.MCPSpec{Name: "weather", Tools: []harnesstest.MCPTool{{
-				Def: mcp.Tool{Name: "mixed", Description: "Returns every content kind"},
-				Result: mcp.CallToolResult{Content: []mcp.Content{
-					{Type: mcp.ContentTypeText, Text: "plain"},
-					{Type: mcp.ContentTypeImage, MimeType: "image/png", Data: mcpPNG},
-					{Type: mcp.ContentTypeResourceLink, URI: "doc://x", Name: "x"},
-					{Type: mcp.ContentTypeResource, Resource: &mcp.EmbeddedResource{URI: "doc://y", Text: "embedded"}},
+				Name: "mixed", Description: "Returns every content kind",
+				Result: harnesstest.MCPResult{Content: []harnesstest.MCPContent{
+					{Type: harnesstest.MCPContentText, Text: "plain"},
+					{Type: harnesstest.MCPContentImage, MimeType: "image/png", Data: mcpPNG},
+					{Type: harnesstest.MCPContentResourceLink, URI: "doc://x", Name: "x"},
+					{Type: harnesstest.MCPContentResource, Resource: &harnesstest.MCPEmbedded{URI: "doc://y", Text: "embedded"}},
 				}},
 			}}}}),
 			model:   toolChain(mcpTool("weather", "mixed")),
@@ -471,7 +467,7 @@ func TestContractMCPRuntime(t *testing.T) {
 			name: "mcp_stdio_server_starts_in_configured_dir",
 			setup: mcpSetup(nil, mcpServerDef{name: "where", stdio: true, dir: true, spec: harnesstest.MCPSpec{
 				Name:  "where",
-				Tools: []harnesstest.MCPTool{{Def: mcp.Tool{Name: "cwd", Description: "Report the working directory"}, Cwd: true}},
+				Tools: []harnesstest.MCPTool{{Name: "cwd", Description: "Report the working directory", Cwd: true}},
 			}}),
 			model:   toolChain(mcpTool("where", "cwd")),
 			actions: oneTurn,

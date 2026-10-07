@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/protocol"
 )
 

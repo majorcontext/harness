@@ -34,27 +34,27 @@ jobs:
           cache: true
 
       - name: Regenerate tables
-        run: go generate ./modelmeta/
+        run: go generate ./internal/modelmeta/
 
       - name: Test generated tables
-        run: go test -race -timeout 300s ./modelmeta/...
+        run: go test -race -timeout 300s ./internal/modelmeta/...
 
       - name: Open or update pull request
         run: |
-          if git diff --quiet -- modelmeta/context_windows_gen.go; then
+          if git diff --quiet -- internal/modelmeta/context_windows_gen.go; then
             echo "Generated file is current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$BRANCH"
-          git add modelmeta/context_windows_gen.go
+          git add internal/modelmeta/context_windows_gen.go
           git commit -m "chore(modelmeta): refresh context windows from models.dev" \
-            -m "Regenerated with go generate ./modelmeta/ from https://models.dev/api.json."
+            -m "Regenerated with go generate ./internal/modelmeta/ from https://models.dev/api.json."
           git push --force origin "$BRANCH"
           if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
             gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" \
               --title "chore(modelmeta): refresh context windows from models.dev" \
-              --body "Daily regeneration of \`modelmeta/context_windows_gen.go\` from https://models.dev/api.json. Review the diff for new or changed windows. Hand-written entries live in \`modelmeta/overrides.json\`."
+              --body "Daily regeneration of \`internal/modelmeta/context_windows_gen.go\` from https://models.dev/api.json. Review the diff for new or changed windows. Hand-written entries live in \`internal/modelmeta/overrides.json\`."
           fi
           gh workflow run ci.yml --ref "$BRANCH"

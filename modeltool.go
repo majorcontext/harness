@@ -7,8 +7,8 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
 

@@ -37,10 +37,10 @@ jobs:
         # duplicate name.
         include:
           - id: message-unmarshal
-            package: ./message/
+            package: ./internal/message/
             target: FuzzUnmarshalMessage
           - id: skill-frontmatter
-            package: ./skill/
+            package: ./internal/skill/
             target: FuzzParseFrontmatter
           - id: anthropic-streamdecode
             package: ./provider/anthropic/

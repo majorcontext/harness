@@ -18,6 +18,7 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
@@ -25,7 +26,6 @@ import (
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/tree"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 

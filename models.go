@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/majorcontext/harness/internal/backend"
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // ErrModelUnavailable reports a model that no configured provider serves.

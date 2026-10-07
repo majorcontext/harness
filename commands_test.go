@@ -11,7 +11,7 @@ import (
 	"testing/synctest"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/protocol"
 )

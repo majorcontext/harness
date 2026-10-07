@@ -27,7 +27,7 @@ question's call id, when one is pending (see "Claude Code structured
 questions" in `docs/models-and-providers.md`). That one call is waiting for
 an answer, not orphaned. Every other orphan gets its repair.
 
-`message.NormalizeForWire` (`message/wire_normalize.go`) is the
+`message.NormalizeForWire` (`internal/message/wire_normalize.go`) is the
 transcode-only sibling. Every transcoder calls it instead. It builds one
 throwaway request, so it may relocate a part. It must still never delete a
 real `ToolResult`.
@@ -47,7 +47,7 @@ Relocation is bounded. `computeRelocationBarrier` moves a result no later
 than the origin run of the next real result. That keeps the original
 relative order intact. A move that would break the bound is refused.
 
-`message/wire_oracle_test.go` is the specification both functions are
+`internal/message/wire_oracle_test.go` is the specification both functions are
 tested against. Derive it from the provider contract only, never from
 either function's internals. See the oracle rule under Testing.
 

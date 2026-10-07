@@ -8,11 +8,11 @@ import (
 	"sync"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/tool/proc"
 	"github.com/majorcontext/harness/internal/toolresult"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/protocol"
 )
 

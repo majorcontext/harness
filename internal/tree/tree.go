@@ -14,9 +14,9 @@ import (
 	"sync"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/prompt"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/message"
 )
 
 // Node is a session that the runtime runs, as the tree sees it.

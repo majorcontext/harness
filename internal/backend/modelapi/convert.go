@@ -8,8 +8,8 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 )
 
 // toMessage maps m to the provider message. A blob part reads its bytes through req.Blob.

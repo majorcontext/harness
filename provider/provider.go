@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // ToolDef describes a tool offered to the model.

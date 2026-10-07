@@ -18,7 +18,7 @@ import (
 	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp" // register WebP decoder (no encoder exists)
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 const (

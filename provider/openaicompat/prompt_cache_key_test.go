@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // TestSessionKeySetsPromptCacheKey: a non-empty Request.SessionKey also sets

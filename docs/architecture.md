@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is partly built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -216,11 +216,11 @@ Free to change.
 
 The `depguard` rules of `.golangci.yml` freeze the graph: `eventlog` imports `protocol` only, `turn` imports `eventlog` and `protocol`, no package of `internal/backend` or `internal/tool` imports `session`, `tree`, or `internal/server`, and only `internal/backend` builds a provider wire.
 
-Phase 6 moves the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), and `mcp`, `plugin`, `skill`, `command`, and `process`, as is.
+Phase 6 has moved the leaf packages to `internal/`: `message` (conversation types), `modelmeta` (context-window table from models.dev; exposed only through `Runtime.Models` and `GET /models`), `mcp`, `plugin`, `skill`, `command`, and `process`, as is, and `imageclamp`, unchanged (the Anthropic, OpenAI, and OpenAI-compatible providers use it).
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client; `mcp` moves to `internal/mcp` as above). It still deletes `imageclamp` (merged into its one consumer). It also deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client). It still deletes the config keys that `New` refuses (the phase 4 switch stops reading them) and their `Defaults` entries, and splits `config/config.go` into files of at most 800 lines.
 
 ## eventlog
 
@@ -933,7 +933,7 @@ Today ~70% of 127k test lines read unexported state and will not survive the res
 
 ### Unit tests
 
-Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and the `internal/backend` wire mapping files), `config`, `message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
+Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and the `internal/backend` wire mapping files), `config`, `internal/message`. TDD means writing the failing contract row in `e2e/` first, seeing it fail for the named reason, then implementing. A file outside the contract suite and the pure-code packages may add test lines only when `testdata/test-exceptions.txt` lists it with a reason. A bug fix adds a table row, not a file. No test reads unexported state across packages.
 
 ### CI gates
 
@@ -944,7 +944,7 @@ Unit tests cover pure code only: `Apply`, wire transcoders (`provider/*/` and th
 | File size | Fail above 800 lines |
 | Function size | Fail when the closing brace is more than 80 lines below the opening brace |
 | Test lines vs code lines per package | Fail above 1.5 test lines per code line, unless the ratio does not rise over the merge base. A new package has no base, but a moved package compares with the package it came from. A change that removes code and adds no test lines always passes |
-| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `provider/*/`, `config`, `message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
+| Test lines outside the contract suite | Fail when a changed `_test.go` file adds test lines (code lines inside `Test`, `Benchmark`, `Fuzz`, and `Example` functions and package-level `var` declarations; top-level helpers, fakes, and types do not count) outside `e2e/`, `internal/eventlog`, `provider/*/`, `config`, `internal/message`, `internal/gates`, and the wire mapping test files `internal/backend/modelapi/convert_test.go` and `internal/backend/claudecode/frames_test.go`, unless `testdata/test-exceptions.txt` lists the file with a reason. The count is net per file, so a change that deletes and adds the same number of test lines passes. A change that deletes test lines always passes. A listed file still meets the test:code ratio row |
 | `time.Sleep`, `time.After` in tests | Fail in a test file. `internal/testpoll` is not a test file |
 | `AGENTS.md` length | Fail above 80 lines at the root and 25 lines in a scoped file |
 | Merge-base diff | `TestRepository` checks only files and packages that differ from `git merge-base HEAD origin/main`, or from `$GATES_BASE_REF`. A new file meets each limit above. A changed file may not cross a limit that it met, and may not get worse on a limit that it already broke. A renamed file compares with its old path. A change that only deletes code always passes. An unchanged file is not checked. No baseline file exists |

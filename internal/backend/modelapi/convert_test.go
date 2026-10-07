@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 )
 
 func TestRequestMapsABlobPartToItsBytes(t *testing.T) {

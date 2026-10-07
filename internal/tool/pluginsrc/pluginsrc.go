@@ -17,9 +17,9 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/plugin"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/plugin"
 	"github.com/majorcontext/harness/protocol"
 )
 

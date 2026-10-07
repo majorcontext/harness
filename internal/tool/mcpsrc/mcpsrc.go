@@ -21,8 +21,8 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/mcp"
 	"github.com/majorcontext/harness/protocol"
 )
 

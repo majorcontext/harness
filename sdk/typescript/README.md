@@ -2,8 +2,8 @@
 
 A zero-dependency Node.js ESM SDK for writing [harness](../../README.md)
 plugins. It is the JavaScript counterpart of the Go SDK
-(`github.com/majorcontext/harness/plugin`); both speak exactly the same wire
-protocol, documented in [`plugin/PROTOCOL.md`](../../plugin/PROTOCOL.md).
+(`github.com/majorcontext/harness/internal/plugin`); both speak exactly the same wire
+protocol, documented in [`internal/plugin/PROTOCOL.md`](../../internal/plugin/PROTOCOL.md).
 
 - **Zero npm dependencies.** `harness-plugin.mjs` uses only Node.js
   built-ins (`node:readline`). Ship it as a single file next to your plugin.
@@ -86,7 +86,7 @@ plugins:
 
 See [`examples/plugins/redactor.mjs`](../../examples/plugins/redactor.mjs) for
 the full reference version of the example above, and
-[`plugin/typescript_conformance_test.go`](../../plugin/typescript_conformance_test.go)
+[`internal/plugin/typescript_conformance_test.go`](../../internal/plugin/typescript_conformance_test.go)
 for it being driven end-to-end through the real Go `plugin.Host`.
 
 ## API
@@ -124,7 +124,7 @@ be `async`. Returning `undefined`/`null` means "no changes", matching the Go
 SDK's `nil` response convention — the harness sends an empty object on your
 behalf. Request/response field names match the wire protocol exactly
 (snake_case, e.g. `session_id`, `call_id`) so they map 1:1 onto
-`plugin/PROTOCOL.md` and the Go structs in `plugin/hooks.go`.
+`internal/plugin/PROTOCOL.md` and the Go structs in `internal/plugin/hooks.go`.
 
 | Hook | Fires on | Return to mutate |
 |---|---|---|
@@ -179,7 +179,7 @@ encoding: a plain JS array of objects with a `type` discriminator, e.g.:
 [{ type: 'text', text: 'hello' }]
 ```
 
-See `github.com/majorcontext/harness/message` for the full set of part
+See `github.com/majorcontext/harness/internal/message` for the full set of part
 types (`text`, `blob`, `tool_call`, `tool_result`, `reasoning`).
 
 ## Protocol version
@@ -207,7 +207,7 @@ For an end-to-end check against the real Go `plugin.Host` (spawns `node` and
 talks the real protocol), see the Go test:
 
 ```sh
-go test ./plugin/... -run TestTypeScriptSDKConformance -v
+go test ./internal/plugin/... -run TestTypeScriptSDKConformance -v
 ```
 
 It skips (not fails) when `node` isn't on `PATH`.

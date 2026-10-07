@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -598,7 +598,7 @@ func TestTranscodeOrphanToolResultBuildsSuccessfully(t *testing.T) {
 }
 
 // TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart is a
-// golden regression test on message/wire_normalize.go:496: a demoted
+// golden regression test on internal/message/wire_normalize.go:496: a demoted
 // ToolResult's Blob used to
 // survive as a raw Part regardless of media type, and this adapter's own
 // transcodeBlob (~line 298) hard-errors building a request containing a
@@ -650,12 +650,12 @@ func TestTranscodeOrphanToolResultImageBlobArrivesAsRealImagePart(t *testing.T) 
 }
 
 // TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn is
-// a golden regression test on message/wire_normalize.go:370: a demoted
+// a golden regression test on internal/message/wire_normalize.go:370: a demoted
 // ToolResult's Blob must never be
 // left inside an assistant-role wire item. Two ToolResults sharing one
 // assistant message (both with no ToolCall anywhere) reach
 // demoteWireInvalidToolResults' assistant-run branch at all — see
-// message/wire_normalize_test.go's
+// internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistedOutOfAssistantMessage for why
 // a single one alone would not.
 func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *testing.T) {
@@ -696,7 +696,7 @@ func TestTranscodeAssistantRunBlobDemotionBuildsAndNeverEntersAssistantTurn(t *t
 // item (there is no message-turn grouping to violate), but this test pins
 // the shape here too, so a future change to this adapter's own item
 // ordering is caught by the same golden repro all three providers share.
-// See message/wire_normalize_test.go's
+// See internal/message/wire_normalize_test.go's
 // TestNormalizeForWireAssistantRunBlobHoistLandsAfterTheAnswerRunToo for
 // the canonical-level account (why TWO ToolResults, A and B, are needed
 // alongside the live, answered ToolCall C).

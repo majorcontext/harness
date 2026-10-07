@@ -1,6 +1,6 @@
 # Plugin
 
-Read the root AGENTS.md. Read `plugin/PROTOCOL.md` before a wire or hook change.
+Read the root AGENTS.md. Read `internal/plugin/PROTOCOL.md` before a wire or hook change.
 
 - A plugin is a separate process speaking versioned JSON-RPC over stdio.
 - `harness plugin probe` caches the manifest with executable and spec identity.

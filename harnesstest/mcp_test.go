@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 func mcpTestSpec() MCPSpec {
@@ -18,10 +18,10 @@ func mcpTestSpec() MCPSpec {
 		Name:         "fake",
 		Instructions: "use the tools",
 		Tools: []MCPTool{
-			{Def: mcp.Tool{Name: "echo"}, Echo: true},
-			{Def: mcp.Tool{Name: "boom"}, RPCError: &mcp.RPCError{Code: -32000, Message: "scripted"}},
+			{Name: "echo", Echo: true},
+			{Name: "boom", RPCError: &MCPError{Code: -32000, Message: "scripted"}},
 		},
-		Resources: []MCPResource{{Resource: mcp.Resource{URI: "doc://a", Name: "a"}, Text: "alpha"}},
+		Resources: []MCPResource{{URI: "doc://a", Name: "a", Text: "alpha"}},
 	}
 }
 

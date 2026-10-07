@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/majorcontext/harness/imageclamp"
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/imageclamp"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/provider"
 )
 
@@ -305,7 +305,7 @@ func transcodeUserMessage(m *message.Message) ([]apiMessage, error) {
 		case *message.Blob:
 			// A blob this wire has no form for is OMITTED with a note, not
 			// an error. This lane is the narrowest of the three (see
-			// message/wire_normalize.go's intersection comment: no PDF at
+			// internal/message/wire_normalize.go's intersection comment: no PDF at
 			// all), and an attachment lives in a session's DURABLE history
 			// — so erroring here would not fail one request, it would fail
 			// every turn from now on, permanently, for a session that

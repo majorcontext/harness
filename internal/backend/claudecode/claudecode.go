@@ -20,8 +20,8 @@ import (
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/internal/backend/external"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 )
 
 // stateKey names the backend state of the external session.

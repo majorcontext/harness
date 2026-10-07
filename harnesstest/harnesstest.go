@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // Step is one scripted reply and the requests it answers.
