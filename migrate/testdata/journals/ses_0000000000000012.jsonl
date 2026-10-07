@@ -1,7 +1,0 @@
-{"type":"session","id":"ses_0000000000000012","created_at":"2026-09-07T08:00:00Z","model":"openai/gpt-5","task_parent_id":"ses_000000000000000c","task_agent_type":"explore","task_depth":1}
-{"type":"message","message":{"id":"msg_i1","role":"user","parts":[{"type":"text","text":"first"}],"source":"task","created_at":"2026-09-07T08:00:01Z"}}
-{"type":"message","message":{"id":"msg_i2","role":"assistant","parts":[{"type":"text","text":"first done"}],"created_at":"2026-09-07T08:00:02Z"}}
-{"type":"task.outcome_committed","created_at":"2026-09-07T08:00:03Z","task_notify":{"child_id":"ses_0000000000000012","agent":"explore","status":"done","result":"first done"}}
-{"type":"child_turn.settled","created_at":"2026-09-07T08:00:03Z"}
-{"type":"message","message":{"id":"msg_i3","role":"user","parts":[{"type":"text","text":"second"}],"source":"task","created_at":"2026-09-07T08:01:00Z"}}
-{"type":"message","message":{"id":"msg_i4","role":"assistant","parts":[{"type":"tool_call","call_id":"call_i1","name":"read","arguments":{"path":"x"}}],"created_at":"2026-09-07T08:01:01Z"}}

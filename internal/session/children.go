@@ -121,12 +121,12 @@ func (r *Report) Parts(result string) []eventlog.Part {
 
 // The reasons that a report gives for a failed turn, by the class of its error.
 const (
-	// ReasonExhausted is the reason of a turn that a usage limit failed.
-	ReasonExhausted = "provider capacity exhausted for this account"
-	// ReasonRateLimited is the reason of a turn that a rate limit failed after its retries.
-	ReasonRateLimited = "provider rate limit outlasted the retry budget for this account"
-	// ReasonLostToRestart is the reason of a child whose turn a restart ended before it recorded an outcome.
-	ReasonLostToRestart = "lost to restart: turn was in flight when the process last stopped"
+	// reasonExhausted is the reason of a turn that a usage limit failed.
+	reasonExhausted = "provider capacity exhausted for this account"
+	// reasonRateLimited is the reason of a turn that a rate limit failed after its retries.
+	reasonRateLimited = "provider rate limit outlasted the retry budget for this account"
+	// reasonLostToRestart is the reason of a child whose turn a restart ended before it recorded an outcome.
+	reasonLostToRestart = "lost to restart: turn was in flight when the process last stopped"
 	reasonPermanent     = "turn failed with a permanent provider error and cannot succeed on retry"
 	reasonUnrecovered   = "turn failed and did not recover"
 )
@@ -134,10 +134,10 @@ const (
 // failReason is the reason that the report of a child gives for the end of
 // its last turn: the error behind a prefix that names its class, so a parent
 // knows which response fits. A turn with no error reads its cause. An error
-// with no class, such as one that an engine journal gave, reads as it is.
+// with no class reads as it is.
 func failReason(last eventlog.TurnEnded) string {
 	if last.Error == "" && last.Cause == eventlog.CauseCrashed {
-		return ReasonLostToRestart
+		return reasonLostToRestart
 	}
 	if last.Error == "" {
 		return last.Detail()
@@ -145,9 +145,9 @@ func failReason(last eventlog.TurnEnded) string {
 	detail := last.ReportError()
 	switch {
 	case last.ErrorClass == eventlog.ErrorRateLimited:
-		return ReasonRateLimited + ": " + detail
+		return reasonRateLimited + ": " + detail
 	case last.Cause == eventlog.CauseProviderExhausted:
-		return ReasonExhausted + ": " + detail
+		return reasonExhausted + ": " + detail
 	case last.ErrorClass == "":
 		return detail
 	case last.ErrorClass == eventlog.ErrorTimedOut:
