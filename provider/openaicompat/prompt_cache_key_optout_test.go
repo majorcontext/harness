@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // TestPromptCacheKeyDisabledOmitsFieldKeepsUser: a deployment whose upstream

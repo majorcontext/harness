@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/protocol"
 )
 

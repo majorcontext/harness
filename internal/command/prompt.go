@@ -13,7 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/majorcontext/harness/skill"
+	"github.com/majorcontext/harness/internal/skill"
 )
 
 // PromptCommand holds validated command metadata. LoadBody reads the body only

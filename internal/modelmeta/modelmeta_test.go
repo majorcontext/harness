@@ -3,7 +3,7 @@ package modelmeta
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 func TestContextWindowAnthropic(t *testing.T) {

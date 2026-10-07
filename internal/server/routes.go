@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/protocol"
 )
 

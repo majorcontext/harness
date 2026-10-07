@@ -15,8 +15,8 @@ import (
 	"github.com/majorcontext/harness/harnesstest"
 	"github.com/majorcontext/harness/internal/backend/modelapi"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/anthropic"
 )

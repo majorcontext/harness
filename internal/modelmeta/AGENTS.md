@@ -3,7 +3,7 @@
 Read the root AGENTS.md.
 
 - Keep metadata static and deterministic. No network or background refresh.
-- Never edit `context_windows_gen.go`. Run `go generate ./modelmeta/`.
+- Never edit `context_windows_gen.go`. Run `go generate ./internal/modelmeta/`.
 - Put entries that models.dev lacks in `overrides.json`.
 - Run the generator only by hand or in the `modelmeta-refresh` workflow.
 - Keep zero unavailable for non-chat models. Zero means unknown.

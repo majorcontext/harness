@@ -1,6 +1,6 @@
 # SDK
 
-Read the root AGENTS.md. Read `plugin/AGENTS.md` and `plugin/PROTOCOL.md` before a protocol change.
+Read the root AGENTS.md. Read `internal/plugin/AGENTS.md` and `internal/plugin/PROTOCOL.md` before a protocol change.
 
 - The TypeScript SDK and the Go plugin host speak the same versioned NDJSON protocol.
 - Keep method names, field names, hook behavior, tool results, and shutdown in parity.
@@ -10,4 +10,4 @@ Read the root AGENTS.md. Read `plugin/AGENTS.md` and `plugin/PROTOCOL.md` before
 - Preserve snake_case wire fields.
 - Derive manifest hooks and tools from the supplied definition.
 - Keep Node 18 compatibility unless the README changes the floor.
-- Run `node --test sdk/typescript/test/*.test.mjs` and `go test -race ./plugin/...`.
+- Run `node --test sdk/typescript/test/*.test.mjs` and `go test -race ./internal/plugin/...`.

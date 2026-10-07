@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // TestTypeScriptSDKConformance exercises the TypeScript/JS plugin SDK
@@ -27,7 +27,7 @@ func TestTypeScriptSDKConformance(t *testing.T) {
 		t.Skip("node not found on PATH; skipping TypeScript SDK conformance test")
 	}
 
-	pluginPath, err := filepath.Abs(filepath.Join("..", "examples", "plugins", "redactor.mjs"))
+	pluginPath, err := filepath.Abs(filepath.Join("..", "..", "examples", "plugins", "redactor.mjs"))
 	if err != nil {
 		t.Fatal(err)
 	}

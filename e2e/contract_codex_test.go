@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 // codexScenario runs against the scripted Responses server, with the model

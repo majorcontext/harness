@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // oversizedPNG builds a PNG whose height exceeds the 8000px provider cap.

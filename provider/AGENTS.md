@@ -1,6 +1,6 @@
 # Provider
 
-Read the root AGENTS.md. Read `message/AGENTS.md` for canonical data rules.
+Read the root AGENTS.md. Read `internal/message/AGENTS.md` for canonical data rules.
 
 - Each adapter builds a new wire request from canonical history. Store no wire state.
 - Every transcoder calls `message.NormalizeForWire` and reads `ToolResult.SafeContent`.

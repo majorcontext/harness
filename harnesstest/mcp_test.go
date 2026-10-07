@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 func mcpTestSpec() MCPSpec {

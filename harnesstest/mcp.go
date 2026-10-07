@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 // MCPSpecEnv is the environment variable that carries a JSON MCPSpec to a

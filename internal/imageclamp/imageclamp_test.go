@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // baseLimits mirrors a typical adapter's caps for tests: 8000px hard cap,

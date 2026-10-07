@@ -13,8 +13,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/skill"
+	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/skill"
 )
 
 // The budget keeps baseBehaviorGuidance a short floor, not a style guide.

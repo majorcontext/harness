@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // TestEffortSetsReasoning: a non-off effort level sets reasoning.effort to the

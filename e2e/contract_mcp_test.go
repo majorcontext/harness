@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/mcp"
+	"github.com/majorcontext/harness/internal/mcp"
 )
 
 const mcpToken = "Bearer e2e-mcp"

@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/imageclamp"
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/imageclamp"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/provider"
 )
 

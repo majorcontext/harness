@@ -11,7 +11,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/provider"
 	"github.com/majorcontext/harness/provider/openaicompat"
 )

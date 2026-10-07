@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/majorcontext/harness/skill"
+	"github.com/majorcontext/harness/internal/skill"
 )
 
 // GeneralPurpose names the built-in profile, which allows every tool.

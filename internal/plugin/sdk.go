@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // Hooks holds a plugin's hook implementations. Nil fields are not subscribed

@@ -3,7 +3,7 @@ package anthropic
 import (
 	"testing"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // TestEffortEnablesThinking: a non-off effort level sets a thinking block with

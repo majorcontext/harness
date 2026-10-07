@@ -13,7 +13,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 // ContextWindow reports ref's advertised context window in tokens. It returns

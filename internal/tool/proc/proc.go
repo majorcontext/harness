@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/process"
+	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/protocol"
 )
 

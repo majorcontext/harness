@@ -3,7 +3,7 @@ package harness
 import (
 	"context"
 
-	"github.com/majorcontext/harness/process"
+	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/protocol"
 )
 

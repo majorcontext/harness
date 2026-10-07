@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/message"
 	"github.com/majorcontext/harness/provider"
 )
 

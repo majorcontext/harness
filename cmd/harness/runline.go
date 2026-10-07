@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/majorcontext/harness"
-	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/config"
-	"github.com/majorcontext/harness/message"
+	"github.com/majorcontext/harness/internal/command"
+	"github.com/majorcontext/harness/internal/message"
 )
 
 const claudeCodeProvider = "claude-code"

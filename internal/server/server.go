@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/majorcontext/harness/command"
+	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/protocol"
 )
 

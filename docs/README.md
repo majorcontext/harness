@@ -23,7 +23,7 @@ These documents describe the deleted `engine` and `server` packages. `architectu
 | [models-and-providers.md](models-and-providers.md) | Model state, effort, cache affinity, and adapters |
 | [mcp-tool-loading.md](mcp-tool-loading.md) | Deferred MCP schemas and stable tool ordering |
 
-The plugin wire contract is in [plugin/PROTOCOL.md](../plugin/PROTOCOL.md).
+The plugin wire contract is in [internal/plugin/PROTOCOL.md](../internal/plugin/PROTOCOL.md).
 
 ## Designs
 

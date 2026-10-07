@@ -2,8 +2,8 @@
 //
 // Plugins are separate processes speaking JSON-RPC 2.0 over stdio, one
 // message per line (NDJSON). This module is the TypeScript/JavaScript
-// counterpart of the Go SDK (github.com/majorcontext/harness/plugin); see
-// plugin/PROTOCOL.md in the harness repo for the versioned wire spec that
+// counterpart of the Go SDK (github.com/majorcontext/harness/internal/plugin); see
+// internal/plugin/PROTOCOL.md in the harness repo for the versioned wire spec that
 // this file implements. Log to stderr — stdout belongs to the protocol.
 //
 // Zero npm dependencies: only Node.js built-ins (node:readline, node:stream)

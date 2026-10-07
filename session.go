@@ -12,9 +12,9 @@ import (
 
 	"github.com/majorcontext/harness/internal/admit"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/protocol"
 )
 

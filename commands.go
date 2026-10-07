@@ -10,12 +10,12 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/admit"
+	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/process"
 	"github.com/majorcontext/harness/internal/server"
 	"github.com/majorcontext/harness/internal/session"
-	"github.com/majorcontext/harness/process"
 	"github.com/majorcontext/harness/protocol"
 )
 

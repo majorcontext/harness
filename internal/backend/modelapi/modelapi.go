@@ -10,9 +10,9 @@ import (
 	"slices"
 
 	"github.com/majorcontext/harness/internal/eventlog"
+	"github.com/majorcontext/harness/internal/message"
+	"github.com/majorcontext/harness/internal/modelmeta"
 	"github.com/majorcontext/harness/internal/turn"
-	"github.com/majorcontext/harness/message"
-	"github.com/majorcontext/harness/modelmeta"
 	"github.com/majorcontext/harness/provider"
 )
 

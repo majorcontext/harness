@@ -32,7 +32,7 @@ Plugins are API clients over the same channel: `Session.Messages`, `MCP.Call`, `
 
 Events v1: `session.status`, `question.asked`, `file.edited`,
 `tool.execute.start`, `tool.execute.end`, `session.error`. Message-delta
-events are deliberately deferred (see plugin/PROTOCOL.md) pending a
+events are deliberately deferred (see internal/plugin/PROTOCOL.md) pending a
 throttling design.
 
 Capability parity bar: the protocol must be able to express the plugin

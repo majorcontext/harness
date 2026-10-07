@@ -5,8 +5,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/majorcontext/harness/command"
 	"github.com/majorcontext/harness/internal/backend"
+	"github.com/majorcontext/harness/internal/command"
 	"github.com/majorcontext/harness/internal/turn"
 )
 

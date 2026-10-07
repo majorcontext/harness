@@ -33,7 +33,7 @@ var testGrowthDirs = []string{
 	"e2e",
 	"internal/eventlog",
 	"config",
-	"message",
+	"internal/message",
 	"internal/gates",
 }
 
