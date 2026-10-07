@@ -409,7 +409,7 @@ command. Section 3 gives the reason.
 branch runs, through one shared entry point, `resolvePromptCommand`
 (`server/commands.go`), called from `POST /session/{id}/prompt_async`,
 `/enqueue`, and `/send`. A resolved command never appends a user message
-or enters the prompt queue (see `docs/session-storage-and-queue.md`).
+or enters the prompt queue.
 
 Resolution runs only when the request's declared provenance
 (`message.PromptSource`, normalized) equals `typed`; empty or omitted

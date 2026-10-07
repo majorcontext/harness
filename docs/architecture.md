@@ -2,7 +2,7 @@
 
 The re-architecture of harness, as built and as planned: a session is an append-only event log, one goroutine owns each session, and every seam is a small interface owned by its consumer.
 
-Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built, except that the five docs under "Historical" of `docs/README.md` are still to be deleted: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
+Phases 1 to 4 are built, except the quiesced cutover with boxes (see Migration). `cmd/harness` runs `serve`, `run`, `sessions`, and `plugin probe` on `harness.Runtime`. Phase 6 is built: `engine`, `server`, `provider/claudecode`, and `mcpserver` are deleted, the config keys of the engine are deleted, and `message`, `modelmeta`, `mcp`, `plugin`, `skill`, `command`, `process`, and `imageclamp` live under `internal/` (see Internal packages). A statement that names a later phase describes planned work.
 
 ## Problem
 
@@ -220,7 +220,7 @@ Phase 6 has moved the leaf packages to `internal/`: `message` (conversation type
 
 `internal/workspace` serves `GET /workspace/changes`. It shells out to git and cannot reach the runtime or any session. Harness is the only HTTP server in a box, so box-level reads live here, isolated. See "workspace".
 
-Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client). It has deleted the config keys that `New` refused (`instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`) with their `Defaults` entries, and split `config/config.go` into files of at most 800 lines.
+Phase 6 has deleted `engine`, `server`, `provider/claudecode`, `harnesstest.SinkReceiver`, `prompt.EngineBase`, `typeid`, and the code that only they used. It has merged `mcpserver` into `mcp` (the MCP server role beside the client). It has deleted the config keys that `New` refused (`instructions_mode`, `event_sink`, `snapshot_every_records`, `tool_result_inline_bytes`, and `tool_result_retained_bytes`) with their `Defaults` entries, and split `config/config.go` into files of at most 800 lines. It has deleted the five docs of the engine: `engine-request-cycle`, `goal-loop`, `session-storage-and-queue`, `models-and-providers`, and `mcp-tool-loading`.
 
 ## eventlog
 
@@ -775,6 +775,7 @@ type Toolset struct {
 
 - `New` builds the tool list from `Options.Tools`, the `goal` tool with `goal_evaluator_model`, and, with a `WorkDir`, the `process` and `task` tools. An empty or repeated name fails `New`. The built-in tools of a `WorkDir` belong to each session; see "Built-in tools".
 - The runtime builds one `turn.Source` for each session when it loads the session. In order, it gives the runtime tools, with `goal` and `task` bound to the session ID and no `goal` for a child; `goal` only for a backend that does not own the loop; the file tools of the `WorkDir`, for a backend that does not own the loop; `internal/tool/mcpsrc`, except for a backend with `OwnsMCP` on a turn with no `AllowedTools`; and `internal/tool/pluginsrc`. The actor adds a last `Source`: `get_conversation_history` for a backend that owns the loop, which no `AllowedTools` list hides, and `read_tool_result` with the retention hooks for a harness loop. `turn.Sources` joins the `Source`s, and `turn.Run` takes no other tool list. Each `Source` gets the `AllowedTools` of the session for each model call and applies `turn.Restrict` once.
+- The tools of a model call keep one order from call to call, because the tools come first in the cached prefix of every provider and a changed byte invalidates the whole prefix. A `Source` returns its tools in a fixed order and never ranges over a map: `mcpsrc` orders the servers by name and the tools of a server by name.
 - `turn.Sources` chains the `turn.Hooks` of its `Source`s in order: `Before` runs in order and a deny ends the chain, and `After` runs in order.
 - The loop runs the tool calls of a response one at a time, in order. A tool error, or a call to a tool that the model may not call, is an error result that the model sees.
 - No tool receives a session. The `goal` and `task` tools hold the session ID that the runtime binds when the session starts.

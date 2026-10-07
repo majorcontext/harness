@@ -82,10 +82,7 @@ representation.
   message — computed fresh every turn, never persisted, and self-correcting
   as retries succeed, which it states with a following recovery block since
   a pinned block is never withdrawn; a Parked server's clause instead
-  reads `<name> (<reason>; use the mcp tool action "connect" to retry)` —
-  sharing its append-only pinned-message mechanism
-  (`withPinnedAmbient`) with the managed-processes status block described in
-  `docs/session-storage-and-queue.md`.
+  reads `<name> (<reason>; use the mcp tool action "connect" to retry)`.
 
   A built-in `mcp` session tool is registered in `newSession` whenever
   the session's MCP registry reports at least one configured server (no
