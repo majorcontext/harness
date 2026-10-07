@@ -116,19 +116,19 @@ config set `context_window_required: false`.
 
 ### Refreshing the context-window tables
 
-The tables in `modelmeta/context_windows_gen.go` are generated from
+The tables in `internal/modelmeta/context_windows_gen.go` are generated from
 models.dev's `limit.context` field. Session creation never calls the network.
 A maintainer, or the daily `modelmeta-refresh` workflow, runs
-`go generate ./modelmeta/` to fetch `https://models.dev/api.json` and rewrite
+`go generate ./internal/modelmeta/` to fetch `https://models.dev/api.json` and rewrite
 the file. The workflow opens or updates one pull request when the file changes.
 
-`modelmeta/overrides.json` holds entries that models.dev lacks, such as a
+`internal/modelmeta/overrides.json` holds entries that models.dev lacks, such as a
 router with no catalog entry. An override wins over the catalog value. The
 generator prints a note when an override shadows or repeats a catalog value.
 When two catalog IDs normalize to one key, the smaller window wins.
 Models with a zero window stay out of the tables.
 
-`go test ./modelmeta/internal/genctx/` checks the generator against a fixed
+`go test ./internal/modelmeta/internal/genctx/` checks the generator against a fixed
 catalog in `testdata/`. Run it with `-update` to rewrite the golden file after
 a deliberate generator change.
 

@@ -15,7 +15,7 @@ no vocabulary for a session operation, and `/compact` reaches nothing
 there today.
 
 A user also has no way to name a reusable prompt. Agent Skills
-(`skill/`) cover the model-invoked case: the model reads a description and
+(`internal/skill/`) cover the model-invoked case: the model reads a description and
 decides to load the body. Nothing covers the human-invoked case, where a
 person types a short name and gets a long, project-specific prompt.
 
@@ -194,7 +194,7 @@ set to method calls instead — see section 5.
 `/model` completes from `modelmeta`. The catalog is static, so completion
 costs no network call.
 
-This table matches the shipped registry (`command/registry.go`), which
+This table matches the shipped registry (`internal/command/registry.go`), which
 differs from the table an earlier draft of this design carried, in four
 ways:
 
@@ -522,7 +522,7 @@ The parser reads `description` and `argument-hint`. It ignores an optional
 `GET /commands` with its error. Other commands stay available. Name errors
 that cannot become command entries appear in `discovery_errors`.
 
-The parser reuses `skill/frontmatter.go`. Extract `splitFrontmatter` and
+The parser reuses `internal/skill/frontmatter.go`. Extract `splitFrontmatter` and
 `parseFrontmatter` into a shared internal package, or export them. Do not
 add a YAML dependency and do not add a second parser.
 

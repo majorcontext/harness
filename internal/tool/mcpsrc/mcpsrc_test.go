@@ -8,7 +8,6 @@ import (
 
 	"github.com/majorcontext/harness/config"
 	"github.com/majorcontext/harness/harnesstest"
-	"github.com/majorcontext/harness/internal/mcp"
 	"github.com/majorcontext/harness/internal/tool/mcpsrc"
 	"github.com/majorcontext/harness/internal/turn"
 	"github.com/majorcontext/harness/protocol"
@@ -16,37 +15,39 @@ import (
 
 var bg = context.Background()
 
-func content(c ...mcp.Content) mcp.CallToolResult { return mcp.CallToolResult{Content: c} }
+func content(c ...harnesstest.MCPContent) harnesstest.MCPResult {
+	return harnesstest.MCPResult{Content: c}
+}
 
-func textResult(s string) mcp.CallToolResult {
-	return content(mcp.Content{Type: mcp.ContentTypeText, Text: s})
+func textResult(s string) harnesstest.MCPResult {
+	return content(harnesstest.MCPContent{Type: harnesstest.MCPContentText, Text: s})
 }
 
 func weather() harnesstest.MCPSpec {
 	failed := textResult("upstream timeout")
 	failed.IsError = true
-	tool := func(name, desc string, res mcp.CallToolResult) harnesstest.MCPTool {
-		return harnesstest.MCPTool{Def: mcp.Tool{Name: name, Description: desc}, Result: res}
+	tool := func(name, desc string, res harnesstest.MCPResult) harnesstest.MCPTool {
+		return harnesstest.MCPTool{Name: name, Description: desc, Result: res}
 	}
 	return harnesstest.MCPSpec{Name: "weather", Instructions: "Call forecast first.", Tools: []harnesstest.MCPTool{
 		tool("forecast", "Get the weather forecast for a city\nmore detail", textResult("Oslo: 3C, snow")),
 		tool("alerts", "List active weather alerts", textResult("none")),
 		tool("flaky", "Always fails", failed),
-		{Def: mcp.Tool{Name: "strict", Description: "Rejects its call"}, RPCError: &mcp.RPCError{Code: -32602, Message: "city is required"}},
+		{Name: "strict", Description: "Rejects its call", RPCError: &harnesstest.MCPError{Code: -32602, Message: "city is required"}},
 		tool("mixed", "Returns every content kind", content(
-			mcp.Content{Type: mcp.ContentTypeText, Text: "plain"},
-			mcp.Content{Type: mcp.ContentTypeImage, MimeType: "image/png", Data: "aGVsbG8="},
-			mcp.Content{Type: mcp.ContentTypeResourceLink, URI: "doc://x", Name: "x"},
-			mcp.Content{Type: mcp.ContentTypeResource, Resource: &mcp.EmbeddedResource{URI: "doc://y", Text: "embedded"}})),
+			harnesstest.MCPContent{Type: harnesstest.MCPContentText, Text: "plain"},
+			harnesstest.MCPContent{Type: harnesstest.MCPContentImage, MimeType: "image/png", Data: "aGVsbG8="},
+			harnesstest.MCPContent{Type: harnesstest.MCPContentResourceLink, URI: "doc://x", Name: "x"},
+			harnesstest.MCPContent{Type: harnesstest.MCPContentResource, Resource: &harnesstest.MCPEmbedded{URI: "doc://y", Text: "embedded"}})),
 	}}
 }
 
 func docs() harnesstest.MCPSpec {
 	return harnesstest.MCPSpec{Name: "docs", PageSize: 1,
-		Tools: []harnesstest.MCPTool{{Def: mcp.Tool{Name: "search", Description: "Search the docs"}, Result: textResult("no hits")}},
+		Tools: []harnesstest.MCPTool{{Name: "search", Description: "Search the docs", Result: textResult("no hits")}},
 		Resources: []harnesstest.MCPResource{
-			{Resource: mcp.Resource{URI: "doc://guide", Name: "guide", MimeType: "text/markdown"}, Text: "# Guide"},
-			{Resource: mcp.Resource{URI: "doc://logo", Name: "logo", MimeType: "image/png"}, Blob: "aGVsbG8="},
+			{URI: "doc://guide", Name: "guide", MimeType: "text/markdown", Text: "# Guide"},
+			{URI: "doc://logo", Name: "logo", MimeType: "image/png", Blob: "aGVsbG8="},
 		}}
 }
 
@@ -133,7 +134,7 @@ func run(ts turn.Toolset, c protocol.ToolCall) (string, bool) {
 
 func TestSearchScoresEachField(t *testing.T) {
 	srv := harnesstest.NewMCPServer(t, harnesstest.MCPSpec{Name: "weather", Tools: []harnesstest.MCPTool{
-		{Def: mcp.Tool{Name: "other", Description: "weather forecast"}}, {Def: mcp.Tool{Name: "weather", Description: "x"}}}})
+		{Name: "other", Description: "weather forecast"}, {Name: "weather", Description: "x"}}})
 	s := mcpsrc.New(config.Config{MCPServers: map[string]config.MCPServerSpec{"weather": {URL: srv.URL()}}, MCPToolLoading: "lazy"})
 	t.Cleanup(s.Close)
 	got, _ := run(s.Toolset(bg, nil, nil, ""), call("mcp", `{"action":"search","query":"weather forecast"}`))
