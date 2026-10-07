@@ -38,10 +38,10 @@ jobs:
           prompt: |
             Use the /code-review skill to review this pull request.
 
-            This is a Go agent harness (engine, provider transcoders, plugin
+            This is a Go agent harness (runtime, provider transcoders, plugin
             protocol). Read the root AGENTS.md first. Then read every scoped
             AGENTS.md that governs a changed path. Review with these priorities:
-            - Race conditions, deadlocks, missing synchronization — the engine,
+            - Race conditions, deadlocks, missing synchronization — the runtime,
               plugin host, and streams are heavily concurrent
             - Protocol correctness (plugin JSON-RPC framing, hook chaining
               semantics, manifest/lazy-spawn invariants)

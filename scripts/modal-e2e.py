@@ -9,10 +9,10 @@ This is an on-demand test (NOT run in CI). It:
      behind an encrypted-ports tunnel, backed by a named Modal Volume,
   3. creates a session and drives one tiny real prompt through the tunnel using
      the real ANTHROPIC_API_KEY from the environment (a bash `echo`),
-  4. records the message count N and max event seq,
+  4. records the message count N and the session head_seq,
   5. `sb.terminate()`s the sandbox abruptly (no graceful shutdown),
   6. relaunches a fresh sandbox on the SAME Volume and asserts the message count
-     is still N, the event journal's seq continues above the prior max (no reset),
+     is still N, the session head_seq continues above the prior value (no reset),
      and the session is still promptable with one more tiny prompt.
 
 Volumes v2 (`version=2`) sync continuously and must retain everything. The
@@ -109,33 +109,33 @@ class Client:
         raise RuntimeError(f"server did not become healthy (last={last})")
 
     def create_session(self, model: str) -> str:
-        status, body = self._req("POST", "/session", {"model": model}, auth=True)
+        status, body = self._req("POST", "/sessions", {"model": model}, auth=True)
         if status != 201:
             raise RuntimeError(f"create session: {status} {body!r}")
         return json.loads(body)["id"]
 
     def prompt(self, sid: str, text: str) -> None:
-        body = {"parts": [{"type": "text", "text": text}]}
-        status, resp = self._req("POST", f"/session/{sid}/prompt_async", body, auth=True)
-        if status != 202:
-            raise RuntimeError(f"prompt_async: {status} {resp!r}")
+        body = {"id": f"e2e-{secrets.token_hex(8)}", "parts": [{"type": "text", "text": text}]}
+        status, resp = self._req("POST", f"/sessions/{sid}/inputs", body, auth=True)
+        if status != 201:
+            raise RuntimeError(f"submit input: {status} {resp!r}")
 
     def list_sessions(self) -> list:
-        status, body = self._req("GET", "/session", None, auth=True)
+        status, body = self._req("GET", "/sessions", None, auth=True)
         assert status == 200, f"list sessions: {status} {body!r}"
-        return json.loads(body)
+        return json.loads(body)["sessions"]
 
     def session(self, sid: str) -> dict:
-        status, body = self._req("GET", f"/session/{sid}", None, auth=True)
+        status, body = self._req("GET", f"/sessions/{sid}", None, auth=True)
         if status != 200:
             raise RuntimeError(f"get session: {status} {body!r}")
         return json.loads(body)
 
-    def messages(self, sid: str) -> list:
-        status, body = self._req("GET", f"/session/{sid}/message", None, auth=True)
+    def message_count(self, sid: str) -> int:
+        status, body = self._req("GET", f"/sessions/{sid}/messages", None, auth=True)
         if status != 200:
             raise RuntimeError(f"get messages: {status} {body!r}")
-        return json.loads(body)
+        return int(json.loads(body)["total"])
 
     def wait_idle(self, sid: str, min_messages: int, deadline_s: float = 180.0) -> dict:
         """Poll the session until it is idle with >= min_messages messages, or a
@@ -145,7 +145,7 @@ class Client:
         while time.monotonic() < deadline:
             s = self.session(sid)
             last = s
-            if s.get("status") == "idle" and s.get("messages", 0) >= min_messages:
+            if s.get("status") == "idle" and self.message_count(sid) >= min_messages:
                 return s
             time.sleep(2.0)
         raise RuntimeError(f"session not idle with >={min_messages} msgs (last={last})")
@@ -216,9 +216,9 @@ def run_flow(image, app, volume, label: str, strict: bool) -> bool:
         nonce = secrets.token_hex(3)
         c1.prompt(sid, f"Use the bash tool to run: echo e2e-{nonce}. Then confirm the output.")
         s1 = c1.wait_idle(sid, min_messages=2)
-        n1 = len(c1.messages(sid))
-        seq1 = int(s1.get("seq", 0))
-        print(f"  after first prompt: messages={n1} max_seq={seq1}")
+        n1 = c1.message_count(sid)
+        seq1 = int(s1.get("head_seq", 0))
+        print(f"  after first prompt: messages={n1} head_seq={seq1}")
 
         # Phase 2: abrupt kill (no graceful shutdown).
         print("  terminating sandbox abruptly...")
@@ -230,8 +230,8 @@ def run_flow(image, app, volume, label: str, strict: bool) -> bool:
         ids = [s["id"] for s in c2.list_sessions()]
         listed = sid in ids
         boot = c2.session(sid)
-        n2 = len(c2.messages(sid))
-        seq_boot = int(boot.get("seq", 0))
+        n2 = c2.message_count(sid)
+        seq_boot = int(boot.get("head_seq", 0))
         print(f"  after relaunch: listed={listed} messages={n2} boot_seq={seq_boot}")
 
         # Phase 4: still promptable; seq continues above the prior max. A prompt
@@ -240,16 +240,16 @@ def run_flow(image, app, volume, label: str, strict: bool) -> bool:
         nonce2 = secrets.token_hex(3)
         c2.prompt(sid, f"Use the bash tool to run: echo again-{nonce2}. Then confirm.")
         s3 = c2.wait_idle(sid, min_messages=n2 + 1)
-        n3 = len(c2.messages(sid))
-        seq3 = int(s3.get("seq", 0))
-        print(f"  after second prompt: messages={n3} max_seq={seq3}")
+        n3 = c2.message_count(sid)
+        seq3 = int(s3.get("head_seq", 0))
+        print(f"  after second prompt: messages={n3} head_seq={seq3}")
 
         # Evaluate.
         ok = True
         checks = [
             ("session listed after relaunch", listed),
             (f"message count retained ({n2} == {n1})", n2 == n1),
-            (f"seq continued above prior max ({seq3} > {seq1})", seq3 > seq1),
+            (f"head_seq continued above prior value ({seq3} > {seq1})", seq3 > seq1),
             (f"session promptable ({n3} > {n2})", n3 > n2),
         ]
         for name, passed in checks:

@@ -9,4 +9,4 @@ Read the root AGENTS.md. Read `docs/design/managed-processes.md` before a lifecy
 - Keep runtime declarations in memory. Never write them to project config.
 - Keep logs under the configured work directory.
 - A restarted name is a new instance. `WaitExit` returns the state of the observed instance.
-- This package must not import `engine` or `message`. The engine renders status.
+- This package must not import `message`. The runtime renders status.

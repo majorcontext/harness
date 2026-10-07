@@ -2,7 +2,7 @@
 
 Read the root AGENTS.md. `mcp/AGENTS.md` covers the client role.
 
-- Keep this package independent from `engine` and `server`.
+- Keep this package independent from the runtime and `internal/server`.
 - A tool that needs a harness type is registered by its caller, never added here.
 - Implement only initialize, notifications/initialized, tools/list, and tools/call.
 - Add no prompts, resources, roots, sampling, elicitation, or resumable streams.

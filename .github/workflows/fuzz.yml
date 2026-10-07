@@ -36,12 +36,6 @@ jobs:
         # clobber each other and makes upload-artifact fail on the
         # duplicate name.
         include:
-          - id: engine-loadsession
-            package: ./engine/
-            target: FuzzLoadSessionReplay
-          - id: engine-validsessionid
-            package: ./engine/
-            target: FuzzValidSessionID
           - id: message-unmarshal
             package: ./message/
             target: FuzzUnmarshalMessage

@@ -1,6 +1,6 @@
 # Agent Skill
 
-Read the root AGENTS.md. `engine/AGENTS.md` covers prompt integration.
+Read the root AGENTS.md.
 
 - Keep two stages. `Load` validates frontmatter and retains no body.
 - `Skill.Instructions` rereads the file and returns the body on demand.
@@ -11,5 +11,5 @@ Read the root AGENTS.md. `engine/AGENTS.md` covers prompt integration.
 - Require the skill name to match its parent directory. Keep rune-based limits.
 - Sort discovered skills by name. Reject duplicate names across directories.
 - A malformed `SKILL.md` fails discovery loudly.
-- In `engine.Config`, an empty directory list disables discovery. A nil list keeps the default.
+- In `config.Config.SkillsDirs`, an empty list disables discovery. A nil list keeps the default.
 - Pin parser behavior with an `e2e/` contract row. Add no test here unless `testdata/test-exceptions.txt` lists the file.
